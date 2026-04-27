@@ -1,0 +1,518 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+// ==========================================
+// 1. NÚCLEO DEL NEGOCIO (Multi-Tenant)
+// ==========================================
+model Empresa {
+  id                  Int          @id @default(autoincrement())
+  nombre              String
+  cuit                String       @unique
+  activo              Boolean      @default(true) // <--- ¡ESTE ES EL CAMPO VITAL QUE FALTABA!
+  
+  // --- FINANZAS Y BILLETERA ---
+  saldoActivo         Float        @default(0.0)
+  modalidadPago       String       @default("POSTPAGO") // PREPAGO (Billetera) o POSTPAGO (Crédito)
+  limiteDescubierto   Float        @default(0.0)        // Cuánto le permitimos adeudar
+  
+  ordenamientoDefault String       @default("PRECIO_ASC") // PRECIO_ASC, SLA, HISTORICO
+  
+  usuarios            Usuario[]
+  envios              Envio[]
+  manifiestos         Manifiesto[] 
+  credenciales        CredencialCourier[] 
+  encuestasNPS        EncuestaNPS[]
+  movimientos         MovimientoFinanciero[]
+  liquidaciones       LiquidacionMensual[]   // NUEVO: Agrupador de facturas a fin de mes
+
+  createdAt           DateTime     @default(now())
+  reglasRuteo         ReglaRuteo[]
+}
+
+model Usuario {
+  id            Int      @id @default(autoincrement())
+  email         String   @unique
+  password      String   
+  nombre        String
+  rol           String   @default("operador_cliente") 
+  
+  empresaId     Int
+  empresa       Empresa  @relation(fields: [empresaId], references: [id])
+}
+
+model Courier {
+  id                Int      @id @default(autoincrement())
+  nombre            String   @unique
+  activo            Boolean  @default(true)
+  
+  // --- CAMPOS NUEVOS PARA EL ABM MAESTRO ---
+  emailSoporte      String?
+  telefonoSoporte   String?
+  contactoComercial String?
+  logoUrl           String?
+  
+  envios            Envio[]
+  nomencladores     Nomenclador[]
+  encuestasNPS      EncuestaNPS[]
+  metricasSLA       MetricaSLA[]
+  slas              SlaCourier[] 
+}
+
+// ==========================================
+// 1.5. CREDENCIALES COURIERS (El Cerebro)
+// ==========================================
+model CredencialCourier {
+  id                     Int      @id @default(autoincrement())
+  empresaId              Int
+  empresa                Empresa  @relation(fields: [empresaId], references: [id])
+
+  nombreCourier          String   
+  activo                 Boolean  @default(true)
+
+  usaCredencialesPropias Boolean  @default(true)
+  credencialesJson       String?  
+
+  courierRecolector      String   @default("mismo_courier") 
+  
+  ofreceDomicilio        Boolean  @default(true)
+  ofreceSucursal         Boolean  @default(true)
+  
+  // --- REGLAS DE PRICING PARTICULAR ---
+  tarifaIncluyeIva       Boolean  @default(true)
+  ajusteTarifaPorcentaje Float    @default(0.0) // Markup en %
+  markupFijo             Float    @default(0.0) // Fee fijo por paquete (Ej: +$500)
+  fechaCaducidadPromo    DateTime?              // Fecha límite de esta condición comercial
+
+  ordenamientoDefault    String   @default("PRECIO_ASC")
+
+  serviciosActivos       String?  
+  
+  tipoAlcance            String   @default("NACIONAL") 
+  provinciasCobertura    String?  
+  localidadesActivas     String?  
+  
+  ordenamientoDomicilio  String   @default("PRECIO_ASC") 
+  ordenamientoSucursal   String   @default("PRECIO_ASC")
+
+  requiereSeguro         Boolean  @default(false)
+  slaPromedioHs          Int      @default(48) 
+
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@unique([empresaId, nombreCourier]) 
+}
+
+// ==========================================
+// 2. MÓDULOS SATÉLITES (La Inteligencia)
+// ==========================================
+
+model Direccion {
+  id            Int      @id @default(autoincrement())
+  nombre        String?
+  documento     String?
+  telefono      String?
+  email         String?
+  cp            String
+  calle         String?
+  altura        String?
+  piso          String?
+  dpto          String?
+  localidad     String?
+  provincia     String?
+  pais          String   @default("Argentina")
+  observacion   String?
+
+  enviosOrigen  Envio[]  @relation("EnvioOrigen")
+  enviosDestino Envio[]  @relation("EnvioDestino")
+}
+
+model OrdenExterna {
+  id                     Int      @id @default(autoincrement())
+  canal                  String?  
+  idTienda               String?  
+  ordenId                String?  
+  referencia             String?  
+  mercadolibreShipmentId String?  
+  
+  envio                  Envio?
+}
+
+// ==========================================
+// 2.3 FINANZAS DE ENVÍO (El Escudo Contable)
+// ==========================================
+model FinanzasEnvio {
+  id                      Int      @id @default(autoincrement())
+  
+  // 1. Lo que mostramos / cobramos
+  precioMostrado          Float?   // Lo que el comprador vio en el checkout
+  precioFactura           Float?   // Lo que Shipro le debita a la empresa
+  porcentajePrecioFactura Float?
+  valorDeclarado          Float?   // Seguro de la mercadería (Terceros)
+  
+  // 2. Auditoría del Courier (Escudo Tarifario)
+  precioProveedor         Float?   // Costo cotizado al crear la etiqueta
+  costoCourierEsperado    Float?   // NUEVO: Lo que DEBERÍA cobrar el courier según el aforo final
+  costoCourierFacturado   Float?   // NUEVO: Lo que REALMENTE vino en el Excel del courier
+  estadoAuditoria         String   @default("PENDIENTE") // OK, DOBLE_COBRO, SOBREPRECIO_RECLAMAR
+  facturaCourierRef       String?  // NUEVO: Escudo anti-UPS (Ej: "FC-0001-9992")
+
+  // 3. Auditoría de Peso Físico
+  pesoCobrado             Float?   // Peso cotizado inicialmente (Ej: 1kg)
+  pesoAforado             Float?   // Peso real facturado a fin de mes (Ej: 5kg)
+  costoAforo              Float?   // Diferencia monetaria del desvío cobrada al cliente
+  
+  // 4. Auditoría de Ruteo Inteligente (Costo de Oportunidad)
+  fugaFinanciera          Float?   @default(0.0) // Diferencia $ vs la mejor opción
+  courierSugerido         String?  // Quién era el más barato para esta modalidad
+  servicioSugerido        String?  // Qué servicio era el más barato
+
+  envio                   Envio?
+}
+
+// ==========================================
+// 2.5 EL EXTRACTO BANCARIO 
+// ==========================================
+model MovimientoFinanciero {
+  id              Int      @id @default(autoincrement())
+  empresaId       Int
+  empresa         Empresa  @relation(fields: [empresaId], references: [id])
+  
+  tipo            String   // Ej: "DEBITO_ENVIO", "CREDITO_RECARGA", "AJUSTE_AFORO"
+  monto           Float    // Negativo (débito) o Positivo (crédito)
+  saldoPosterior  Float    // Foto del saldo después del movimiento
+  
+  referencia      String?  // Ej: "Tracking #12345" o "Transf. MP #999"
+  descripcion     String?  // Ej: "Ajuste por aforo de 1kg a 5kg"
+  
+  envioId         Int?     // Vinculación directa a un paquete (opcional)
+  envio           Envio?   @relation(fields: [envioId], references: [id])
+  
+  fecha           DateTime @default(now())
+}
+
+// ==========================================
+// 2.6 LIQUIDACIÓN MENSUAL (El Cierre Fiscal)
+// ==========================================
+model LiquidacionMensual {
+  id               Int      @id @default(autoincrement())
+  empresaId        Int
+  empresa          Empresa  @relation(fields: [empresaId], references: [id])
+  
+  periodo          String   // Ej: "2026-04" o "Abril 2026"
+  montoTotal       Float    // La suma de todos los envíos y aforos del mes
+  estado           String   @default("EMITIDA") // EMITIDA, PAGADA
+  
+  excelProformaUrl String?  // El link al Excel consolidado con el detalle
+  facturaXubioUrl  String?  // El link al PDF legal de la AFIP generado por Xubio
+  
+  fechaCreacion    DateTime @default(now())
+  
+  envios           Envio[]  // Todos los envíos que entraron en esta liquidación
+}
+
+// ==========================================
+// 3. EL CORAZÓN OPERATIVO (El Envío)
+// ==========================================
+model Envio {
+  id                Int        @id @default(autoincrement())
+  
+  trackingNumber    String     @unique 
+  trackingFirstMile String?
+  diasPrometidosCheckout Int?    
+  numeroOrden       String?
+
+  etiquetaUrl       String?    
+  
+  pesoReal          Float
+  pesoVolumetrico   Float?   
+  pesoFacturado     Float?    
+  fragil            Boolean   @default(false)
+  
+  tipo              String?   
+  modalidad         String    @default("Estándar") 
+  servicioId        String?   
+  
+  estadoActual      String    @default("IMPRESO")
+  
+  // NUEVO: Control de Liquidación (Evita facturar dos veces)
+  estadoLiquidacion String    @default("PENDIENTE") // PENDIENTE, LIQUIDADO
+  liquidacionId     Int?
+  liquidacion       LiquidacionMensual? @relation(fields: [liquidacionId], references: [id])
+
+  fechaImpresion    DateTime  @default(now())   
+  fechaColecta      DateTime?  // Cuándo el courier hizo la recolección física
+  fechaEntrega      DateTime?  // Cuándo llegó a manos del cliente
+  
+  empresaId         Int
+  empresa           Empresa   @relation(fields: [empresaId], references: [id])
+  
+  courierId         Int
+  courier           Courier   @relation(fields: [courierId], references: [id])
+
+  origenId          Int?
+  origen            Direccion? @relation("EnvioOrigen", fields: [origenId], references: [id])
+
+  destinoId         Int?
+  destino           Direccion? @relation("EnvioDestino", fields: [destinoId], references: [id])
+
+  ordenExternaId    Int?       @unique
+  ordenExterna      OrdenExterna? @relation(fields: [ordenExternaId], references: [id])
+
+  finanzasId        Int?       @unique
+  finanzas          FinanzasEnvio? @relation(fields: [finanzasId], references: [id])
+
+  manifiestoId      Int?
+  manifiesto        Manifiesto? @relation(fields: [manifiestoId], references: [id])
+
+  eventos           EventoTracking[]
+  tickets           TicketSoporte[]
+  movimientos       MovimientoFinanciero[] 
+  encuestaNPS       EncuestaNPS? 
+}
+
+// ==========================================
+// 4. TRAZABILIDAD (Historial de Estados)
+// ==========================================
+model EventoTracking {
+  id            Int      @id @default(autoincrement())
+  estado        String   
+  observacion   String?
+  fecha         DateTime @default(now())
+  
+  envioId       Int
+  envio         Envio    @relation(fields: [envioId], references: [id], onDelete: Cascade)
+}
+
+// ==========================================
+// 5. CONFIGURACIÓN Y REGLAS DE NEGOCIO
+// ==========================================
+model Nomenclador {
+  id            Int      @id @default(autoincrement())
+  estadoCrudo   String   
+  codigoApi     String?  
+  estadoShipro  String?  
+  
+  courierId     Int
+  courier       Courier  @relation(fields: [courierId], references: [id])
+
+  @@unique([courierId, estadoCrudo]) 
+}
+
+// ==========================================
+// 6. MESA DE AYUDA (Atención al Cliente)
+// ==========================================
+model TicketSoporte {
+  id            Int      @id @default(autoincrement())
+  motivo        String   
+  estado        String   @default("ABIERTO") 
+  observacion   String?  
+  
+  fechaCreacion DateTime @default(now())
+  fechaCierre   DateTime?
+
+  envioId       Int
+  envio         Envio    @relation(fields: [envioId], references: [id], onDelete: Cascade)
+
+  auditorias    AuditoriaSoporte[]
+}
+
+// ==========================================
+// 7. AUDITORÍA Y TRAZABILIDAD (CRM)
+// ==========================================
+model AuditoriaSoporte {
+  id            Int      @id @default(autoincrement())
+  accion        String   
+  detalle       String?  
+  fecha         DateTime @default(now())
+  
+  usuarioEmail  String?  
+  
+  ticketId      Int
+  ticket        TicketSoporte @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+}
+
+// ==========================================
+// 8. AUDITORÍA DE CHECKOUTS (El Peaje)
+// ==========================================
+model AuditoriaCheckout {
+  id                 Int      @id @default(autoincrement())
+  tienda             String   
+  comprador          String
+  email              String
+  telefono           String?
+  direccionCruda     String   
+  
+  score              Int      @default(0)
+  problemas          String?  
+  
+  calle              String?
+  altura             String?
+  piso               String?
+  dpto               String?
+  cp                 String?
+  localidad          String?
+  provincia          String?
+  entrecalles        String?
+
+  resuelto           Boolean  @default(false)
+  fechaCreacion      DateTime @default(now())
+}
+
+// ==========================================
+// 9. DATOS MAESTROS (Geografía Argentina)
+// ==========================================
+model Provincia {
+  id          Int         @id @default(autoincrement())
+  nombre      String      @unique 
+  
+  localidades Localidad[]
+}
+
+model Localidad {
+  id          Int         @id @default(autoincrement())
+  nombre      String      
+  
+  provinciaId Int
+  provincia   Provincia   @relation(fields: [provinciaId], references: [id], onDelete: Cascade)
+  
+  codigos     CodigoPostal[] 
+}
+
+model CodigoPostal {
+  id          Int         @id @default(autoincrement())
+  codigo      String      @unique 
+  
+  localidades Localidad[] 
+}
+
+// ==========================================
+// 10. ARMADO Y COLECTAS (Historial)
+// ==========================================
+model Manifiesto {
+  id                Int      @id @default(autoincrement())
+  numeroCorrelativo Int      
+  fechaCreacion     DateTime @default(now())
+  courier           String
+  cantidadPaquetes  Int
+  pdfUrl            String?  
+  
+  empresaId         Int
+  empresa           Empresa  @relation(fields: [empresaId], references: [id])
+  
+  envios            Envio[]  
+}
+
+// ==========================================
+// 11. EXPERIENCIA DE CLIENTE (NPS Transaccional)
+// ==========================================
+model EncuestaNPS {
+  id                   Int      @id @default(autoincrement())
+  
+  // Q1: NPS Principal (0-10)
+  score                Int      
+  categoria            String   // PROMOTOR, PASIVO, DETRACTOR (Calculado automáticamente)
+  
+  // Q2: Motivo Principal
+  comentario           String?  
+  
+  // Q3: Experiencia de Entrega
+  experienciaEntrega   String?  // Ej: "A tiempo", "Demorado", "Paquete dañado"
+  
+  // Q4: Satisfacción Producto
+  satisfaccionProducto Int?     // Escala 1-5
+  
+  // Q5: Intención de Recompra
+  probabilidadRecompra Int?     // Escala 0-10
+  
+  // Q6: Sugerencia de Mejora
+  sugerenciaMejora     String?  
+
+  // --- DATOS DE CONTEXTO ---
+  slaCumplido          Boolean? // Cruzamos si el correo cumplió el SLA vs lo que el cliente sintió
+  cpDestino            String?
+  provincia            String?
+  modalidad            String?  
+  
+  envioId              Int      @unique
+  envio                Envio    @relation(fields: [envioId], references: [id], onDelete: Cascade)
+  
+  empresaId            Int
+  empresa              Empresa  @relation(fields: [empresaId], references: [id])
+  
+  courierId            Int
+  courier              Courier  @relation(fields: [courierId], references: [id])
+
+  fechaVoto            DateTime @default(now())
+}
+
+// ==========================================
+// 12. MOTOR DE RUTEO INTELIGENTE (Reglas Globales)
+// ==========================================
+model ReglaRuteo {
+  id                Int      @id @default(autoincrement())
+  
+  // ---> AGREGAMOS ESTO PARA QUE CADA CLIENTE TENGA SUS REGLAS <---
+  empresaId         Int?     // Si es NULL, es una plantilla global de Shipro
+  empresa           Empresa? @relation(fields: [empresaId], references: [id])
+  
+  nombre            String   // Ej: "Protección de Margen" o "Clientes VIP"
+  prioridad         Int      // El orden de ejecución (1 se ejecuta primero)
+  
+  condicionVariable String   // Ej: "VALOR_CARRITO", "PESO_PAQUETE", "PROVINCIA_DESTINO"
+  condicionOperador String   // Ej: "MAYOR_A", "MENOR_A", "ENTRE", "IGUAL_A"
+  condicionValor1   Float?   // Ej: 80000
+  condicionValor2   Float?   // Ej: 200000 
+  
+  accionTipo        String   // Ej: "PRIORIZAR_SLA", "TOPE_COSTO_PORCENTAJE", "FORZAR_COURIER"
+  accionValor       String?  // Ej: "10" o "1" 
+  
+  activa            Boolean  @default(false) // Por defecto apagadas para que el cliente decida
+  fechaCreacion     DateTime @default(now())
+  fechaActualizacion DateTime @updatedAt
+}
+
+// ==========================================
+// 13. INTELIGENCIA LOGÍSTICA (Torre de Control y Checkout)
+// ==========================================
+
+model MetricaSLA {
+  id                 Int      @id @default(autoincrement())
+  
+  courierId          Int
+  courier            Courier  @relation(fields: [courierId], references: [id], onDelete: Cascade)
+  
+  provinciaDestino   String   // Ej: "Córdoba"
+  
+  // La matemática pre-calculada
+  slaPromedioHs      Int      // El SLA real calculado (Ej: 55)
+  muestraEnvios      Int      // Envíos que formaron el promedio (Ej: 42)
+  
+  fechaActualizacion DateTime @default(now()) @updatedAt
+
+  // Evitamos que haya dos métricas para el mismo courier y destino
+  @@unique([courierId, provinciaDestino]) 
+}
+
+model Feriado {
+  id          Int      @id @default(autoincrement())
+  fecha       DateTime @unique  // Ej: 2026-05-01 (1 de Mayo)
+  descripcion String?           // Ej: "Día del Trabajador"
+  activo      Boolean  @default(true)
+}
+
+model SlaCourier {
+  id           Int      @id @default(autoincrement())
+  courierId    Int
+  zonaNombre   String   // Ejemplo: "Interior 1", "AMBA", "Patagonia"
+  diasPactados Int      // Ejemplo: 3
+  courier      Courier  @relation(fields: [courierId], references: [id])
+
+  @@unique([courierId, zonaNombre])
+}

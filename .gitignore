@@ -39,3 +39,14 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# ==============================
+# BASES DE DATOS Y ARCHIVOS PESADOS (Agregado para Shipro)
+# ==============================
+*.csv
+*.xlsx
+*.sql
+*.sqlite
+*.sqlite-journal
+*.db
+envios.csv

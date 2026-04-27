@@ -1,0 +1,404 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import { useSession } from "next-auth/react";
+import { Truck, Save, Settings2, Loader2, CheckCircle2, AlertCircle, Lock, Key, Package, Percent, Plus, X, Network, KeyRound, Eye, ArrowRight } from 'lucide-react';
+
+export default function MisTransportes() {
+  const { data: session } = useSession();
+  const esEquipoShipro = session?.user?.rol === 'admin_shipro' || session?.user?.rol === 'operador_shipro';
+
+  // ================= MODO DIOS =================
+  const [empresasLista, setEmpresasLista] = useState<any[]>([]);
+  const [empresaActivaId, setEmpresaActivaId] = useState<number>(session?.user?.empresaId || 1);
+
+  const [cargando, setCargando] = useState(true);
+  const [guardando, setGuardando] = useState(false);
+  const [mensaje, setMensaje] = useState<{texto: string, tipo: 'ok'|'error'} | null>(null);
+  const [tabActiva, setTabActiva] = useState<'credenciales' | 'estrategias'>('credenciales');
+
+  // ================= ESTADOS =================
+  const [configsGenerales, setConfigsGenerales] = useState({ ordenamiento: "MOTOR_PRECIO" });
+  const [couriers, setCouriers] = useState<any[]>([]);
+  
+  // REGLAS DINÁMICAS (Cruza la Maestra con la del Cliente)
+  const [reglasDinamicas, setReglasDinamicas] = useState<any[]>([]);
+
+  // CARGAR LISTA DE EMPRESAS PARA MODO DIOS
+  useEffect(() => {
+    if (esEquipoShipro) {
+      fetch('/api/admin/empresas').then(res => res.json()).then(data => {
+        if (Array.isArray(data)) setEmpresasLista(data);
+      });
+    }
+  }, [esEquipoShipro]);
+
+  // CARGAR DATOS DE LA EMPRESA SELECCIONADA
+  useEffect(() => {
+    const cargarTodo = async () => {
+      setCargando(true);
+      try {
+        // 1. Cargar Credenciales
+        const resCreds = await fetch(`/api/configuracion/couriers?empresaId=${empresaActivaId}`);
+        if (resCreds.ok) {
+          const data = await resCreds.json();
+          if (data.empresa) setConfigsGenerales({ ordenamiento: data.empresa.ordenamientoDefault || "MOTOR_PRECIO" });
+          
+          if (data.couriersGlobales) {
+            const couriersDin = data.couriersGlobales.map((globalCourier: any) => {
+              const configCliente = (data.credencialesCliente || []).find((c: any) => c.nombreCourier === globalCourier.nombre);
+              
+              let credsPorDefecto = {};
+              if (globalCourier.nombre === 'Andreani') credsPorDefecto = { usuario: "", password: "", cliente: "", contrato_dom: "", contrato_suc: "", contrato_cambio: "", contrato_devolucion: "", sucursal_origen: "" };
+              else if (globalCourier.nombre === "Moci's") credsPorDefecto = { client_api: "", client_secret: "" };
+              else credsPorDefecto = { api_key: "", api_secret: "" };
+              
+              if (configCliente) {
+                return {
+                  id: globalCourier.nombre, activo: configCliente.activo, usaPropias: configCliente.usaCredencialesPropias,
+                  credenciales: configCliente.credencialesJson ? JSON.parse(configCliente.credencialesJson) : credsPorDefecto,
+                  markupClientePorcentaje: configCliente.ajusteTarifaPorcentaje || 0, markupClienteFijo: configCliente.markupFijo || 0, recolector: configCliente.courierRecolector || "pickup"
+                };
+              } else {
+                return { id: globalCourier.nombre, activo: false, usaPropias: true, credenciales: credsPorDefecto, markupClientePorcentaje: 0, markupClienteFijo: 0, recolector: "pickup" };
+              }
+            });
+            setCouriers(couriersDin);
+          }
+        }
+
+        // 2. Cargar Reglas (Maestras + Cliente)
+        const [resMaestras, resCliente] = await Promise.all([
+          fetch('/api/admin/reglas'),
+          fetch(`/api/empresa/reglas?empresaId=${empresaActivaId}`)
+        ]);
+
+        const maestras = await resMaestras.json();
+        const clienteReglas = await resCliente.json();
+
+        if (Array.isArray(maestras)) {
+          const dinamicas = maestras.map(m => {
+            const rCliente = Array.isArray(clienteReglas) ? clienteReglas.find(rc => rc.nombre === m.nombre) : null;
+            return {
+              idMaestra: m.id,
+              nombre: m.nombre,
+              condicionVariable: m.condicionVariable,
+              condicionOperador: m.condicionOperador,
+              accionTipo: m.accionTipo,
+              // Valores específicos del cliente (o vacío si no la configuró)
+              activa: rCliente ? rCliente.activa : false,
+              condicionValor1: rCliente && rCliente.condicionValor1 ? rCliente.condicionValor1.toString() : "",
+              accionValor: rCliente && rCliente.accionValor ? rCliente.accionValor : ""
+            };
+          });
+          setReglasDinamicas(dinamicas);
+        }
+
+      } catch (error) {
+        console.error(error);
+      } finally {
+        setCargando(false);
+      }
+    };
+    if (empresaActivaId) cargarTodo();
+  }, [empresaActivaId]);
+
+  // ================= HANDLERS CREDENCIALES =================
+  const handleToggleCourier = (id: string) => setCouriers(couriers.map(c => c.id === id ? { ...c, activo: !c.activo } : c));
+  const handleUpdateCourier = (id: string, campo: string, valor: any) => setCouriers(couriers.map(c => c.id === id ? { ...c, [campo]: valor } : c));
+  const handleUpdateCredencial = (id: string, clave: string, valor: string) => setCouriers(couriers.map(c => c.id === id ? { ...c, credenciales: { ...c.credenciales, [clave]: valor } } : c));
+
+  const intentarUsarCuentaShipro = (e: React.MouseEvent, courierId: string, estaUsandoPropias: boolean) => {
+    if (!esEquipoShipro) {
+      e.preventDefault();
+      alert(`Para operar con la Tarifa Corporativa de Shipro en ${courierId}, solicitá la activación a tu Asesor Comercial.`);
+    } else {
+      handleUpdateCourier(courierId, 'usaPropias', false);
+    }
+  };
+
+  const guardarConfiguracionCredenciales = async () => {
+    setGuardando(true);
+    try {
+      const res = await fetch("/api/configuracion/couriers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ empresaId: empresaActivaId, configsGenerales, couriers })
+      });
+      if (res.ok) setMensaje({ texto: "Red Logística guardada exitosamente.", tipo: 'ok' });
+      else setMensaje({ texto: "Error al guardar la red.", tipo: 'error' });
+    } catch (error) {
+      setMensaje({ texto: "Error de conexión.", tipo: 'error' });
+    } finally {
+      setGuardando(false);
+      setTimeout(() => setMensaje(null), 5000);
+    }
+  };
+
+  // ================= HANDLERS REGLAS DINÁMICAS =================
+  const handleReglaChange = (nombre: string, campo: string, valor: any) => {
+    setReglasDinamicas(prev => prev.map(r => {
+      if (r.nombre === nombre) {
+        return { ...r, [campo]: valor };
+      }
+      // EXCLUSIVIDAD: Si estamos prendiendo una regla, apagamos todas las demás en el Frontend
+      if (campo === 'activa' && valor === true) {
+        return { ...r, activa: false };
+      }
+      return r;
+    }));
+  };
+
+  const guardarRegla = async (regla: any) => {
+    if (regla.activa) {
+      if (regla.condicionVariable !== "PROVINCIA_DESTINO" && !regla.condicionValor1) return alert("Ingresá el valor de la condición.");
+      if (regla.accionTipo === "FORZAR_COURIER" && !regla.accionValor) return alert("Ingresá el ID del Courier a forzar.");
+    }
+
+    setGuardando(true);
+    try {
+      await fetch('/api/empresa/reglas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          empresaId: empresaActivaId, 
+          nombre: regla.nombre, 
+          condicionVariable: regla.condicionVariable, 
+          condicionOperador: regla.condicionOperador, 
+          condicionValor1: regla.condicionValor1, 
+          accionTipo: regla.accionTipo, 
+          accionValor: regla.accionValor, 
+          activa: regla.activa 
+        })
+      });
+      setMensaje({ texto: `Estrategia "${regla.nombre}" actualizada.`, tipo: 'ok' });
+    } catch (e) {
+      setMensaje({ texto: "Error al guardar.", tipo: 'error' });
+    }
+    setGuardando(false);
+    setTimeout(() => setMensaje(null), 3000);
+  };
+
+  return (
+    <div className="flex flex-col h-full bg-gray-50 overflow-y-auto relative">
+      
+      {/* BARRA MODO DIOS (Solo Súper Admin) */}
+      {esEquipoShipro && (
+        <div className="bg-red-600 text-white px-8 py-2 flex items-center justify-between text-sm shadow-inner z-30">
+          <div className="flex items-center gap-2 font-black tracking-wider uppercase">
+            <Eye className="w-4 h-4" /> MODO AUDITORÍA (SÚPER ADMIN)
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="font-medium">Viendo cuenta de:</span>
+            <select 
+              value={empresaActivaId} 
+              onChange={e => setEmpresaActivaId(Number(e.target.value))}
+              className="bg-red-900 border-none text-white text-sm font-bold rounded-lg px-3 py-1 outline-none"
+            >
+              {empresasLista.map(emp => (
+                <option key={emp.id} value={emp.id}>{emp.nombre}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      )}
+
+      {/* CABECERA */}
+      <header className="bg-white border-b border-gray-200 px-8 py-6 shrink-0 sticky top-0 z-20 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div className="flex items-center gap-4">
+          <div className="p-2.5 rounded-xl bg-indigo-50 text-indigo-600 border border-indigo-100">
+            <Truck className="w-6 h-6" />
+          </div>
+          <div>
+            <h2 className="text-2xl font-black text-gray-800 tracking-tight">Mi Red de Transportes</h2>
+            <p className="text-sm font-medium text-gray-500 mt-1">Activá integraciones y definí tu estrategia.</p>
+          </div>
+        </div>
+        {tabActiva === 'credenciales' && (
+          <button onClick={guardarConfiguracionCredenciales} disabled={guardando || cargando} className="flex items-center gap-2 px-6 py-2.5 bg-[#233b6b] hover:bg-blue-900 text-white font-bold rounded-xl transition-colors shadow-sm disabled:opacity-50">
+            {guardando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Guardar Credenciales
+          </button>
+        )}
+      </header>
+
+      {/* PESTAÑAS (TABS) */}
+      <div className="flex border-b border-gray-200 bg-white px-8">
+        <button onClick={() => setTabActiva('credenciales')} className={`py-4 px-6 text-sm font-black uppercase tracking-wider flex items-center gap-2 transition-colors border-b-2 ${tabActiva === 'credenciales' ? 'border-[#233b6b] text-[#233b6b]' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
+          <KeyRound className="w-4 h-4" /> Integraciones
+        </button>
+        <button onClick={() => setTabActiva('estrategias')} className={`py-4 px-6 text-sm font-black uppercase tracking-wider flex items-center gap-2 transition-colors border-b-2 ${tabActiva === 'estrategias' ? 'border-purple-600 text-purple-700' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
+          <Network className="w-4 h-4" /> Estrategias de Ruteo
+        </button>
+      </div>
+
+      <div className="p-8 max-w-5xl mx-auto w-full space-y-8">
+        {mensaje && (
+          <div className={`p-4 rounded-xl font-bold flex items-center gap-2 animate-in slide-in-from-top-2 ${mensaje.tipo === 'ok' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+            {mensaje.tipo === 'ok' ? <CheckCircle2 className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />} {mensaje.texto}
+          </div>
+        )}
+
+        {cargando ? (
+          <div className="flex justify-center items-center py-20"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>
+        ) : (
+          <>
+            {/* ================= PESTAÑA 1: CREDENCIALES ================= */}
+            {tabActiva === 'credenciales' && (
+              <div className="space-y-6 animate-in fade-in">
+                {couriers.map(courier => (
+                  <div key={courier.id} className={`bg-white rounded-2xl border-2 transition-all overflow-hidden ${courier.activo ? 'border-[#233b6b] shadow-md' : 'border-gray-200 shadow-sm'}`}>
+                    <div className="p-5 bg-gray-50/50 flex flex-wrap justify-between items-center border-b border-gray-100 gap-4">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-black text-xl shadow-sm border ${courier.activo ? 'bg-indigo-600 text-white border-indigo-700' : 'bg-white text-gray-400 border-gray-200'}`}>{courier.id.substring(0, 2).toUpperCase()}</div>
+                        <div><h4 className="font-black text-gray-800 text-lg">{courier.id}</h4><p className="text-xs font-bold text-gray-400 uppercase tracking-wider">{courier.activo ? 'Integración Activa' : 'Módulo Inactivo'}</p></div>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" className="sr-only peer" checked={courier.activo} onChange={() => handleToggleCourier(courier.id)} />
+                        <div className="w-14 h-7 bg-gray-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-green-500 shadow-inner"></div>
+                      </label>
+                    </div>
+
+                    {courier.activo && (
+                      <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-8 animate-in slide-in-from-top-2">
+                        <div className="space-y-6">
+                          <div>
+                            <h5 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-2"><Key className="w-4 h-4 text-indigo-500"/> 1. Accesos API</h5>
+                            <div className="space-y-3">
+                              <div onClick={(e) => intentarUsarCuentaShipro(e, courier.id, courier.usaPropias)} className={`relative flex items-center gap-3 p-4 border-2 rounded-xl transition-colors ${!courier.usaPropias ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 bg-gray-50/50 cursor-pointer hover:border-gray-300'}`}>
+                                {!esEquipoShipro && courier.usaPropias && (
+                                  <div className="absolute inset-0 bg-white/40 backdrop-blur-[1px] z-10 flex items-center justify-end pr-4 rounded-xl cursor-not-allowed"><Lock className="w-5 h-5 text-slate-500"/></div>
+                                )}
+                                <input type="radio" readOnly checked={!courier.usaPropias} className="w-5 h-5 text-indigo-600" />
+                                <div><p className="text-sm font-black text-gray-800">Usar Cuenta Corriente Shipro</p><p className="text-[10px] text-gray-500 font-medium">Tarifas corporativas descontadas de tu billetera.</p></div>
+                              </div>
+
+                              <label className={`flex items-center gap-3 p-4 border-2 rounded-xl cursor-pointer transition-colors ${courier.usaPropias ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:bg-gray-50'}`}>
+                                <input type="radio" readOnly checked={courier.usaPropias} onChange={() => handleUpdateCourier(courier.id, 'usaPropias', true)} className="w-5 h-5 text-indigo-600" />
+                                <div><p className="text-sm font-black text-gray-800">Tengo contrato propio con {courier.id}</p><p className="text-[10px] text-gray-500 font-medium">Los envíos se facturan en tu cuenta. Shipro solo rutea.</p></div>
+                              </label>
+                            </div>
+
+                            {courier.usaPropias && (
+                              <div className="mt-4 p-5 bg-slate-50 border border-slate-200 rounded-xl space-y-4">
+                                <p className="text-[10px] font-bold text-indigo-600 uppercase tracking-wider border-b border-slate-200 pb-2">Datos de Integración</p>
+                                <div className="grid grid-cols-1 gap-4">
+                                  {Object.keys(courier.credenciales).map(key => {
+                                    const isSecret = key.toLowerCase().includes('pass') || key.toLowerCase().includes('secret');
+                                    // ENMASCARAMIENTO PARA EL MODO DIOS: Si es equipo Shipro, oculta la visual pero deja escribir
+                                    return (
+                                      <div key={key}>
+                                        <label className="block text-xs font-bold text-gray-500 mb-1 uppercase tracking-wider">{key.replace(/_/g, ' ')}</label>
+                                        <input 
+                                          type={isSecret && !esEquipoShipro ? "password" : "text"} 
+                                          value={esEquipoShipro && isSecret && courier.credenciales[key] ? "••••••••••••••••" : courier.credenciales[key]} 
+                                          onChange={(e) => handleUpdateCredencial(courier.id, key, e.target.value)} 
+                                          className={`w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono outline-none shadow-sm ${esEquipoShipro && isSecret ? 'bg-red-50 text-red-500 border-red-200 focus:border-red-500' : 'focus:border-indigo-500'}`} 
+                                          placeholder={isSecret ? "••••••••••••••••" : `Ingresá tu ${key}`} 
+                                        />
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="space-y-8">
+                          <div>
+                            <h5 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-2"><Package className="w-4 h-4 text-emerald-500"/> 2. Estrategia de Despacho</h5>
+                            <select value={courier.recolector} onChange={e => handleUpdateCourier(courier.id, 'recolector', e.target.value)} className="w-full p-3 border-2 border-gray-200 rounded-xl text-sm font-bold text-gray-700 outline-none focus:border-emerald-500">
+                              <option value="pickup">{courier.id} retira los paquetes por mi depósito (Colecta)</option>
+                              <option value="dropoff">Nosotros llevamos los paquetes a la sucursal de {courier.id}</option>
+                              {courier.id !== "Moci's" && <option value="shipro_cross">Contratar Moci's Logística para inyectar en {courier.id}</option>}
+                            </select>
+                          </div>
+
+                          <div className="bg-blue-50 border border-blue-100 rounded-xl p-5">
+                            <h5 className="text-xs font-black text-blue-800 uppercase tracking-widest mb-1 flex items-center gap-2"><Percent className="w-4 h-4 text-blue-600"/> 3. Ajuste Comercial (Tu Tienda)</h5>
+                            <div className="grid grid-cols-2 gap-4 mt-4">
+                              <div>
+                                <label className="block text-xs font-bold text-blue-900 mb-1">Recargo/Descuento (%)</label>
+                                <div className="relative"><input type="number" value={courier.markupClientePorcentaje} onChange={e => handleUpdateCourier(courier.id, 'markupClientePorcentaje', parseFloat(e.target.value))} className="w-full pl-3 pr-8 py-2 border border-blue-200 rounded-lg text-sm font-bold text-blue-900 outline-none focus:border-blue-500 bg-white" /><span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold">%</span></div>
+                              </div>
+                              <div>
+                                <label className="block text-xs font-bold text-blue-900 mb-1">Costo Fijo Adicional</label>
+                                <div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold">$</span><input type="number" value={courier.markupClienteFijo} onChange={e => handleUpdateCourier(courier.id, 'markupClienteFijo', parseFloat(e.target.value))} className="w-full pl-7 pr-3 py-2 border border-blue-200 rounded-lg text-sm font-bold text-blue-900 outline-none focus:border-blue-500 bg-white" /></div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* ================= PESTAÑA 2: ESTRATEGIAS DINÁMICAS ================= */}
+            {tabActiva === 'estrategias' && (
+              <div className="space-y-8 animate-in fade-in">
+                
+                <section className="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-2xl shadow-sm border border-purple-100 p-6 flex flex-col md:flex-row gap-6 items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-black text-purple-900 flex items-center gap-2"><Settings2 className="w-5 h-5"/> Motor Base de Cotización</h3>
+                    <p className="text-xs text-purple-700 mt-1">El comportamiento general cuando no se cumple ninguna de las reglas excepcionales.</p>
+                  </div>
+                  <div className="flex flex-col gap-2 w-full md:w-auto">
+                    <select value={configsGenerales.ordenamiento} onChange={e => setConfigsGenerales({ordenamiento: e.target.value})} className="w-full md:w-72 border-2 border-purple-200 bg-white rounded-xl p-3 text-sm font-bold text-purple-900 outline-none focus:border-purple-500">
+                      <option value="MOTOR_PRECIO">Priorizar Mejor Precio (Recomendado)</option>
+                      <option value="MOTOR_SLA">Priorizar Entrega Express (SLA)</option>
+                    </select>
+                    <button onClick={guardarConfiguracionCredenciales} disabled={guardando} className="text-[10px] font-bold uppercase tracking-widest text-purple-600 hover:text-purple-800 text-right">Guardar Motor Base</button>
+                  </div>
+                </section>
+
+                {reglasDinamicas.length === 0 ? (
+                  <div className="p-10 text-center text-gray-400 font-medium border-2 border-dashed border-gray-200 rounded-2xl">
+                    No hay reglas estratégicas creadas por Shipro aún.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {reglasDinamicas.map(regla => (
+                      <div key={regla.idMaestra} className={`border-2 rounded-2xl p-6 transition-all shadow-sm ${regla.activa ? 'border-purple-500 bg-purple-50/30' : 'border-gray-200 bg-white'}`}>
+                        <div className="flex justify-between items-start mb-4">
+                          <div className={`p-3 rounded-xl ${regla.activa ? 'bg-purple-100' : 'bg-gray-100'}`}>
+                            <Network className={`w-6 h-6 ${regla.activa ? 'text-purple-600' : 'text-gray-500'}`} />
+                          </div>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" className="sr-only peer" checked={regla.activa} onChange={(e) => handleReglaChange(regla.nombre, 'activa', e.target.checked)} />
+                            <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-purple-600 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                          </label>
+                        </div>
+                        
+                        <h3 className="text-lg font-bold text-gray-800">{regla.nombre}</h3>
+                        <p className="text-xs font-bold text-gray-400 mt-1 mb-4 flex items-center gap-1"><ArrowRight className="w-3 h-3"/> Acción: {regla.accionTipo.replace(/_/g, ' ')}</p>
+                        
+                        <div className="space-y-3">
+                          <div className="flex gap-2">
+                            <div className="flex-1">
+                              <label className="text-[10px] font-bold text-gray-400 uppercase">{regla.condicionVariable.replace('_', ' ')} {regla.condicionOperador.replace('_', ' ')}</label>
+                              <input type="text" placeholder="Tu Valor..." disabled={!regla.activa} value={regla.condicionValor1} onChange={(e) => handleReglaChange(regla.nombre, 'condicionValor1', e.target.value)} className="w-full mt-1 border border-gray-300 rounded-lg p-2 text-sm disabled:bg-gray-100 outline-none focus:border-purple-500" />
+                            </div>
+                            
+                            {regla.accionTipo === "FORZAR_COURIER" && (
+                              <div className="w-1/3">
+                                <label className="text-[10px] font-bold text-gray-400 uppercase">Courier ID</label>
+                                <input type="text" placeholder="Ej: 1" disabled={!regla.activa} value={regla.accionValor} onChange={(e) => handleReglaChange(regla.nombre, 'accionValor', e.target.value)} className="w-full mt-1 border border-gray-300 rounded-lg p-2 text-sm disabled:bg-gray-100 outline-none focus:border-purple-500" />
+                              </div>
+                            )}
+                          </div>
+                          <button disabled={guardando} onClick={() => guardarRegla(regla)} className="w-full py-2 bg-gray-900 text-white rounded-lg text-sm font-bold hover:bg-gray-800 transition-colors">Guardar Regla</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

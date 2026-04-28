@@ -9,7 +9,10 @@ export default function CotizadorRapido() {
   const brandColor = '#233b6b';
 
   // Estados del Formulario
-  const [cpOrigen, setCpOrigen] = useState("1000");
+  // HARDCODED: CP de origen del depósito.
+  // Eliminar cuando se implemente módulo Depósitos (DEUDA 4).
+  // Ver DEUDAS.md
+  const [cpOrigen, setCpOrigen] = useState("1050");
   const [cpDestino, setCpDestino] = useState("");
   const [peso, setPeso] = useState("1");
   const [largo, setLargo] = useState("10");

@@ -64,7 +64,10 @@ export async function POST(request: Request) {
       dpto: envioOriginal.destino.dpto || "",
       localidad: envioOriginal.destino.localidad || "CABA",
       provincia: envioOriginal.destino.provincia || "CABA",
-      cp: envioOriginal.destino.cp || "1000",
+      // HARDCODED: CP de origen del depósito.
+      // Eliminar cuando se implemente módulo Depósitos (DEUDA 4).
+      // Ver DEUDAS.md
+      cp: envioOriginal.destino.cp || "1050",
       dni: envioOriginal.destino.documento || "0",
       email: envioOriginal.destino.email || "sinemail@shipro.pro",
       telefono: envioOriginal.destino.telefono || "1100000000",

@@ -7,7 +7,10 @@ const POSTAL_LOOKUP: Record<string, { provincia: string; localidades: string[] }
   "1614": { provincia: "Buenos Aires", localidades: ["Los Polvorines", "Villa de Mayo", "Ingeniero Adolfo Sourdeaux"] },
   "5000": { provincia: "Córdoba", localidades: ["Córdoba Capital"] },
   "7600": { provincia: "Buenos Aires", localidades: ["Mar del Plata", "Batán"] },
-  "1000": { provincia: "CABA", localidades: ["CABA (Retiro/Centro)"] }
+  // HARDCODED: CP de origen del depósito.
+  // Eliminar cuando se implemente módulo Depósitos (DEUDA 4).
+  // Ver DEUDAS.md
+  "1050": { provincia: "CABA", localidades: ["CABA (San Nicolas)"] }
 };
 
 export async function POST(request: Request) {

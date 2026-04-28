@@ -241,7 +241,10 @@ export default function NuevoEnvio() {
     }
 
     const telefonoFinal = `+549${telefonoProcesado}`;
-    const cpOrigen = "1000"; 
+    // HARDCODED: CP de origen del depósito.
+    // Eliminar cuando se implemente módulo Depósitos (DEUDA 4).
+    // Ver DEUDAS.md
+    const cpOrigen = "1050";
     
     const params = new URLSearchParams({
       origen: cpOrigen,
@@ -316,7 +319,8 @@ export default function NuevoEnvio() {
               <h3 className="text-lg font-bold text-gray-800">1. Origen del Envío</h3>
             </div>
             <select className="w-full sm:w-1/2 border border-gray-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-gray-50">
-              <option>Depósito Central (Ciudad Autónoma de Buenos Aires - CP 1000)</option>
+              {/* HARDCODED: CP de origen del depósito. Eliminar cuando se implemente módulo Depósitos (DEUDA 4). Ver DEUDAS.md */}
+              <option>Depósito Central (Ciudad Autónoma de Buenos Aires - CP 1050)</option>
             </select>
           </div>
 

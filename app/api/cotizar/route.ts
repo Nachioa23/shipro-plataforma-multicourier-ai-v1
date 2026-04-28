@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
+import { resolverContext } from "@/lib/auth-context";
 
 // =================================================================
 // HELPER: CÁLCULO DE DÍAS HÁBILES (Soporta Feriados DB)
@@ -56,7 +57,10 @@ function obtenerCredencialesShipro(courier: string) {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { empresaId, cpOrigen, cpDestino, provinciaDestino, paquetes, valorCarrito: bodyValorCarrito } = body;
+    const ctx = resolverContext(request, body.filtroEmpresa);
+    if (ctx instanceof NextResponse) return ctx;
+
+    const { cpOrigen, cpDestino, provinciaDestino, paquetes, valorCarrito: bodyValorCarrito } = body;
 
     const pesoTotal = paquetes.reduce((acc: number, p: any) => acc + (parseFloat(p.pesoKg) || 1), 0);
     const valorCarrito = bodyValorCarrito || paquetes.reduce((acc: number, p: any) => acc + (parseFloat(p.valorDeclarado) || 0), 0);
@@ -64,10 +68,10 @@ export async function POST(request: Request) {
     let couriersConfigurados: any[] = [];
     let reglasEmpresa: any[] = [];
     let motorBase = "MOTOR_PRECIO";
-    
-    if (empresaId) {
+
+    if (ctx.empresaId !== null) {
       const empresa = await prisma.empresa.findUnique({
-        where: { id: parseInt(empresaId) },
+        where: { id: ctx.empresaId },
         include: { 
           credenciales: { where: { activo: true } },
           reglasRuteo: { where: { activa: true }, orderBy: { prioridad: 'asc' } }

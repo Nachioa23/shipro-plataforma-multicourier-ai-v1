@@ -1,18 +1,20 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { resolverContext } from "@/lib/auth-context";
 
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const empresaId = searchParams.get("empresaId");
+    const ctx = resolverContext(request, searchParams.get("filtroEmpresa"));
+    if (ctx instanceof NextResponse) return ctx;
+
     const search = searchParams.get("search") || "";
     const courier = searchParams.get("courier") || "Todos";
     const fechaDesde = searchParams.get("fechaDesde") || "";
     const fechaHasta = searchParams.get("fechaHasta") || "";
 
-    if (!empresaId) return NextResponse.json({ error: "Falta empresaId" }, { status: 400 });
-
-    let where: any = { empresaId: parseInt(empresaId) };
+    let where: any = {};
+    if (ctx.empresaId !== null) where.empresaId = ctx.empresaId;
 
     if (courier !== "Todos") {
       where.courier = courier;

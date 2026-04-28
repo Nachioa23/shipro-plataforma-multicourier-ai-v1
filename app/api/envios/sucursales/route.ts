@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
+import { resolverContext } from "@/lib/auth-context";
 
 function calcularDistancia(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371; 
@@ -30,17 +31,23 @@ function obtenerCredencialesShipro(courier: string) {
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
+    const ctx = resolverContext(request, searchParams.get("filtroEmpresa"));
+    if (ctx instanceof NextResponse) return ctx;
+
     const cp = searchParams.get("cp");
     const localidad = searchParams.get("localidad") || "";
     const courier = searchParams.get("courier") || "andreani";
-    const empresaId = searchParams.get("empresaId") || "1";
 
     if (!cp) return NextResponse.json({ error: "Falta el Código Postal" }, { status: 400 });
 
+    if (ctx.empresaId === null) {
+      return NextResponse.json({ error: "Esta ruta requiere una empresa específica para usar sus credenciales." }, { status: 400 });
+    }
+
     const nombreNormalizado = courier.toLowerCase().replace(/[']/g, '');
-    
+
     const credencial = await prisma.credencialCourier.findUnique({
-      where: { empresaId_nombreCourier: { empresaId: parseInt(empresaId), nombreCourier: courier } }
+      where: { empresaId_nombreCourier: { empresaId: ctx.empresaId, nombreCourier: courier } }
     });
 
     // REGLA ESTRICTA DE CREDENCIALES

@@ -1,15 +1,16 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { resolverContext } from "@/lib/auth-context";
 
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const empresaId = searchParams.get("empresaId");
-    
-    // Filtro base: Si es administrador ve todo, si no, ve su empresa.
+    const ctx = resolverContext(request, searchParams.get("filtroEmpresa"));
+    if (ctx instanceof NextResponse) return ctx;
+
     let whereClause: any = {};
-    if (empresaId && empresaId !== "TODAS") {
-      whereClause.empresaId = parseInt(empresaId);
+    if (ctx.empresaId !== null) {
+      whereClause.empresaId = ctx.empresaId;
     }
 
     // Traemos los envíos con sus eventos y destinos para analizar

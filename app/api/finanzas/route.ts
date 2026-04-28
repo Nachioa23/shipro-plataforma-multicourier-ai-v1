@@ -1,15 +1,19 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { resolverContext } from "@/lib/auth-context";
 
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const empresaId = searchParams.get("empresaId");
-    
-    if (!empresaId) return NextResponse.json({ error: "Falta empresaId" }, { status: 400 });
+    const ctx = resolverContext(request, searchParams.get("filtroEmpresa"));
+    if (ctx instanceof NextResponse) return ctx;
+
+    if (ctx.empresaId === null) {
+      return NextResponse.json({ error: "Esta ruta requiere una empresa específica (no soporta agregado de TODAS)." }, { status: 400 });
+    }
 
     const empresa = await prisma.empresa.findUnique({
-      where: { id: parseInt(empresaId) },
+      where: { id: ctx.empresaId },
       include: {
         movimientos: {
           orderBy: { fecha: 'desc' },

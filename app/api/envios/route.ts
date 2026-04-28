@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { crearEnvio } from "@/lib/envios/crear";
+import { resolverContext } from "@/lib/auth-context";
 
 // ==========================================
 // GET: LECTURA DE ENVÍOS (Buscador y Filtros Dinámicos)
@@ -8,9 +9,8 @@ import { crearEnvio } from "@/lib/envios/crear";
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const empresaId = searchParams.get("empresaId");
-    const rol = searchParams.get("rol")?.toLowerCase() || "";
-    const filtroEmpresa = searchParams.get("filtroEmpresa");
+    const ctx = resolverContext(request, searchParams.get("filtroEmpresa"));
+    if (ctx instanceof NextResponse) return ctx;
 
     const page = parseInt(searchParams.get("page") || "1");
     const limit = parseInt(searchParams.get("limit") || "25");
@@ -22,15 +22,7 @@ export async function GET(request: Request) {
     const estadoTab = searchParams.get("estado") || "Todos";
 
     let where: any = {};
-
-    if (rol.includes("admin") || rol.includes("shipro")) {
-      if (filtroEmpresa && filtroEmpresa !== "TODAS") {
-        where.empresaId = parseInt(filtroEmpresa);
-      }
-    } else {
-      if (!empresaId) return NextResponse.json({ error: "Falta empresaId" }, { status: 400 });
-      where.empresaId = parseInt(empresaId);
-    }
+    if (ctx.empresaId !== null) where.empresaId = ctx.empresaId;
 
     if (search) {
       where.OR = [

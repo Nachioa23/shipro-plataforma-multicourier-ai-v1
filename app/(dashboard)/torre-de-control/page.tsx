@@ -42,7 +42,7 @@ export default function TorreDeControl() {
       setCargandoDatos(true);
       try {
         const params = new URLSearchParams();
-        params.append("empresaId", filtroEmpresaId);
+        params.append("filtroEmpresa", filtroEmpresaId);
         if (filtroRuteoDesde) params.append("desde", filtroRuteoDesde);
         if (filtroRuteoHasta) params.append("hasta", filtroRuteoHasta);
 

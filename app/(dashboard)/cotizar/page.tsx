@@ -25,7 +25,7 @@ function CotizadorContenido() {
   const [sucursalElegidaId, setSucursalElegidaId] = useState<string>("");
 
   const searchParams = useSearchParams();
-  const cpOrigen = searchParams.get("origen") || "1000";
+  const cpOrigen = searchParams.get("origen") || "1050";
   const cpDestino = searchParams.get("destino") || "0000";
   const localidadDestino = searchParams.get("localidad") || "Destino";
   const peso = searchParams.get("peso") || "1";
@@ -133,7 +133,7 @@ function CotizadorContenido() {
     };
 
     try {
-      const res = await fetch("/api/envios", {
+      const res = await fetch("/api/envios/manual", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });

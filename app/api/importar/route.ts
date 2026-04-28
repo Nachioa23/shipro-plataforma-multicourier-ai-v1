@@ -70,7 +70,7 @@ export async function POST(request: Request) {
         }
 
         const fechaImpresion = data.fechaCreacion && data.fechaCreacion !== "null" ? new Date(data.fechaCreacion) : new Date();
-        const fechaRec = data.fechaRecoleccion && data.fechaRecoleccion !== "null" ? new Date(data.fechaRecoleccion) : null;
+        const fechaRec = data.fechaColecta && data.fechaColecta !== "null" ? new Date(data.fechaColecta) : null;
         const fechaEnt = data.fechaEntrega && data.fechaEntrega !== "null" ? new Date(data.fechaEntrega) : null;
 
         await prisma.envio.upsert({
@@ -84,7 +84,7 @@ export async function POST(request: Request) {
             // ========================================================
 
             estadoActual: data.estadoActual,
-            fechaRecoleccion: fechaRec,
+            fechaColecta: fechaRec,
             fechaEntrega: fechaEnt,
             pesoReal: data.pesoReal,
             pesoFacturado: data.pesoFacturado,
@@ -115,7 +115,7 @@ export async function POST(request: Request) {
             pesoFacturado: data.pesoFacturado,
             pesoVolumetrico: data.pesoVolumetrico,
             fechaImpresion: fechaImpresion,
-            fechaRecoleccion: fechaRec,
+            fechaColecta: fechaRec,
             fechaEntrega: fechaEnt,
             finanzas: {
               create: {

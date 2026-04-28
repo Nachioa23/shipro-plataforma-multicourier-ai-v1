@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import fs from 'fs';
 import path from 'path';
 import csv from 'csv-parser';
+import bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
@@ -17,15 +18,16 @@ async function main() {
     create: { nombre: 'Shipro HQ', cuit: '00-00000000-0' },
   });
 
+  const adminPassword = await bcrypt.hash('admin', 10);
   await prisma.usuario.upsert({
     where: { email: 'admin@shipro.pro' },
     update: {},
-    create: { 
-      email: 'admin@shipro.pro', 
-      password: 'admin', 
-      nombre: 'Nacho (Director)', 
-      rol: 'admin_shipro', 
-      empresaId: empresa.id 
+    create: {
+      email: 'admin@shipro.pro',
+      password: adminPassword,
+      nombre: 'Nacho (Director)',
+      rol: 'admin_shipro',
+      empresaId: empresa.id
     },
   });
   

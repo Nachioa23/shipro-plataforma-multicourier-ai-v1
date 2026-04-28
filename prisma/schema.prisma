@@ -15,7 +15,11 @@ model Empresa {
   nombre              String
   cuit                String       @unique
   activo              Boolean      @default(true) // <--- ¡ESTE ES EL CAMPO VITAL QUE FALTABA!
-  
+
+  apiKey              String?      @unique
+  apiKeyActiva        Boolean      @default(true)
+  apiKeyCreadaEn      DateTime?
+
   // --- FINANZAS Y BILLETERA ---
   saldoActivo         Float        @default(0.0)
   modalidadPago       String       @default("POSTPAGO") // PREPAGO (Billetera) o POSTPAGO (Crédito)

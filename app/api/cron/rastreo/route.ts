@@ -24,7 +24,7 @@ function obtenerCredencialesShipro(courier: string) {
 export async function GET(request: Request) {
   try {
     const LOTE_MAXIMO = 200; // Capacidad escalada para +100k envíos/mes
-    const baseUrl = process.env.NEXTAUTH_URL || "http://localhost:3000";
+    const baseUrl = process.env.APP_URL || "http://localhost:3000";
 
     // OBTENER LOS ENVÍOS "MÁS VIEJOS" QUE NO ESTÁN ENTREGADOS
     // Ordenamos por 'fechaActualizacion' ascendente, para que siempre procese los más atrasados primero.

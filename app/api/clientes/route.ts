@@ -46,7 +46,7 @@ export async function POST(request: Request) {
 
     // ¡DISPARAMOS EL NUEVO EMAIL DE ONBOARDING AUTOMÁTICO!
     try {
-      const urlLogin = "http://localhost:3000/login"; // La URL de acceso a tu plataforma
+      const urlLogin = `${process.env.APP_URL || "http://localhost:3000"}/login`;
       
       // Llamamos al Mail 5 que creamos, pasándole los datos exactos:
       await enviarMailBienvenida(email, razonSocial, passwordTemporal, urlLogin);
@@ -90,7 +90,7 @@ export async function PUT(request: Request) {
 
       // ¡DISPARAMOS EL EMAIL AUTOMÁTICO PARA USUARIOS NUEVOS!
       try {
-        const urlLogin = "http://localhost:3000/login";
+        const urlLogin = `${process.env.APP_URL || "http://localhost:3000"}/login`;
         
         // Usamos la misma función de bienvenida, pero ahora saluda al usuario particular
         await enviarMailBienvenida(email, nombre, passwordTemporal, urlLogin);

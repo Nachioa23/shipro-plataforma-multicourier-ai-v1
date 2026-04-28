@@ -265,7 +265,7 @@ export default function TrackingPublico({ params }: { params: Promise<{ tracking
   const eventoEnCamino = [...eventos].reverse().find((e: any) => 
     ["EN_TRANSITO", "RECOLECTADO", "EN_SUCURSAL", "EN_REPARTO", "DESPACHADO"].includes(e.estado.toUpperCase())
   );
-  const fechaEnCamino = eventoEnCamino ? eventoEnCamino.fecha : envio.fechaRecoleccion;
+  const fechaEnCamino = eventoEnCamino ? eventoEnCamino.fecha : envio.fechaColecta;
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col font-sans">

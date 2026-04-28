@@ -99,7 +99,7 @@ export default function ImportadorDefinitivo() {
                 
                 // Fechas Clave (Para el Dashboard y SLA)
                 fechaCreacion: fila.created_at || new Date().toISOString(),
-                fechaRecoleccion: fila.fecha_recoleccion || null,
+                fechaColecta: fila.fecha_recoleccion || null,
                 fechaEntrega: fila.fecha_entrega || null,
 
                 // CRM: Datos de Destino

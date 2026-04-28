@@ -322,7 +322,7 @@ export async function POST(request: Request) {
         paquetes: [{ pesoKg: parseFloat(pesoReal) || 1, largoCm: 10, anchoCm: 10, altoCm: 10, valorDeclarado: parseFloat(valorDeclarado) || 0 }]
       };
 
-      const urlBase = request.headers.get("origin") || "http://localhost:3000";
+      const urlBase = request.headers.get("origin") || process.env.APP_URL || "http://localhost:3000";
       const resCotizador = await fetch(`${urlBase}/api/cotizar`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payloadCotizador)
       });
@@ -411,9 +411,9 @@ export async function POST(request: Request) {
     if (email) {
       if (falloPorPeaje) {
          const { enviarMailRetenido } = await import("@/lib/mailer");
-         await enviarMailRetenido(email, trackingOficial, destinatarioNombre, `http://localhost:3000/corregir/${trackingOficial}`, empresaNombreParaMail);
+         await enviarMailRetenido(email, trackingOficial, destinatarioNombre, `${process.env.APP_URL || "http://localhost:3000"}/corregir/${trackingOficial}`, empresaNombreParaMail);
       } else {
-         enviarMailCreacion(email, trackingOficial, destinatarioNombre, nombreOficial, `http://localhost:3000/seguimiento/${trackingOficial}`);
+         enviarMailCreacion(email, trackingOficial, destinatarioNombre, nombreOficial, `${process.env.APP_URL || "http://localhost:3000"}/seguimiento/${trackingOficial}`);
       }
     }
 

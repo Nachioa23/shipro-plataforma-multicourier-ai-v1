@@ -68,7 +68,7 @@ export async function GET(request: Request) {
     }
 
     // 5. Redirigimos al cliente a la página pública de seguimiento para que complete las otras 5 preguntas
-    const baseUrl = process.env.NEXTAUTH_URL || "http://localhost:3000";
+    const baseUrl = process.env.APP_URL || "http://localhost:3000";
     return NextResponse.redirect(`${baseUrl}/s/${tracking}?nps=success&score=${score}`);
 
   } catch (error) {

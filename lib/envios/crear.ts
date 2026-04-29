@@ -1,26 +1,8 @@
 import prisma from "@/lib/prisma";
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { enviarMailCreacion } from "@/lib/mailer";
-
-function obtenerCredencialesShipro(courier: string) {
-  const c = courier.toLowerCase().replace(/['\s]/g, '');
-  if (c === 'andreani') {
-    return {
-      username: process.env.ANDREANI_USER?.trim() || '',
-      password: process.env.ANDREANI_PASS?.trim() || '',
-      cliente: process.env.ANDREANI_CLIENTE?.trim() || '',
-      id_sucursal_origen: process.env.ANDREANI_SUCURSAL_ORIGEN?.trim() || '',
-      contrato_domicilio: process.env.ANDREANI_CONTRATO_DOM?.trim() || '',
-      contrato_sucursal: process.env.ANDREANI_CONTRATO_SUC?.trim() || '',
-      contrato_cambio: process.env.ANDREANI_CONTRATO_CAMBIO?.trim() || '',
-      contrato_devolucion: process.env.ANDREANI_CONTRATO_DEVOLUCION?.trim() || ''
-    };
-  }
-  if (c === 'mocis') {
-    return { clientApi: process.env.MOCIS_CLIENT_API?.trim() || '', clientSecret: process.env.MOCIS_CLIENT_SECRET?.trim() || '' };
-  }
-  return {};
-}
+import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
+import { cotizar } from "@/lib/cotizador";
 
 export interface CrearEnvioInput {
   empresaId: number;
@@ -45,6 +27,13 @@ export interface CrearEnvioInput {
 }
 
 export async function crearEnvio(input: CrearEnvioInput) {
+  // Política de negocio: crear envío requiere una empresa específica.
+  // Modo Dios "TODAS" no aplica acá. Defensivo runtime check (TS ya garantiza
+  // empresaId: number, pero si en el futuro se cambia el tipo este guard atrapa).
+  if (input.empresaId === null || input.empresaId === undefined) {
+    throw new Error('EmpresaRequerida: crear envío requiere una empresa específica. Modo Dios sin filtro no aplica acá.');
+  }
+
   const {
     empresaId, destinatarioNombre, cpDestino, pesoReal, nombreCourier,
     calle, altura, piso, dpto, dni, email, telefono, localidad, modalidad,
@@ -169,16 +158,23 @@ export async function crearEnvio(input: CrearEnvioInput) {
   // DESPACHO AL COURIER (Solo si NO falló el peaje)
   if (!falloPorPeaje) {
     try {
+      // courierReal.nombre es la capitalización canónica de BD (ya validada arriba
+      // en el findFirst). NO usar courierNombreLimpio (lowercase) porque
+      // CredencialCourier.nombreCourier en BD está capitalizado y findUnique
+      // requiere match exacto. Ver DEUDA 11.
       const credencialMain = await prisma.credencialCourier.findUnique({
-        where: { empresaId_nombreCourier: { empresaId, nombreCourier: courierNombreLimpio } }
+        where: { empresaId_nombreCourier: { empresaId, nombreCourier: courierReal.nombre } }
       });
 
       if (credencialMain && credencialMain.activo) {
-        let llavesMain = credencialMain.usaCredencialesPropias
-          ? JSON.parse(credencialMain.credencialesJson || '{}')
+        // Si el cliente usa credenciales propias y son inválidas/incompletas,
+        // parsearCredencialesPropias lanza un error que el catch outer absorbe.
+        // NO hay fallback automático a Shipro (política de protección financiera):
+        // el envío queda con tracking genérico SHP-xxxx hasta que el cliente
+        // arregle sus credenciales en /mis-transportes.
+        const llavesMain = credencialMain.usaCredencialesPropias
+          ? parsearCredencialesPropias(courierNombreLimpio, credencialMain.credencialesJson)
           : obtenerCredencialesShipro(courierNombreLimpio);
-
-        if (!llavesMain.clientApi && !llavesMain.username) llavesMain = obtenerCredencialesShipro(courierNombreLimpio);
 
         const motorMain = CourierFactory.crear(courierNombreLimpio, llavesMain);
 
@@ -216,9 +212,22 @@ export async function crearEnvio(input: CrearEnvioInput) {
           urlEtiquetaFinal = respuestaMain.etiquetaUrl || null;
         }
 
-        if (credencialMain.courierRecolector && credencialMain.courierRecolector !== "mismo_courier") {
-          let llavesRecolector = obtenerCredencialesShipro(credencialMain.courierRecolector);
-          const motorRecolector = CourierFactory.crear(credencialMain.courierRecolector, llavesRecolector);
+        const recolector = credencialMain.courierRecolector?.trim() || "";
+        const recolectorLower = recolector.toLowerCase();
+        const mainNombreLower = credencialMain.nombreCourier?.toLowerCase() || "";
+
+        const esMismoCourier =
+          !recolector ||
+          recolectorLower === "mismo_courier" ||
+          recolectorLower === "pickup" ||
+          recolectorLower === mainNombreLower;
+
+        const esDropoff = recolectorLower === "dropoff";
+
+        if (!esMismoCourier && !esDropoff) {
+          const courierMicrohub = recolectorLower === "shipro_cross" ? "mocis" : recolector;
+          const llavesRecolector = obtenerCredencialesShipro(courierMicrohub);
+          const motorRecolector = CourierFactory.crear(courierMicrohub, llavesRecolector);
 
           const paramsRecolector = { ...paramsDespacho, referencia: `FIRST-MILE: ${trackingOficial}` };
           const respuestaRecolector = await motorRecolector.despachar(paramsRecolector);
@@ -229,7 +238,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
         }
       }
     } catch (errorDisp) {
-      console.warn(`[Shipro] Aviso: Falló el despacho en los couriers.`, errorDisp);
+      console.warn(`[Shipro] Aviso: Falló el despacho en los couriers (puede ser por API caída o credenciales inválidas).`, errorDisp);
     }
   }
 
@@ -242,31 +251,34 @@ export async function crearEnvio(input: CrearEnvioInput) {
   let servicioSugeridoStr: string | null = null;
 
   try {
-    const payloadCotizador = {
-      empresaId, cpOrigen: "1000", cpDestino, provinciaDestino,
-      paquetes: [{ pesoKg: parseFloat(String(pesoReal)) || 1, largoCm: 10, anchoCm: 10, altoCm: 10, valorDeclarado: parseFloat(String(valorDeclarado)) || 0 }]
-    };
-
-    const urlBase = process.env.APP_URL || "http://localhost:3000";
-    const resCotizador = await fetch(`${urlBase}/api/cotizar`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payloadCotizador)
+    // HARDCODED: CP de origen del depósito.
+    // Eliminar cuando se implemente módulo Depósitos (DEUDA 4).
+    // Ver DEUDAS.md
+    const dataCotizacion = await cotizar({
+      empresaId,
+      cpOrigen: "1050",
+      cpDestino: String(cpDestino),
+      provinciaDestino,
+      paquetes: [{
+        pesoKg: parseFloat(String(pesoReal)) || 1,
+        largoCm: 10, anchoCm: 10, altoCm: 10,
+        valorDeclarado: parseFloat(String(valorDeclarado)) || 0,
+        requiereSeguro: false
+      }]
     });
 
-    if (resCotizador.ok) {
-      const dataCotizacion = await resCotizador.json();
-      const mod = modalidad?.toLowerCase() || "";
-      let opcionesParaComparar: any[] = [];
+    const mod = modalidad?.toLowerCase() || "";
+    let opcionesParaComparar: any[] = [];
 
-      if (mod.includes('sucursal')) opcionesParaComparar = dataCotizacion.sucursal || [];
-      else if (mod.includes('domicilio') || mod.includes('estándar') || mod.includes('sameday') || mod.includes('same-day')) opcionesParaComparar = dataCotizacion.domicilio || [];
+    if (mod.includes('sucursal')) opcionesParaComparar = dataCotizacion.sucursal || [];
+    else if (mod.includes('domicilio') || mod.includes('estándar') || mod.includes('sameday') || mod.includes('same-day')) opcionesParaComparar = dataCotizacion.domicilio || [];
 
-      if (opcionesParaComparar.length > 0) {
-        const opcionMasBarata = opcionesParaComparar.reduce((prev, curr) => prev.precioFinal < curr.precioFinal ? prev : curr);
-        if (opcionMasBarata.precioFinal < montoDebito) {
-          fugaCalculada = montoDebito - opcionMasBarata.precioFinal;
-          courierSugeridoStr = opcionMasBarata.courier;
-          servicioSugeridoStr = opcionMasBarata.modalidad;
-        }
+    if (opcionesParaComparar.length > 0) {
+      const opcionMasBarata = opcionesParaComparar.reduce((prev, curr) => prev.precioFinal < curr.precioFinal ? prev : curr);
+      if (opcionMasBarata.precioFinal < montoDebito) {
+        fugaCalculada = montoDebito - opcionMasBarata.precioFinal;
+        courierSugeridoStr = opcionMasBarata.courier;
+        servicioSugeridoStr = opcionMasBarata.modalidad;
       }
     }
   } catch (errorFuga) {}

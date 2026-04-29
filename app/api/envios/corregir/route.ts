@@ -1,27 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
-
-// Función auxiliar (misma que en route.ts principal)
-function obtenerCredencialesShipro(courier: string) {
-  const c = courier.toLowerCase().replace(/['\s]/g, '');
-  if (c === 'andreani') {
-    return { 
-      username: process.env.ANDREANI_USER?.trim() || '', 
-      password: process.env.ANDREANI_PASS?.trim() || '', 
-      cliente: process.env.ANDREANI_CLIENTE?.trim() || '',
-      id_sucursal_origen: process.env.ANDREANI_SUCURSAL_ORIGEN?.trim() || '',
-      contrato_domicilio: process.env.ANDREANI_CONTRATO_DOM?.trim() || '',
-      contrato_sucursal: process.env.ANDREANI_CONTRATO_SUC?.trim() || '',
-      contrato_cambio: process.env.ANDREANI_CONTRATO_CAMBIO?.trim() || '',
-      contrato_devolucion: process.env.ANDREANI_CONTRATO_DEVOLUCION?.trim() || ''
-    };
-  }
-  if (c === 'mocis') {
-    return { clientApi: process.env.MOCIS_CLIENT_API?.trim() || '', clientSecret: process.env.MOCIS_CLIENT_SECRET?.trim() || '' };
-  }
-  return {};
-}
+import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 
 export async function POST(request: Request) {
   try {
@@ -79,11 +59,9 @@ export async function POST(request: Request) {
       });
 
       if (credencialMain && credencialMain.activo) {
-        let llavesMain = credencialMain.usaCredencialesPropias 
-          ? JSON.parse(credencialMain.credencialesJson || '{}') 
-          : obtenerCredencialesShipro(envio.courier.nombre);
-        
-        if (!llavesMain.clientApi && !llavesMain.username) llavesMain = obtenerCredencialesShipro(envio.courier.nombre);
+        const llavesMain = credencialMain.usaCredencialesPropias
+          ? parsearCredencialesPropias(nombreCourierLimpio, credencialMain.credencialesJson)
+          : obtenerCredencialesShipro(nombreCourierLimpio);
         
         const motorMain = CourierFactory.crear(nombreCourierLimpio, llavesMain);
         

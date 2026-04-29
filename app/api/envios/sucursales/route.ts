@@ -14,19 +14,7 @@ function calcularDistancia(lat1: number, lon1: number, lat2: number, lon2: numbe
   return R * c;
 }
 
-function obtenerCredencialesShipro(courier: string) {
-  const c = courier.toLowerCase().replace(/[']/g, ''); 
-  if (c === 'andreani') {
-    return { 
-      username: process.env.ANDREANI_USER?.trim() || '', 
-      password: process.env.ANDREANI_PASS?.trim() || '', 
-      cliente: process.env.ANDREANI_CLIENTE?.trim() || '',
-      contrato_sucursal: process.env.ANDREANI_CONTRATO_SUC?.trim() || '',
-      contrato_domicilio: process.env.ANDREANI_CONTRATO_DOM?.trim() || ''
-    };
-  }
-  return {};
-}
+import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 
 export async function GET(request: Request) {
   try {
@@ -51,8 +39,8 @@ export async function GET(request: Request) {
     });
 
     // REGLA ESTRICTA DE CREDENCIALES
-    let llaves = credencial?.usaCredencialesPropias 
-      ? JSON.parse(credencial.credencialesJson || '{}') 
+    const llaves = credencial?.usaCredencialesPropias
+      ? parsearCredencialesPropias(nombreNormalizado, credencial.credencialesJson)
       : obtenerCredencialesShipro(nombreNormalizado);
 
     const motorCourier = CourierFactory.crear(nombreNormalizado, llaves);

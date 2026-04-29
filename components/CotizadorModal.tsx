@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
-import { Calculator, MapPin, Package, Loader2, Truck, Store, X } from 'lucide-react';
+import { Calculator, MapPin, Package, Loader2, Truck, Store, X, Building2 } from 'lucide-react';
 
 interface CotizadorModalProps {
   isOpen: boolean;
@@ -12,8 +12,13 @@ interface CotizadorModalProps {
 export default function CotizadorModal({ isOpen, onClose }: CotizadorModalProps) {
   const { data: session } = useSession();
   const brandColor = '#233b6b';
+  const rol = session?.user?.rol || '';
+  const esShipro = rol === 'admin_shipro' || rol === 'operador_shipro';
 
-  const [cpOrigen, setCpOrigen] = useState("1000");
+  // HARDCODED: CP de origen del depósito.
+  // Eliminar cuando se implemente módulo Depósitos (DEUDA 4).
+  // Ver DEUDAS.md
+  const [cpOrigen, setCpOrigen] = useState("1050");
   const [cpDestino, setCpDestino] = useState("");
   const [peso, setPeso] = useState("1");
   const [largo, setLargo] = useState("10");
@@ -24,6 +29,18 @@ export default function CotizadorModal({ isOpen, onClose }: CotizadorModalProps)
   const [resultados, setResultados] = useState<{ domicilio: any[], sucursal: any[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Dropdown shipro: empresa elegida + lista de clientes activos
+  const [empresaSeleccionadaId, setEmpresaSeleccionadaId] = useState<string>("");
+  const [listaClientes, setListaClientes] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (!isOpen || !esShipro) return;
+    fetch('/api/clientes')
+      .then(r => r.json())
+      .then(data => setListaClientes(Array.isArray(data) ? data.filter((c: any) => c.activo) : []))
+      .catch(() => setListaClientes([]));
+  }, [isOpen, esShipro]);
+
   if (!isOpen) return null;
 
   const consultarTarifas = async (e: React.FormEvent) => {
@@ -32,24 +49,30 @@ export default function CotizadorModal({ isOpen, onClose }: CotizadorModalProps)
       setError("Por favor, completá todos los campos.");
       return;
     }
+    if (esShipro && !empresaSeleccionadaId) {
+      setError("Seleccioná una empresa antes de cotizar.");
+      return;
+    }
 
     setCargando(true);
     setError(null);
     setResultados(null);
 
     try {
-      const bodyRequest = {
-        empresaId: session?.user?.empresaId || 1, 
-        cpOrigen, 
-        cpDestino, 
+      const bodyRequest: any = {
+        cpOrigen,
+        cpDestino,
         paquetes: [{
           pesoKg: parseFloat(peso), largoCm: parseFloat(largo), anchoCm: parseFloat(ancho), altoCm: parseFloat(alto),
           valorDeclarado: 0, requiereSeguro: false
         }]
       };
+      if (esShipro && empresaSeleccionadaId) {
+        bodyRequest.filtroEmpresa = empresaSeleccionadaId;
+      }
 
       const res = await fetch("/api/cotizar", {
-        method: "POST", 
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(bodyRequest)
       });
@@ -61,7 +84,12 @@ export default function CotizadorModal({ isOpen, onClose }: CotizadorModalProps)
           sucursal: data.sucursal || []
         });
       } else {
-        setError("Error al consultar las tarifas.");
+        const errData = await res.json().catch(() => ({}));
+        if (errData?.code === 'EMPRESA_REQUERIDA') {
+          setError(errData.error || "Seleccioná una empresa para cotizar.");
+        } else {
+          setError("Error al consultar las tarifas.");
+        }
       }
     } catch (err) {
       setError("Error de conexión con el servidor.");
@@ -72,16 +100,13 @@ export default function CotizadorModal({ isOpen, onClose }: CotizadorModalProps)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
-      {/* FONDO OSCURO (Overlay) */}
-      <div 
-        className="absolute inset-0 bg-gray-900/60 backdrop-blur-sm transition-opacity" 
+      <div
+        className="absolute inset-0 bg-gray-900/60 backdrop-blur-sm transition-opacity"
         onClick={onClose}
       ></div>
 
-      {/* CONTENEDOR DEL MODAL */}
       <div className="relative bg-gray-50 rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
-        
-        {/* CABECERA */}
+
         <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-blue-50 text-blue-600 rounded-lg">
@@ -92,7 +117,7 @@ export default function CotizadorModal({ isOpen, onClose }: CotizadorModalProps)
               <p className="text-xs text-gray-500 font-medium">Consulta de tarifas en tiempo real</p>
             </div>
           </div>
-          <button 
+          <button
             onClick={onClose}
             className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
           >
@@ -100,12 +125,29 @@ export default function CotizadorModal({ isOpen, onClose }: CotizadorModalProps)
           </button>
         </div>
 
-        {/* CUERPO DEL MODAL (Scrollable) */}
         <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
-          
-          {/* FORMULARIO */}
+
           <div className="lg:col-span-5">
             <form onSubmit={consultarTarifas} className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 space-y-5">
+
+              {esShipro && (
+                <div>
+                  <label className="block text-[10px] font-bold text-indigo-600 uppercase tracking-wider mb-1 flex items-center gap-1">
+                    <Building2 className="w-3 h-3" /> Cotizar para empresa:
+                  </label>
+                  <select
+                    value={empresaSeleccionadaId}
+                    onChange={(e) => setEmpresaSeleccionadaId(e.target.value)}
+                    className="w-full border border-indigo-200 bg-indigo-50 text-indigo-900 rounded-lg px-3 py-2 text-sm font-bold focus:outline-none cursor-pointer"
+                  >
+                    <option value="" disabled>Seleccionar empresa…</option>
+                    {listaClientes.map(c => (
+                      <option key={c.id} value={c.id}>{c.nombre}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               {error && (
                 <div className="p-3 bg-red-50 text-red-700 text-xs font-bold rounded-lg border border-red-200">
                   {error}
@@ -148,14 +190,18 @@ export default function CotizadorModal({ isOpen, onClose }: CotizadorModalProps)
                 </div>
               </div>
 
-              <button type="submit" disabled={cargando} className="w-full flex items-center justify-center gap-2 py-3 text-white font-bold rounded-lg shadow-md hover:opacity-90 transition-all text-sm disabled:opacity-70" style={{ backgroundColor: brandColor }}>
+              <button
+                type="submit"
+                disabled={cargando || (esShipro && !empresaSeleccionadaId)}
+                className="w-full flex items-center justify-center gap-2 py-3 text-white font-bold rounded-lg shadow-md hover:opacity-90 transition-all text-sm disabled:opacity-50"
+                style={{ backgroundColor: brandColor }}
+              >
                 {cargando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Calculator className="w-4 h-4" />}
                 {cargando ? "Cotizando..." : "Calcular Tarifas"}
               </button>
             </form>
           </div>
 
-          {/* RESULTADOS */}
           <div className="lg:col-span-7">
             {cargando ? (
               <div className="h-full min-h-[300px] flex flex-col items-center justify-center bg-white rounded-xl border border-gray-200">
@@ -165,12 +211,13 @@ export default function CotizadorModal({ isOpen, onClose }: CotizadorModalProps)
             ) : !resultados ? (
               <div className="h-full min-h-[300px] flex flex-col items-center justify-center bg-white/50 rounded-xl border border-dashed border-gray-300">
                  <Calculator className="w-10 h-10 text-gray-300 mb-3" />
-                 <p className="text-gray-400 font-bold text-sm">Ingresá los datos para ver las tarifas</p>
+                 <p className="text-gray-400 font-bold text-sm">
+                   {esShipro && !empresaSeleccionadaId ? "Seleccioná una empresa para cotizar" : "Ingresá los datos para ver las tarifas"}
+                 </p>
               </div>
             ) : (
               <div className="bg-white p-5 rounded-xl border border-gray-200 space-y-6 min-h-[300px]">
-                
-                {/* DOMICILIO */}
+
                 <div>
                   <h4 className="text-xs font-bold text-gray-500 flex items-center gap-1.5 mb-3"><Truck className="w-3.5 h-3.5" /> Entrega a Domicilio</h4>
                   {resultados.domicilio.length === 0 ? (
@@ -190,7 +237,6 @@ export default function CotizadorModal({ isOpen, onClose }: CotizadorModalProps)
                   )}
                 </div>
 
-                {/* SUCURSAL */}
                 <div>
                   <h4 className="text-xs font-bold text-gray-500 flex items-center gap-1.5 mb-3"><Store className="w-3.5 h-3.5" /> Retiro en Sucursal</h4>
                   {resultados.sucursal.length === 0 ? (

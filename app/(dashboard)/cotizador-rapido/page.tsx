@@ -1,12 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
-import { Calculator, MapPin, Package, Loader2, Truck, Store, ArrowRightCircle } from 'lucide-react';
+import { Calculator, MapPin, Package, Loader2, Truck, Store, ArrowRightCircle, Building2 } from 'lucide-react';
 
 export default function CotizadorRapido() {
   const { data: session } = useSession();
   const brandColor = '#233b6b';
+  const rol = session?.user?.rol || '';
+  const esShipro = rol === 'admin_shipro' || rol === 'operador_shipro';
 
   // Estados del Formulario
   // HARDCODED: CP de origen del depósito.
@@ -24,10 +26,26 @@ export default function CotizadorRapido() {
   const [resultados, setResultados] = useState<{ domicilio: any[], sucursal: any[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Dropdown shipro: empresa elegida + lista de clientes activos
+  const [empresaSeleccionadaId, setEmpresaSeleccionadaId] = useState<string>("");
+  const [listaClientes, setListaClientes] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (!esShipro) return;
+    fetch('/api/clientes')
+      .then(r => r.json())
+      .then(data => setListaClientes(Array.isArray(data) ? data.filter((c: any) => c.activo) : []))
+      .catch(() => setListaClientes([]));
+  }, [esShipro]);
+
   const consultarTarifas = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!cpOrigen || !cpDestino || !peso || !largo || !ancho || !alto) {
       setError("Por favor, completá todos los campos.");
+      return;
+    }
+    if (esShipro && !empresaSeleccionadaId) {
+      setError("Seleccioná una empresa antes de cotizar.");
       return;
     }
 
@@ -36,18 +54,20 @@ export default function CotizadorRapido() {
     setResultados(null);
 
     try {
-      const bodyRequest = {
-        empresaId: session?.user?.empresaId || 1, 
-        cpOrigen, 
-        cpDestino, 
+      const bodyRequest: any = {
+        cpOrigen,
+        cpDestino,
         paquetes: [{
           pesoKg: parseFloat(peso), largoCm: parseFloat(largo), anchoCm: parseFloat(ancho), altoCm: parseFloat(alto),
           valorDeclarado: 0, requiereSeguro: false
         }]
       };
+      if (esShipro && empresaSeleccionadaId) {
+        bodyRequest.filtroEmpresa = empresaSeleccionadaId;
+      }
 
       const res = await fetch("/api/cotizar", {
-        method: "POST", 
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(bodyRequest)
       });
@@ -59,7 +79,12 @@ export default function CotizadorRapido() {
           sucursal: data.sucursal || []
         });
       } else {
-        setError("Error al consultar las tarifas con el Courier.");
+        const errData = await res.json().catch(() => ({}));
+        if (errData?.code === 'EMPRESA_REQUERIDA') {
+          setError(errData.error || "Seleccioná una empresa para cotizar.");
+        } else {
+          setError("Error al consultar las tarifas con el Courier.");
+        }
       }
     } catch (err) {
       setError("Error de conexión con el servidor.");
@@ -95,11 +120,29 @@ export default function CotizadorRapido() {
       </header>
 
       <div className="p-8 max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-8">
-        
+
         {/* PANEL IZQUIERDO: FORMULARIO */}
         <div className="lg:col-span-4 space-y-6">
           <form onSubmit={consultarTarifas} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 space-y-6">
-            
+
+            {esShipro && (
+              <div>
+                <label className="block text-[10px] font-bold text-indigo-600 uppercase tracking-wider mb-1 flex items-center gap-1">
+                  <Building2 className="w-3 h-3" /> Cotizar para empresa:
+                </label>
+                <select
+                  value={empresaSeleccionadaId}
+                  onChange={(e) => setEmpresaSeleccionadaId(e.target.value)}
+                  className="w-full border border-indigo-200 bg-indigo-50 text-indigo-900 rounded-lg px-3 py-2 text-sm font-bold focus:outline-none cursor-pointer"
+                >
+                  <option value="" disabled>Seleccionar empresa…</option>
+                  {listaClientes.map(c => (
+                    <option key={c.id} value={c.id}>{c.nombre}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             {error && (
               <div className="p-3 bg-red-50 text-red-700 text-sm font-bold rounded-lg border border-red-200">
                 {error}
@@ -144,10 +187,10 @@ export default function CotizadorRapido() {
               </div>
             </div>
 
-            <button 
-              type="submit" 
-              disabled={cargando}
-              className="w-full flex items-center justify-center gap-2 py-3.5 text-white font-bold rounded-xl shadow-md hover:opacity-90 transition-all text-sm disabled:opacity-70 mt-4" 
+            <button
+              type="submit"
+              disabled={cargando || (esShipro && !empresaSeleccionadaId)}
+              className="w-full flex items-center justify-center gap-2 py-3.5 text-white font-bold rounded-xl shadow-md hover:opacity-90 transition-all text-sm disabled:opacity-50 mt-4"
               style={{ backgroundColor: brandColor }}
             >
               {cargando ? <Loader2 className="w-5 h-5 animate-spin" /> : <Calculator className="w-5 h-5" />}
@@ -166,7 +209,9 @@ export default function CotizadorRapido() {
           ) : !resultados ? (
              <div className="h-full min-h-[400px] flex flex-col items-center justify-center bg-white/50 rounded-2xl border border-dashed border-gray-300">
                 <ArrowRightCircle className="w-16 h-16 text-gray-200 mb-4" />
-                <p className="text-gray-400 font-bold text-lg">Ingresá los datos para ver las opciones</p>
+                <p className="text-gray-400 font-bold text-lg">
+                  {esShipro && !empresaSeleccionadaId ? "Seleccioná una empresa para cotizar" : "Ingresá los datos para ver las opciones"}
+                </p>
              </div>
           ) : (
             <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-200 space-y-8">
@@ -175,7 +220,6 @@ export default function CotizadorRapido() {
                 <button onClick={limpiarConsulta} className="text-sm font-bold text-blue-600 hover:text-blue-800 transition-colors">Nueva Consulta</button>
               </div>
 
-              {/* TARJETAS DOMICILIO */}
               <div>
                 <h4 className="text-sm font-bold text-gray-500 flex items-center gap-2 mb-4"><Truck className="w-4 h-4" /> Entrega a Domicilio</h4>
                 {resultados.domicilio.length === 0 ? (
@@ -196,7 +240,6 @@ export default function CotizadorRapido() {
                 )}
               </div>
 
-              {/* TARJETAS SUCURSAL */}
               <div>
                 <h4 className="text-sm font-bold text-gray-500 flex items-center gap-2 mb-4"><Store className="w-4 h-4" /> Retiro en Sucursal</h4>
                 {resultados.sucursal.length === 0 ? (

@@ -1,26 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
-
-function obtenerCredencialesShipro(courier: string) {
-  const c = courier.toLowerCase(); 
-  if (c === 'andreani') {
-    return { 
-      username: process.env.ANDREANI_USER?.trim() || '', 
-      password: process.env.ANDREANI_PASS?.trim() || '', 
-      cliente: process.env.ANDREANI_CLIENTE?.trim() || '',
-      contrato_cambio: process.env.ANDREANI_CONTRATO_CAMBIO?.trim() || '',
-      contrato_devolucion: process.env.ANDREANI_CONTRATO_DEVOLUCION?.trim() || ''
-    };
-  }
-  if (c === 'mocis') {
-    return { 
-      clientApi: process.env.MOCIS_CLIENT_API?.trim() || '', 
-      clientSecret: process.env.MOCIS_CLIENT_SECRET?.trim() || '' 
-    };
-  }
-  return {};
-}
+import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 
 export async function POST(request: Request) {
   try {
@@ -47,9 +28,9 @@ export async function POST(request: Request) {
     });
 
     // REGLA ESTRICTA DE CREDENCIALES
-    let llaves = credencial?.usaCredencialesPropias
-        ? JSON.parse(credencial.credencialesJson || '{}')
-        : obtenerCredencialesShipro(nombreNormalizado);
+    const llaves = credencial?.usaCredencialesPropias
+      ? parsearCredencialesPropias(nombreNormalizado, credencial.credencialesJson)
+      : obtenerCredencialesShipro(nombreNormalizado);
 
     const motorCourier = CourierFactory.crear(nombreNormalizado, llaves);
 

@@ -6,17 +6,7 @@ import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 import QRCode from "qrcode";
 import fs from 'fs';
 import path from 'path';
-
-function obtenerCredencialesShipro(courier: string) {
-  const c = courier.toLowerCase().replace(/['\s]/g, '');
-  if (c === 'andreani') {
-    return { 
-      username: process.env.ANDREANI_USER?.trim() || '', password: process.env.ANDREANI_PASS?.trim() || '', cliente: process.env.ANDREANI_CLIENTE?.trim() || '',
-      contrato_domicilio: process.env.ANDREANI_CONTRATO_DOM?.trim() || '', contrato_sucursal: process.env.ANDREANI_CONTRATO_SUC?.trim() || ''
-    };
-  }
-  return {};
-}
+import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 
 export async function POST(request: Request) {
   try {
@@ -122,8 +112,9 @@ export async function POST(request: Request) {
           where: { empresaId_nombreCourier: { empresaId: envio.empresaId, nombreCourier: envio.courier.nombre.toLowerCase() } }
         });
         
-        let llaves = credencial?.usaCredencialesPropias ? JSON.parse(credencial.credencialesJson || '{}') : obtenerCredencialesShipro(nombreNormalizado);
-        if (!llaves.clientApi && !llaves.username) llaves = obtenerCredencialesShipro(nombreNormalizado);
+        let llaves = credencial?.usaCredencialesPropias
+          ? parsearCredencialesPropias(nombreNormalizado, credencial.credencialesJson)
+          : obtenerCredencialesShipro(nombreNormalizado);
 
         let pdfBuffer: ArrayBuffer | Uint8Array;
         const motor = CourierFactory.crear(nombreNormalizado, llaves);

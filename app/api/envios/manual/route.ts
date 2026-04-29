@@ -35,7 +35,13 @@ export async function POST(request: Request) {
       numeroOrden: body.numeroOrden
     });
     return NextResponse.json(result);
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.message?.startsWith('EmpresaRequerida')) {
+      return NextResponse.json(
+        { error: 'Seleccioná una empresa para crear el envío', code: 'EMPRESA_REQUERIDA' },
+        { status: 400 }
+      );
+    }
     console.error("Error en POST /api/envios/manual:", error);
     return NextResponse.json({ error: "Error interno al crear el envío o debitar el saldo." }, { status: 500 });
   }

@@ -16,8 +16,22 @@ export default function NuevoEnvio() {
   const router = useRouter();
   const { data: session } = useSession();
   const brandColor = '#233b6b';
-  
+  const rol = session?.user?.rol || '';
+  const esShipro = rol === 'admin_shipro' || rol === 'operador_shipro';
+
   const [errorValidacion, setErrorValidacion] = useState<string | null>(null);
+
+  // Dropdown shipro: empresa elegida + lista de clientes activos
+  const [empresaSeleccionadaId, setEmpresaSeleccionadaId] = useState<string>("");
+  const [listaClientes, setListaClientes] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (!esShipro) return;
+    fetch('/api/clientes')
+      .then(r => r.json())
+      .then(data => setListaClientes(Array.isArray(data) ? data.filter((c: any) => c.activo) : []))
+      .catch(() => setListaClientes([]));
+  }, [esShipro]);
 
   // ==========================================
   // ESTADOS DEL FORMULARIO
@@ -222,6 +236,7 @@ export default function NuevoEnvio() {
   const validarYAvanzar = () => {
     setErrorValidacion(null);
 
+    if (esShipro && !empresaSeleccionadaId) return setErrorValidacion("Seleccioná una empresa antes de avanzar al cotizador.");
     if (!destNombre.trim()) return setErrorValidacion("Falta el Nombre del destinatario.");
     if (!destEmail.trim()) return setErrorValidacion("El Email del destinatario es obligatorio.");
     if (!destTelefono.trim()) return setErrorValidacion("El Teléfono es obligatorio.");
@@ -246,7 +261,7 @@ export default function NuevoEnvio() {
     // Ver DEUDAS.md
     const cpOrigen = "1050";
     
-    const params = new URLSearchParams({
+    const paramsObj: Record<string, string> = {
       origen: cpOrigen,
       destino: destCP,
       peso: paqPeso,
@@ -262,9 +277,13 @@ export default function NuevoEnvio() {
       altura: destAltura,
       piso: destPiso,
       dpto: destDpto,
-      orden: numeroOrden // Pasamos el número de orden
-    });
-    
+      orden: numeroOrden
+    };
+    if (esShipro && empresaSeleccionadaId) {
+      paramsObj.filtroEmpresa = empresaSeleccionadaId;
+    }
+    const params = new URLSearchParams(paramsObj);
+
     router.push(`/cotizar?${params.toString()}`);
   };
 
@@ -311,7 +330,25 @@ export default function NuevoEnvio() {
         )}
 
         <div className="max-w-4xl mx-auto space-y-6 pb-20">
-          
+
+          {esShipro && (
+            <div className="bg-white p-5 rounded-xl shadow-sm border border-indigo-200">
+              <label className="block text-[10px] font-bold text-indigo-600 uppercase tracking-wider mb-2 flex items-center gap-1">
+                <Building2 className="w-3 h-3" /> Cotizar para empresa:
+              </label>
+              <select
+                value={empresaSeleccionadaId}
+                onChange={(e) => setEmpresaSeleccionadaId(e.target.value)}
+                className="w-full sm:w-1/2 border border-indigo-200 bg-indigo-50 text-indigo-900 rounded-lg px-3 py-2 text-sm font-bold focus:outline-none cursor-pointer"
+              >
+                <option value="" disabled>Seleccionar empresa…</option>
+                {listaClientes.map(c => (
+                  <option key={c.id} value={c.id}>{c.nombre}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {/* 1. ORIGEN */}
           <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-200">
             <div className="flex items-center gap-3 mb-6">

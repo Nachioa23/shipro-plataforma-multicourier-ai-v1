@@ -2,24 +2,7 @@ import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { enviarMailColecta, enviarMailEntregadoNPS } from "@/lib/mailer";
-
-function obtenerCredencialesShipro(courier: string) {
-  const c = courier.toLowerCase().replace(/[']/g, ''); 
-  if (c === 'andreani') {
-    return { 
-      username: process.env.ANDREANI_USER?.trim() || '', password: process.env.ANDREANI_PASS?.trim() || '', cliente: process.env.ANDREANI_CLIENTE?.trim() || '',
-      id_sucursal_origen: process.env.ANDREANI_SUCURSAL_ORIGEN?.trim() || '', contrato_domicilio: process.env.ANDREANI_CONTRATO_DOM?.trim() || '',
-      contrato_sucursal: process.env.ANDREANI_CONTRATO_SUC?.trim() || '', contrato_cambio: process.env.ANDREANI_CONTRATO_CAMBIO?.trim() || '',
-      contrato_devolucion: process.env.ANDREANI_CONTRATO_DEVOLUCION?.trim() || '', contrato_sucursal_sucursal: process.env.ANDREANI_CONTRATO_SUC_SUC?.trim() || '',
-      contrato_domicilio_sucursal: process.env.ANDREANI_CONTRATO_DOM_SUC?.trim() || '', contrato_sucursal_domicilio: process.env.ANDREANI_CONTRATO_SUC_DOM?.trim() || '',
-      contrato_domicilio_domicilio: process.env.ANDREANI_CONTRATO_DOM_DOM?.trim() || ''
-    };
-  }
-  if (c === 'mocis') {
-    return { clientApi: 'shipro', clientSecret: 'shipro' };
-  }
-  return {};
-}
+import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 
 export async function GET(request: Request) {
   try {
@@ -57,7 +40,9 @@ export async function GET(request: Request) {
           where: { empresaId_nombreCourier: { empresaId: envio.empresaId, nombreCourier: nombreCourierBaseDatos } }
         });
 
-        let llaves = credencial?.usaCredencialesPropias ? JSON.parse(credencial.credencialesJson || '{}') : obtenerCredencialesShipro(nombreNormalizado);
+        let llaves = credencial?.usaCredencialesPropias
+          ? parsearCredencialesPropias(nombreNormalizado, credencial.credencialesJson)
+          : obtenerCredencialesShipro(nombreNormalizado);
 
         const motorCourier = CourierFactory.crear(nombreNormalizado, llaves);
         const nuevoEstadoCrudo = await motorCourier.rastrear(envio.trackingNumber);

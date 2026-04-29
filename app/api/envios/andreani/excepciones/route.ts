@@ -1,16 +1,6 @@
 import { NextResponse } from 'next/server';
 import prisma from "@/lib/prisma";
-
-// =========================================================================
-// FUNCIÓN AUXILIAR: OBTENER CREDENCIALES DE SHIPRO (FALLBACK AUTORIZADO)
-// =========================================================================
-function obtenerCredencialesShipro() {
-  return { 
-    username: process.env.ANDREANI_USER?.trim() || '', 
-    password: process.env.ANDREANI_PASS?.trim() || '', 
-    contrato_cambio: process.env.ANDREANI_CONTRATO_CAMBIO?.trim() || ''
-  };
-}
+import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 
 // =========================================================================
 // FUNCIÓN AUXILIAR: OBTENER TOKEN DE ANDREANI (DINÁMICO)
@@ -69,12 +59,11 @@ export async function POST(request: Request) {
     });
 
     // 3. APLICAMOS LA REGLA ESTRICTA DE CREDENCIALES
-    let llaves: any = {};
-    
+    let llaves: any;
     if (credencial?.usaCredencialesPropias) {
-      llaves = JSON.parse(credencial.credencialesJson || '{}');
+      llaves = parsearCredencialesPropias('andreani', credencial.credencialesJson);
     } else {
-      llaves = obtenerCredencialesShipro();
+      llaves = obtenerCredencialesShipro('andreani');
     }
 
     const username = llaves.username;

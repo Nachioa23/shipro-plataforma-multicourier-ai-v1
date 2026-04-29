@@ -240,6 +240,31 @@ Un módulo nuevo en el dashboard, accesible solo para `admin_shipro`, que gestio
 
 **Prioridad:** Importante operativa, NO bloqueante para deploy. Bloquea el caso de uso "First-Mile Mocis → Andreani" pero no la operación directa Andreani-Andreani ni Mocis-Mocis.
 
+## DEUDA 14 — Fallback hardcodeado a localhost en cron de rastreo (Menor — fail-fast deseable)
+
+**Status:** Identificada el 2026-04-29 durante la auditoría de SUB-PASO 8 (protección de crons). PENDIENTE — no bloquea deploy mientras `APP_URL` esté correctamente seteada en el servidor de producción.
+
+**Detalle:** [app/api/cron/rastreo/route.ts:10](app/api/cron/rastreo/route.ts#L10):
+
+```ts
+const baseUrl = process.env.APP_URL || "http://localhost:3000";
+```
+
+`baseUrl` se usa para construir los links en los mails de colecta y NPS que el cron dispara cuando un envío cambia de estado (ver líneas 85-91). Si en producción se olvida configurar `APP_URL`, el cron responde 200 OK normalmente, pero los mails al cliente final van con links a `http://localhost:3000/s/<tracking>` y `http://localhost:3000/...` (NPS). Síntoma silencioso: la plataforma "funciona" pero los clientes reciben mails rotos.
+
+**Mitigación actual:** `APP_URL` está en `.env.local` y documentada como variable requerida en `docs/CRONS.md` (sección 3). Confiar en el procedimiento de deploy.
+
+**Fix futuro (recomendado, ~5 minutos):** reemplazar el fallback por un throw fail-fast al inicio del handler:
+
+```ts
+const baseUrl = process.env.APP_URL;
+if (!baseUrl) {
+  return NextResponse.json({ error: "APP_URL no configurada" }, { status: 500 });
+}
+```
+
+Así el cron se rompe ruidosamente en lugar de mandar mails rotos. Aplicar también si aparece el mismo patrón en otros archivos.
+
 ## Otras deudas menores (no críticas, registradas para no perderlas)
 
 - **`obtenerCredencialesShipro` duplicado** en 4-5 archivos: `app/api/cotizar/route.ts`, `app/api/etiquetas/masiva/route.ts`, `app/api/cron/rastreo/route.ts`, `lib/envios/crear.ts`, posiblemente más. Centralizar en `lib/couriers/credenciales.ts`.

@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
-import { CreditCard, FileText, Download, TrendingUp, BarChart3, Receipt, CheckCircle2, Scale, DollarSign, Loader2, AlertTriangle, ArrowUpRight, ArrowDownRight, FileSpreadsheet } from 'lucide-react';
+import Link from "next/link";
+import { CreditCard, FileText, Download, TrendingUp, BarChart3, Receipt, CheckCircle2, Scale, DollarSign, Loader2, AlertTriangle, ArrowUpRight, ArrowDownRight, FileSpreadsheet, Building2 } from 'lucide-react';
 
 export default function Facturacion() {
   const brandColor = '#233b6b';
@@ -53,6 +54,21 @@ export default function Facturacion() {
   };
 
   const esPostpago = billeteraData.modalidadPago === 'POSTPAGO';
+
+  if (session && session.user.empresaId === null) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full bg-gray-50 p-8">
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-10 max-w-md text-center">
+          <Building2 className="w-12 h-12 text-blue-500 mx-auto mb-4" />
+          <h2 className="text-xl font-black text-gray-800 mb-2">Sección para usuarios cliente</h2>
+          <p className="text-sm text-gray-600 mb-6">La facturación corresponde a la cuenta corriente de cada cliente. Como usuario Shipro no tenés una empresa propia.</p>
+          <Link href="/torre-de-control" className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#233b6b] hover:bg-blue-900 text-white text-sm font-bold rounded-lg transition-colors">
+            Ir a Torre de Control
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full relative bg-gray-50">

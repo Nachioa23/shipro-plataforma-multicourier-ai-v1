@@ -10,14 +10,10 @@ async function main() {
   console.log('🚀 Iniciando el sembrado de la base de datos...');
 
   // ==========================================
-  // PARTE 1: EMPRESA, USUARIO Y COURIERS (Tu código original)
+  // PARTE 1: USUARIO ADMIN SHIPRO Y COURIERS
+  // Los usuarios shipro (admin_shipro / operador_shipro) no pertenecen a ninguna empresa.
+  // empresaId=null => Modo Dios (operan por cuenta y orden de cualquier cliente).
   // ==========================================
-  const empresa = await prisma.empresa.upsert({
-    where: { id: 1 },
-    update: {},
-    create: { nombre: 'Shipro HQ', cuit: '00-00000000-0' },
-  });
-
   const adminPassword = await bcrypt.hash('admin', 10);
   await prisma.usuario.upsert({
     where: { email: 'admin@shipro.pro' },
@@ -27,7 +23,7 @@ async function main() {
       password: adminPassword,
       nombre: 'Nacho (Director)',
       rol: 'admin_shipro',
-      empresaId: empresa.id
+      empresaId: null
     },
   });
   

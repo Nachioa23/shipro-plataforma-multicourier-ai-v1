@@ -8,18 +8,18 @@ declare module "next-auth" {
       name: string;
       email: string;
       rol: string;
-      empresaId: number;
+      empresaId: number | null;
     };
   }
   interface User {
     rol: string;
-    empresaId: number;
+    empresaId: number | null;
   }
 }
 
 declare module "next-auth/jwt" {
   interface JWT {
     rol: string;
-    empresaId: number;
+    empresaId: number | null;
   }
 }

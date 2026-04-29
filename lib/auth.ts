@@ -24,7 +24,8 @@ export const authOptions: NextAuthOptions = {
         const passwordMatch = await bcrypt.compare(credentials.password, user.password);
         if (!passwordMatch) return null;
 
-        if (!user.empresa.activo) {
+        // Usuarios shipro (empresaId=null) no pertenecen a ninguna empresa: no aplicar el check de empresa activa.
+        if (user.empresa && !user.empresa.activo) {
           throw new Error("Empresa deshabilitada. Contactá a soporte.");
         }
 

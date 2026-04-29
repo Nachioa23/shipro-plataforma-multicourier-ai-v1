@@ -5,7 +5,7 @@ import { useSession } from "next-auth/react";
 import Link from "next/link";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import { ArrowLeft, FileText, Search, Download, Loader2, Package } from 'lucide-react';
+import { ArrowLeft, FileText, Search, Download, Loader2, Package, Building2 } from 'lucide-react';
 
 export default function HistorialManifiestos() {
   const { data: session } = useSession();
@@ -55,6 +55,21 @@ export default function HistorialManifiestos() {
   const formatearFecha = (fechaStr: string) => {
     return new Date(fechaStr).toLocaleDateString("es-AR", { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) + ' hs';
   };
+
+  if (session && session.user.empresaId === null) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full bg-gray-50 p-8">
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-10 max-w-md text-center">
+          <Building2 className="w-12 h-12 text-blue-500 mx-auto mb-4" />
+          <h2 className="text-xl font-black text-gray-800 mb-2">Sección para usuarios cliente</h2>
+          <p className="text-sm text-gray-600 mb-6">El historial de manifiestos corresponde a las colectas de cada empresa. Como usuario Shipro no tenés una empresa propia.</p>
+          <Link href="/torre-de-control" className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#233b6b] hover:bg-blue-900 text-white text-sm font-bold rounded-lg transition-colors">
+            Ir a Torre de Control
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   // ================= GENERADOR DE PDF (REIMPRESIÓN) =================
   const reimprimirManifiesto = (manifiesto: any) => {

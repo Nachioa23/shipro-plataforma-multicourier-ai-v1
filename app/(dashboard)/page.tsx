@@ -85,7 +85,7 @@ export default function BandejaPedidos() {
     setCargandoEnvios(true);
     try {
       const queryParams = new URLSearchParams({
-        empresaId: session?.user?.empresaId?.toString() || "1",
+        empresaId: session?.user?.empresaId?.toString() || "TODAS",
         rol: session?.user?.rol || "cliente",
         filtroEmpresa: filtroEmpresaId,
         page: page.toString(),
@@ -148,7 +148,7 @@ export default function BandejaPedidos() {
     setExportando(true);
     try {
       const queryParams = new URLSearchParams({
-        empresaId: session?.user?.empresaId?.toString() || "1",
+        empresaId: session?.user?.empresaId?.toString() || "TODAS",
         rol: session?.user?.rol || "cliente",
         filtroEmpresa: filtroEmpresaId,
         page: "1", limit: "5000", search: busqueda, courier: filtroCourier, fechaDesde, fechaHasta, estado: filtroEstadoRapido

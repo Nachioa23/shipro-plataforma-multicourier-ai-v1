@@ -10,7 +10,7 @@ export default function MisTransportes() {
 
   // ================= MODO DIOS =================
   const [empresasLista, setEmpresasLista] = useState<any[]>([]);
-  const [empresaActivaId, setEmpresaActivaId] = useState<number>(session?.user?.empresaId || 1);
+  const [empresaActivaId, setEmpresaActivaId] = useState<number | null>(session?.user?.empresaId ?? null);
 
   const [cargando, setCargando] = useState(true);
   const [guardando, setGuardando] = useState(false);
@@ -190,11 +190,12 @@ export default function MisTransportes() {
           </div>
           <div className="flex items-center gap-3">
             <span className="font-medium">Viendo cuenta de:</span>
-            <select 
-              value={empresaActivaId} 
+            <select
+              value={empresaActivaId ?? ""}
               onChange={e => setEmpresaActivaId(Number(e.target.value))}
               className="bg-red-900 border-none text-white text-sm font-bold rounded-lg px-3 py-1 outline-none"
             >
+              {empresaActivaId === null && <option value="" disabled>Seleccioná una empresa...</option>}
               {empresasLista.map(emp => (
                 <option key={emp.id} value={emp.id}>{emp.nombre}</option>
               ))}

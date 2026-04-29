@@ -12,6 +12,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "No autenticado" }, { status: 401 });
   }
 
+  if (token.empresaId === null) {
+    return NextResponse.json({ error: "API Key no aplica para usuarios Shipro" }, { status: 400 });
+  }
+
   const empresaId = token.empresaId;
 
   const empresa = await prisma.empresa.findUnique({
@@ -48,6 +52,10 @@ export async function POST(request: NextRequest) {
   const rol = token.rol;
   if (!ROLES_AUTORIZADOS_ROTACION.includes(rol)) {
     return NextResponse.json({ error: "Rol no autorizado para rotar la API Key" }, { status: 403 });
+  }
+
+  if (token.empresaId === null) {
+    return NextResponse.json({ error: "API Key no aplica para usuarios Shipro" }, { status: 400 });
   }
 
   const empresaId = token.empresaId;

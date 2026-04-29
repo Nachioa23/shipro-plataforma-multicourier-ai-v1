@@ -8,12 +8,10 @@ export interface AuthContext {
 
 /**
  * Resuelve el contexto de auth desde headers inyectados por proxy.ts.
- * - Cliente (rol no shipro): empresaId = header x-empresa-id SIEMPRE. Ignora filtroEmpresa.
- * - Shipro (admin_shipro / operador_shipro): empresaId = filtroEmpresa (query/body).
- *   null = "TODAS" (Modo Dios).
+ * - Cliente (x-empresa-id numérico): empresaId = ese número. Ignora filtroEmpresa (defensivo).
+ * - Shipro (x-empresa-id="SHIPRO"): empresaId = filtroEmpresa (query/body). null = "TODAS" (Modo Dios).
  *
- * Devuelve NextResponse 401/400 directamente si el contexto es inválido.
- * Workaround pendiente del modelo correcto en DEUDA 5 (Usuario.empresaId nullable).
+ * x-rol se sigue chequeando como defense-in-depth para rutas que no pasen por proxy.
  */
 export function resolverContext(
   request: Request,
@@ -29,7 +27,7 @@ export function resolverContext(
     );
   }
 
-  const esShipro = rol.startsWith("admin_shipro") || rol.startsWith("operador_shipro");
+  const esShipro = empresaIdHeader === "SHIPRO" || rol.startsWith("admin_shipro") || rol.startsWith("operador_shipro");
 
   if (esShipro) {
     if (!filtroEmpresaRaw || filtroEmpresaRaw === "TODAS") {

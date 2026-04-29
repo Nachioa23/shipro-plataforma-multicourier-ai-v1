@@ -44,10 +44,10 @@ model Usuario {
   email         String   @unique
   password      String   
   nombre        String
-  rol           String   @default("operador_cliente") 
-  
-  empresaId     Int
-  empresa       Empresa  @relation(fields: [empresaId], references: [id])
+  rol           String   @default("operador_cliente")
+
+  empresaId     Int?
+  empresa       Empresa? @relation(fields: [empresaId], references: [id])
 }
 
 model Courier {

@@ -2,12 +2,13 @@
 
 import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
-import { Users, Search, MapPin, Phone, Mail, Edit, Trash2, Filter, Star, X, Download, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
+import Link from "next/link";
+import { Users, Search, MapPin, Phone, Mail, Edit, Trash2, Filter, Star, X, Download, Loader2, ChevronLeft, ChevronRight, Building2 } from 'lucide-react';
 
 export default function Directorio() {
   const { data: session } = useSession();
   const brandColor = '#233b6b';
-  
+
   // ================= ESTADOS DE PAGINACIÓN Y DATOS =================
   const [contactos, setContactos] = useState<any[]>([]);
   const [cargando, setCargando] = useState(true);
@@ -54,8 +55,23 @@ export default function Directorio() {
 
   const handleFiltroChange = (setter: any, value: any) => {
     setter(value);
-    setPage(1); 
+    setPage(1);
   };
+
+  if (session && session.user.empresaId === null) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full bg-gray-50 p-8">
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-10 max-w-md text-center">
+          <Building2 className="w-12 h-12 text-blue-500 mx-auto mb-4" />
+          <h2 className="text-xl font-black text-gray-800 mb-2">Sección para usuarios cliente</h2>
+          <p className="text-sm text-gray-600 mb-6">El directorio es la libreta de direcciones de cada empresa. Como usuario Shipro no tenés una empresa propia.</p>
+          <Link href="/torre-de-control" className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#233b6b] hover:bg-blue-900 text-white text-sm font-bold rounded-lg transition-colors">
+            Ir a Torre de Control
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full relative bg-gray-50 overflow-y-auto font-sans pb-20">

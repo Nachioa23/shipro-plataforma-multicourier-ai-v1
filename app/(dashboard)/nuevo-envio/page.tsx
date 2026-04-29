@@ -103,13 +103,14 @@ export default function NuevoEnvio() {
   // Buscador de Agenda Inteligente
   useEffect(() => {
     const buscarContactos = async () => {
-      if (!busquedaAgenda || busquedaAgenda.length < 3 || !session?.user?.empresaId) {
+      const empresaIdParaBusqueda = esShipro ? empresaSeleccionadaId : session?.user?.empresaId;
+      if (!busquedaAgenda || busquedaAgenda.length < 3 || !empresaIdParaBusqueda) {
         setResultadosAgenda([]);
         return;
       }
       setBuscandoAgenda(true);
       try {
-        const res = await fetch(`/api/directorio?empresaId=${session.user.empresaId}&search=${encodeURIComponent(busquedaAgenda)}&limit=5`);
+        const res = await fetch(`/api/directorio?empresaId=${empresaIdParaBusqueda}&search=${encodeURIComponent(busquedaAgenda)}&limit=5`);
         if (res.ok) {
           const result = await res.json();
           setResultadosAgenda(result.data || []);
@@ -124,7 +125,7 @@ export default function NuevoEnvio() {
 
     const timeoutId = setTimeout(buscarContactos, 400);
     return () => clearTimeout(timeoutId);
-  }, [busquedaAgenda, session]);
+  }, [busquedaAgenda, session, esShipro, empresaSeleccionadaId]);
 
   // Google Maps Autocomplete (Blindado contra renders dobles)
   useEffect(() => {

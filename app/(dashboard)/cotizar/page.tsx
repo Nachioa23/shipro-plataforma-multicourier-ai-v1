@@ -109,7 +109,8 @@ function CotizadorContenido() {
           const locEncoded = encodeURIComponent(localidadDestino);
           const empresaIdParaSucursales = (esShipro && empresaSeleccionadaId)
             ? empresaSeleccionadaId
-            : (session?.user?.empresaId || 1);
+            : session?.user?.empresaId;
+          if (!empresaIdParaSucursales) return;
           const res = await fetch(`/api/envios/sucursales?cp=${cpDestino}&localidad=${locEncoded}&courier=andreani&filtroEmpresa=${empresaIdParaSucursales}`);
           if (res.ok) {
             const data = await res.json();

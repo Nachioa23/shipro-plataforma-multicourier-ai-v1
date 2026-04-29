@@ -39,7 +39,7 @@ function classify(path: string, method: string): Kind {
 }
 
 type AuthResult =
-  | { ok: true; empresaId: number; mode: "apiKey" | "session"; rol?: string }
+  | { ok: true; empresaId: number | null; mode: "apiKey" | "session"; rol?: string }
   | { ok: false; response: NextResponse };
 
 async function authByApiKey(authHeader: string): Promise<AuthResult> {
@@ -61,6 +61,10 @@ async function authBySession(request: NextRequest): Promise<AuthResult> {
   const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
   if (!token) {
     return { ok: false, response: NextResponse.json({ error: "No autenticado" }, { status: 401 }) };
+  }
+  if (token.empresaId === null) {
+    // Usuario shipro (Modo Dios). No pertenece a empresa, no aplica check de empresa activa.
+    return { ok: true, empresaId: null, mode: "session", rol: token.rol };
   }
   const empresa = await prisma.empresa.findUnique({
     where: { id: token.empresaId },
@@ -107,7 +111,7 @@ export async function proxy(request: NextRequest) {
   if (!authResult.ok) return authResult.response;
 
   const headers = new Headers(request.headers);
-  headers.set("x-empresa-id", String(authResult.empresaId));
+  headers.set("x-empresa-id", authResult.empresaId === null ? "SHIPRO" : String(authResult.empresaId));
   headers.set("x-auth-mode", authResult.mode);
   if (authResult.rol) headers.set("x-rol", authResult.rol);
   return NextResponse.next({ request: { headers } });

@@ -50,3 +50,10 @@ next-env.d.ts
 *.sqlite-journal
 *.db
 envios.csv
+
+# Excepción: las migrations de Prisma SÍ deben estar en git
+# (sin esto, prisma migrate deploy no funciona en producción)
+!prisma/migrations/**/*.sql
+
+# Backups de BD locales NO se commitean (DEUDA 5 generó dev.db.backup.*)
+prisma/dev.db.backup.*

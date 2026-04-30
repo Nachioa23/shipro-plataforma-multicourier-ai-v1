@@ -107,8 +107,13 @@ export default function AccionesEnvio({ envioId, tracking, etiquetaUrl, estadoIn
   };
 
   const handleImprimir = async () => {
+    if (estadoInterno === 'BLOQUEADO_SALDO') {
+      alert(`⚠️ ENVÍO BLOQUEADO POR SALDO\nEl envío ${tracking} no tiene etiqueta real. Cargá saldo en /facturacion para destrabarlo automáticamente.`);
+      return;
+    }
+
     const motivo = evaluarEstadoEtiqueta(estadoInterno);
-    
+
     if (motivo === 'cancelada') {
       const ok = window.confirm(`⚠️ ENVÍO CANCELADO\nEl envío ${tracking} está cancelado. Imprimirlo y despacharlo causará pérdidas.\n¿Estás seguro de forzar la impresión?`);
       if (!ok) return;
@@ -323,6 +328,7 @@ export default function AccionesEnvio({ envioId, tracking, etiquetaUrl, estadoIn
   };
 
   const estaAnulada = estadoInterno === 'CANCELADO' || estadoInterno === 'ENTREGADO';
+  const estaBloqueada = estadoInterno === 'BLOQUEADO_SALDO';
 
   return (
     <>
@@ -330,10 +336,10 @@ export default function AccionesEnvio({ envioId, tracking, etiquetaUrl, estadoIn
         <button onClick={abrirFicha} disabled={cargandoGlobal} title="Ver Ficha 360" className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors disabled:opacity-50">
           {cargandoGlobal ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
         </button>
-        <button onClick={handleImprimir} disabled={cargandoGlobal || estaAnulada} title="Imprimir" className="p-1.5 text-green-600 hover:bg-green-50 rounded transition-colors disabled:opacity-50">
+        <button onClick={handleImprimir} disabled={cargandoGlobal || estaAnulada || estaBloqueada} title={estaBloqueada ? "Bloqueado por saldo. Cargá saldo para destrabar." : "Imprimir"} className="p-1.5 text-green-600 hover:bg-green-50 rounded transition-colors disabled:opacity-50">
           <Printer className="w-4 h-4" />
         </button>
-        <button onClick={handleAnular} disabled={cargandoGlobal || estaAnulada} title="Anular" className={`p-1.5 rounded transition-colors disabled:opacity-50 ${estaAnulada ? 'text-gray-400' : 'text-red-600 hover:bg-red-50'}`}>
+        <button onClick={handleAnular} disabled={cargandoGlobal || estaAnulada || estaBloqueada} title={estaBloqueada ? "Bloqueado por saldo. Cargá saldo para destrabar." : "Anular"} className={`p-1.5 rounded transition-colors disabled:opacity-50 ${estaAnulada || estaBloqueada ? 'text-gray-400' : 'text-red-600 hover:bg-red-50'}`}>
           <XCircle className="w-4 h-4" />
         </button>
       </div>

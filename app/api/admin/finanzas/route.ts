@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { procesarEnviosBloqueados } from "@/lib/envios/procesar-bloqueados";
 
 // GET: Trae a todas las empresas y sus saldos
 export async function GET(request: Request) {
@@ -69,7 +70,12 @@ export async function POST(request: Request) {
       return { nuevoSaldo, movimiento };
     });
 
-    return NextResponse.json({ success: true, ...resultado });
+    // Después de recargar saldo: intentar destrabar envíos en BLOQUEADO_SALDO
+    // de esa empresa (DEUDA 16). Procesa máx 10 inline; restantes quedan
+    // para próxima recarga o un endpoint manual futuro.
+    const recovery = await procesarEnviosBloqueados(parseInt(empresaId));
+
+    return NextResponse.json({ success: true, ...resultado, recovery });
 
   } catch (error: any) {
     console.error("Error al acreditar pago:", error);

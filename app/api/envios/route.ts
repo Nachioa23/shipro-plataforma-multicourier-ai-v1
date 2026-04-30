@@ -60,11 +60,14 @@ export async function GET(request: Request) {
         case "Retenidos":
           where.estadoActual = { in: ["RETENIDO", "Retenido"] };
           break;
+        case "Bloqueados":
+          where.estadoActual = "BLOQUEADO_SALDO";
+          break;
         case "Pendientes":
           where.estadoActual = { in: ["PENDIENTE", "Pendiente"] };
           break;
         case "Etiquetados":
-          where.estadoActual = { notIn: ["PENDIENTE", "Pendiente", "RETENIDO", "Retenido"] };
+          where.estadoActual = { notIn: ["PENDIENTE", "Pendiente", "RETENIDO", "Retenido", "BLOQUEADO_SALDO"] };
           break;
       }
     }
@@ -129,6 +132,16 @@ export async function POST(request: Request) {
       provinciaDestino: body.provinciaDestino,
       numeroOrden: body.numeroOrden
     });
+
+    if (result.bloqueadoPorSaldo) {
+      return NextResponse.json({
+        ...result,
+        status: "BLOQUEADO_SALDO",
+        bloqueadoPorSaldo: true,
+        warning: "Envío creado pero bloqueado por falta de saldo. El cliente debe cargar saldo en Shipro para destrabarlo."
+      });
+    }
+
     return NextResponse.json(result);
   } catch (error) {
     console.error("Error en POST /api/envios:", error);

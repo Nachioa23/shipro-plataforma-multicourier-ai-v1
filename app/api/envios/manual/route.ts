@@ -54,6 +54,15 @@ export async function POST(request: Request) {
       provinciaDestino: body.provinciaDestino,
       numeroOrden: body.numeroOrden
     });
+
+    if (result.bloqueadoPorSaldo) {
+      return NextResponse.json({
+        ...result,
+        status: "BLOQUEADO_SALDO",
+        warning: "Envío creado pero pendiente por carga de saldo. Cargá saldo en /facturacion para destrabarlo."
+      });
+    }
+
     return NextResponse.json(result);
   } catch (error: any) {
     if (error?.message?.startsWith('EmpresaRequerida')) {

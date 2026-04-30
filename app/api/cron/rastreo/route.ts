@@ -14,7 +14,7 @@ export async function GET(request: Request) {
     // Ordenamos por 'fechaActualizacion' ascendente, para que siempre procese los más atrasados primero.
     const enviosARastrear = await prisma.envio.findMany({
       where: {
-        estadoActual: { notIn: ["ENTREGADO", "INCIDENCIA", "CANCELADO", "DEVUELTO", "NO_ENTREGADO"] },
+        estadoActual: { notIn: ["ENTREGADO", "INCIDENCIA", "CANCELADO", "DEVUELTO", "NO_ENTREGADO", "BLOQUEADO_SALDO"] },
         trackingNumber: { not: "" }
       },
       include: { 

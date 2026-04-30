@@ -366,6 +366,58 @@ Así el cron se rompe ruidosamente en lugar de mandar mails rotos. Aplicar tambi
 
 **Why bloquea producción:** sin auditoría, cualquier error operacional o cambio malicioso queda sin trazabilidad. Cuando un cliente reporta "yo no autoricé este cambio", no hay forma de demostrar lo contrario.
 
+## DEUDA 20 — Endpoint manual para procesar bloqueados restantes (Menor — extensión de DEUDA 16)
+
+**Status:** Identificada el 2026-04-30 durante implementación de DEUDA 16. PENDIENTE — extensión.
+
+**Detalle:** `procesarEnviosBloqueados()` ([lib/envios/procesar-bloqueados.ts](lib/envios/procesar-bloqueados.ts)) procesa máximo 10 envíos FIFO inline tras una recarga. Si un cliente tiene 50 envíos BLOQUEADO_SALDO y recarga saldo suficiente para los 50, solo se destraban 10 — los 40 restantes quedan bloqueados hasta otra recarga.
+
+**How to apply (~2 horas):** endpoint `POST /api/envios/reintentar-bloqueados` (admin_shipro o gerente_cliente), con body `{ empresaId? }`. Llama a `procesarEnviosBloqueados()` y retorna el `recovery`. UI: botón "Reintentar bloqueados" en `/admin-finanzas` y `/dashboard`.
+
+**Why no bloqueante:** mientras el volumen sea bajo (< 10 bloqueados por cliente por día), el procesamiento inline post-recarga alcanza. Pasar a manual cuando aparezcan casos con cola larga.
+
+## DEUDA 21 — Matriz de permisos granular en /mis-transportes (Importante pre-producción)
+
+**Status:** Identificada el 2026-04-30 durante implementación de DEUDA 16. PENDIENTE — extensión de la política defense-in-depth.
+
+**Estado actual:** En DEUDA 16 se aplicó defense-in-depth solo al campo `tipoCuenta` ([app/api/configuracion/couriers/route.ts](app/api/configuracion/couriers/route.ts)). Los demás campos del mismo handler (activar/desactivar courier, cargar credenciales propias, marcar credenciales Shipro, markups, recolector) NO tienen validación per-rol — cualquier usuario con sesión válida puede modificarlos.
+
+**Riesgo:** un `operador_cliente` con bypass del frontend (DevTools) podría desactivar la integración de Andreani de su empresa, o cambiar a "credenciales Shipro" generándose un riesgo de doble facturación. La UI lo bloquea pero el backend no.
+
+**How to apply (~3 horas):** definir matriz explícita de permisos por campo en `mis-transportes`. Por ejemplo:
+
+| Campo | admin_shipro | gerente_cliente | operador_cliente | operador_shipro |
+|---|---|---|---|---|
+| `activo` | ✅ | ✅ | ❌ | ✅ (auditoría) |
+| `usaCredencialesPropias` | ✅ | ✅ | ❌ | ❌ |
+| `credencialesJson` (propias) | ✅ | ✅ | ❌ | ❌ |
+| `credencialesJson` (Shipro) | ✅ | ❌ | ❌ | ❌ |
+| `markup*` | ✅ | ✅ | ❌ | ❌ |
+| `tipoCuenta` | ✅ | ❌ | ❌ | ❌ |
+| `courierRecolector` | ✅ | ✅ | ❌ | ❌ |
+
+Implementar como helper `lib/permisos.ts` con `puedeEditarCampo(rol, campo): boolean` y aplicar en el handler como spread de patches condicionales (mismo patrón que DEUDA 16 con `tipoCuentaPatch`).
+
+**Relación con DEUDA 19:** cada cambio sensible debe loggearse (auditoría). DEUDA 21 + DEUDA 19 trabajan en conjunto.
+
+## DEUDA 22 — Suspensión automática de cuenta al alcanzar limiteDescubierto (Importante pre-producción)
+
+**Status:** Identificada el 2026-04-30 durante implementación de DEUDA 16. PENDIENTE.
+
+**Estado actual:** Una empresa POSTPAGO con `limiteDescubierto = $0` y saldo negativo sigue creando envíos (caen en BLOQUEADO_SALDO en DEUDA 16, OK). Pero una empresa POSTPAGO con `limiteDescubierto = $50.000` y saldo `-$60.000` también sigue creando envíos bloqueados — la cuenta debería suspenderse antes (cobrar antes de seguir prestando).
+
+**How to apply (~medio día):**
+- Nuevo campo `Empresa.suspendida: boolean @default(false)`.
+- Al pasar el límite, marcar `suspendida = true` automáticamente (en `lib/envios/crear.ts` o en el cron de finanzas).
+- Mientras suspendida: rechazar **toda** creación de envío con código `CUENTA_SUSPENDIDA` (no solo los que excedan saldo).
+- UI: banner rojo prominente en dashboard cliente con instrucciones de regularización.
+- Re-activación automática cuando el saldo vuelve a `>= -limiteDescubierto * 0.5` (margen para evitar flapping).
+- Notificación a admin_shipro al detectar empresa suspendida (alerta de gestión).
+
+**Why bloqueante pre-producción real:** sin suspensión automática, un cliente Modelo A (cuenta corriente) puede generar deuda ilimitada. Riesgo financiero alto.
+
+**Relación con DEUDA 19:** suspensión + cambio de estado de cuenta es evento de auditoría obligatorio.
+
 ## Otras deudas menores (no críticas, registradas para no perderlas)
 
 - **`obtenerCredencialesShipro` duplicado** en 4-5 archivos: `app/api/cotizar/route.ts`, `app/api/etiquetas/masiva/route.ts`, `app/api/cron/rastreo/route.ts`, `lib/envios/crear.ts`, posiblemente más. Centralizar en `lib/couriers/credenciales.ts`.

@@ -80,9 +80,16 @@ model CredencialCourier {
   activo                 Boolean  @default(true)
 
   usaCredencialesPropias Boolean  @default(true)
-  credencialesJson       String?  
+  credencialesJson       String?
 
-  courierRecolector      String   @default("mismo_courier") 
+  // Tipo de cuenta para esta combinación cliente↔courier (DEUDA 16).
+  // null = usar Empresa.modalidadPago como default.
+  // PREPAGO: validar saldoActivo >= costo antes de despachar.
+  // POSTPAGO: validar saldoActivo + limiteDescubierto >= costo.
+  // Si no alcanza: envío queda en estado BLOQUEADO_SALDO sin tracking real.
+  tipoCuenta             String?
+
+  courierRecolector      String   @default("mismo_courier")
   
   ofreceDomicilio        Boolean  @default(true)
   ofreceSucursal         Boolean  @default(true)

@@ -38,6 +38,20 @@ export async function POST(request: Request) {
       const nombreNormalizado = normalizarParaComparacion(envio.courier.nombre);
       const fecha = envio.fechaImpresion ? new Date(envio.fechaImpresion).toLocaleDateString('es-AR') : new Date().toLocaleDateString('es-AR');
 
+      // CASO BLOQUEADO_SALDO (DEUDA 16): el envío no tiene etiqueta real porque
+      // nunca se llamó al courier. Generamos página placeholder con instrucciones.
+      if (envio.estadoActual === "BLOQUEADO_SALDO") {
+        const colorRojo = rgb(0.85, 0.15, 0.15);
+        const pageBloq = pdfMaestro.addPage([288, 432]);
+        pageBloq.drawText("ETIQUETA BLOQUEADA", { x: 35, y: 260, size: 16, font: fontB, color: colorRojo });
+        pageBloq.drawText("PENDIENTE DE SALDO", { x: 35, y: 240, size: 14, font: fontB, color: colorShipro });
+        pageBloq.drawText(`Trk: ${envio.trackingNumber}`, { x: 35, y: 200, size: 10, font: fontN, color: colorGris });
+        pageBloq.drawText(`Destinatario: ${truncar(envio.destino?.nombre, 30)}`, { x: 35, y: 180, size: 9, font: fontN, color: colorGris });
+        pageBloq.drawText("Cargá saldo en Shipro para destrabar este envío.", { x: 35, y: 140, size: 9, font: fontN });
+        pageBloq.drawText("Una vez con saldo, la etiqueta se genera automáticamente.", { x: 35, y: 125, size: 9, font: fontN });
+        continue;
+      }
+
       try {
         // ==============================================================
         // CASO 1: ES MOCI'S PURO (Etiqueta Nativa Shipro Flow)

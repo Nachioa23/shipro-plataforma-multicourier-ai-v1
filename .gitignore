@@ -49,6 +49,7 @@ next-env.d.ts
 *.sqlite
 *.sqlite-journal
 *.db
+*.db-journal
 envios.csv
 
 # Excepción: las migrations de Prisma SÍ deben estar en git

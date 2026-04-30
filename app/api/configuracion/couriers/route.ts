@@ -34,6 +34,12 @@ export async function POST(request: Request) {
     const body = await request.json();
     const { empresaId, configsGenerales, couriers } = body;
 
+    // tipoCuenta (DEUDA 16) solo lo modifica admin_shipro. Para otros roles
+    // se ignora silenciosamente — el frontend tampoco lo muestra/edita.
+    // Defense-in-depth: aunque el frontend filtre, el backend valida también.
+    const rol = request.headers.get("x-rol") || "";
+    const puedeEditarTipoCuenta = rol === "admin_shipro";
+
     // 1. Guardamos reglas globales
     await prisma.empresa.update({
       where: { id: parseInt(empresaId) },
@@ -45,8 +51,14 @@ export async function POST(request: Request) {
       const credencialesJson = courier.usaPropias ? JSON.stringify(courier.credenciales) : null;
       const serviciosActivos = JSON.stringify(courier.servicios || []);
       const provinciasCobertura = JSON.stringify(courier.provincias || []);
-      
+
       const alcance = ['Moova', 'Mocis'].includes(courier.id) ? 'LOCAL' : 'NACIONAL';
+
+      // tipoCuenta: solo se incluye en update/create si el rol lo permite.
+      // Valor "" (default empresa) → null en BD.
+      const tipoCuentaPatch = puedeEditarTipoCuenta
+        ? { tipoCuenta: courier.tipoCuenta ? courier.tipoCuenta : null }
+        : {};
 
       await prisma.credencialCourier.upsert({
         where: {
@@ -62,9 +74,10 @@ export async function POST(request: Request) {
           serviciosActivos: serviciosActivos,
           provinciasCobertura: provinciasCobertura,
           ajusteTarifaPorcentaje: parseFloat(courier.markupClientePorcentaje) || 0,
-          markupFijo: parseFloat(courier.markupClienteFijo) || 0, 
+          markupFijo: parseFloat(courier.markupClienteFijo) || 0,
           courierRecolector: courier.recolector,
           requiereSeguro: courier.seguroActivado || false,
+          ...tipoCuentaPatch,
         },
         create: {
           empresaId: parseInt(empresaId),
@@ -79,6 +92,7 @@ export async function POST(request: Request) {
           courierRecolector: courier.recolector,
           requiereSeguro: courier.seguroActivado || false,
           tipoAlcance: alcance,
+          ...tipoCuentaPatch,
         }
       });
     }

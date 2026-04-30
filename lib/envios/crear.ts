@@ -1,8 +1,7 @@
 import prisma from "@/lib/prisma";
-import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { enviarMailCreacion } from "@/lib/mailer";
-import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
-import { obtenerCourier, normalizarParaComparacion } from "@/lib/couriers/normalizar";
+import { obtenerCourier } from "@/lib/couriers/normalizar";
+import { despacharCourier } from "@/lib/envios/dispatch";
 import { cotizar } from "@/lib/cotizador";
 
 export interface CrearEnvioInput {
@@ -63,7 +62,6 @@ export async function crearEnvio(input: CrearEnvioInput) {
     courierReal = await prisma.courier.create({ data: { nombre: nombreCourier, activo: true } });
   }
   const courierIdReal = courierReal.id;
-  const courierNombreLimpio = normalizarParaComparacion(courierReal.nombre);
 
   // DIRECTORIO Y ABM: Actualizar o crear contacto
   const direccionExistente = await prisma.direccion.findFirst({ where: { email: email } });
@@ -154,94 +152,73 @@ export async function crearEnvio(input: CrearEnvioInput) {
     }
   }
 
-  // DESPACHO AL COURIER (Solo si NO falló el peaje)
-  if (!falloPorPeaje) {
-    try {
-      // courierReal.nombre es la capitalización canónica de BD (ya resuelto por
-      // obtenerCourier arriba). NO refactorear a obtenerCredencialCourier aquí:
-      // courierReal ya está en memoria; usar el helper agregaría una query
-      // innecesaria (re-resolvería el courier que ya tenemos).
-      const credencialMain = await prisma.credencialCourier.findUnique({
-        where: { empresaId_nombreCourier: { empresaId, nombreCourier: courierReal.nombre } }
-      });
+  // ==============================================================
+  // CARGAR CREDENCIAL Y EMPRESA (necesarios para validación de saldo)
+  // courierReal.nombre es la capitalización canónica de BD (ya resuelto por
+  // obtenerCourier arriba). NO refactorear a obtenerCredencialCourier aquí:
+  // courierReal ya está en memoria; usar el helper agregaría una query
+  // innecesaria (re-resolvería el courier que ya tenemos).
+  // ==============================================================
+  const credencialMain = await prisma.credencialCourier.findUnique({
+    where: { empresaId_nombreCourier: { empresaId, nombreCourier: courierReal.nombre } }
+  });
+  const empresaPreCheck = await prisma.empresa.findUnique({ where: { id: empresaId } });
 
-      if (credencialMain && credencialMain.activo) {
-        // Si el cliente usa credenciales propias y son inválidas/incompletas,
-        // parsearCredencialesPropias lanza un error que el catch outer absorbe.
-        // NO hay fallback automático a Shipro (política de protección financiera):
-        // el envío queda con tracking genérico SHP-xxxx hasta que el cliente
-        // arregle sus credenciales en /mis-transportes.
-        const llavesMain = credencialMain.usaCredencialesPropias
-          ? parsearCredencialesPropias(courierNombreLimpio, credencialMain.credencialesJson)
-          : obtenerCredencialesShipro(courierNombreLimpio);
+  // ==============================================================
+  // VALIDACIÓN DE SALDO POR tipoCuenta (DEUDA 16)
+  // Si no alcanza, NO se rebota la creación: el envío se crea con
+  // tracking SHP-* + estado BLOQUEADO_SALDO. No se llama al courier,
+  // no se debita saldo, no se manda mail. Se desbloquea cuando el
+  // cliente recargue saldo (procesarEnviosBloqueados).
+  // ==============================================================
+  const montoDebito = parseFloat(String(costoEnvio)) || 0;
+  const tipoCuentaEfectivo = credencialMain?.tipoCuenta || empresaPreCheck?.modalidadPago || "POSTPAGO";
+  let bloqueadoPorSaldo = false;
 
-        const motorMain = CourierFactory.crear(courierNombreLimpio, llavesMain);
-
-        let tipoEntregaFormateado: "sucursal" | "domicilio" | "inversa" | "cambio" = "domicilio";
-        const mod = modalidad?.toLowerCase() || "";
-        if (mod.includes('sucursal')) tipoEntregaFormateado = "sucursal";
-        if (mod.includes('inversa') || mod.includes('devolucion')) tipoEntregaFormateado = "inversa";
-        if (mod.includes('cambio')) tipoEntregaFormateado = "cambio";
-
-        // Si llegamos acá, el peaje no falló → calle/altura/localidad están definidas.
-        // Coercimos a "" para satisfacer DespachoParams (string requerido) sin asumir non-null.
-        const paramsDespacho = {
-          destinatarioNombre,
-          calle: calle || "",
-          altura: altura || "",
-          piso, dpto,
-          localidad: localidad || "",
-          provincia: provinciaDestino,
-          cp: String(cpDestino),
-          dni: dni || "",
-          email: email || "",
-          telefono: telefono || "",
-          peso: parseFloat(String(pesoReal)) || 1,
-          paquetes: [{
-            pesoKg: parseFloat(String(pesoReal)) || 1, largoCm: 10, anchoCm: 10, altoCm: 10,
-            valorDeclarado: parseFloat(String(valorDeclarado)) || 0, requiereSeguro: credencialMain.requiereSeguro
-          }],
-          referencia: numeroOrden ? `ORDEN-${numeroOrden}` : `ORDEN-${Date.now()}`,
-          tipoEntrega: tipoEntregaFormateado
-        };
-
-        const respuestaMain = await motorMain.despachar(paramsDespacho);
-        if (respuestaMain && respuestaMain.tracking) {
-          trackingOficial = respuestaMain.tracking;
-          urlEtiquetaFinal = respuestaMain.etiquetaUrl || null;
-        }
-
-        const recolector = credencialMain.courierRecolector?.trim() || "";
-        const recolectorLower = recolector.toLowerCase();
-        const mainNombreLower = credencialMain.nombreCourier?.toLowerCase() || "";
-
-        const esMismoCourier =
-          !recolector ||
-          recolectorLower === "mismo_courier" ||
-          recolectorLower === "pickup" ||
-          recolectorLower === mainNombreLower;
-
-        const esDropoff = recolectorLower === "dropoff";
-
-        if (!esMismoCourier && !esDropoff) {
-          const courierMicrohub = recolectorLower === "shipro_cross" ? "mocis" : recolector;
-          const llavesRecolector = obtenerCredencialesShipro(courierMicrohub);
-          const motorRecolector = CourierFactory.crear(courierMicrohub, llavesRecolector);
-
-          const paramsRecolector = { ...paramsDespacho, referencia: `FIRST-MILE: ${trackingOficial}` };
-          const respuestaRecolector = await motorRecolector.despachar(paramsRecolector);
-
-          if (respuestaRecolector && respuestaRecolector.tracking) {
-            trackingFirstMile = respuestaRecolector.tracking;
-          }
-        }
-      }
-    } catch (errorDisp) {
-      console.warn(`[Shipro] Aviso: Falló el despacho en los couriers (puede ser por API caída o credenciales inválidas).`, errorDisp);
+  if (tipoCuentaEfectivo === "PREPAGO") {
+    if ((empresaPreCheck?.saldoActivo || 0) < montoDebito) {
+      bloqueadoPorSaldo = true;
+    }
+  } else { // POSTPAGO
+    if ((empresaPreCheck?.saldoActivo || 0) + (empresaPreCheck?.limiteDescubierto || 0) < montoDebito) {
+      bloqueadoPorSaldo = true;
     }
   }
 
-  const montoDebito = parseFloat(String(costoEnvio)) || 0;
+  if (bloqueadoPorSaldo) {
+    estadoInicialEnvio = "BLOQUEADO_SALDO";
+  }
+
+  // DESPACHO AL COURIER (solo si NO falló el peaje y NO está bloqueado por saldo)
+  if (!falloPorPeaje && !bloqueadoPorSaldo && credencialMain && credencialMain.activo) {
+    const dispatchResult = await despacharCourier({
+      credencial: credencialMain,
+      courierNombreCanonico: courierReal.nombre,
+      destinatarioNombre,
+      calle: calle || "",
+      altura: altura || "",
+      piso, dpto,
+      localidad: localidad || "",
+      provincia: provinciaDestino,
+      cp: String(cpDestino),
+      dni: dni || "",
+      email: email || "",
+      telefono: telefono || "",
+      pesoReal: parseFloat(String(pesoReal)) || 1,
+      valorDeclarado: parseFloat(String(valorDeclarado)) || 0,
+      modalidad,
+      numeroOrden
+    });
+    if (dispatchResult.tracking) {
+      trackingOficial = dispatchResult.tracking;
+      urlEtiquetaFinal = dispatchResult.etiquetaUrl;
+      trackingFirstMile = dispatchResult.trackingFirstMile;
+    }
+    // Si dispatchResult.tracking es null, el envío queda con SHP-* y estado "Pendiente"
+    // (mismo comportamiento que tenía el catch anterior).
+  }
+
+  // montoDebito ya fue calculado arriba para la validación de saldo.
   const montoProveedor = parseFloat(String(costoProveedor)) || 0;
   let empresaNombreParaMail = "la Tienda";
 
@@ -317,24 +294,31 @@ export async function crearEnvio(input: CrearEnvioInput) {
       include: { courier: true, destino: true, finanzas: true }
     });
 
-    await tx.movimientoFinanciero.create({
-      data: {
-        empresaId,
-        tipo: "DEBITO_ENVIO",
-        monto: -montoDebito,
-        saldoPosterior: nuevoSaldo,
-        referencia: trackingOficial,
-        descripcion: `Generación de etiqueta ${courierReal.nombre.toUpperCase()}`,
-        envioId: envioCreado.id
-      }
-    });
+    // Si BLOQUEADO_SALDO: NO crear MovimientoFinanciero ni actualizar saldo.
+    // El débito se aplica recién cuando se desbloquee (procesarEnviosBloqueados).
+    if (!bloqueadoPorSaldo) {
+      await tx.movimientoFinanciero.create({
+        data: {
+          empresaId,
+          tipo: "DEBITO_ENVIO",
+          monto: -montoDebito,
+          saldoPosterior: nuevoSaldo,
+          referencia: trackingOficial,
+          descripcion: `Generación de etiqueta ${courierReal.nombre.toUpperCase()}`,
+          envioId: envioCreado.id
+        }
+      });
 
-    await tx.empresa.update({
-      where: { id: empresaId },
-      data: { saldoActivo: nuevoSaldo }
-    });
+      await tx.empresa.update({
+        where: { id: empresaId },
+        data: { saldoActivo: nuevoSaldo }
+      });
+    }
 
-    if (falloPorPeaje) {
+    if (bloqueadoPorSaldo) {
+      const saldoDisponible = (empresaData?.saldoActivo || 0) + (tipoCuentaEfectivo === "POSTPAGO" ? (empresaData?.limiteDescubierto || 0) : 0);
+      await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_SALDO", observacion: `Bloqueado por saldo insuficiente. Costo $${montoDebito.toFixed(2)}, disponible $${saldoDisponible.toFixed(2)} (${tipoCuentaEfectivo}). Se desbloqueará al recargar saldo.`, envioId: envioCreado.id } });
+    } else if (falloPorPeaje) {
       await tx.eventoTracking.create({ data: { estado: "RETENIDO", observacion: `Retenido en Peaje: ${motivoRetencion}`, envioId: envioCreado.id } });
     } else {
       await tx.eventoTracking.create({ data: { estado: "Pendiente", observacion: "Envío registrado en plataforma y etiqueta generada.", envioId: envioCreado.id } });
@@ -343,7 +327,9 @@ export async function crearEnvio(input: CrearEnvioInput) {
     return envioCreado;
   });
 
-  if (email) {
+  // Mails: NO mandar si está bloqueado por saldo (el destinatario no debe recibir
+  // notificación hasta que el envío se destrabe y tenga tracking real).
+  if (email && !bloqueadoPorSaldo) {
     if (falloPorPeaje) {
       const { enviarMailRetenido } = await import("@/lib/mailer");
       await enviarMailRetenido(email, trackingOficial, destinatarioNombre, `${process.env.APP_URL || "http://localhost:3000"}/corregir/${trackingOficial}`, empresaNombreParaMail);
@@ -352,5 +338,10 @@ export async function crearEnvio(input: CrearEnvioInput) {
     }
   }
 
-  return { ...resultadoTransaccion, trackingNumber: trackingOficial };
+  return {
+    ...resultadoTransaccion,
+    trackingNumber: trackingOficial,
+    bloqueadoPorSaldo,
+    estado: estadoInicialEnvio
+  };
 }

@@ -2,11 +2,17 @@
 
 import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
-import { Truck, Save, Settings2, Loader2, CheckCircle2, AlertCircle, Lock, Key, Package, Percent, Plus, X, Network, KeyRound, Eye, ArrowRight } from 'lucide-react';
+import { Truck, Save, Settings2, Loader2, CheckCircle2, AlertCircle, Lock, Key, Package, Percent, Plus, X, Network, KeyRound, Eye, ArrowRight, DollarSign } from 'lucide-react';
 
 export default function MisTransportes() {
   const { data: session } = useSession();
   const esEquipoShipro = session?.user?.rol === 'admin_shipro' || session?.user?.rol === 'operador_shipro';
+  const esAdminShipro = session?.user?.rol === 'admin_shipro';
+  const esGerenteCliente = session?.user?.rol === 'gerente_cliente';
+  // tipoCuenta (DEUDA 16): solo admin_shipro edita; gerente_cliente ve read-only;
+  // operador_* sin acceso (oculto).
+  const puedeVerTipoCuenta = esAdminShipro || esGerenteCliente;
+  const puedeEditarTipoCuenta = esAdminShipro;
 
   // ================= MODO DIOS =================
   const [empresasLista, setEmpresasLista] = useState<any[]>([]);
@@ -57,10 +63,11 @@ export default function MisTransportes() {
                 return {
                   id: globalCourier.nombre, activo: configCliente.activo, usaPropias: configCliente.usaCredencialesPropias,
                   credenciales: configCliente.credencialesJson ? JSON.parse(configCliente.credencialesJson) : credsPorDefecto,
-                  markupClientePorcentaje: configCliente.ajusteTarifaPorcentaje || 0, markupClienteFijo: configCliente.markupFijo || 0, recolector: configCliente.courierRecolector || "pickup"
+                  markupClientePorcentaje: configCliente.ajusteTarifaPorcentaje || 0, markupClienteFijo: configCliente.markupFijo || 0, recolector: configCliente.courierRecolector || "pickup",
+                  tipoCuenta: configCliente.tipoCuenta || ""
                 };
               } else {
-                return { id: globalCourier.nombre, activo: false, usaPropias: true, credenciales: credsPorDefecto, markupClientePorcentaje: 0, markupClienteFijo: 0, recolector: "pickup" };
+                return { id: globalCourier.nombre, activo: false, usaPropias: true, credenciales: credsPorDefecto, markupClientePorcentaje: 0, markupClienteFijo: 0, recolector: "pickup", tipoCuenta: "" };
               }
             });
             setCouriers(couriersDin);
@@ -314,6 +321,25 @@ export default function MisTransportes() {
                               {courier.id !== "Moci's" && <option value="shipro_cross">Contratar Moci's Logística para inyectar en {courier.id}</option>}
                             </select>
                           </div>
+
+                          {puedeVerTipoCuenta && (
+                            <div>
+                              <h5 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-2"><DollarSign className="w-4 h-4 text-amber-500"/> 2.5 Tipo de Cuenta</h5>
+                              <select
+                                value={courier.tipoCuenta || ""}
+                                onChange={e => handleUpdateCourier(courier.id, 'tipoCuenta', e.target.value)}
+                                disabled={!puedeEditarTipoCuenta}
+                                className="w-full p-3 border-2 border-gray-200 rounded-xl text-sm font-bold text-gray-700 outline-none focus:border-amber-500 disabled:bg-gray-50 disabled:text-gray-500 disabled:cursor-not-allowed"
+                              >
+                                <option value="">Default empresa</option>
+                                <option value="PREPAGO">PREPAGO (validar saldo antes de despachar)</option>
+                                <option value="POSTPAGO">POSTPAGO (cuenta corriente, factura a fin de mes)</option>
+                              </select>
+                              {!puedeEditarTipoCuenta && (
+                                <p className="text-[10px] text-gray-500 mt-1.5">Solo admin Shipro puede cambiar este campo. Contactá a tu asesor.</p>
+                              )}
+                            </div>
+                          )}
 
                           <div className="bg-blue-50 border border-blue-100 rounded-xl p-5">
                             <h5 className="text-xs font-black text-blue-800 uppercase tracking-widest mb-1 flex items-center gap-2"><Percent className="w-4 h-4 text-blue-600"/> 3. Ajuste Comercial (Tu Tienda)</h5>

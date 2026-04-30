@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import prisma from "@/lib/prisma";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
+import { obtenerCredencialCourier } from "@/lib/couriers/normalizar";
 
 // =========================================================================
 // FUNCIÓN AUXILIAR: OBTENER TOKEN DE ANDREANI (DINÁMICO)
@@ -49,14 +50,7 @@ export async function POST(request: Request) {
     }
 
     // 2. Buscamos la configuración comercial de ese cliente para Andreani
-    const credencial = await prisma.credencialCourier.findUnique({
-      where: { 
-        empresaId_nombreCourier: { 
-          empresaId: envio.empresaId, 
-          nombreCourier: 'andreani' 
-        } 
-      }
-    });
+    const credencial = await obtenerCredencialCourier(envio.empresaId, 'andreani');
 
     // 3. APLICAMOS LA REGLA ESTRICTA DE CREDENCIALES
     let llaves: any;

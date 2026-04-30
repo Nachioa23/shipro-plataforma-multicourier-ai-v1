@@ -1,6 +1,7 @@
 import prisma from "@/lib/prisma";
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
+import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
 import type { Paquete } from "@/lib/couriers/CourierInterface";
 
 export interface CotizarInput {
@@ -125,7 +126,7 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
 
   for (const config of couriersAptos) {
     try {
-      const nombreNormalizado = config.nombreCourier.replace(/['\s]/g, '').toLowerCase();
+      const nombreNormalizado = normalizarParaComparacion(config.nombreCourier);
 
       // Si el cliente usa credenciales propias inválidas, parsearCredencialesPropias
       // lanza y este courier se salta (no aparece en las opciones).

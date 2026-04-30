@@ -7,6 +7,7 @@ import QRCode from "qrcode";
 import fs from 'fs';
 import path from 'path';
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
+import { obtenerCredencialCourier, normalizarParaComparacion } from "@/lib/couriers/normalizar";
 
 export async function POST(request: Request) {
   try {
@@ -34,7 +35,7 @@ export async function POST(request: Request) {
     for (const envio of envios) {
       if (!envio.trackingNumber) continue; // Si no hay tracking, ignoramos
 
-      const nombreNormalizado = envio.courier.nombre.toLowerCase().replace(/['\s]/g, '');
+      const nombreNormalizado = normalizarParaComparacion(envio.courier.nombre);
       const fecha = envio.fechaImpresion ? new Date(envio.fechaImpresion).toLocaleDateString('es-AR') : new Date().toLocaleDateString('es-AR');
 
       try {
@@ -108,9 +109,7 @@ export async function POST(request: Request) {
           continue;
         }
 
-        const credencial = await prisma.credencialCourier.findUnique({
-          where: { empresaId_nombreCourier: { empresaId: envio.empresaId, nombreCourier: envio.courier.nombre.toLowerCase() } }
-        });
+        const credencial = await obtenerCredencialCourier(envio.empresaId, envio.courier.nombre);
         
         let llaves = credencial?.usaCredencialesPropias
           ? parsearCredencialesPropias(nombreNormalizado, credencial.credencialesJson)

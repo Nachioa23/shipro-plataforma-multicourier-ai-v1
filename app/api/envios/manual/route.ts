@@ -9,10 +9,30 @@ export async function POST(request: Request) {
   if (!empresaIdHeader) {
     return NextResponse.json({ error: "Falta empresaId en el contexto de auth" }, { status: 400 });
   }
-  const empresaId = parseInt(empresaIdHeader);
 
   try {
     const body = await request.json();
+
+    // Para shipro: header trae "SHIPRO" (Modo Dios). La empresa específica
+    // viene en body.filtroEmpresa (dropdown del frontend).
+    // Para cliente: header trae empresaId numérico de su sesión.
+    let empresaId: number;
+    if (empresaIdHeader === "SHIPRO") {
+      if (!body.filtroEmpresa) {
+        return NextResponse.json(
+          { error: 'Seleccioná una empresa para crear el envío', code: 'EMPRESA_REQUERIDA' },
+          { status: 400 }
+        );
+      }
+      empresaId = parseInt(body.filtroEmpresa);
+    } else {
+      empresaId = parseInt(empresaIdHeader);
+    }
+
+    if (isNaN(empresaId)) {
+      return NextResponse.json({ error: "empresaId inválido" }, { status: 400 });
+    }
+
     const result = await crearEnvio({
       empresaId,
       destinatarioNombre: body.destinatarioNombre,

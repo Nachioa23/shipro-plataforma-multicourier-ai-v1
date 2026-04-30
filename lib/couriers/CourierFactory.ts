@@ -1,11 +1,13 @@
 import { ICourierIntegrator } from './CourierInterface';
 import { AndreaniAdapter } from './AndreaniAdapter';
 import { MocisAdapter } from './MocisAdapter';
+import { normalizarParaComparacion } from './normalizar';
 
 export class CourierFactory {
   static crear(courier: string, credenciales: any): ICourierIntegrator {
-
-    switch (courier.toLowerCase()) {
+    // Defense-in-depth: tolerar variantes ("Moci's", "MOCIS", "andreani ")
+    // sin importar cómo el caller normalizó. Una sola fuente de verdad.
+    switch (normalizarParaComparacion(courier)) {
 
       case 'andreani':
         return new AndreaniAdapter({

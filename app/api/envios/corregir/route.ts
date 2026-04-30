@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
+import { obtenerCredencialCourier, normalizarParaComparacion } from "@/lib/couriers/normalizar";
 
 export async function POST(request: Request) {
   try {
@@ -52,11 +53,9 @@ export async function POST(request: Request) {
     let despachoExitoso = false;
 
     try {
-      const nombreCourierLimpio = envio.courier.nombre.toLowerCase().replace(/['\s]/g, '');
-      
-      const credencialMain = await prisma.credencialCourier.findUnique({
-        where: { empresaId_nombreCourier: { empresaId: envio.empresaId, nombreCourier: envio.courier.nombre.toLowerCase() } }
-      });
+      const nombreCourierLimpio = normalizarParaComparacion(envio.courier.nombre);
+
+      const credencialMain = await obtenerCredencialCourier(envio.empresaId, envio.courier.nombre);
 
       if (credencialMain && credencialMain.activo) {
         const llavesMain = credencialMain.usaCredencialesPropias

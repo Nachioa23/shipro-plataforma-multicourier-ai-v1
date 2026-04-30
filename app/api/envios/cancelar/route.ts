@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
+import { obtenerCredencialCourier, normalizarParaComparacion } from "@/lib/couriers/normalizar";
 
 export async function POST(request: Request) {
   try {
@@ -16,11 +17,9 @@ export async function POST(request: Request) {
     if (!envio) return NextResponse.json({ error: "Envío no encontrado" }, { status: 404 });
     if (envio.estadoActual === "CANCELADO") return NextResponse.json({ error: "El envío ya está cancelado" }, { status: 400 });
 
-    const nombreMainCourier = envio.courier.nombre.toLowerCase();
+    const nombreMainCourier = normalizarParaComparacion(envio.courier.nombre);
 
-    const credencialMain = await prisma.credencialCourier.findUnique({
-      where: { empresaId_nombreCourier: { empresaId: envio.empresaId, nombreCourier: nombreMainCourier } }
-    });
+    const credencialMain = await obtenerCredencialCourier(envio.empresaId, envio.courier.nombre);
 
     // REGLA ESTRICTA DE CREDENCIALES
     let llavesMain = credencialMain?.usaCredencialesPropias

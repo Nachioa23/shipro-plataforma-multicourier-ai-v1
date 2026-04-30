@@ -15,6 +15,7 @@ function calcularDistancia(lat1: number, lon1: number, lat2: number, lon2: numbe
 }
 
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
+import { obtenerCredencialCourier, normalizarParaComparacion } from "@/lib/couriers/normalizar";
 
 export async function GET(request: Request) {
   try {
@@ -32,11 +33,9 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Esta ruta requiere una empresa específica para usar sus credenciales." }, { status: 400 });
     }
 
-    const nombreNormalizado = courier.toLowerCase().replace(/[']/g, '');
+    const nombreNormalizado = normalizarParaComparacion(courier);
 
-    const credencial = await prisma.credencialCourier.findUnique({
-      where: { empresaId_nombreCourier: { empresaId: ctx.empresaId, nombreCourier: courier } }
-    });
+    const credencial = await obtenerCredencialCourier(ctx.empresaId, courier);
 
     // REGLA ESTRICTA DE CREDENCIALES
     const llaves = credencial?.usaCredencialesPropias

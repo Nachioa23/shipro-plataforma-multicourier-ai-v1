@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
+import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
 
 export async function POST(request: Request) {
   try {
@@ -21,7 +22,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Envío original no encontrado" }, { status: 404 });
     }
 
-    const nombreNormalizado = envioOriginal.courier.nombre.toLowerCase();
+    const nombreNormalizado = normalizarParaComparacion(envioOriginal.courier.nombre);
 
     const credencial = await prisma.credencialCourier.findUnique({
       where: { empresaId_nombreCourier: { empresaId: envioOriginal.empresaId, nombreCourier: envioOriginal.courier.nombre } }

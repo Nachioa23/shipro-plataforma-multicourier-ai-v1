@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
+import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
 
 export async function POST(request: Request) {
   try {
@@ -18,7 +19,7 @@ export async function POST(request: Request) {
 
     let mensaje = "Historial cargado";
     if (forzarActualizacion && envio.estadoActual !== "CANCELADO") {
-      const nombreNormalizado = envio.courier.nombre.toLowerCase();
+      const nombreNormalizado = normalizarParaComparacion(envio.courier.nombre);
       
       const credencial = await prisma.credencialCourier.findUnique({
         where: { empresaId_nombreCourier: { empresaId: envio.empresaId, nombreCourier: envio.courier.nombre } }

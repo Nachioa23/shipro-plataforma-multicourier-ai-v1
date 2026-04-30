@@ -3,6 +3,7 @@ import prisma from "@/lib/prisma";
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { enviarMailColecta, enviarMailEntregadoNPS } from "@/lib/mailer";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
+import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
 
 export async function GET(request: Request) {
   try {
@@ -33,8 +34,8 @@ export async function GET(request: Request) {
       try {
         if (envio.trackingNumber.startsWith('SHP-')) continue;
 
-        const nombreCourierBaseDatos = envio.courier.nombre; 
-        const nombreNormalizado = nombreCourierBaseDatos.toLowerCase().replace(/[']/g, ''); 
+        const nombreCourierBaseDatos = envio.courier.nombre;
+        const nombreNormalizado = normalizarParaComparacion(nombreCourierBaseDatos);
 
         const credencial = await prisma.credencialCourier.findUnique({
           where: { empresaId_nombreCourier: { empresaId: envio.empresaId, nombreCourier: nombreCourierBaseDatos } }

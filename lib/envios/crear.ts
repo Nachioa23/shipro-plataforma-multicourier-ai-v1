@@ -2,6 +2,7 @@ import prisma from "@/lib/prisma";
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { enviarMailCreacion } from "@/lib/mailer";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
+import { obtenerCourier, normalizarParaComparacion } from "@/lib/couriers/normalizar";
 import { cotizar } from "@/lib/cotizador";
 
 export interface CrearEnvioInput {
@@ -48,23 +49,21 @@ export async function crearEnvio(input: CrearEnvioInput) {
   let motivoRetencion = "";
 
   // =========================================================
-  // DICCIONARIO INTELIGENTE DE COURIERS (Anti-Duplicados)
+  // RESOLVER COURIER CANÓNICO
+  // obtenerCourier tolera variantes ("moci", "Moci's", "MOCIS") y
+  // devuelve el registro de BD con el nombre canónico correcto.
+  // Si no existe, lo crea con el nombre tal como vino (legacy:
+  // antes el diccionario manual hardcodeaba "Andreani"/"Mocis";
+  // ahora confiamos en obtenerCourier — si el caller manda algo
+  // raro queda como debt para DEUDA 12 / ABM).
   // =========================================================
-  const textoIngresado = nombreCourier.toLowerCase().replace(/['\s]/g, '');
-  let nombreOficial = nombreCourier;
-
-  if (textoIngresado.includes('andreani')) nombreOficial = "Andreani";
-  else if (textoIngresado.includes('mocis') || textoIngresado.includes('moci')) nombreOficial = "Mocis";
-
-  let courierReal = await prisma.courier.findFirst({
-    where: { nombre: nombreOficial }
-  });
+  let courierReal = await obtenerCourier(nombreCourier);
 
   if (!courierReal) {
-    courierReal = await prisma.courier.create({ data: { nombre: nombreOficial, activo: true } });
+    courierReal = await prisma.courier.create({ data: { nombre: nombreCourier, activo: true } });
   }
   const courierIdReal = courierReal.id;
-  const courierNombreLimpio = nombreOficial.toLowerCase().replace(/['\s]/g, '');
+  const courierNombreLimpio = normalizarParaComparacion(courierReal.nombre);
 
   // DIRECTORIO Y ABM: Actualizar o crear contacto
   const direccionExistente = await prisma.direccion.findFirst({ where: { email: email } });
@@ -158,10 +157,10 @@ export async function crearEnvio(input: CrearEnvioInput) {
   // DESPACHO AL COURIER (Solo si NO falló el peaje)
   if (!falloPorPeaje) {
     try {
-      // courierReal.nombre es la capitalización canónica de BD (ya validada arriba
-      // en el findFirst). NO usar courierNombreLimpio (lowercase) porque
-      // CredencialCourier.nombreCourier en BD está capitalizado y findUnique
-      // requiere match exacto. Ver DEUDA 11.
+      // courierReal.nombre es la capitalización canónica de BD (ya resuelto por
+      // obtenerCourier arriba). NO refactorear a obtenerCredencialCourier aquí:
+      // courierReal ya está en memoria; usar el helper agregaría una query
+      // innecesaria (re-resolvería el courier que ya tenemos).
       const credencialMain = await prisma.credencialCourier.findUnique({
         where: { empresaId_nombreCourier: { empresaId, nombreCourier: courierReal.nombre } }
       });
@@ -325,7 +324,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
         monto: -montoDebito,
         saldoPosterior: nuevoSaldo,
         referencia: trackingOficial,
-        descripcion: `Generación de etiqueta ${nombreOficial.toUpperCase()}`,
+        descripcion: `Generación de etiqueta ${courierReal.nombre.toUpperCase()}`,
         envioId: envioCreado.id
       }
     });
@@ -349,7 +348,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
       const { enviarMailRetenido } = await import("@/lib/mailer");
       await enviarMailRetenido(email, trackingOficial, destinatarioNombre, `${process.env.APP_URL || "http://localhost:3000"}/corregir/${trackingOficial}`, empresaNombreParaMail);
     } else {
-      enviarMailCreacion(email, trackingOficial, destinatarioNombre, nombreOficial, `${process.env.APP_URL || "http://localhost:3000"}/seguimiento/${trackingOficial}`);
+      enviarMailCreacion(email, trackingOficial, destinatarioNombre, courierReal.nombre, `${process.env.APP_URL || "http://localhost:3000"}/seguimiento/${trackingOficial}`);
     }
   }
 

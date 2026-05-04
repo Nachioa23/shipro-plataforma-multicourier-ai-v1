@@ -21,6 +21,18 @@ export interface DispatchInput {
   valorDeclarado: number;
   modalidad?: string;
   numeroOrden?: string | null;
+  // DEUDA 4: datos del depósito de origen para imprimir en la etiqueta del courier.
+  // Si no viene, los adapters caen al fallback hardcoded.
+  origen?: {
+    calle: string;
+    altura: string;
+    cp: string;
+    localidad: string;
+    provincia: string;
+    pais?: string;
+    telefono?: string;
+    email?: string;
+  };
 }
 
 export interface DispatchResult {
@@ -84,7 +96,8 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
         valorDeclarado: input.valorDeclarado || 0, requiereSeguro: credencial.requiereSeguro
       }],
       referencia: input.numeroOrden ? `ORDEN-${input.numeroOrden}` : `ORDEN-${Date.now()}`,
-      tipoEntrega: tipoEntregaFormateado
+      tipoEntrega: tipoEntregaFormateado,
+      origen: input.origen,  // DEUDA 4: datos del depósito real (puede ser undefined → adapter usa fallback)
     };
 
     const respuestaMain = await motorMain.despachar(paramsDespacho);

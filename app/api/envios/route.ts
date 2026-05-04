@@ -61,13 +61,19 @@ export async function GET(request: Request) {
           where.estadoActual = { in: ["RETENIDO", "Retenido"] };
           break;
         case "Bloqueados":
+          where.estadoActual = { in: ["BLOQUEADO_SALDO", "BLOQUEADO_DEPOSITO"] };
+          break;
+        case "BloqueadosSaldo":
           where.estadoActual = "BLOQUEADO_SALDO";
+          break;
+        case "BloqueadosDeposito":
+          where.estadoActual = "BLOQUEADO_DEPOSITO";
           break;
         case "Pendientes":
           where.estadoActual = { in: ["PENDIENTE", "Pendiente"] };
           break;
         case "Etiquetados":
-          where.estadoActual = { notIn: ["PENDIENTE", "Pendiente", "RETENIDO", "Retenido", "BLOQUEADO_SALDO"] };
+          where.estadoActual = { notIn: ["PENDIENTE", "Pendiente", "RETENIDO", "Retenido", "BLOQUEADO_SALDO", "BLOQUEADO_DEPOSITO"] };
           break;
       }
     }
@@ -130,8 +136,20 @@ export async function POST(request: Request) {
       costoEnvio: body.costoEnvio,
       costoProveedor: body.costoProveedor,
       provinciaDestino: body.provinciaDestino,
-      numeroOrden: body.numeroOrden
+      numeroOrden: body.numeroOrden,
+      permitirBloqueoPorDeposito: true,
     });
+
+    if (result.bloqueadoPorDeposito) {
+      return NextResponse.json({
+        success: true,
+        tracking: result.trackingNumber,
+        etiquetaUrl: null,
+        bloqueadoPorDeposito: true,
+        status: "BLOQUEADO_DEPOSITO",
+        warning: "El cliente no tiene depósito predeterminado configurado. Configurá uno en Shipro para que se procesen los envíos pendientes."
+      });
+    }
 
     if (result.bloqueadoPorSaldo) {
       return NextResponse.json({
@@ -143,7 +161,19 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json(result);
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.message?.startsWith('DepositoNoEncontrado')) {
+      return NextResponse.json(
+        { error: 'Depósito no encontrado.', code: 'DEPOSITO_NO_ENCONTRADO' },
+        { status: 400 }
+      );
+    }
+    if (error?.message?.startsWith('DepositoInactivo')) {
+      return NextResponse.json(
+        { error: 'El depósito está inactivo o eliminado y no puede usarse para crear envíos.', code: 'DEPOSITO_INACTIVO' },
+        { status: 400 }
+      );
+    }
     console.error("Error en POST /api/envios:", error);
     return NextResponse.json({ error: "Error interno al crear el envío o debitar el saldo." }, { status: 500 });
   }

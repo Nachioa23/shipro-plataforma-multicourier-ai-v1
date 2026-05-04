@@ -6,6 +6,19 @@ import { cotizar } from "@/lib/cotizador";
 
 export interface CrearEnvioInput {
   empresaId: number;
+  // DEUDA 4: depósito de origen.
+  // - Opcional: si no viene, usa el predeterminado activo de la empresa.
+  // - Si viene un id que no pertenece a la empresa o está inactivo: throw.
+  // - E-commerces (POST /api/envios) nunca pasan depositoId → siempre predeterminado.
+  // - Dashboard (/nuevo-envio) puede pasar uno del dropdown si hay >1 depósito.
+  depositoId?: number;
+  // DEUDA 4 + visión DEUDA 27: si la empresa NO tiene depósito predeterminado:
+  // - false (default): throw DepositoRequerido (rechazo claro, dashboard).
+  // - true: crear envío con SHP-* + estado BLOQUEADO_DEPOSITO. La etiqueta se
+  //   destraba automáticamente cuando el cliente configure su depósito predeterminado
+  //   (procesarEnviosBloqueadosPorDeposito disparado desde /api/depositos).
+  // E-commerces (POST /api/envios) pasan true para no romper la venta.
+  permitirBloqueoPorDeposito?: boolean;
   destinatarioNombre: string;
   cpDestino: string | number;
   pesoReal: number | string;
@@ -35,7 +48,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
   }
 
   const {
-    empresaId, destinatarioNombre, cpDestino, pesoReal, nombreCourier,
+    empresaId, depositoId: depositoIdInput, permitirBloqueoPorDeposito, destinatarioNombre, cpDestino, pesoReal, nombreCourier,
     calle, altura, piso, dpto, dni, email, telefono, localidad, modalidad,
     valorDeclarado, costoEnvio, costoProveedor, provinciaDestino, numeroOrden
   } = input;
@@ -79,13 +92,85 @@ export async function crearEnvio(input: CrearEnvioInput) {
     direccionId = nuevaDir.id;
   }
 
-  const nombreDeposito = `Depósito Central - Empresa ${empresaId}`;
-  let direccionOrigen = await prisma.direccion.findFirst({ where: { nombre: nombreDeposito } });
-  if (!direccionOrigen) {
-    direccionOrigen = await prisma.direccion.create({
-      data: { nombre: nombreDeposito, calle: "Av. Libertador", altura: "1234", localidad: "CABA", cp: "1000", provincia: "CABA", pais: "Argentina" }
-    });
+  // ==============================================================
+  // DEPÓSITO DE ORIGEN (DEUDA 4)
+  // Cargamos la empresa con sus depósitos activos no eliminados en una sola query.
+  // Esto reemplaza la lógica vieja que creaba una Direccion fake hardcoded
+  // ("Depósito Central - Empresa N" con CP 1000 / Av. Libertador).
+  //
+  // Reglas:
+  // - Si caller pasó depositoId → buscar en los depósitos de SU empresa. Si no
+  //   matchea: 404 genérico (no expone que el depósito existe en otra empresa).
+  // - Si depositoId apunta a inactivo o eliminado: error claro.
+  //   (Visión completa con BLOQUEADO_DEPOSITO + recuperación automática post
+  //   configuración: ver DEUDA 27 — pendiente.)
+  // - Sin depositoId: usar el predeterminado.
+  // - Sin predeterminado: throw DepositoRequerido (handler retorna 400).
+  // ==============================================================
+  const empresaConData = await prisma.empresa.findUnique({
+    where: { id: empresaId },
+    include: {
+      depositos: {
+        where: { eliminado: false, activo: true },
+        orderBy: [{ esPredeterminado: 'desc' }, { id: 'asc' }],
+      },
+    },
+  });
+
+  if (!empresaConData) {
+    throw new Error(`EmpresaNoEncontrada: empresa id=${empresaId} no existe.`);
   }
+
+  let deposito: typeof empresaConData.depositos[0] | undefined;
+  let bloqueadoPorDeposito = false;
+
+  if (depositoIdInput) {
+    deposito = empresaConData.depositos.find(d => d.id === depositoIdInput);
+    if (!deposito) {
+      // 404 genérico — no enumeration: no exponemos si el depósito existe en otra empresa.
+      throw new Error('DepositoNoEncontrado: depósito no encontrado.');
+    }
+    // El where de la query ya filtra eliminado=false y activo=true, entonces si
+    // matcheamos significa que está usable. Defense extra:
+    if (deposito.eliminado || !deposito.activo) {
+      throw new Error('DepositoInactivo: el depósito está inactivo o eliminado y no puede usarse para crear envíos.');
+    }
+  } else {
+    deposito = empresaConData.depositos.find(d => d.esPredeterminado);
+    if (!deposito) {
+      // Sin predeterminado: branch según permitirBloqueoPorDeposito.
+      // - true (e-commerce): crear con BLOQUEADO_DEPOSITO. Se destraba cuando el
+      //   cliente configure su depósito predeterminado (procesarEnviosBloqueadosPorDeposito).
+      // - false (dashboard): rechazar con error claro.
+      if (permitirBloqueoPorDeposito) {
+        bloqueadoPorDeposito = true;
+        estadoInicialEnvio = "BLOQUEADO_DEPOSITO";
+      } else {
+        throw new Error('DepositoRequerido: la empresa no tiene depósito predeterminado activo. Configurá uno en /configuracion/depositos.');
+      }
+    }
+  }
+
+  // Snapshot de la dirección al momento del envío. La FK origenId apunta a esto;
+  // depositoId apunta al registro vivo. Si el cliente edita el depósito en el
+  // futuro, los envíos viejos mantienen la dirección de origen del momento.
+  // Si bloqueadoPorDeposito: NO creamos snapshot (no hay datos del depósito).
+  // origenId y depositoId quedan en null en el envío hasta que se destrabe.
+  const direccionOrigen = deposito ? await prisma.direccion.create({
+    data: {
+      nombre: deposito.nombre,
+      calle: deposito.direccionCalle,
+      altura: deposito.direccionAltura,
+      piso: deposito.direccionPiso,
+      dpto: deposito.direccionDpto,
+      cp: deposito.codigoPostal,
+      localidad: deposito.localidad,
+      provincia: deposito.provincia,
+      pais: deposito.pais,
+      telefono: deposito.contactoTelefono,
+      email: deposito.contactoEmail,
+    },
+  }) : null;
 
   // ==============================================================
   // REGLA DEL PEAJE (Google Maps)
@@ -162,35 +247,41 @@ export async function crearEnvio(input: CrearEnvioInput) {
   const credencialMain = await prisma.credencialCourier.findUnique({
     where: { empresaId_nombreCourier: { empresaId, nombreCourier: courierReal.nombre } }
   });
-  const empresaPreCheck = await prisma.empresa.findUnique({ where: { id: empresaId } });
 
   // ==============================================================
   // VALIDACIÓN DE SALDO POR tipoCuenta (DEUDA 16)
+  // Reusamos `empresaConData` cargada arriba para resolución del depósito;
+  // tiene los campos saldoActivo/limiteDescubierto/modalidadPago necesarios.
   // Si no alcanza, NO se rebota la creación: el envío se crea con
   // tracking SHP-* + estado BLOQUEADO_SALDO. No se llama al courier,
   // no se debita saldo, no se manda mail. Se desbloquea cuando el
   // cliente recargue saldo (procesarEnviosBloqueados).
   // ==============================================================
   const montoDebito = parseFloat(String(costoEnvio)) || 0;
-  const tipoCuentaEfectivo = credencialMain?.tipoCuenta || empresaPreCheck?.modalidadPago || "POSTPAGO";
+  const tipoCuentaEfectivo = credencialMain?.tipoCuenta || empresaConData.modalidadPago || "POSTPAGO";
   let bloqueadoPorSaldo = false;
 
   if (tipoCuentaEfectivo === "PREPAGO") {
-    if ((empresaPreCheck?.saldoActivo || 0) < montoDebito) {
+    if ((empresaConData.saldoActivo || 0) < montoDebito) {
       bloqueadoPorSaldo = true;
     }
   } else { // POSTPAGO
-    if ((empresaPreCheck?.saldoActivo || 0) + (empresaPreCheck?.limiteDescubierto || 0) < montoDebito) {
+    if ((empresaConData.saldoActivo || 0) + (empresaConData.limiteDescubierto || 0) < montoDebito) {
       bloqueadoPorSaldo = true;
     }
   }
 
-  if (bloqueadoPorSaldo) {
+  // Prioridad de estados: BLOQUEADO_DEPOSITO > BLOQUEADO_SALDO. Si ambos
+  // aplican, el envío arranca como BLOQUEADO_DEPOSITO; cuando se configure
+  // depósito, la función procesarEnviosBloqueadosPorDeposito() valida saldo
+  // y transiciona a BLOQUEADO_SALDO si no alcanza.
+  if (bloqueadoPorSaldo && !bloqueadoPorDeposito) {
     estadoInicialEnvio = "BLOQUEADO_SALDO";
   }
 
-  // DESPACHO AL COURIER (solo si NO falló el peaje y NO está bloqueado por saldo)
-  if (!falloPorPeaje && !bloqueadoPorSaldo && credencialMain && credencialMain.activo) {
+  // DESPACHO AL COURIER (solo si NO falló el peaje, NO está bloqueado por saldo
+  // ni por depósito, y hay credencial + depósito disponibles).
+  if (!falloPorPeaje && !bloqueadoPorSaldo && !bloqueadoPorDeposito && credencialMain && credencialMain.activo && deposito) {
     const dispatchResult = await despacharCourier({
       credencial: credencialMain,
       courierNombreCanonico: courierReal.nombre,
@@ -207,7 +298,19 @@ export async function crearEnvio(input: CrearEnvioInput) {
       pesoReal: parseFloat(String(pesoReal)) || 1,
       valorDeclarado: parseFloat(String(valorDeclarado)) || 0,
       modalidad,
-      numeroOrden
+      numeroOrden,
+      // DEUDA 4: pasar el origen real del depósito al courier (resuelve bug latente
+      // donde los adapters imprimían etiquetas con "Av. Libertador 1234" hardcoded).
+      origen: {
+        calle: deposito.direccionCalle,
+        altura: deposito.direccionAltura,
+        cp: deposito.codigoPostal,
+        localidad: deposito.localidad,
+        provincia: deposito.provincia,
+        pais: deposito.pais,
+        telefono: deposito.contactoTelefono,
+        email: deposito.contactoEmail || undefined,
+      },
     });
     if (dispatchResult.tracking) {
       trackingOficial = dispatchResult.tracking;
@@ -276,7 +379,10 @@ export async function crearEnvio(input: CrearEnvioInput) {
         modalidad: modalidad || "Estándar",
         empresa: { connect: { id: empresaId } },
         courier: { connect: { id: courierIdReal } },
-        origen: { connect: { id: direccionOrigen.id } },
+        // Si bloqueadoPorDeposito: origen y deposito quedan en null hasta que
+        // procesarEnviosBloqueadosPorDeposito() los pueble post-configuración.
+        ...(direccionOrigen ? { origen: { connect: { id: direccionOrigen.id } } } : {}),
+        ...(deposito ? { deposito: { connect: { id: deposito.id } } } : {}),
         destino: { connect: { id: direccionId } },
         finanzas: {
           create: {
@@ -294,9 +400,9 @@ export async function crearEnvio(input: CrearEnvioInput) {
       include: { courier: true, destino: true, finanzas: true }
     });
 
-    // Si BLOQUEADO_SALDO: NO crear MovimientoFinanciero ni actualizar saldo.
-    // El débito se aplica recién cuando se desbloquee (procesarEnviosBloqueados).
-    if (!bloqueadoPorSaldo) {
+    // Si BLOQUEADO_SALDO o BLOQUEADO_DEPOSITO: NO crear MovimientoFinanciero ni
+    // actualizar saldo. El débito se aplica recién cuando se desbloquee.
+    if (!bloqueadoPorSaldo && !bloqueadoPorDeposito) {
       await tx.movimientoFinanciero.create({
         data: {
           empresaId,
@@ -315,7 +421,9 @@ export async function crearEnvio(input: CrearEnvioInput) {
       });
     }
 
-    if (bloqueadoPorSaldo) {
+    if (bloqueadoPorDeposito) {
+      await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_DEPOSITO", observacion: `Bloqueado: la empresa no tiene depósito predeterminado configurado. Se desbloqueará automáticamente cuando se configure uno en /configuracion/depositos.`, envioId: envioCreado.id } });
+    } else if (bloqueadoPorSaldo) {
       const saldoDisponible = (empresaData?.saldoActivo || 0) + (tipoCuentaEfectivo === "POSTPAGO" ? (empresaData?.limiteDescubierto || 0) : 0);
       await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_SALDO", observacion: `Bloqueado por saldo insuficiente. Costo $${montoDebito.toFixed(2)}, disponible $${saldoDisponible.toFixed(2)} (${tipoCuentaEfectivo}). Se desbloqueará al recargar saldo.`, envioId: envioCreado.id } });
     } else if (falloPorPeaje) {
@@ -327,9 +435,9 @@ export async function crearEnvio(input: CrearEnvioInput) {
     return envioCreado;
   });
 
-  // Mails: NO mandar si está bloqueado por saldo (el destinatario no debe recibir
-  // notificación hasta que el envío se destrabe y tenga tracking real).
-  if (email && !bloqueadoPorSaldo) {
+  // Mails: NO mandar si está bloqueado por saldo o por depósito (el destinatario
+  // no debe recibir notificación hasta que el envío se destrabe y tenga tracking real).
+  if (email && !bloqueadoPorSaldo && !bloqueadoPorDeposito) {
     if (falloPorPeaje) {
       const { enviarMailRetenido } = await import("@/lib/mailer");
       await enviarMailRetenido(email, trackingOficial, destinatarioNombre, `${process.env.APP_URL || "http://localhost:3000"}/corregir/${trackingOficial}`, empresaNombreParaMail);
@@ -342,6 +450,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
     ...resultadoTransaccion,
     trackingNumber: trackingOficial,
     bloqueadoPorSaldo,
+    bloqueadoPorDeposito,
     estado: estadoInicialEnvio
   };
 }

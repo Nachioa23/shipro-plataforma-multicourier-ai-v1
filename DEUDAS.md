@@ -418,6 +418,107 @@ Implementar como helper `lib/permisos.ts` con `puedeEditarCampo(rol, campo): boo
 
 **Relación con DEUDA 19:** suspensión + cambio de estado de cuenta es evento de auditoría obligatorio.
 
+## DEUDA 26 — Limpieza de tabla Provincia y Localidad (Importante — pre-producción)
+
+**Status:** Identificada el 2026-05-03 durante DEUDA 4 (módulo Depósitos), tras verificar el endpoint `/api/geografia/buscar`. PENDIENTE — sesión dedicada estimada 1-2 horas.
+
+**Estado actual:**
+- Tabla `Provincia` tiene **44 entradas**: 24 reales en MAYÚSCULAS sin acentos (`BUENOS AIRES`, `CIUDAD AUTONOMA DE BUENOS AIRES`, `CORDOBA`, `NEUQUEN`, etc.) + **20 basura** del parseo del CSV (`100 AL 21`, `300 (APEADERO FCGB)`, `400-LADO ESTE)`, `5`, `500`, etc.).
+- Tabla `Localidad` tiene 19201 entradas, todas en MAYÚSCULAS sin acentos (ej: `RECOLETA`, `LOS POLVORINES`).
+- Causa: el parser CSV (`csv-parser` en seed.ts) no maneja correctamente filas con comas dentro de campos (ej: localidades como "BARRIO X, ZONA Y"), generando filas malformadas con campos corridos.
+
+**Mitigación temporal aplicada en DEUDA 4:**
+- `lib/constants/normalizar-provincia.ts` mapea variantes mayúsculas/sin-acentos a la lista canónica `PROVINCIAS_AR`.
+- `app/api/geografia/buscar/route.ts` aplica el normalizador antes de devolver, filtrando entradas basura (devuelve `provincia: null, localidades: []` cuando la provincia no matchea).
+- BD intacta — el frontend ve datos limpios.
+
+**How to apply (1-2 horas, sesión dedicada):**
+1. Reemplazar `csv-parser` por uno que respete RFC 4180 (ej: `papaparse` o `csv-parse` con opciones strict).
+2. En `prisma/seed.ts`:
+   - Pre-procesar cada fila: `provincia` se mapea con `normalizarProvincia()` antes del upsert. Si retorna null, descartar fila.
+   - `localidad` se transforma a Title Case (helper) antes del create/findFirst.
+3. Migración de limpieza (script TypeScript):
+   - DELETE de las 20 provincias basura + sus localidades asociadas + sus codigos postales asociados (cascade).
+   - UPDATE de las 24 provincias reales a la versión canónica de `PROVINCIAS_AR`.
+   - UPDATE de cada localidad a Title Case.
+4. Eliminar `lib/constants/normalizar-provincia.ts` (ya no es necesaria una vez la BD está limpia).
+5. Simplificar el endpoint `/api/geografia/buscar` (sacar la llamada al normalizador).
+
+**Riesgo:** los envíos existentes guardan provincia/localidad en `Direccion` como **strings**, no como FKs. Verificado: la limpieza de las tablas Provincia/Localidad no rompe envíos históricos. Pero conviene re-verificar antes del deploy.
+
+**Why no bloqueante hoy:** la mitigación temporal cubre el caso visible (dropdown frontend). Las 20 entradas basura en Provincia no aparecen en ningún lugar del UI porque el normalizador las filtra con null. Operativamente el sistema funciona. Pero la limpieza estructural es importante antes del deploy a Postgres en Linode (mejor migrar BD limpia que arrastrar la deuda).
+
+## DEUDA 27 — Etiqueta diferida por depósito faltante (Importante post-MVP)
+
+**Status:** Identificada el 2026-05-04 durante FASE E de DEUDA 4. PENDIENTE — sesión dedicada estimada 4-6 horas (alcance similar a DEUDA 16). Por ahora aplicamos bloqueo duro: si el cliente no tiene depósito predeterminado, `crearEnvio()` lanza `DepositoRequerido` y los handlers retornan 400.
+
+**Estado actual (post-FASE E DEUDA 4):**
+- Si el cliente intenta crear un envío sin depósito predeterminado configurado → bloqueo duro 400.
+- E-commerce que recibe ese error puede caerse o mostrar mensaje al comprador.
+- La venta del e-commerce queda en limbo o se cancela.
+
+**Visión completa (paralela a DEUDA 16 con BLOQUEADO_SALDO):**
+- En lugar de rechazar, crear el envío con tracking `SHP-XXXXXX` y estado `BLOQUEADO_DEPOSITO`.
+- NO llamar al courier (no hay origen para despachar).
+- NO mandar mail al destinatario hasta que se destrabe.
+- SÍ mandar mail al `gerente_cliente` con CTA: "Configurá tu depósito predeterminado en Shipro para destrabar N envíos pendientes."
+- Banner amber en dashboard del cliente con contador.
+- Cuando el cliente configure su depósito predeterminado: trigger `procesarEnviosBloqueadosPorDeposito(empresaId)` que recorre los `BLOQUEADO_DEPOSITO` y los re-despacha (igual patrón que `procesarEnviosBloqueados()` de DEUDA 16).
+- En `/api/depositos/[id]/predeterminado` POST y en el endpoint de creación de primer depósito: invocar la función automáticamente después de marcar/crear.
+
+**How to apply (4-6 horas):**
+1. Estado nuevo: `Envio.estadoActual === "BLOQUEADO_DEPOSITO"`. No requiere migración (estadoActual es String libre).
+2. Modificar `lib/envios/crear.ts`: en lugar de throw `DepositoRequerido`, setear `bloqueadoPorDeposito = true` y crear envío con SHP-* (igual patrón que DEUDA 16).
+3. Modificar `lib/envios/dispatch.ts`: skip si `bloqueadoPorDeposito`.
+4. Crear `lib/envios/procesar-bloqueados-deposito.ts` (o extender `procesar-bloqueados.ts` para que sea genérico por motivo).
+5. Trigger en `/api/depositos/[id]/predeterminado` POST y en `/api/depositos` POST (cuando es el primer depósito).
+6. UI: banner amber + tab "BLOQUEADOS POR CONFIG" en dashboard cliente.
+7. Modificar handlers `/api/envios/manual`, `/api/envios` POST, `/api/cotizar`: aceptar el bloqueo y devolver 200 con flag `bloqueadoPorDeposito` (en vez de 400).
+8. Mail al gerente con CTA.
+
+**Why post-MVP:** la base operativa (DEUDA 4 + DEUDA 16) ya cubre el flujo crítico. Sin DEUDA 27, el cliente que no configuró depósito recibe 400 claro y configura → flujo funciona. La venta del e-commerce se cae solo si el e-commerce no maneja errores 400. Para MVP es aceptable. Para producción a escala (>50 clientes con onboarding masivo), implementar DEUDA 27 reduce fricción.
+
+**Relación con DEUDA 16:** **arquitectura compartida.** El sistema de "etiqueta diferida con destrabado automático post-configuración" es transversal. Cuando se implemente DEUDA 27, considerar refactorear `procesar-bloqueados.ts` para que acepte un parámetro `motivo: "SALDO" | "DEPOSITO" | otros futuros` y centralice la lógica.
+
+## DEUDA 29 — Adapters de couriers cotizan ignorando `cpOrigen` (CRÍTICA pre-deploy MVP)
+
+**Status:** Identificada el 2026-05-04 durante smoke test final de DEUDA 4 (Test 4). PENDIENTE — sesión dedicada estimada 3-4 horas. Bloquea la integración de couriers nuevos (mismo bug potencial en cada adapter).
+
+**Bug:**
+- `lib/couriers/MocisAdapter.ts` (cotizar() ~línea 121-170): solo envía `cpDestino` al endpoint de Akeron. El parámetro `params.cpOrigen` se recibe pero nunca se lee.
+- `lib/couriers/AndreaniAdapter.ts` (cotizar() ~línea 79-108): solo envía `cpDestino` al endpoint `/v1/tarifas` de Andreani. `params.cpOrigen` se recibe pero nunca se manda al API.
+
+**Impacto operacional:**
+- Cotizaciones incorrectas cuando el origen real del cliente no es AMBA.
+- Mocis aparece como opción aunque el origen esté fuera de su zona de cobertura.
+- Andreani devuelve tarifa AMBA→destino en lugar de origen→destino, subestimando el costo real (especialmente origenes de interior).
+
+**Detección concreta:**
+- Smoke test final de DEUDA 4: cotización origen 5000 (Córdoba, Alto Alberdi) → destino 1900 (La Plata) devolvió $8.000-$8.857 de Andreani y un Same Day de Mocis. La tarifa real de Córdoba→La Plata vía Andreani debería rondar los $15.000-$25.000; Mocis no debería aparecer (solo opera AMBA).
+
+**Por qué no se vio antes:**
+Hasta DEUDA 4, `/nuevo-envio/page.tsx` tenía `const cpOrigen = "1050"` hardcoded. Origen siempre era CABA, así que la tarifa AMBA→destino que devolvía cada API coincidía con el origen real. Cero discrepancia visible. Al hacer real el origen (DEUDA 4), el bug latente quedó expuesto.
+
+**Filosofía para el fix (NO mantener listas hardcoded):**
+- El courier es la fuente de verdad de su cobertura. NO mantener listas hardcoded de "Mocis solo opera en estos CPs".
+- Nosotros mandamos `cpOrigen` + `cpDestino`. El courier responde:
+  - Tarifa si hay cobertura.
+  - Error si no hay cobertura → el cotizador ya hace `try/catch` per courier ([lib/cotizador.ts:182-197](lib/cotizador.ts#L182-L197)) y lo skipea silenciosamente.
+- Eso evita drift de listas y respeta el contrato del courier.
+
+**Documentación oficial de los APIs:**
+- Mocis (Akeron): https://documenter.getpostman.com/view/18644794/UVJhCaAn
+- Andreani Developers: https://developers.andreani.com/document
+
+**How to apply (3-4 horas):**
+1. Mocis adapter: revisar doc Akeron, identificar el campo correcto para `cpOrigen` en `/shipping/price` y enviarlo. Si Akeron rechaza con error de cobertura cuando el origen no aplica, el cotizador ya lo skipea.
+2. Andreani adapter: revisar doc developers, identificar el campo de origen en `/v1/tarifas` (probablemente `cpOrigen` o `codigoPostalOrigen`), enviarlo en la query.
+3. Agregar logging de request/response de cotización (con redacción de credenciales) para debugging futuro de tarifas raras.
+4. Smoke test 5 combinaciones: AMBA-AMBA, AMBA-Interior, Interior-AMBA, Interior-Interior, origen sin cobertura del courier.
+
+**Bloquea:**
+Integración de couriers nuevos. Cualquier adapter nuevo replicaría el mismo bug si no se aclara la convención. Una vez resuelto este, documentar la convención en `lib/couriers/CourierInterface.ts` (JSDoc en `cotizar()` exigiendo respeto a `cpOrigen`).
+
 ## Otras deudas menores (no críticas, registradas para no perderlas)
 
 - **`obtenerCredencialesShipro` duplicado** en 4-5 archivos: `app/api/cotizar/route.ts`, `app/api/etiquetas/masiva/route.ts`, `app/api/cron/rastreo/route.ts`, `lib/envios/crear.ts`, posiblemente más. Centralizar en `lib/couriers/credenciales.ts`.

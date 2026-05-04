@@ -29,14 +29,66 @@ model Empresa {
   
   usuarios            Usuario[]
   envios              Envio[]
-  manifiestos         Manifiesto[] 
-  credenciales        CredencialCourier[] 
+  manifiestos         Manifiesto[]
+  credenciales        CredencialCourier[]
   encuestasNPS        EncuestaNPS[]
   movimientos         MovimientoFinanciero[]
   liquidaciones       LiquidacionMensual[]   // NUEVO: Agrupador de facturas a fin de mes
+  depositos           Deposito[]             // DEUDA 4: depósitos físicos del cliente
 
   createdAt           DateTime     @default(now())
   reglasRuteo         ReglaRuteo[]
+}
+
+// ==========================================
+// 1.6 DEPÓSITOS FÍSICOS (DEUDA 4)
+// Cada empresa puede tener N depósitos. Uno marcado como predeterminado
+// se usa por default en e-commerces y cuando hay un solo depósito.
+// El cliente elige al crear envío manual cuando hay >1.
+// ==========================================
+model Deposito {
+  id                Int      @id @default(autoincrement())
+
+  empresaId         Int
+  empresa           Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  nombre            String
+  esPredeterminado  Boolean  @default(false)
+  activo            Boolean  @default(true)
+
+  // Contacto del depósito (para coordinar colectas)
+  contactoNombre    String
+  contactoTelefono  String
+  contactoEmail     String?
+
+  // Dirección física (datos para etiqueta y CP origen)
+  direccionCalle    String
+  direccionAltura   String
+  direccionPiso     String?
+  direccionDpto     String?
+  codigoPostal      String
+  localidad         String
+  provincia         String
+  pais              String   @default("Argentina")
+
+  // Horarios estructurados (JSON: 7 días × 3 franjas estándar 09-12 / 12-15 / 15-18)
+  horarios          String
+
+  observaciones     String?
+
+  // Soft delete (DEUDA 4): los depósitos no se borran físicamente porque
+  // tienen valor histórico (envíos los referencian). El endpoint DELETE
+  // en realidad hace UPDATE eliminado=true, activo=false, esPredeterminado=false.
+  // La FK desde Envio usa onDelete: Restrict (defense-in-depth: aunque el
+  // endpoint nunca borra, la BD rechaza un DELETE accidental).
+  eliminado         Boolean  @default(false)
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  enviosOrigen      Envio[]
+
+  @@index([empresaId])
 }
 
 model Usuario {
@@ -269,6 +321,14 @@ model Envio {
 
   origenId          Int?
   origen            Direccion? @relation("EnvioOrigen", fields: [origenId], references: [id])
+
+  // DEUDA 4: referencia al Deposito que originó el envío. La Direccion en
+  // origenId es un snapshot al momento de creación; depositoId apunta al
+  // registro vivo (que el cliente puede haber editado después).
+  // onDelete: Restrict — defense-in-depth contra borrado físico. El endpoint
+  // DELETE hace soft delete (eliminado=true). La BD rechaza un DELETE accidental.
+  depositoId        Int?
+  deposito          Deposito?  @relation(fields: [depositoId], references: [id], onDelete: Restrict)
 
   destinoId         Int?
   destino           Direccion? @relation("EnvioDestino", fields: [destinoId], references: [id])

@@ -25,6 +25,12 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+    if (error?.message?.startsWith('DepositoRequerido')) {
+      return NextResponse.json(
+        { error: 'Configurá al menos un depósito predeterminado para cotizar.', code: 'DEPOSITO_REQUERIDO' },
+        { status: 400 }
+      );
+    }
     console.error("Error en POST /api/cotizar:", error);
     return NextResponse.json({ error: "Falla interna" }, { status: 500 });
   }

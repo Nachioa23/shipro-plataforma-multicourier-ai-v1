@@ -22,6 +22,21 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Envío original no encontrado" }, { status: 404 });
     }
 
+    // DEUDA 4: el "destino" de la inversa (donde llega el paquete devuelto) es
+    // el depósito predeterminado del cliente. Si no hay, no se puede generar.
+    const depositoPred = await prisma.deposito.findFirst({
+      where: { empresaId: envioOriginal.empresaId, esPredeterminado: true, activo: true, eliminado: false },
+    });
+    if (!depositoPred) {
+      return NextResponse.json(
+        {
+          error: 'La empresa no tiene depósito predeterminado configurado. La inversa no puede generarse hasta que se configure uno.',
+          code: 'DEPOSITO_REQUERIDO',
+        },
+        { status: 400 }
+      );
+    }
+
     const nombreNormalizado = normalizarParaComparacion(envioOriginal.courier.nombre);
 
     const credencial = await prisma.credencialCourier.findUnique({
@@ -39,6 +54,7 @@ export async function POST(request: Request) {
     if (tipoAccion === 'cambio') tipoEntregaFormateado = "cambio";
 
     const paramsDespacho = {
+      // Datos del cliente que devuelve (origen del paquete inverso).
       destinatarioNombre: envioOriginal.destino.nombre || "Sin Nombre",
       calle: envioOriginal.destino.calle || "Sin Calle",
       altura: envioOriginal.destino.altura || "0",
@@ -46,10 +62,7 @@ export async function POST(request: Request) {
       dpto: envioOriginal.destino.dpto || "",
       localidad: envioOriginal.destino.localidad || "CABA",
       provincia: envioOriginal.destino.provincia || "CABA",
-      // HARDCODED: CP de origen del depósito.
-      // Eliminar cuando se implemente módulo Depósitos (DEUDA 4).
-      // Ver DEUDAS.md
-      cp: envioOriginal.destino.cp || "1050",
+      cp: envioOriginal.destino.cp,
       dni: envioOriginal.destino.documento || "0",
       email: envioOriginal.destino.email || "sinemail@shipro.pro",
       telefono: envioOriginal.destino.telefono || "1100000000",
@@ -64,7 +77,20 @@ export async function POST(request: Request) {
       }],
       referencia: `INVERSA-${trackingOriginal}`,
       tipoEntrega: tipoEntregaFormateado,
-      trackingOriginal: trackingOriginal 
+      trackingOriginal: trackingOriginal,
+      // DEUDA 4: depósito real al que llega la inversa (Mocis lo usa como
+      // destino del shipping_inversa). Reemplaza el hardcoded "Depósito Central"
+      // que tenía el adapter por defecto.
+      origen: {
+        calle: depositoPred.direccionCalle,
+        altura: depositoPred.direccionAltura,
+        cp: depositoPred.codigoPostal,
+        localidad: depositoPred.localidad,
+        provincia: depositoPred.provincia,
+        pais: depositoPred.pais,
+        telefono: depositoPred.contactoTelefono,
+        email: depositoPred.contactoEmail || undefined,
+      },
     };
 
     let trackingInverso = "SHP-INV-" + Math.floor(Math.random() * 900000);

@@ -27,7 +27,20 @@ function CotizadorContenido() {
   const [sucursalElegidaId, setSucursalElegidaId] = useState<string>("");
 
   const searchParams = useSearchParams();
-  const cpOrigen = searchParams.get("origen") || "1050";
+  // Origen viene del depósito elegido en /nuevo-envio (sin fallback hardcoded).
+  // Si falta depositoId/origen, el flujo es inválido → redirigir.
+  const depositoIdParam = searchParams.get("depositoId");
+  const depositoId = depositoIdParam ? parseInt(depositoIdParam) : null;
+  const cpOrigen = searchParams.get("origen") || "";
+  const origenNombre = searchParams.get("origenNombre") || "";
+  const origenLocalidad = searchParams.get("origenLocalidad") || "";
+
+  useEffect(() => {
+    if (!depositoId || !cpOrigen) {
+      router.replace("/nuevo-envio");
+    }
+  }, [depositoId, cpOrigen, router]);
+
   const cpDestino = searchParams.get("destino") || "0000";
   const localidadDestino = searchParams.get("localidad") || "Destino";
   const peso = searchParams.get("peso") || "1";
@@ -68,7 +81,7 @@ function CotizadorContenido() {
       setCotizando(true);
       try {
         const bodyRequest: any = {
-          cpOrigen, cpDestino, localidadDestino: decodeURIComponent(localidadDestino),
+          depositoId, cpOrigen, cpDestino, localidadDestino: decodeURIComponent(localidadDestino),
           paquetes: [{
             pesoKg: parseFloat(peso), largoCm: parseFloat(largo), anchoCm: parseFloat(ancho), altoCm: parseFloat(alto),
             valorDeclarado: 0, requiereSeguro: false
@@ -152,7 +165,10 @@ function CotizadorContenido() {
     if (tabActivo === 'sucursal') modalidadDespacho = "sucursal";
 
     // EL PAYLOAD AHORA LLEVA AMBOS PRECIOS (VENTA Y COSTO)
+    // depositoId viene del depósito elegido por el usuario en /nuevo-envio.
+    // Sin él, el backend caería al fallback de predeterminado, ignorando la elección.
     const payload: any = {
+      depositoId,
       nombreCourier: tarifaElegida.courier.toLowerCase(),
       modalidad: modalidadDespacho,
       destinatarioNombre: nombreDestino,
@@ -240,7 +256,12 @@ function CotizadorContenido() {
                 <div className="flex items-center gap-6">
                   <div className="flex flex-col">
                     <span className="text-blue-200 text-xs font-bold uppercase tracking-wider mb-1">Origen</span>
-                    <span className="font-semibold text-sm">CABA (CP {cpOrigen})</span>
+                    <span className="font-semibold text-sm">
+                      {origenNombre || origenLocalidad || `CP ${cpOrigen}`}
+                    </span>
+                    {origenNombre && origenLocalidad && (
+                      <span className="text-blue-200 text-xs mt-1 truncate max-w-[160px]">{origenLocalidad} (CP {cpOrigen})</span>
+                    )}
                   </div>
                   <div className="flex-1 w-32 border-t border-dashed border-blue-400/50 relative">
                     <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#233b6b] px-2 text-blue-300">

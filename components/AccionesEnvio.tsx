@@ -111,6 +111,10 @@ export default function AccionesEnvio({ envioId, tracking, etiquetaUrl, estadoIn
       alert(`⚠️ ENVÍO BLOQUEADO POR SALDO\nEl envío ${tracking} no tiene etiqueta real. Cargá saldo en /facturacion para destrabarlo automáticamente.`);
       return;
     }
+    if (estadoInterno === 'BLOQUEADO_DEPOSITO') {
+      alert(`⚠️ ENVÍO BLOQUEADO POR DEPÓSITO\nEl envío ${tracking} no tiene etiqueta real. Configurá un depósito predeterminado en /configuracion/depositos para destrabarlo automáticamente.`);
+      return;
+    }
 
     const motivo = evaluarEstadoEtiqueta(estadoInterno);
 
@@ -328,7 +332,12 @@ export default function AccionesEnvio({ envioId, tracking, etiquetaUrl, estadoIn
   };
 
   const estaAnulada = estadoInterno === 'CANCELADO' || estadoInterno === 'ENTREGADO';
-  const estaBloqueada = estadoInterno === 'BLOQUEADO_SALDO';
+  const estaBloqueadaSaldo = estadoInterno === 'BLOQUEADO_SALDO';
+  const estaBloqueadaDeposito = estadoInterno === 'BLOQUEADO_DEPOSITO';
+  const estaBloqueada = estaBloqueadaSaldo || estaBloqueadaDeposito;
+  const tooltipBloqueada = estaBloqueadaDeposito
+    ? "Envío bloqueado por configuración pendiente de depósito. Configurá en /configuracion/depositos."
+    : "Envío bloqueado por falta de saldo. Cargá saldo en /facturacion.";
 
   return (
     <>
@@ -336,10 +345,10 @@ export default function AccionesEnvio({ envioId, tracking, etiquetaUrl, estadoIn
         <button onClick={abrirFicha} disabled={cargandoGlobal} title="Ver Ficha 360" className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors disabled:opacity-50">
           {cargandoGlobal ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
         </button>
-        <button onClick={handleImprimir} disabled={cargandoGlobal || estaAnulada || estaBloqueada} title={estaBloqueada ? "Bloqueado por saldo. Cargá saldo para destrabar." : "Imprimir"} className="p-1.5 text-green-600 hover:bg-green-50 rounded transition-colors disabled:opacity-50">
+        <button onClick={handleImprimir} disabled={cargandoGlobal || estaAnulada || estaBloqueada} title={estaBloqueada ? tooltipBloqueada : "Imprimir"} className="p-1.5 text-green-600 hover:bg-green-50 rounded transition-colors disabled:opacity-50">
           <Printer className="w-4 h-4" />
         </button>
-        <button onClick={handleAnular} disabled={cargandoGlobal || estaAnulada || estaBloqueada} title={estaBloqueada ? "Bloqueado por saldo. Cargá saldo para destrabar." : "Anular"} className={`p-1.5 rounded transition-colors disabled:opacity-50 ${estaAnulada || estaBloqueada ? 'text-gray-400' : 'text-red-600 hover:bg-red-50'}`}>
+        <button onClick={handleAnular} disabled={cargandoGlobal || estaAnulada || estaBloqueada} title={estaBloqueada ? tooltipBloqueada : "Anular"} className={`p-1.5 rounded transition-colors disabled:opacity-50 ${estaAnulada || estaBloqueada ? 'text-gray-400' : 'text-red-600 hover:bg-red-50'}`}>
           <XCircle className="w-4 h-4" />
         </button>
       </div>

@@ -116,9 +116,28 @@ export class AndreaniAdapter implements ICourierIntegrator {
 
     const contratoAUsar = this.determinarContrato(params.tipoEntrega || 'domicilio', 'sucursal');
 
-    const origenConfig = this.creds.id_sucursal_origen 
-      ? { sucursal: { id: this.creds.id_sucursal_origen } } 
-      : { postal: { codigoPostal: "1000", calle: "Av Libertador", numero: "1234", localidad: "CABA", region: "CABA", pais: "Argentina" } };
+    // Origen del despacho:
+    // 1. Si la credencial tiene id_sucursal_origen configurado → Andreani retira de esa sucursal.
+    // 2. Sino, si params.origen viene (DEUDA 4) → usar datos del depósito real del cliente.
+    // 3. Sino → fallback hardcoded (deuda futura: eliminar este fallback cuando todos los
+    //    callers pasen origen explícito; hoy se mantiene por compatibilidad temporal).
+    let origenConfig: any;
+    if (this.creds.id_sucursal_origen) {
+      origenConfig = { sucursal: { id: this.creds.id_sucursal_origen } };
+    } else if (params.origen) {
+      origenConfig = {
+        postal: {
+          codigoPostal: params.origen.cp,
+          calle: params.origen.calle,
+          numero: params.origen.altura,
+          localidad: params.origen.localidad,
+          region: params.origen.provincia,
+          pais: params.origen.pais || "Argentina",
+        },
+      };
+    } else {
+      origenConfig = { postal: { codigoPostal: "1000", calle: "Av Libertador", numero: "1234", localidad: "CABA", region: "CABA", pais: "Argentina" } };
+    }
 
     let destinoConfig: any = { 
       postal: { 

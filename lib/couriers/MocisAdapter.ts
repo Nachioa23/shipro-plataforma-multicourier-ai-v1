@@ -197,16 +197,30 @@ export class MocisAdapter implements ICourierIntegrator {
           telephone: params.telefono || "1100000000",
           email: params.email || "sinemail@shipro.pro"
         },
-        destino: { // Tu depósito central
-          provincia: 2, // Asumimos CABA por defecto para el depósito
-          postal_code: "1000",
-          address: "Depósito Central",
-          location: "CABA",
-          reference: "Recepción Inversa",
-          receives: "Logística Shipro",
-          telephone: "1100000000",
-          email: "operaciones@shipro.pro"
-        },
+        // Destino = depósito del cliente que recibe la devolución/cambio.
+        // Si params.origen viene (DEUDA 4): usar datos reales. Sino: fallback hardcoded
+        // (deuda futura: eliminar fallback cuando todos los callers pasen origen).
+        destino: params.origen
+          ? {
+              provincia: parseInt(await this.obtenerIdProvincia(params.origen.provincia)),
+              postal_code: params.origen.cp,
+              address: `${params.origen.calle} ${params.origen.altura}`.trim(),
+              location: params.origen.localidad,
+              reference: "Recepción Inversa",
+              receives: "Logística Shipro",
+              telephone: params.origen.telefono || "1100000000",
+              email: params.origen.email || "operaciones@shipro.pro",
+            }
+          : { // Fallback temporal
+              provincia: 2,
+              postal_code: "1000",
+              address: "Depósito Central",
+              location: "CABA",
+              reference: "Recepción Inversa",
+              receives: "Logística Shipro",
+              telephone: "1100000000",
+              email: "operaciones@shipro.pro",
+            },
         type_inversa: isCambio ? "2" : "1",
         devolucion_shipping_code: params.trackingOriginal,
         // Si es cambio, Akeron pide el tracking nuevo. Como todavía no lo tenemos, mandamos el original como referencia cruzada.

@@ -52,6 +52,21 @@ export async function POST(request: Request) {
         continue;
       }
 
+      // CASO BLOQUEADO_DEPOSITO (DEUDA 27): el envío no tiene etiqueta real porque
+      // la empresa todavía no configuró un depósito predeterminado. Placeholder análogo.
+      if (envio.estadoActual === "BLOQUEADO_DEPOSITO") {
+        const colorRojo = rgb(0.85, 0.15, 0.15);
+        const pageBloq = pdfMaestro.addPage([288, 432]);
+        pageBloq.drawText("ETIQUETA BLOQUEADA", { x: 35, y: 260, size: 16, font: fontB, color: colorRojo });
+        pageBloq.drawText("PENDIENTE DE CONFIGURACIÓN", { x: 35, y: 240, size: 12, font: fontB, color: colorShipro });
+        pageBloq.drawText("DE DEPÓSITO", { x: 35, y: 225, size: 12, font: fontB, color: colorShipro });
+        pageBloq.drawText(`Trk: ${envio.trackingNumber}`, { x: 35, y: 195, size: 10, font: fontN, color: colorGris });
+        pageBloq.drawText(`Destinatario: ${truncar(envio.destino?.nombre, 30)}`, { x: 35, y: 175, size: 9, font: fontN, color: colorGris });
+        pageBloq.drawText("Configurá un depósito predeterminado en Shipro", { x: 35, y: 135, size: 9, font: fontN });
+        pageBloq.drawText("para destrabar este envío.", { x: 35, y: 122, size: 9, font: fontN });
+        continue;
+      }
+
       try {
         // ==============================================================
         // CASO 1: ES MOCI'S PURO (Etiqueta Nativa Shipro Flow)

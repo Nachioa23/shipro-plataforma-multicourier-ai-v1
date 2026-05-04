@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
 import * as XLSX from "xlsx";
-import { Search, Package, Clock, Inbox, Download, Loader2, Calendar, DollarSign, ChevronLeft, ChevronRight, CheckSquare, Square, Building2, AlertTriangle, MapPin, SearchCode, X, Check, SlidersHorizontal, ChevronDown, Truck, LifeBuoy, MessageSquare, Wallet } from 'lucide-react';
+import { Search, Package, Clock, Inbox, Download, Loader2, Calendar, DollarSign, ChevronLeft, ChevronRight, CheckSquare, Square, Building2, AlertTriangle, MapPin, SearchCode, X, Check, SlidersHorizontal, ChevronDown, Truck, LifeBuoy, MessageSquare, Wallet, Warehouse } from 'lucide-react';
 import AccionesEnvio from '@/components/AccionesEnvio';
 
 declare global {
@@ -42,7 +42,9 @@ export default function BandejaPedidos() {
   const [fechaDesde, setFechaDesde] = useState("");
   const [fechaHasta, setFechaHasta] = useState("");
   const [filtroEstadoRapido, setFiltroEstadoRapido] = useState("Todos");
-  const [enviosBloqueadosCount, setEnviosBloqueadosCount] = useState(0);
+  const [enviosBloqueadosSaldoCount, setEnviosBloqueadosSaldoCount] = useState(0);
+  const [enviosBloqueadosDepositoCount, setEnviosBloqueadosDepositoCount] = useState(0);
+  const enviosBloqueadosTotal = enviosBloqueadosSaldoCount + enviosBloqueadosDepositoCount;
   
   // LISTA DINÁMICA DE COURIERS
   const [couriersLista, setCouriersLista] = useState<string[]>([]);
@@ -123,21 +125,32 @@ export default function BandejaPedidos() {
     return () => clearTimeout(timeoutId);
   }, [page, limit, busqueda, filtroCourier, filtroProvincia, fechaDesde, fechaHasta, filtroEmpresaId, filtroEstadoRapido]);
 
-  // Contador de envíos bloqueados por saldo (DEUDA 16) — solo para clientes.
-  // Shipro ve el contador agregado en torre-de-control.
+  // Contadores de envíos bloqueados — solo para clientes.
+  // DEUDA 16 (BLOQUEADO_SALDO) + DEUDA 27 (BLOQUEADO_DEPOSITO).
+  // Shipro ve los contadores agregados en torre-de-control.
   useEffect(() => {
     if (esEquipoShipro || !filtroEmpresaId) return;
-    const params = new URLSearchParams({
+    const baseParams = {
       empresaId: session?.user?.empresaId?.toString() || "",
       filtroEmpresa: filtroEmpresaId,
       page: "1",
       limit: "1",
-      estado: "Bloqueados"
-    });
-    fetch(`/api/envios?${params}`)
-      .then(res => res.ok ? res.json() : { meta: { total: 0 } })
-      .then(data => setEnviosBloqueadosCount(data.meta?.total || 0))
-      .catch(() => setEnviosBloqueadosCount(0));
+    };
+    const paramsSaldo = new URLSearchParams({ ...baseParams, estado: "BloqueadosSaldo" });
+    const paramsDeposito = new URLSearchParams({ ...baseParams, estado: "BloqueadosDeposito" });
+
+    Promise.all([
+      fetch(`/api/envios?${paramsSaldo}`).then(res => res.ok ? res.json() : { meta: { total: 0 } }),
+      fetch(`/api/envios?${paramsDeposito}`).then(res => res.ok ? res.json() : { meta: { total: 0 } }),
+    ])
+      .then(([saldoData, depositoData]) => {
+        setEnviosBloqueadosSaldoCount(saldoData.meta?.total || 0);
+        setEnviosBloqueadosDepositoCount(depositoData.meta?.total || 0);
+      })
+      .catch(() => {
+        setEnviosBloqueadosSaldoCount(0);
+        setEnviosBloqueadosDepositoCount(0);
+      });
   }, [session, filtroEmpresaId, esEquipoShipro, filtroEstadoRapido]);
 
   const handleFiltroChange = (setter: any, value: any) => {
@@ -514,19 +527,82 @@ export default function BandejaPedidos() {
         </div>
       </header>
 
-      {/* BANNER ENVÍOS BLOQUEADOS POR SALDO (DEUDA 16) — solo clientes */}
-      {!esEquipoShipro && enviosBloqueadosCount > 0 && (
-        <div className="bg-amber-50 border-b border-amber-200 px-8 py-3 flex items-center justify-between gap-4 shrink-0">
-          <div className="flex items-center gap-3">
-            <Wallet className="w-5 h-5 text-amber-600 shrink-0" />
-            <p className="text-sm font-bold text-amber-900">
-              Tenés <span className="font-black">{enviosBloqueadosCount}</span> envíos pendientes por carga de saldo.
-            </p>
+      {/* BANNER ENVÍOS BLOQUEADOS — solo clientes.
+          Casos:
+          1. Solo depósito (DEUDA 27)        → indigo + Warehouse + "Configurar depósito"
+          2. Solo saldo (DEUDA 16)           → amber  + Wallet    + "Cargar saldo"
+          3. Ambos (orden de resolución)     → amber-strong + AlertTriangle + lista 1-2
+             Orden: depósito primero (prerrequisito one-time), saldo después (recurrente).
+             Al destrabar depósito sin saldo: backend transiciona a BLOQUEADO_SALDO. */}
+      {!esEquipoShipro && enviosBloqueadosTotal > 0 && (
+        enviosBloqueadosDepositoCount > 0 && enviosBloqueadosSaldoCount > 0 ? (
+          // CASO 3 — Ambos
+          <div className="bg-amber-50 border-b-2 border-amber-300 px-8 py-4 shrink-0">
+            <div className="flex items-start gap-3 mb-3">
+              <AlertTriangle className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-black text-amber-900">
+                  Tenés <span className="font-black">{enviosBloqueadosTotal}</span> envíos bloqueados que necesitan tu atención.
+                </p>
+                <p className="text-xs font-bold text-amber-800 mt-0.5">Resolvé en orden:</p>
+              </div>
+            </div>
+            <ol className="space-y-2 ml-8">
+              <li className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="font-black text-indigo-700">1.</span>
+                  <Warehouse className="w-4 h-4 text-indigo-600 shrink-0" />
+                  <span className="text-amber-900">
+                    Configurá un depósito predeterminado
+                    <span className="text-amber-700 font-bold ml-1">({enviosBloqueadosDepositoCount} envíos esperando)</span>
+                  </span>
+                </div>
+                <Link href="/configuracion/depositos" className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg transition-colors shadow-sm whitespace-nowrap">
+                  Configurar depósito →
+                </Link>
+              </li>
+              <li className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="font-black text-amber-700">2.</span>
+                  <Wallet className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span className="text-amber-900">
+                    Cargá saldo en tu cuenta
+                    <span className="text-amber-700 font-bold ml-1">({enviosBloqueadosSaldoCount} envíos esperando)</span>
+                  </span>
+                </div>
+                <Link href="/facturacion" className="px-4 py-1.5 bg-amber-100 hover:bg-amber-200 text-amber-900 text-xs font-bold rounded-lg transition-colors border border-amber-300 whitespace-nowrap">
+                  Cargar saldo
+                </Link>
+              </li>
+            </ol>
           </div>
-          <Link href="/facturacion" className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg transition-colors shadow-sm whitespace-nowrap">
-            Cargar saldo →
-          </Link>
-        </div>
+        ) : enviosBloqueadosDepositoCount > 0 ? (
+          // CASO 1 — Solo depósito
+          <div className="bg-indigo-50 border-b border-indigo-200 px-8 py-3 flex items-center justify-between gap-4 shrink-0">
+            <div className="flex items-center gap-3">
+              <Warehouse className="w-5 h-5 text-indigo-600 shrink-0" />
+              <p className="text-sm font-bold text-indigo-900">
+                Tenés <span className="font-black">{enviosBloqueadosDepositoCount}</span> envíos pendientes por configuración de depósito.
+              </p>
+            </div>
+            <Link href="/configuracion/depositos" className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg transition-colors shadow-sm whitespace-nowrap">
+              Configurar depósito →
+            </Link>
+          </div>
+        ) : (
+          // CASO 2 — Solo saldo
+          <div className="bg-amber-50 border-b border-amber-200 px-8 py-3 flex items-center justify-between gap-4 shrink-0">
+            <div className="flex items-center gap-3">
+              <Wallet className="w-5 h-5 text-amber-600 shrink-0" />
+              <p className="text-sm font-bold text-amber-900">
+                Tenés <span className="font-black">{enviosBloqueadosSaldoCount}</span> envíos pendientes por carga de saldo.
+              </p>
+            </div>
+            <Link href="/facturacion" className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg transition-colors shadow-sm whitespace-nowrap">
+              Cargar saldo →
+            </Link>
+          </div>
+        )
       )}
 
       {/* CUERPO PRINCIPAL */}
@@ -604,7 +680,7 @@ export default function BandejaPedidos() {
              {[
                { id: "Todos", label: "Toda la Carga", icon: Inbox },
                { id: "Retenidos", label: "RETENIDOS 🚨", icon: AlertTriangle },
-               { id: "Bloqueados", label: "BLOQUEADOS POR SALDO 💳", icon: Wallet },
+               { id: "Bloqueados", label: enviosBloqueadosTotal > 0 ? `BLOQUEADOS (${enviosBloqueadosTotal}) 🔒` : "BLOQUEADOS 🔒", icon: AlertTriangle },
                { id: "Pendientes", label: "Por Etiquetar", icon: Package },
                { id: "Etiquetados", label: "Etiquetados", icon: Check }
              ].map(tab => (
@@ -657,10 +733,12 @@ export default function BandejaPedidos() {
                       const fechaTabla = (envio.fechaImpresion) ? new Date(envio.fechaImpresion).toLocaleDateString("es-AR") : 'Sin fecha';
                       
                       const esRetenido = envio.estadoActual === "RETENIDO" || envio.estadoActual === "Retenido";
-                      const esBloqueado = envio.estadoActual === "BLOQUEADO_SALDO";
+                      const esBloqueadoSaldo = envio.estadoActual === "BLOQUEADO_SALDO";
+                      const esBloqueadoDeposito = envio.estadoActual === "BLOQUEADO_DEPOSITO";
+                      const esBloqueado = esBloqueadoSaldo || esBloqueadoDeposito;
 
                       return (
-                        <tr key={envio.id} className={`transition-colors hover:bg-gray-50 group ${seleccionadas.includes(envio.id) ? 'bg-blue-50/50' : ''} ${esRetenido ? 'bg-red-50/20' : ''} ${esBloqueado ? 'bg-amber-50/30' : ''}`}>
+                        <tr key={envio.id} className={`transition-colors hover:bg-gray-50 group ${seleccionadas.includes(envio.id) ? 'bg-blue-50/50' : ''} ${esRetenido ? 'bg-red-50/20' : ''} ${esBloqueadoSaldo ? 'bg-amber-50/30' : ''} ${esBloqueadoDeposito ? 'bg-indigo-50/30' : ''}`}>
                           
                           <td className="px-6 py-4 cursor-pointer text-center" onClick={() => toggleSeleccion(envio.id)}>
                             {seleccionadas.includes(envio.id) ? <CheckSquare className="w-4 h-4 text-[#233b6b] mx-auto" /> : <Square className="w-4 h-4 text-gray-300 group-hover:text-gray-400 transition-colors mx-auto" />}
@@ -706,10 +784,11 @@ export default function BandejaPedidos() {
                                 ['ENTREGADO', 'Entregado'].includes(envio.estadoActual) ? 'bg-green-50 text-green-700 border-green-200' :
                                 ['EN_TRANSITO', 'RECOLECTADO', 'EN_SUCURSAL', 'EN_REPARTO', 'DESPACHADO'].includes(envio.estadoActual) ? 'bg-blue-50 text-blue-700 border-blue-200' :
                                 ['RETENIDO', 'Retenido'].includes(envio.estadoActual) ? 'bg-red-50 text-red-700 border-red-200 animate-pulse' :
-                                envio.estadoActual === 'BLOQUEADO_SALDO' ? 'bg-amber-50 text-amber-800 border-amber-300 animate-pulse' :
+                                esBloqueadoSaldo ? 'bg-amber-50 text-amber-800 border-amber-300 animate-pulse' :
+                                esBloqueadoDeposito ? 'bg-indigo-50 text-indigo-800 border-indigo-300 animate-pulse' :
                                 'bg-gray-50 text-gray-600 border-gray-200'
                             }`}>
-                                {envio.estadoActual.replace(/_/g, ' ')}
+                                {esBloqueadoSaldo ? 'BLOQUEADO POR SALDO' : esBloqueadoDeposito ? 'BLOQUEADO POR DEPÓSITO' : envio.estadoActual.replace(/_/g, ' ')}
                             </span>
                           </td>
                           
@@ -717,7 +796,9 @@ export default function BandejaPedidos() {
                             <div className="flex items-center justify-end gap-2">
                               {esRetenido ? (
                                 <button onClick={() => abrirModalCorreccion(envio)} className="px-4 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-lg shadow-sm transition-colors">Corregir</button>
-                              ) : esBloqueado ? (
+                              ) : esBloqueadoDeposito ? (
+                                <Link href="/configuracion/depositos" className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg shadow-sm transition-colors">Configurar depósito</Link>
+                              ) : esBloqueadoSaldo ? (
                                 <Link href="/facturacion" className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg shadow-sm transition-colors">Cargar saldo</Link>
                               ) : (
                                 <AccionesEnvio envioId={envio.id} tracking={envio.trackingNumber} etiquetaUrl={envio.etiquetaUrl} estadoInterno={envio.estadoActual} motivoBloqueo={null} />

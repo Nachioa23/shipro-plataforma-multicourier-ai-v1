@@ -34,7 +34,7 @@ export async function procesarEnviosBloqueados(empresaId: number): Promise<Proce
 
   const todosBloqueados = await prisma.envio.findMany({
     where: { empresaId, estadoActual: "BLOQUEADO_SALDO" },
-    include: { courier: true, finanzas: true, destino: true },
+    include: { courier: true, finanzas: true, destino: true, deposito: true },
     orderBy: { id: 'asc' }
   });
 
@@ -94,6 +94,20 @@ export async function procesarEnviosBloqueados(empresaId: number): Promise<Proce
       continue;
     }
 
+    // DEUDA 4: pasar origen del depósito al courier. Para envíos creados
+    // post-DEUDA 4, `depositoId` está poblado. Para envíos legacy (null),
+    // omitimos origen y el adapter cae al fallback hardcoded.
+    const origenDeposito = envio.deposito ? {
+      calle: envio.deposito.direccionCalle,
+      altura: envio.deposito.direccionAltura,
+      cp: envio.deposito.codigoPostal,
+      localidad: envio.deposito.localidad,
+      provincia: envio.deposito.provincia,
+      pais: envio.deposito.pais,
+      telefono: envio.deposito.contactoTelefono,
+      email: envio.deposito.contactoEmail || undefined,
+    } : undefined;
+
     const dispatchResult = await despacharCourier({
       credencial,
       courierNombreCanonico: envio.courier.nombre,
@@ -111,7 +125,8 @@ export async function procesarEnviosBloqueados(empresaId: number): Promise<Proce
       pesoReal: envio.pesoReal,
       valorDeclarado: envio.finanzas?.valorDeclarado || 0,
       modalidad: envio.modalidad,
-      numeroOrden: envio.numeroOrden
+      numeroOrden: envio.numeroOrden,
+      origen: origenDeposito,
     });
 
     if (!dispatchResult.tracking) {

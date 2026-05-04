@@ -35,6 +35,7 @@ export async function POST(request: Request) {
 
     const result = await crearEnvio({
       empresaId,
+      depositoId: body.depositoId,
       destinatarioNombre: body.destinatarioNombre,
       cpDestino: body.cpDestino,
       pesoReal: body.pesoReal,
@@ -68,6 +69,24 @@ export async function POST(request: Request) {
     if (error?.message?.startsWith('EmpresaRequerida')) {
       return NextResponse.json(
         { error: 'Seleccioná una empresa para crear el envío', code: 'EMPRESA_REQUERIDA' },
+        { status: 400 }
+      );
+    }
+    if (error?.message?.startsWith('DepositoRequerido')) {
+      return NextResponse.json(
+        { error: 'Configurá un depósito predeterminado en /configuracion/depositos antes de crear envíos.', code: 'DEPOSITO_REQUERIDO' },
+        { status: 400 }
+      );
+    }
+    if (error?.message?.startsWith('DepositoNoEncontrado')) {
+      return NextResponse.json(
+        { error: 'Depósito no encontrado.', code: 'DEPOSITO_NO_ENCONTRADO' },
+        { status: 400 }
+      );
+    }
+    if (error?.message?.startsWith('DepositoInactivo')) {
+      return NextResponse.json(
+        { error: 'El depósito está inactivo o eliminado y no puede usarse para crear envíos.', code: 'DEPOSITO_INACTIVO' },
         { status: 400 }
       );
     }

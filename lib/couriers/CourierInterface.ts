@@ -43,18 +43,32 @@ export interface DespachoParams {
   telefono: string;
   email: string;
   dni: string;
-  
+
   paquetes: Paquete[];
-  referencia?: string; 
-  
+  referencia?: string;
+
   // Lista unificada para que TypeScript no tire errores
   tipoEntrega?: 'domicilio' | 'sucursal' | 'inversa' | 'cambio' | 'devolucion';
-  
+
   // VITAL: Si es a sucursal, acá viene el ID de la sucursal elegida en el checkout
-  sucursalDestinoId?: string; 
-  
+  sucursalDestinoId?: string;
+
   // VITAL: Para logística inversa (Devolución/Cambio), enviamos el tracking original
   trackingOriginal?: string;
+
+  // DEUDA 4: datos del depósito de origen (snapshot del momento del despacho).
+  // Si no viene, los adapters caen al fallback hardcoded por compatibilidad
+  // temporal — eliminar fallbacks cuando todos los callers pasen origen.
+  origen?: {
+    calle: string;
+    altura: string;
+    cp: string;
+    localidad: string;
+    provincia: string;
+    pais?: string;
+    telefono?: string;
+    email?: string;
+  };
 }
 
 // ==========================================================

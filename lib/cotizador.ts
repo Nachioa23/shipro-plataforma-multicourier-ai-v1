@@ -6,7 +6,12 @@ import type { Paquete } from "@/lib/couriers/CourierInterface";
 
 export interface CotizarInput {
   empresaId: number | null;
-  cpOrigen: string;
+  // DEUDA 4: opcional. Si no viene, se lee del depósito predeterminado de la
+  // empresa. Si la empresa no tiene depósito, se lanza DepositoRequerido.
+  // Casos donde el caller pasa cpOrigen explícito:
+  // - Cotizador rápido manual donde el operador shipro tipea un CP origen.
+  // - Tests / usos administrativos.
+  cpOrigen?: string;
   cpDestino: string;
   provinciaDestino?: string;
   paquetes: Paquete[];
@@ -77,7 +82,7 @@ async function calcularFechaEstimada(horasSla: number): Promise<string> {
  * genérica solo aplica al momento de crear el envío real).
  */
 export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
-  const { empresaId, cpOrigen, cpDestino, provinciaDestino, paquetes, valorCarrito: bodyValorCarrito } = input;
+  const { empresaId, cpOrigen: cpOrigenInput, cpDestino, provinciaDestino, paquetes, valorCarrito: bodyValorCarrito } = input;
 
   // Política de negocio: cotizar requiere una empresa específica.
   // Modo Dios "TODAS" no aplica acá (cada empresa tiene credenciales y reglas distintas).
@@ -88,13 +93,29 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
   const pesoTotal = paquetes.reduce((acc: number, p: any) => acc + (parseFloat(p.pesoKg) || 1), 0);
   const valorCarrito = bodyValorCarrito || paquetes.reduce((acc: number, p: any) => acc + (parseFloat(p.valorDeclarado) || 0), 0);
 
+  // Cargamos empresa + depósitos en una sola query. El predeterminado se usa
+  // si el caller no pasó cpOrigen explícito (DEUDA 4).
   const empresa = await prisma.empresa.findUnique({
     where: { id: empresaId },
     include: {
       credenciales: { where: { activo: true } },
-      reglasRuteo: { where: { activa: true }, orderBy: { prioridad: 'asc' } }
-    }
+      reglasRuteo: { where: { activa: true }, orderBy: { prioridad: 'asc' } },
+      depositos: {
+        where: { eliminado: false, activo: true, esPredeterminado: true },
+        take: 1,
+      },
+    },
   });
+
+  // Resolver cpOrigen efectivo: input explícito > predeterminado de la empresa.
+  let cpOrigen = cpOrigenInput;
+  if (!cpOrigen) {
+    const depositoPred = empresa?.depositos?.[0];
+    if (!depositoPred) {
+      throw new Error('DepositoRequerido: la empresa no tiene depósito predeterminado activo. Configurá uno en /configuracion/depositos.');
+    }
+    cpOrigen = depositoPred.codigoPostal;
+  }
   const couriersConfigurados: any[] = empresa?.credenciales || [];
   const reglasEmpresa: any[] = empresa?.reglasRuteo || [];
   const motorBase = empresa?.ordenamientoDefault || "MOTOR_PRECIO";

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
-import { AlertCircle, Clock, Map, ArrowRightLeft, Target, Building2, Activity, Box, SlidersHorizontal, PackageCheck, Headset, TrendingDown, Truck, Store, MapPin, ZoomIn, X, BarChart, PieChart, HeartHandshake, Smile, Meh, Frown, MessageSquare, ShieldAlert, Loader2, Check, ShieldCheck, MapPinned, SearchCode, DollarSign, TrendingUp, Lightbulb, Calendar, CheckCircle2, Scale, Undo2, LifeBuoy, ListChecks, Timer, Star, Repeat, Wallet } from 'lucide-react';
+import { AlertCircle, Clock, Map, ArrowRightLeft, Target, Building2, Activity, Box, SlidersHorizontal, PackageCheck, Headset, TrendingDown, Truck, Store, MapPin, ZoomIn, X, BarChart, PieChart, HeartHandshake, Smile, Meh, Frown, MessageSquare, ShieldAlert, Loader2, Check, ShieldCheck, MapPinned, SearchCode, DollarSign, TrendingUp, Lightbulb, Calendar, CheckCircle2, Scale, Undo2, LifeBuoy, ListChecks, Timer, Star, Repeat, Wallet, Warehouse } from 'lucide-react';
 import Link from "next/link"; 
 
 export default function TorreDeControl() {
@@ -27,21 +27,29 @@ export default function TorreDeControl() {
   const [filtroRuteoServicio, setFiltroRuteoServicio] = useState("TODOS");
   const [filtroRuteoCourier, setFiltroRuteoCourier] = useState("TODOS");
 
-  // Contador global de envíos BLOQUEADO_SALDO (DEUDA 16). Modo Dios.
+  // Contadores globales de envíos bloqueados (DEUDA 16 saldo + DEUDA 27 depósito). Modo Dios.
+  // Cards independientes: cada métrica tiene valor diagnóstico por separado.
   const [bloqueadosSaldoCount, setBloqueadosSaldoCount] = useState(0);
+  const [bloqueadosDepositoCount, setBloqueadosDepositoCount] = useState(0);
 
   useEffect(() => {
     if (!filtroEmpresaId) return;
-    const params = new URLSearchParams({
-      filtroEmpresa: filtroEmpresaId,
-      page: "1",
-      limit: "1",
-      estado: "Bloqueados"
-    });
-    fetch(`/api/envios?${params}`)
-      .then(res => res.ok ? res.json() : { meta: { total: 0 } })
-      .then(data => setBloqueadosSaldoCount(data.meta?.total || 0))
-      .catch(() => setBloqueadosSaldoCount(0));
+    const baseParams = { filtroEmpresa: filtroEmpresaId, page: "1", limit: "1" };
+    const paramsSaldo = new URLSearchParams({ ...baseParams, estado: "BloqueadosSaldo" });
+    const paramsDeposito = new URLSearchParams({ ...baseParams, estado: "BloqueadosDeposito" });
+
+    Promise.all([
+      fetch(`/api/envios?${paramsSaldo}`).then(res => res.ok ? res.json() : { meta: { total: 0 } }),
+      fetch(`/api/envios?${paramsDeposito}`).then(res => res.ok ? res.json() : { meta: { total: 0 } }),
+    ])
+      .then(([saldoData, depositoData]) => {
+        setBloqueadosSaldoCount(saldoData.meta?.total || 0);
+        setBloqueadosDepositoCount(depositoData.meta?.total || 0);
+      })
+      .catch(() => {
+        setBloqueadosSaldoCount(0);
+        setBloqueadosDepositoCount(0);
+      });
   }, [filtroEmpresaId]);
 
   useEffect(() => {
@@ -1010,6 +1018,27 @@ export default function TorreDeControl() {
               </div>
             </div>
             <Link href="/" className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg transition-colors shadow-sm whitespace-nowrap">
+              Ver bandeja →
+            </Link>
+          </div>
+        )}
+
+        {/* Card de envíos bloqueados por depósito (DEUDA 27) — visibilidad operacional Modo Dios. */}
+        {bloqueadosDepositoCount > 0 && (
+          <div className="bg-indigo-50 border border-indigo-300 rounded-xl p-4 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-indigo-100 rounded-lg">
+                <Warehouse className="w-5 h-5 text-indigo-700" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-indigo-900">
+                  <span className="font-black">{bloqueadosDepositoCount}</span> envíos bloqueados por depósito
+                  {filtroEmpresaId === "TODAS" ? " en el ecosistema" : " en esta empresa"}
+                </p>
+                <p className="text-xs text-indigo-700">Pendiente de configuración cliente. Se procesan automáticamente al configurar depósito predeterminado.</p>
+              </div>
+            </div>
+            <Link href="/" className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg transition-colors shadow-sm whitespace-nowrap">
               Ver bandeja →
             </Link>
           </div>

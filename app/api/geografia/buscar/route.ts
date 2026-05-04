@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { normalizarProvincia } from "@/lib/constants/normalizar-provincia";
 
 export async function GET(request: Request) {
   try {
@@ -24,8 +25,17 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Código Postal no encontrado" }, { status: 404 });
     }
 
-    // Formateamos la respuesta para que sea fácil de leer por el Frontend
-    const provincia = codigoData.localidades[0].provincia.nombre;
+    // Normalizamos la provincia a la lista canónica PROVINCIAS_AR (DEUDA 4).
+    // La BD tiene 24 provincias reales en MAYÚSCULAS sin acentos + 20 entradas
+    // basura del parseo CSV. Si la primera localidad apunta a basura, devolvemos
+    // provincia: null (limpieza estructural pendiente — DEUDA 26).
+    const provinciaRaw = codigoData.localidades[0].provincia.nombre;
+    const provincia = normalizarProvincia(provinciaRaw);
+
+    if (!provincia) {
+      return NextResponse.json({ provincia: null, localidades: [] });
+    }
+
     const localidades = codigoData.localidades.map(loc => loc.nombre);
 
     return NextResponse.json({ provincia, localidades });

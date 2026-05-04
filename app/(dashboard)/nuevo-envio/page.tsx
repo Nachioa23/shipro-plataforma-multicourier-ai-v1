@@ -1,16 +1,14 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { ArrowLeft, Package, MapPin, Building2, ArrowRight, Loader2, AlertCircle, X, User, Search, BookOpen, ShoppingBag } from 'lucide-react';
-
-declare global {
-  interface Window {
-    google: any;
-  }
-}
+import { ArrowLeft, Package, MapPin, Building2, ArrowRight, Loader2, AlertCircle, X, User, BookOpen, ShoppingBag, Warehouse } from 'lucide-react';
+import InputTelefono from "@/components/forms/InputTelefono";
+import AutocompleteAddress, { AddressData } from "@/components/forms/AutocompleteAddress";
+import { useCpLookup } from "@/lib/hooks/useCpLookup";
+import { PROVINCIAS_AR } from "@/lib/constants/provincias-ar";
 
 export default function NuevoEnvio() {
   const router = useRouter();
@@ -33,6 +31,39 @@ export default function NuevoEnvio() {
       .catch(() => setListaClientes([]));
   }, [esShipro]);
 
+  // Depósitos del cliente activo. Reemplaza el origen hardcoded "CP 1050".
+  // - Cliente: arranca cargando los suyos al montar.
+  // - Shipro (Modo Dios): vacío hasta que elija empresa; al elegir, recarga.
+  const [depositos, setDepositos] = useState<any[]>([]);
+  const [depositoSeleccionadoId, setDepositoSeleccionadoId] = useState<number | null>(null);
+  const [cargandoDepositos, setCargandoDepositos] = useState(true);
+
+  useEffect(() => {
+    if (esShipro && !empresaSeleccionadaId) {
+      setDepositos([]);
+      setDepositoSeleccionadoId(null);
+      setCargandoDepositos(false);
+      return;
+    }
+    setCargandoDepositos(true);
+    const params = esShipro ? `?empresaId=${empresaSeleccionadaId}` : "";
+    fetch(`/api/depositos${params}`)
+      .then(r => r.ok ? r.json() : [])
+      .then((data: any[]) => {
+        const lista = Array.isArray(data) ? data : [];
+        setDepositos(lista);
+        const predeterminado = lista.find(d => d.esPredeterminado);
+        setDepositoSeleccionadoId(predeterminado ? predeterminado.id : null);
+      })
+      .catch(() => {
+        setDepositos([]);
+        setDepositoSeleccionadoId(null);
+      })
+      .finally(() => setCargandoDepositos(false));
+  }, [esShipro, empresaSeleccionadaId]);
+
+  const depositoSeleccionado = depositos.find(d => d.id === depositoSeleccionadoId);
+
   // ==========================================
   // ESTADOS DEL FORMULARIO
   // ==========================================
@@ -51,7 +82,15 @@ export default function NuevoEnvio() {
   const [destProvincia, setDestProvincia] = useState("");
   const [destLocalidades, setDestLocalidades] = useState<string[]>([]);
   const [destLocalidadSeleccionada, setDestLocalidadSeleccionada] = useState("");
-  const [buscandoCP, setBuscandoCP] = useState(false);
+
+  // Escenario 3 (DEUDA 4 política "el usuario manda"): si el usuario edita
+  // manualmente localidad o provincia, ese campo NO se autocompleta más al
+  // cambiar el CP. Si lo borra, el flag se resetea y el próximo CP válido
+  // vuelve a autocompletar.
+  const [editadosManualmente, setEditadosManualmente] = useState({
+    localidad: false,
+    provincia: false,
+  });
 
   const [paqPeso, setPaqPeso] = useState("");
   const [paqLargo, setPaqLargo] = useState("");
@@ -66,39 +105,24 @@ export default function NuevoEnvio() {
   const [buscandoAgenda, setBuscandoAgenda] = useState(false);
   const [mostrarDropdown, setMostrarDropdown] = useState(false);
 
-  const autocompleteInputRef = useRef<HTMLInputElement>(null);
-  const autocompleteInstanceRef = useRef<any>(null); 
 
-  // Buscador de CP (Geografía)
+  // Buscador de CP (Geografía) — usa el hook compartido useCpLookup.
+  const cpLookup = useCpLookup(destCP);
+  const buscandoCP = cpLookup.buscando;
+
+  // Sync con cpLookup respetando "Escenario 3: el usuario manda".
+  // - Lista de opciones (destLocalidades) siempre se actualiza.
+  // - Provincia y localidad solo se autocompletan si el usuario NO las editó manualmente.
+  // - Si el CP se borra, cpLookup devuelve vacío → guards evitan sobreescribir (regla 5).
   useEffect(() => {
-    const buscarDatosGeograficos = async () => {
-      if (!destCP || destCP.length < 4) {
-        setDestLocalidades([]); 
-        setDestProvincia(""); 
-        return;
-      }
-      setBuscandoCP(true);
-      try {
-        const res = await fetch(`/api/geografia/buscar?cp=${destCP}`);
-        if (res.ok) {
-          const data = await res.json();
-          setDestProvincia(data.provincia);
-          setDestLocalidades(data.localidades);
-          setDestLocalidadSeleccionada(data.localidades[0]);
-        } else {
-          setDestLocalidades([]); 
-          setDestProvincia("");
-        }
-      } catch (error) { 
-        console.error("Error buscando CP:", error); 
-      } finally { 
-        setBuscandoCP(false); 
-      }
-    };
-    
-    const timeoutId = setTimeout(buscarDatosGeograficos, 500);
-    return () => clearTimeout(timeoutId);
-  }, [destCP]);
+    setDestLocalidades(cpLookup.localidades);
+    if (!editadosManualmente.provincia && cpLookup.provincia) {
+      setDestProvincia(cpLookup.provincia);
+    }
+    if (!editadosManualmente.localidad && cpLookup.localidades.length > 0) {
+      setDestLocalidadSeleccionada(cpLookup.localidades[0]);
+    }
+  }, [cpLookup.provincia, cpLookup.localidades, editadosManualmente]);
 
   // Buscador de Agenda Inteligente
   useEffect(() => {
@@ -127,77 +151,32 @@ export default function NuevoEnvio() {
     return () => clearTimeout(timeoutId);
   }, [busquedaAgenda, session, esShipro, empresaSeleccionadaId]);
 
-  // Google Maps Autocomplete (Blindado contra renders dobles)
-  useEffect(() => {
-    const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
-    if (!apiKey) return;
-
-    const initAutocomplete = () => {
-      if (!autocompleteInputRef.current || !window.google) return;
-      if (autocompleteInstanceRef.current) return;
-
-      autocompleteInstanceRef.current = new window.google.maps.places.Autocomplete(autocompleteInputRef.current, {
-        componentRestrictions: { country: "ar" }, 
-        fields: ["address_components", "geometry", "name"],
-        types: ["address"], 
-      });
-
-      autocompleteInstanceRef.current.addListener("place_changed", () => {
-        const place = autocompleteInstanceRef.current.getPlace();
-        if (!place.address_components) return;
-
-        let calle = "";
-        let altura = "";
-        let cp = "";
-        let localidad = "";
-        let provincia = "";
-
-        for (const component of place.address_components) {
-          const componentType = component.types[0];
-          switch (componentType) {
-            case "route": calle = component.short_name; break;
-            case "street_number": altura = component.long_name; break;
-            case "postal_code": cp = component.long_name.replace(/\D/g, ''); break;
-            case "locality":
-            case "sublocality_level_1": localidad = component.long_name; break;
-            case "administrative_area_level_1": provincia = component.long_name; break;
-          }
-        }
-
-        setDestCalle(calle || "");
-        setDestAltura(altura || "");
-        if (cp) setDestCP(cp);
-        if (provincia) setDestProvincia(provincia);
-        if (localidad) {
-          setDestLocalidades([localidad]);
-          setDestLocalidadSeleccionada(localidad);
-        }
-      });
-    };
-
-    // Si ya está cargado Google, lo iniciamos
-    if (window.google) {
-      initAutocomplete();
-      return;
+  // Callback que recibe el AutocompleteAddress cuando el usuario selecciona
+  // una dirección del dropdown de Google. Setea todos los campos relacionados.
+  const handlePlaceChanged = (data: AddressData) => {
+    setDestCalle(data.calle || "");
+    setDestAltura(data.altura || "");
+    if (data.cp) setDestCP(data.cp);
+    if (data.provincia) setDestProvincia(data.provincia);
+    if (data.localidad) {
+      setDestLocalidades([data.localidad]);
+      setDestLocalidadSeleccionada(data.localidad);
     }
+    // Acción explícita del usuario seleccionando dirección completa → resetear
+    // flags para que un cambio futuro de CP vuelva a autocompletar (Escenario 3).
+    setEditadosManualmente({ localidad: false, provincia: false });
+  };
 
-    // Revisamos si el script ya se inyectó pero está cargando
-    const existingScript = document.getElementById('google-maps-script');
-    if (existingScript) {
-      existingScript.addEventListener('load', initAutocomplete);
-      return;
-    }
+  // Handlers de edición manual (marcan flag "el usuario manda")
+  const handleChangeLocalidad = (valor: string) => {
+    setDestLocalidadSeleccionada(valor);
+    setEditadosManualmente(prev => ({ ...prev, localidad: valor !== "" }));
+  };
 
-    // Si no existe, lo inyectamos con ID único
-    const script = document.createElement("script");
-    script.id = 'google-maps-script';
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
-    script.async = true;
-    script.defer = true;
-    script.onload = initAutocomplete;
-    document.head.appendChild(script);
-    
-  }, []);
+  const handleChangeProvincia = (valor: string) => {
+    setDestProvincia(valor);
+    setEditadosManualmente(prev => ({ ...prev, provincia: valor !== "" }));
+  };
 
   // ==========================================
   // LÓGICA DE LIMPIEZA Y AUTOCOMPLETADO
@@ -224,20 +203,20 @@ export default function NuevoEnvio() {
       setDestLocalidades([contacto.localidad]);
       setDestLocalidadSeleccionada(contacto.localidad);
     }
-    
+    // Acción explícita del usuario eligiendo un contacto → resetear flags.
+    setEditadosManualmente({ localidad: false, provincia: false });
+
     setBusquedaAgenda("");
     setMostrarDropdown(false);
     setErrorValidacion(null);
   };
 
-  const handleKeyDownGoogle = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') e.preventDefault();
-  };
 
   const validarYAvanzar = () => {
     setErrorValidacion(null);
 
     if (esShipro && !empresaSeleccionadaId) return setErrorValidacion("Seleccioná una empresa antes de avanzar al cotizador.");
+    if (!depositoSeleccionado) return setErrorValidacion("Seleccioná un depósito de origen antes de avanzar al cotizador.");
     if (!destNombre.trim()) return setErrorValidacion("Falta el Nombre del destinatario.");
     if (!destEmail.trim()) return setErrorValidacion("El Email del destinatario es obligatorio.");
     if (!destTelefono.trim()) return setErrorValidacion("El Teléfono es obligatorio.");
@@ -257,13 +236,17 @@ export default function NuevoEnvio() {
     }
 
     const telefonoFinal = `+549${telefonoProcesado}`;
-    // HARDCODED: CP de origen del depósito.
-    // Eliminar cuando se implemente módulo Depósitos (DEUDA 4).
-    // Ver DEUDAS.md
-    const cpOrigen = "1050";
-    
+    // CP de origen viene del depósito elegido por el usuario.
+    // depositoId también va por URL para que /cotizar lo forwardee al backend
+    // (sin él, el backend caería al fallback de predeterminado y la elección
+    // del usuario sería ignorada silenciosamente — DEUDA 4).
+    const cpOrigen = depositoSeleccionado!.codigoPostal;
+
     const paramsObj: Record<string, string> = {
+      depositoId: String(depositoSeleccionado!.id),
       origen: cpOrigen,
+      origenNombre: depositoSeleccionado!.nombre,
+      origenLocalidad: depositoSeleccionado!.localidad,
       destino: destCP,
       peso: paqPeso,
       largo: paqLargo,
@@ -350,16 +333,55 @@ export default function NuevoEnvio() {
             </div>
           )}
 
-          {/* 1. ORIGEN */}
+          {/* 1. ORIGEN — Depósitos reales del cliente.
+              4 estados:
+              - Cargando → spinner
+              - Lista vacía → bloque amber con CTA a /configuracion/depositos
+              - 1 depósito → texto fijo (no hay nada que elegir)
+              - 2+ depósitos → dropdown con predeterminado por default y ⭐ */}
           <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-200">
             <div className="flex items-center gap-3 mb-6">
-              <div className="p-2 bg-slate-100 rounded-lg"><Building2 className="w-5 h-5 text-slate-700" /></div>
+              <div className="p-2 bg-slate-100 rounded-lg"><Warehouse className="w-5 h-5 text-slate-700" /></div>
               <h3 className="text-lg font-bold text-gray-800">1. Origen del Envío</h3>
             </div>
-            <select className="w-full sm:w-1/2 border border-gray-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-gray-50">
-              {/* HARDCODED: CP de origen del depósito. Eliminar cuando se implemente módulo Depósitos (DEUDA 4). Ver DEUDAS.md */}
-              <option>Depósito Central (Ciudad Autónoma de Buenos Aires - CP 1050)</option>
-            </select>
+
+            {cargandoDepositos ? (
+              <div className="flex items-center gap-3 text-sm text-gray-500">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Cargando depósitos…
+              </div>
+            ) : depositos.length === 0 ? (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+                  <p className="text-sm font-bold text-amber-900">
+                    No tenés depósitos configurados. Configurá un depósito predeterminado para crear envíos.
+                  </p>
+                </div>
+                <Link href="/configuracion/depositos" className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg transition-colors shadow-sm whitespace-nowrap">
+                  Configurar depósito →
+                </Link>
+              </div>
+            ) : depositos.length === 1 ? (
+              <p className="text-sm text-gray-700">
+                <span className="font-bold text-gray-500">Despachando desde:</span>{' '}
+                <span className="font-bold text-gray-800">{depositos[0].nombre}</span>{' '}
+                <span className="text-gray-600">({depositos[0].localidad}, {depositos[0].provincia} - CP {depositos[0].codigoPostal})</span>
+              </p>
+            ) : (
+              <select
+                value={depositoSeleccionadoId ?? ""}
+                onChange={(e) => setDepositoSeleccionadoId(e.target.value ? parseInt(e.target.value) : null)}
+                className="w-full sm:w-2/3 border border-gray-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white"
+              >
+                <option value="">Seleccionar origen</option>
+                {depositos.map((d: any) => (
+                  <option key={d.id} value={d.id}>
+                    {d.nombre} ({d.localidad}, {d.provincia} - CP {d.codigoPostal}){d.esPredeterminado ? " ⭐" : ""}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
 
           {/* 2. DESTINATARIO Y AGENDA */}
@@ -440,13 +462,11 @@ export default function NuevoEnvio() {
               </div>
               <div className="col-span-12 md:col-span-6">
                 <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Teléfono (WhatsApp) *</label>
-                <input 
-                  type="tel" 
-                  value={destTelefono} 
-                  onChange={e => setDestTelefono(limpiarTelefono(e.target.value))} 
-                  maxLength={10} 
-                  className="w-full border border-gray-300 rounded-lg p-3 text-sm outline-none focus:border-blue-500" 
-                  placeholder="Ej: 1155772580 (Sin 0 ni 15)" 
+                <InputTelefono
+                  value={destTelefono}
+                  onChange={setDestTelefono}
+                  className="w-full border border-gray-300 rounded-lg p-3 text-sm outline-none focus:border-blue-500"
+                  placeholder="Ej: 1155772580 (Sin 0 ni 15)"
                 />
               </div>
             </div>
@@ -462,18 +482,7 @@ export default function NuevoEnvio() {
             {/* BUSCADOR DE GOOGLE MAPS */}
             <div className="mb-6 space-y-2">
               <label className="block text-[10px] font-black text-blue-600 uppercase tracking-widest">Buscador Inteligente (Recomendado)</label>
-              <div className="relative flex items-center bg-blue-50/50 border-2 border-blue-200 rounded-xl overflow-hidden focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-500/10 transition-all">
-                <div className="pl-4 pr-2 flex items-center pointer-events-none">
-                  <Search className="w-5 h-5 text-blue-500" />
-                </div>
-                <input 
-                  ref={autocompleteInputRef}
-                  type="text" 
-                  onKeyDown={handleKeyDownGoogle}
-                  placeholder="Empezá a escribir la dirección acá..." 
-                  className="w-full py-3.5 pr-4 bg-transparent text-sm font-bold text-gray-800 outline-none placeholder:text-blue-300"
-                />
-              </div>
+              <AutocompleteAddress onPlaceChanged={handlePlaceChanged} />
             </div>
             
             <div className="grid grid-cols-12 gap-5">
@@ -485,13 +494,30 @@ export default function NuevoEnvio() {
               </div>
 
               <div className="col-span-12 md:col-span-4">
-                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Provincia (Automático)</label>
-                <input type="text" value={destProvincia} readOnly className="w-full bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm font-bold text-gray-500 cursor-not-allowed" placeholder="Esperando CP..." />
+                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Provincia *</label>
+                <select value={destProvincia} onChange={e => handleChangeProvincia(e.target.value)} className="w-full border border-gray-300 rounded-lg p-3 text-sm outline-none focus:border-blue-500 bg-white">
+                  <option value="">Seleccionar provincia</option>
+                  {PROVINCIAS_AR.map(p => <option key={p} value={p}>{p}</option>)}
+                </select>
               </div>
 
               <div className="col-span-12 md:col-span-4">
                 <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Localidad *</label>
-                <input type="text" value={destLocalidadSeleccionada} onChange={e => setDestLocalidadSeleccionada(e.target.value)} className="w-full border border-gray-300 rounded-lg p-3 text-sm outline-none focus:border-blue-500" placeholder="Localidad" />
+                <select
+                  value={destLocalidadSeleccionada}
+                  onChange={e => handleChangeLocalidad(e.target.value)}
+                  disabled={destLocalidades.length === 0}
+                  className="w-full border border-gray-300 rounded-lg p-3 text-sm outline-none focus:border-blue-500 bg-white capitalize disabled:bg-gray-50 disabled:cursor-not-allowed"
+                >
+                  {destLocalidades.length === 0 ? (
+                    <option value="">{destCP.length < 4 ? "Esperando CP..." : "Sin localidades disponibles"}</option>
+                  ) : (
+                    <>
+                      <option value="">Seleccionar localidad</option>
+                      {destLocalidades.map(loc => <option key={loc} value={loc}>{loc}</option>)}
+                    </>
+                  )}
+                </select>
               </div>
 
               <div className="col-span-12 sm:col-span-6">
@@ -544,7 +570,13 @@ export default function NuevoEnvio() {
             <Link href="/" className="px-6 py-3 bg-white border border-gray-300 text-gray-600 font-bold rounded-lg hover:bg-gray-100 transition-colors text-sm">
               Cancelar
             </Link>
-            <button onClick={validarYAvanzar} className="flex items-center gap-2 px-8 py-3 text-white font-bold rounded-lg shadow-md hover:opacity-90 transition-opacity text-sm" style={{ backgroundColor: brandColor }}>
+            <button
+              onClick={validarYAvanzar}
+              disabled={!depositoSeleccionado || cargandoDepositos}
+              title={!depositoSeleccionado ? "Configurá y seleccioná un depósito de origen para continuar." : ""}
+              className="flex items-center gap-2 px-8 py-3 text-white font-bold rounded-lg shadow-md hover:opacity-90 transition-opacity text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ backgroundColor: brandColor }}
+            >
               Siguiente: Cotizar Tarifas <ArrowRight className="w-4 h-4" />
             </button>
           </div>

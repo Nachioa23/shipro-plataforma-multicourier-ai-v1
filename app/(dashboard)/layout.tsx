@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Sora } from "next/font/google";
 import Link from "next/link";
-import { Inbox, Tags, Package, LayoutDashboard, Truck, ShieldAlert, Users, CreditCard, ArrowRightLeft, Activity, LogOut, Building2, Calculator, Landmark, Scale, FileSpreadsheet, Settings2 } from 'lucide-react';
+import { Inbox, Tags, Package, LayoutDashboard, Truck, ShieldAlert, Users, CreditCard, ArrowRightLeft, Activity, LogOut, Building2, Calculator, Landmark, Scale, FileSpreadsheet, Settings2, Settings } from 'lucide-react';
 import { useSession, signOut, SessionProvider } from "next-auth/react";
 import CotizadorModal from '@/components/CotizadorModal';
 import "../globals.css";
@@ -97,8 +97,17 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
               <Link href="/facturacion" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-gray-50 hover:text-[#233b6b] rounded-lg font-medium text-sm transition-all">
                 <CreditCard className="w-5 h-5" /><span>Facturación y Saldos</span>
               </Link>
-              <Link href="/mis-transportes" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-gray-50 hover:text-[#233b6b] rounded-lg font-medium text-sm transition-all">
-                <Truck className="w-5 h-5" /><span>Mis Transportes</span>
+              <Link href="/configuracion/transportes" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-gray-50 hover:text-[#233b6b] rounded-lg font-medium text-sm transition-all">
+                <Settings className="w-5 h-5" /><span>Configuración</span>
+              </Link>
+            </div>
+          )}
+
+          {activeRole === 'operador_cliente' && (
+            <div className="pt-6 animate-in slide-in-from-left-4 fade-in duration-300">
+              <p className="px-3 text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Configuración</p>
+              <Link href="/configuracion/depositos" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-gray-50 hover:text-[#233b6b] rounded-lg font-medium text-sm transition-all">
+                <Settings className="w-5 h-5" /><span>Mis Depósitos</span>
               </Link>
             </div>
           )}

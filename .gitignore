@@ -58,3 +58,6 @@ envios.csv
 
 # Backups de BD locales NO se commitean (DEUDA 5 generó dev.db.backup.*)
 prisma/dev.db.backup.*
+
+# Carpeta de Claude Code / Cursor IDE — no es del proyecto
+.claude/

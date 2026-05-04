@@ -43,7 +43,7 @@ Con el proxy actual, el self-fetch HTTP a `/api/cotizar` desde dentro de `crearE
 
 **How to apply:** SUB-PASO 7 del plan general — refactorear el self-fetch a llamada directa a la función `cotizar` (extraída a `lib/cotizador.ts` siguiendo el mismo patrón de `lib/envios/crear.ts`).
 
-## DEUDA 4 — Módulo de Depósitos (CRÍTICA, bloqueante pre-producción)
+## DEUDA 4 — Módulo de Depósitos (RESUELTA en commit e7d92b9)
 
 Hoy el CP de origen del depósito está hardcodeado como `"1050"` (San Nicolás CABA) en múltiples archivos: `app/(dashboard)/cotizador-rapido/page.tsx`, `app/(dashboard)/nuevo-envio/page.tsx`, `app/api/checkouts/route.ts`, `app/api/envios/inversa/route.ts`. Adicionalmente, `lib/envios/crear.ts` usa el nombre `"Depósito Central - Empresa <id>"` para localizar la dirección de origen en `Direccion`. Nada de esto escala a clientes con depósitos en otras ubicaciones.
 

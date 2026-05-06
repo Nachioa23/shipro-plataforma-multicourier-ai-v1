@@ -183,6 +183,8 @@ Debería ser `"Moci's"` para coincidir con BD.
 
 **Status:** Detectada el 2026-04-29 durante el debug del bug de `courierRecolector="pickup"` en `lib/envios/crear.ts`. Fix temporal aplicado el mismo día (manejo de 3 casos en `crear.ts`); refactor completo PENDIENTE como SUB-PASO mayor post-MVP. Estimado 2-3 días dedicados. No bloquea operación con los 2 couriers integrados hoy (Andreani + Moci's) pero sí bloquea el escalamiento a más couriers e integradores externos.
 
+**Nota complementaria (descubierta diseñando DEUDA 29):** 0 envíos en BD tienen `trackingFirstMile`. El flujo first-mile nunca corrió productivamente. Esto valida que cualquier refactor de `courierRecolector` tiene riesgo bajo de migración.
+
 **Estado actual del modelo:**
 - `CredencialCourier.courierRecolector` mezcla valores legacy y nombres reales: `"pickup"`, `"mismo_courier"`, `"shipro_cross"`, `"dropoff"`, nombres de courier (`"Moci's"`, `"andreani"`). Los 4 registros de la BD actual tienen `"pickup"` (placeholder importado de la plataforma anterior).
 - Credenciales master de Shipro hardcodeadas en `.env.local` (`ANDREANI_USER`, `ANDREANI_PASS`, `MOCIS_USER`, etc.). No auditable (no se sabe quién las cambió ni cuándo). Rotar requiere developer + redeploy.
@@ -483,6 +485,8 @@ Implementar como helper `lib/permisos.ts` con `puedeEditarCampo(rol, campo): boo
 ## DEUDA 29 — Adapters de couriers cotizan ignorando `cpOrigen` (CRÍTICA pre-deploy MVP)
 
 **Status:** Identificada el 2026-05-04 durante smoke test final de DEUDA 4 (Test 4). PENDIENTE — sesión dedicada estimada 3-4 horas. Bloquea la integración de couriers nuevos (mismo bug potencial en cada adapter).
+
+**Contexto operacional descubierto durante diseño:** El flujo microhub/dropoff (cadena Mocis-Andreani como First-Mile + Last-Mile) NUNCA corrió end-to-end en producción. La consulta SQL al momento del diseño mostró 0 envíos con `trackingFirstMile` no nulo. El código de despacho first-mile (`lib/envios/dispatch.ts`), cancelación en cascada (`envios/cancelar/route.ts`), re-despacho (`envios/corregir/route.ts`) y etiquetado masivo (`etiquetas/masiva/route.ts`) está implementado pero nunca fue ejercitado por data productiva. El refactor de DEUDA 29 será el primer test real de la cadena Mocis-Andreani. Esto reduce el riesgo de migración (no hay data crítica que romper) pero aumenta el alcance de testing al implementar (hay que probar end-to-end por primera vez).
 
 **Bug:**
 - `lib/couriers/MocisAdapter.ts` (cotizar() ~línea 121-170): solo envía `cpDestino` al endpoint de Akeron. El parámetro `params.cpOrigen` se recibe pero nunca se lee.

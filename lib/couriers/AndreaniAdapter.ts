@@ -1,8 +1,8 @@
-import { 
-  ICourierIntegrator, 
-  CotizacionParams, 
-  DespachoParams, 
-  SucursalCourier 
+import {
+  ICourierIntegrator,
+  CotizacionParams,
+  DespachoParams,
+  SucursalInfo
 } from './CourierInterface';
 
 export interface CredencialesAndreani {

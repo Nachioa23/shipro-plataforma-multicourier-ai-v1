@@ -1,4 +1,4 @@
-import { ICourierIntegrator, CotizacionParams, DespachoParams, SucursalCourier } from './CourierInterface';
+import { ICourierIntegrator, CotizacionParams, DespachoParams, SucursalInfo } from './CourierInterface';
 
 export class MocisAdapter implements ICourierIntegrator {
   private API_URL = 'https://mocis.akeron.net/api/v1';
@@ -435,5 +435,5 @@ export class MocisAdapter implements ICourierIntegrator {
     return estadoCrudo; 
   }
 
-  async obtenerSucursales(cp: string): Promise<SucursalCourier[]> { return []; }
+  async obtenerSucursales(cp: string): Promise<SucursalInfo[]> { return []; }
 }

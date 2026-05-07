@@ -74,7 +74,7 @@ export interface DespachoParams {
 // ==========================================================
 // 4. ESTRUCTURA DE UNA SUCURSAL (Para mostrar en el Checkout)
 // ==========================================
-export interface SucursalCourier {
+export interface SucursalInfo {
   id: string; // El código interno del courier (Ej: "SUC-123")
   nombre: string;
   direccion: string;
@@ -95,7 +95,7 @@ export interface ICourierIntegrator {
   despachar(params: DespachoParams): Promise<{ tracking: string, etiquetaBase64?: string, etiquetaUrl?: string }>;
   rastrear(tracking: string): Promise<string>;
   traducirEstado(estadoCrudo: string): string;
-  obtenerSucursales(cp: string): Promise<SucursalCourier[]>;
+  obtenerSucursales(cp: string): Promise<SucursalInfo[]>;
   cancelarEnvio(tracking: string): Promise<boolean>;
   solicitarRecoleccion?(fecha: Date, cantidadBultos: number, direccionOrigen: string): Promise<string>;
 }

@@ -36,6 +36,11 @@ model Empresa {
   liquidaciones       LiquidacionMensual[]   // NUEVO: Agrupador de facturas a fin de mes
   depositos           Deposito[]             // DEUDA 4: depósitos físicos del cliente
 
+  // DEUDA 29: si true, el cliente puede usar credenciales Shipro (Modelo A) al activar
+  // couriers. Inmutabilidad direccional: gerente_cliente puede ir A→B (obtener
+  // credenciales propias), pero NO B→A. Decidido por admin_shipro en onboarding.
+  modeloAHabilitado   Boolean      @default(false)
+
   createdAt           DateTime     @default(now())
   reglasRuteo         ReglaRuteo[]
 }
@@ -88,6 +93,9 @@ model Deposito {
 
   enviosOrigen      Envio[]
 
+  // DEUDA 29: sucursal preferida del cliente para imposición/recolección, por courier.
+  sucursalesPreferidas DepositoSucursalPreferida[]
+
   @@index([empresaId])
 }
 
@@ -106,18 +114,41 @@ model Courier {
   id                Int      @id @default(autoincrement())
   nombre            String   @unique
   activo            Boolean  @default(true)
-  
+
   // --- CAMPOS NUEVOS PARA EL ABM MAESTRO ---
   emailSoporte      String?
   telefonoSoporte   String?
   contactoComercial String?
   logoUrl           String?
-  
+
+  // --- DEUDA 29: Capacidades de cadena ---
+  // Se usan en pre-filtro al cotizar y al validar combinaciones cliente↔courier.
+  // Cada courier real declara qué puede hacer; la plataforma filtra candidatos.
+  puedeRecogerDomicilio        Boolean @default(true)
+  puedeConsolidar              Boolean @default(false)
+  puedeEntregarDomicilio       Boolean @default(true)
+  puedeEntregarSucursal        Boolean @default(false)
+  aceptaDropOff                Boolean @default(false)
+  tieneSucursales              Boolean @default(false)
+
+  // --- DEUDA 29: Capacidades de logística inversa (granulares) ---
+  aceptaInversaCambioMercaderia Boolean @default(false)
+  aceptaInversaSoloRetiro       Boolean @default(false)
+  aceptaInversaDropOff          Boolean @default(false)
+
+  // --- DEUDA 29: Performance — timeout por courier al cotizar ---
+  timeoutCotizacionMs          Int     @default(7000)
+
   envios            Envio[]
   nomencladores     Nomenclador[]
   encuestasNPS      EncuestaNPS[]
   metricasSLA       MetricaSLA[]
-  slas              SlaCourier[] 
+  slas              SlaCourier[]
+
+  // --- DEUDA 29: Relaciones nuevas ---
+  sucursales        SucursalCourier[]
+  tramos            TramoEnvio[]
+  latencias         MetricaCourierLatencia[]
 }
 
 // ==========================================
@@ -141,11 +172,19 @@ model CredencialCourier {
   // Si no alcanza: envío queda en estado BLOQUEADO_SALDO sin tracking real.
   tipoCuenta             String?
 
-  courierRecolector      String   @default("mismo_courier")
-  
+  // --- DEUDA 29: First-Mile reemplaza el string libre `courierRecolector` legacy ---
+  // Valores válidos:
+  // - "mismo_courier": el courier configurado retira directo del depósito.
+  // - "consolidador": un courier externo (ej. Mocis) recoge y entrega al
+  //   courier de Last-Mile. Requiere courierRecolectorId no nulo.
+  // - "drop_off_cliente": el cliente lleva el paquete a una sucursal del
+  //   courier de Last-Mile. NO requiere courierRecolectorId.
+  modoFirstMile          String   @default("mismo_courier")
+  courierRecolectorId    Int?
+
   ofreceDomicilio        Boolean  @default(true)
   ofreceSucursal         Boolean  @default(true)
-  
+
   // --- REGLAS DE PRICING PARTICULAR ---
   tarifaIncluyeIva       Boolean  @default(true)
   ajusteTarifaPorcentaje Float    @default(0.0) // Markup en %
@@ -154,13 +193,12 @@ model CredencialCourier {
 
   ordenamientoDefault    String   @default("PRECIO_ASC")
 
-  serviciosActivos       String?  
-  
-  tipoAlcance            String   @default("NACIONAL") 
-  provinciasCobertura    String?  
-  localidadesActivas     String?  
-  
-  ordenamientoDomicilio  String   @default("PRECIO_ASC") 
+  serviciosActivos       String?
+
+  // DEUDA 29: campos eliminados (tipoAlcance, provinciasCobertura, localidadesActivas).
+  // Cobertura ahora se consulta al courier en cada cotización (trust the source of truth).
+
+  ordenamientoDomicilio  String   @default("PRECIO_ASC")
   ordenamientoSucursal   String   @default("PRECIO_ASC")
 
   requiereSeguro         Boolean  @default(false)
@@ -285,11 +323,17 @@ model LiquidacionMensual {
 // ==========================================
 model Envio {
   id                Int        @id @default(autoincrement())
-  
-  trackingNumber    String     @unique 
-  trackingFirstMile String?
-  diasPrometidosCheckout Int?    
+
+  trackingNumber    String     @unique
+  // DEUDA 29: trackingFirstMile eliminado. La info ahora vive en TramoEnvio.
+  // Verificado pre-refactor: 0 envíos productivos referenciaban este campo.
+  diasPrometidosCheckout Int?
   numeroOrden       String?
+
+  // DEUDA 29: cómo arrancó el envío.
+  // - "recoleccion_courier": un courier (mismo o consolidador) retira del depósito.
+  // - "drop_off_cliente": el cliente llevó el paquete a una sucursal del courier.
+  tipoOrigen        String     @default("recoleccion_courier")
 
   etiquetaUrl       String?    
   
@@ -344,8 +388,12 @@ model Envio {
 
   eventos           EventoTracking[]
   tickets           TicketSoporte[]
-  movimientos       MovimientoFinanciero[] 
-  encuestaNPS       EncuestaNPS? 
+  movimientos       MovimientoFinanciero[]
+  encuestaNPS       EncuestaNPS?
+
+  // DEUDA 29: cadena de tramos (recolección, entrega, ciclo_completo).
+  // Cada tramo tiene su propio courier responsable y trackingExterno.
+  tramos            TramoEnvio[]
 }
 
 // ==========================================
@@ -586,4 +634,183 @@ model SlaCourier {
   courier      Courier  @relation(fields: [courierId], references: [id])
 
   @@unique([courierId, zonaNombre])
+}
+
+// ==========================================
+// 14. DEUDA 29 — ARQUITECTURA MULTICOURIER
+// Ver docs/ARQUITECTURA-MULTICOURIER.md
+// ==========================================
+
+// Sucursales / puntos de los couriers (sucursal_propia, punto_red, locker).
+// Tabla única para todos los couriers; columnas explícitas en lo que se usa para
+// lógica (filtros, índices), JSON solo para datos de display.
+model SucursalCourier {
+  id              Int      @id @default(autoincrement())
+
+  courierId       Int
+  courier         Courier  @relation(fields: [courierId], references: [id])
+
+  // Identidad
+  idExterno       String   // ID que el courier usa en su API
+  codigo          String?  // Código corto humano (ej. "SFN", "CNQ")
+  nombre          String   // Nombre legible (ej. "SANTA FE (CENTRO)")
+  tipo            String   @default("sucursal_propia")
+  // Valores: "sucursal_propia" | "punto_red" | "locker"
+
+  // Dirección
+  direccionCalle  String?
+  direccionAltura String?
+  direccionPiso   String?
+  direccionDpto   String?
+  codigoPostal    String
+  localidad       String
+  provincia       String
+  pais            String   @default("Argentina")
+
+  // Geolocalización (crítico para búsqueda de cercanía con Haversine)
+  latitud         Float?
+  longitud        Float?
+
+  // Capacidades operativas (columnas indexables, NO JSON)
+  aceptaAdmision        Boolean @default(false)
+  aceptaEntrega         Boolean @default(false)
+  aceptaDevolucion      Boolean @default(false)
+  aceptaB2B             Boolean @default(false)
+  aceptaB2C             Boolean @default(true)
+  tieneBuzonInteligente Boolean @default(false)
+
+  // Atención
+  horariosJson    String?  // JSON estructurado con horarios por día
+  telefono        String?
+  email           String?
+
+  // Estado y auditoría
+  activa                  Boolean  @default(true)
+  eliminada               Boolean  @default(false)  // Soft delete
+  fechaUltimaConfirmacion DateTime?                 // Última sincronización
+
+  // Datos no-lógicos (display, descripciones largas)
+  metadatosJson   String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relaciones
+  tramosOrigen        TramoEnvio[] @relation("TramoSucursalOrigen")
+  tramosDestino       TramoEnvio[] @relation("TramoSucursalDestino")
+  depositosPreferidos DepositoSucursalPreferida[]
+
+  @@index([courierId])
+  @@index([latitud, longitud])
+  @@index([courierId, codigoPostal])
+  @@unique([courierId, idExterno])
+}
+
+// Sucursal preferida por depósito × courier. La plataforma sugiere con Haversine,
+// el cliente confirma con un click ("el usuario manda" — Escenario 3 DEUDA 4).
+model DepositoSucursalPreferida {
+  id                Int      @id @default(autoincrement())
+
+  depositoId        Int
+  deposito          Deposito @relation(fields: [depositoId], references: [id])
+
+  courierId         Int
+
+  sucursalCourierId Int
+  sucursal          SucursalCourier @relation(fields: [sucursalCourierId], references: [id])
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([depositoId, courierId])
+}
+
+// Tramos de la cadena logística de un envío.
+// Cada tramo tiene su propio courier y trackingExterno. N tramos desde el inicio.
+model TramoEnvio {
+  id              Int      @id @default(autoincrement())
+
+  envioId         Int
+  envio           Envio    @relation(fields: [envioId], references: [id], onDelete: Cascade)
+
+  orden           Int      // 1, 2, 3... Secuencia cronológica.
+
+  courierId       Int
+  courier         Courier  @relation(fields: [courierId], references: [id])
+
+  tipo            String
+  // Valores: "recoleccion" | "entrega" | "ciclo_completo"
+
+  trackingExterno String?  // Tracking propio del courier para este tramo.
+
+  estadoActual    String   @default("PENDIENTE")
+  // Estado homogeneizado por Nomenclador (lenguaje Shipro).
+
+  estadoCrudoUltimo String? // Último estado raw del courier, para auditoría.
+
+  sucursalOrigenId  Int?
+  sucursalOrigen    SucursalCourier? @relation("TramoSucursalOrigen", fields: [sucursalOrigenId], references: [id])
+
+  sucursalDestinoId Int?
+  sucursalDestino   SucursalCourier? @relation("TramoSucursalDestino", fields: [sucursalDestinoId], references: [id])
+
+  fechaCreacion   DateTime @default(now())
+  fechaInicio     DateTime? // Cuando el courier tomó posesión (primer evento real).
+  fechaFin        DateTime? // Cuando el tramo se cerró.
+
+  metadatosJson   String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([envioId, orden])
+  @@index([envioId])
+  @@index([trackingExterno])
+  @@index([estadoActual])
+}
+
+// Snapshot de cada cotización presentada al comprador. Propósito: analytics y
+// tracking de conversión. NO se usa para validar precios al cierre de venta
+// (en logística la cotización es estimación referencial, no contractual).
+model CotizacionSnapshot {
+  id                    Int      @id @default(autoincrement())
+  empresaId             Int
+  depositoOrigenId      Int
+  destinoSnapshotJson   String
+  paqueteSnapshotJson   String
+  opcionesSnapshotJson  String
+  usadaEnEnvioId        Int?
+  createdAt             DateTime @default(now())
+}
+
+// Métrica de latencia por llamada a courier. Para detectar degradación de servicio.
+model MetricaCourierLatencia {
+  id            Int      @id @default(autoincrement())
+  courierId     Int
+  courier       Courier  @relation(fields: [courierId], references: [id])
+  operacion     String   // "cotizar" | "despachar" | "tracking" | "etiqueta"
+  latenciaMs    Int
+  status        String   // "success" | "timeout" | "error"
+  envioId       Int?
+  createdAt     DateTime @default(now())
+
+  @@index([courierId, operacion])
+  @@index([createdAt])
+}
+
+// Histórico de cotizaciones para fallback cuando TODOS los couriers fallan.
+// Se busca promedio de los últimos 30 días para combinación origen-destino-peso.
+// Limpieza periódica de registros > 30 días.
+model HistoricoCotizaciones {
+  id            Int      @id @default(autoincrement())
+  courierId     Int
+  cpOrigen      String
+  cpDestino     String
+  pesoKg        Float
+  precio        Float
+  servicio      String?
+  createdAt     DateTime @default(now())
+
+  @@index([courierId, cpOrigen, cpDestino])
+  @@index([createdAt])
 }

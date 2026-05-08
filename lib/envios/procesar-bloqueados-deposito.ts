@@ -156,6 +156,21 @@ export async function procesarEnviosBloqueadosPorDeposito(empresaId: number): Pr
     const dispatchResult = await despacharCourier({
       credencial,
       courierNombreCanonico: envio.courier.nombre,
+      // === DEUDA 29 Sub-fase 1.C.2 ===
+      courierIdMain: envio.courierId,
+      // tipoOrigen defensivo: el campo es String en BD, normalizamos al union.
+      // Si el valor original era "drop_off_cliente", lo respetamos. Cualquier otro
+      // (incluido default "recoleccion_courier") cae al recoleccion_courier.
+      //
+      // TODO DEUDA 29 Sub-fase 6: validación en crear.ts para que envíos con
+      // tipoOrigen="drop_off_cliente" no entren a BLOQUEADO_DEPOSITO (no necesitan
+      // depósito propio porque el cliente lleva el paquete a sucursal del courier).
+      tipoOrigen: envio.tipoOrigen === "drop_off_cliente" ? "drop_off_cliente" : "recoleccion_courier",
+      // TODO DEUDA 29 Sub-fase 6: persistir sucursalOrigenId/sucursalDestinoId del
+      // envío original cuando UI lo pueble. Hoy no se persisten en Envio (solo
+      // en TramoEnvio post-despacho), así que en reintentos van como null.
+      sucursalOrigenId: null,
+      sucursalDestinoId: null,
       destinatarioNombre: envio.destino.nombre || "",
       calle: envio.destino.calle || "",
       altura: envio.destino.altura || "",
@@ -184,13 +199,64 @@ export async function procesarEnviosBloqueadosPorDeposito(empresaId: number): Pr
     });
 
     if (!dispatchResult.tracking) {
-      await prisma.eventoTracking.create({
-        data: {
-          estado: "BLOQUEADO_DEPOSITO",
-          observacion: `Reintento post-configuración de depósito falló: ${dispatchResult.error || "courier no devolvió tracking"}.`,
-          envioId: envio.id,
-        },
-      });
+      // DEUDA 29 Sub-fase 1.C.2: PARTIAL FAILURE.
+      // El envío deja BLOQUEADO_DEPOSITO y pasa a BLOQUEADO_PARCIAL.
+      // Asignamos depositoId + origenId snapshot AUNQUE el courier falle: el cliente
+      // YA configuró su depósito predeterminado, esa info no se debe perder. El motivo
+      // del bloqueo cambió de "sin depósito" a "courier rechazó". NO debitamos saldo.
+      // Persistimos tramos exitosos si los hay (caso C tramo 1 OK + tramo 2 falla).
+      try {
+        await prisma.$transaction(async (tx) => {
+          const direccionOrigen = await tx.direccion.create({
+            data: {
+              nombre: depositoPred.nombre,
+              calle: depositoPred.direccionCalle,
+              altura: depositoPred.direccionAltura,
+              piso: depositoPred.direccionPiso,
+              dpto: depositoPred.direccionDpto,
+              cp: depositoPred.codigoPostal,
+              localidad: depositoPred.localidad,
+              provincia: depositoPred.provincia,
+              pais: depositoPred.pais,
+              telefono: depositoPred.contactoTelefono,
+              email: depositoPred.contactoEmail,
+            },
+          });
+
+          await tx.envio.update({
+            where: { id: envio.id },
+            data: {
+              estadoActual: "BLOQUEADO_PARCIAL",
+              depositoId: depositoPred.id,
+              origenId: direccionOrigen.id,
+            },
+          });
+
+          if (dispatchResult.tramos.length > 0) {
+            await tx.tramoEnvio.createMany({
+              data: dispatchResult.tramos.map(t => ({
+                envioId: envio.id,
+                orden: t.orden,
+                courierId: t.courierId,
+                tipo: t.tipo,
+                trackingExterno: t.trackingExterno,
+                sucursalOrigenId: t.sucursalOrigenId ?? null,
+                sucursalDestinoId: t.sucursalDestinoId ?? null,
+              })),
+            });
+          }
+
+          await tx.eventoTracking.create({
+            data: {
+              estado: "BLOQUEADO_PARCIAL",
+              observacion: `Reintento post-configuración de depósito falló: ${dispatchResult.error || "courier no devolvió tracking"}. Tramos persistidos: ${dispatchResult.tramos.length}. El operador debe resolver la falla manualmente.`,
+              envioId: envio.id,
+            },
+          });
+        });
+      } catch (txErr: any) {
+        console.error(`[procesarEnviosBloqueadosPorDeposito] Falló transición a BLOQUEADO_PARCIAL para envío ${envio.id}:`, txErr);
+      }
       fallados++;
       continue;
     }
@@ -221,13 +287,28 @@ export async function procesarEnviosBloqueadosPorDeposito(empresaId: number): Pr
           where: { id: envio.id },
           data: {
             trackingNumber: trackingReal,
-            trackingFirstMile: dispatchResult.trackingFirstMile,
+            // TODO DEUDA 29 Sub-fase 3: tracking del first-mile ahora vive en TramoEnvio.trackingExterno.
             etiquetaUrl: dispatchResult.etiquetaUrl,
             estadoActual: "Pendiente",
             depositoId: depositoPred.id,
             origenId: direccionOrigen.id,
           },
         });
+
+        // DEUDA 29 Sub-fase 1.C.2: persistir los TramoEnvio que dispatch.ts ejecutó.
+        if (dispatchResult.tramos.length > 0) {
+          await tx.tramoEnvio.createMany({
+            data: dispatchResult.tramos.map(t => ({
+              envioId: envio.id,
+              orden: t.orden,
+              courierId: t.courierId,
+              tipo: t.tipo,
+              trackingExterno: t.trackingExterno,
+              sucursalOrigenId: t.sucursalOrigenId ?? null,
+              sucursalDestinoId: t.sucursalDestinoId ?? null,
+            })),
+          });
+        }
 
         await tx.movimientoFinanciero.create({
           data: {

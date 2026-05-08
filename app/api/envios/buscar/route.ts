@@ -16,13 +16,12 @@ export async function GET(request: Request) {
 
     const trackingLimpio = tracking.trim();
 
-    // Buscamos el envío asegurándonos de que encuentre el principal o el de colecta
+    // TODO DEUDA 29 Sub-fase 3: extender búsqueda a TramoEnvio.trackingExterno para
+    // recuperar el comportamiento de "buscar también por tracking de colecta" que daba
+    // el campo legacy trackingFirstMile.
     const envio = await prisma.envio.findFirst({
       where: {
-        OR: [
-          { trackingNumber: trackingLimpio },
-          { trackingFirstMile: trackingLimpio }
-        ]
+        trackingNumber: trackingLimpio
       },
       include: { 
         courier: true, 

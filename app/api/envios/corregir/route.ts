@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { CourierFactory } from "@/lib/couriers/CourierFactory";
-import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
-import { obtenerCredencialCourier, normalizarParaComparacion } from "@/lib/couriers/normalizar";
+import { obtenerCredencialCourier } from "@/lib/couriers/normalizar";
+import { despacharCourier } from "@/lib/envios/dispatch";
 
 export async function POST(request: Request) {
   try {
@@ -13,154 +12,233 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Faltan datos obligatorios" }, { status: 400 });
     }
 
-    // 1. Buscamos el envío y toda su info relacional necesaria para despachar
+    // 1. Buscar envío en RETENIDO con info necesaria.
+    // DEUDA 29 Sub-fase 1.C.2: include extendido para construir origen real
+    // del despacho (deposito vivo + origen snapshot fallback) y para defense
+    // contra futuros cambios del filtro de estados (tramos previos).
     const envio = await prisma.envio.findFirst({
-      where: { 
-        trackingNumber: trackingNumber, 
-        estadoActual: { in: ["RETENIDO", "Retenido"] } 
+      where: {
+        trackingNumber,
+        estadoActual: { in: ["RETENIDO", "Retenido"] },
       },
-      include: { 
+      include: {
         destino: true,
         courier: true,
         finanzas: true,
-        empresa: true
-      }
+        empresa: true,
+        deposito: true,
+        origen: true,
+        tramos: true,
+      },
     });
 
-    // CORRECCIÓN DE TYPESCRIPT: Verificamos que el objeto "destino" exista completo
     if (!envio || !envio.destino || !envio.courier) {
       return NextResponse.json({ error: "Envío no encontrado o inválido para corrección" }, { status: 404 });
     }
 
-    // 2. Actualizamos la dirección del destinatario en la base de datos
+    // Defense in depth: este endpoint solo soporta envíos sin tramos previos.
+    // El filtro de estado RETENIDO garantiza esto hoy (los envíos RETENIDO
+    // nunca tuvieron despacho exitoso → no tienen tramos), pero defendemos
+    // contra futuros cambios del filtro.
+    if (envio.tramos.length > 0) {
+      return NextResponse.json({
+        error: "Este envío ya tiene tramos despachados. Usar otro endpoint para corrección post-despacho.",
+      }, { status: 400 });
+    }
+
+    // 2. Actualizar dirección del destinatario.
     await prisma.direccion.update({
       where: { id: envio.destino.id },
-      data: { 
-        calle, 
-        altura, 
-        cp: String(cp), 
-        localidad, 
-        provincia, 
-        piso: piso || "", 
-        dpto: dpto || "" 
-      }
+      data: {
+        calle,
+        altura,
+        cp: String(cp),
+        localidad,
+        provincia,
+        piso: piso || "",
+        dpto: dpto || "",
+      },
     });
 
-    // 3. ¡MOMENTO DE LA VERDAD! Despachamos al Courier con la dirección limpia
-    let nuevoTrackingOficial = envio.trackingNumber; // Mantenemos el provisorio por defecto
-    let nuevoTrackingFirstMile = envio.trackingFirstMile;
-    let nuevaUrlEtiqueta = envio.etiquetaUrl;
-    let despachoExitoso = false;
+    // 3. Cargar credencial principal y validar que esté activa.
+    const credencialMain = await obtenerCredencialCourier(envio.empresaId, envio.courier.nombre);
+    if (!credencialMain || !credencialMain.activo) {
+      return NextResponse.json({
+        error: "Dirección corregida, pero no hay credencial activa para el courier. Contactar soporte.",
+      }, { status: 502 });
+    }
 
-    try {
-      const nombreCourierLimpio = normalizarParaComparacion(envio.courier.nombre);
+    // 4. Construir origen del despacho (DEUDA 4 follow-up).
+    // Hoy el código previo no pasaba origen al adapter → bug latente para
+    // clientes fuera de AMBA (etiquetas con "Av. Libertador 1234" hardcoded).
+    // Preferimos el depósito vivo (envio.deposito) por consistencia con
+    // crear.ts; fallback al snapshot original (envio.origen) si no hay
+    // depósito asignado (envíos legacy o casos especiales).
+    let origenDespacho;
+    if (envio.deposito) {
+      origenDespacho = {
+        calle: envio.deposito.direccionCalle,
+        altura: envio.deposito.direccionAltura,
+        cp: envio.deposito.codigoPostal,
+        localidad: envio.deposito.localidad,
+        provincia: envio.deposito.provincia,
+        pais: envio.deposito.pais,
+        telefono: envio.deposito.contactoTelefono,
+        email: envio.deposito.contactoEmail || undefined,
+      };
+    } else if (envio.origen) {
+      origenDespacho = {
+        calle: envio.origen.calle || "",
+        altura: envio.origen.altura || "",
+        cp: envio.origen.cp,
+        localidad: envio.origen.localidad || "",
+        provincia: envio.origen.provincia || "",
+        pais: envio.origen.pais,
+        telefono: envio.origen.telefono || undefined,
+        email: envio.origen.email || undefined,
+      };
+    }
+    // Si no hay deposito ni origen → undefined → el adapter usa fallback.
 
-      const credencialMain = await obtenerCredencialCourier(envio.empresaId, envio.courier.nombre);
+    // 5. Re-despachar con la dirección corregida vía despacharCourier
+    // (DEUDA 29 Sub-fase 1.C.2: reemplaza la lógica inline duplicada).
+    // dispatch.ts maneja internamente: motor, credenciales, paramsDespacho,
+    // first-mile (consolidador), vinculación Mocis-Andreani.
+    const dispatchResult = await despacharCourier({
+      credencial: credencialMain,
+      courierNombreCanonico: envio.courier.nombre,
+      courierIdMain: envio.courierId,
+      // tipoOrigen defensivo: el campo es String en BD, normalizamos al union.
+      tipoOrigen: envio.tipoOrigen === "drop_off_cliente" ? "drop_off_cliente" : "recoleccion_courier",
+      // TODO DEUDA 29 Sub-fase 6: persistir sucursalOrigenId/sucursalDestinoId del
+      // envío original cuando UI lo pueble. Hoy van como null.
+      sucursalOrigenId: null,
+      sucursalDestinoId: null,
+      destinatarioNombre: envio.destino.nombre || "Consumidor Final",
+      calle,
+      altura,
+      piso: piso || undefined,
+      dpto: dpto || undefined,
+      localidad,
+      provincia,
+      cp: String(cp),
+      dni: envio.destino.documento || "",
+      email: envio.destino.email || "",
+      telefono: envio.destino.telefono || "",
+      pesoReal: envio.pesoReal,
+      valorDeclarado: envio.finanzas?.valorDeclarado || 0,
+      modalidad: envio.modalidad,
+      numeroOrden: envio.numeroOrden,
+      origen: origenDespacho,
+    });
 
-      if (credencialMain && credencialMain.activo) {
-        const llavesMain = credencialMain.usaCredencialesPropias
-          ? parsearCredencialesPropias(nombreCourierLimpio, credencialMain.credencialesJson)
-          : obtenerCredencialesShipro(nombreCourierLimpio);
-        
-        const motorMain = CourierFactory.crear(nombreCourierLimpio, llavesMain);
-        
-        let tipoEntregaFormateado: "sucursal" | "domicilio" | "inversa" | "cambio" = "domicilio";
-        const mod = envio.modalidad?.toLowerCase() || "";
-        if (mod.includes('sucursal')) tipoEntregaFormateado = "sucursal";
-        if (mod.includes('inversa') || mod.includes('devolucion')) tipoEntregaFormateado = "inversa";
-        if (mod.includes('cambio')) tipoEntregaFormateado = "cambio";
+    // 6. Manejar resultado en 3 ramas según el estado del despacho.
 
-        const paramsDespacho = {
-          destinatarioNombre: envio.destino.nombre || "Consumidor Final", 
-          calle: calle, 
-          altura: altura, 
-          piso: piso, 
-          dpto: dpto, 
-          localidad: localidad, 
-          provincia: provincia, 
-          cp: String(cp), 
-          dni: envio.destino.documento || "", 
-          email: envio.destino.email || "", 
-          telefono: envio.destino.telefono || "", 
-          peso: envio.pesoReal, 
-          paquetes: [{ 
-            pesoKg: envio.pesoReal, 
-            largoCm: 10, anchoCm: 10, altoCm: 10,
-            valorDeclarado: envio.finanzas?.valorDeclarado || 0, 
-            requiereSeguro: credencialMain.requiereSeguro      
-          }], 
-          referencia: envio.numeroOrden ? `ORDEN-${envio.numeroOrden}` : `ORDEN-${Date.now()}`,
-          tipoEntrega: tipoEntregaFormateado
-        };
+    // ---------- RAMA 1: despacho exitoso ----------
+    if (dispatchResult.tracking) {
+      try {
+        await prisma.$transaction(async (tx) => {
+          await tx.envio.update({
+            where: { id: envio.id },
+            data: {
+              estadoActual: "Pendiente",
+              trackingNumber: dispatchResult.tracking!,
+              etiquetaUrl: dispatchResult.etiquetaUrl,
+            },
+          });
 
-        const respuestaMain = await motorMain.despachar(paramsDespacho);
-        if (respuestaMain && respuestaMain.tracking) {
-          nuevoTrackingOficial = respuestaMain.tracking; 
-          nuevaUrlEtiqueta = respuestaMain.etiquetaUrl || null; 
-          despachoExitoso = true;
-        }
-
-        // Lógica de First Mile (Recolector)
-        if (despachoExitoso && credencialMain.courierRecolector && credencialMain.courierRecolector !== "mismo_courier") {
-          let llavesRecolector = obtenerCredencialesShipro(credencialMain.courierRecolector);
-          const motorRecolector = CourierFactory.crear(credencialMain.courierRecolector, llavesRecolector);
-          
-          const paramsRecolector = { ...paramsDespacho, referencia: `FIRST-MILE: ${nuevoTrackingOficial}` };
-          const respuestaRecolector = await motorRecolector.despachar(paramsRecolector);
-          
-          if (respuestaRecolector && respuestaRecolector.tracking) {
-            nuevoTrackingFirstMile = respuestaRecolector.tracking;
-            const jsonCreds = JSON.parse(credencialMain.credencialesJson || '{}');
-            const revendedor = jsonCreds.revendedor || '';
-
-            if (revendedor === credencialMain.courierRecolector && nombreCourierLimpio === 'andreani') {
-               try {
-                  const tokenAdmin = await (motorRecolector as any).getToken(); 
-                  const bodyVinculacion = new URLSearchParams();
-                  bodyVinculacion.append('code', nuevoTrackingFirstMile); 
-                  bodyVinculacion.append('andreani_tracking_codes', `[${nuevoTrackingOficial}]`); 
-
-                  await fetch(`https://mocis.akeron.net/api/v1/shipping/andreani/set_tracking_code`, {
-                     method: 'POST',
-                     headers: { 'Authorization': `Bearer ${tokenAdmin}`, 'Content-Type': 'application/x-www-form-urlencoded' },
-                     body: bodyVinculacion.toString()
-                  });
-               } catch (errorVinc) {}
-            }
+          if (dispatchResult.tramos.length > 0) {
+            await tx.tramoEnvio.createMany({
+              data: dispatchResult.tramos.map(t => ({
+                envioId: envio.id,
+                orden: t.orden,
+                courierId: t.courierId,
+                tipo: t.tipo,
+                trackingExterno: t.trackingExterno,
+                sucursalOrigenId: t.sucursalOrigenId ?? null,
+                sucursalDestinoId: t.sucursalDestinoId ?? null,
+              })),
+            });
           }
-        }
+
+          await tx.eventoTracking.create({
+            data: {
+              envioId: envio.id,
+              estado: "Pendiente",
+              observacion: `Dirección corregida. Tracking oficial asignado: ${dispatchResult.tracking}.`,
+            },
+          });
+        });
+      } catch (txErr: any) {
+        console.error(`[Corregir] Falló persistencia post-despacho exitoso para envío ${envio.id}:`, txErr);
+        return NextResponse.json({
+          error: "Error guardando los datos post-corrección. Contactar soporte.",
+        }, { status: 500 });
       }
-    } catch (errorDisp) {
-       console.warn(`[Shipro] Falló el despacho oficial post-corrección.`, errorDisp);
-       return NextResponse.json({ error: "Dirección corregida, pero el correo rechazó la etiqueta. Contactar soporte." }, { status: 502 });
+
+      return NextResponse.json({ success: true, trackingOficial: dispatchResult.tracking });
     }
 
-    // 4. Si el despacho fue exitoso, actualizamos el envío y lo liberamos
-    if (despachoExitoso) {
-        await prisma.envio.update({
-          where: { id: envio.id },
-          data: { 
-            estadoActual: "Pendiente",
-            trackingNumber: nuevoTrackingOficial,
-            trackingFirstMile: nuevoTrackingFirstMile,
-            etiquetaUrl: nuevaUrlEtiqueta
-          }
-        });
+    // ---------- RAMA 2: partial failure CON tramos huérfanos → BLOQUEADO_PARCIAL ----------
+    // Caso C tramo 1 OK + tramo 2 falla (consolidador). Si dejamos en RETENIDO
+    // y el cliente reintenta, despacharCourier despacharía Mocis OTRA VEZ → tramos
+    // duplicados → doble cobro del recolector. BLOQUEADO_PARCIAL es la única
+    // opción correcta. Operador resuelve manualmente (Sub-fase 3 agregará
+    // reintento automático).
+    if (dispatchResult.tramos.length > 0) {
+      try {
+        await prisma.$transaction(async (tx) => {
+          await tx.envio.update({
+            where: { id: envio.id },
+            data: { estadoActual: "BLOQUEADO_PARCIAL" },
+          });
 
-        // 5. Dejamos huella en la trazabilidad operativa
-        await prisma.eventoTracking.create({
-          data: {
-            envioId: envio.id,
-            estado: "Pendiente",
-            observacion: `Dirección corregida. Tracking oficial asignado: ${nuevoTrackingOficial}`
-          }
-        });
+          await tx.tramoEnvio.createMany({
+            data: dispatchResult.tramos.map(t => ({
+              envioId: envio.id,
+              orden: t.orden,
+              courierId: t.courierId,
+              tipo: t.tipo,
+              trackingExterno: t.trackingExterno,
+              sucursalOrigenId: t.sucursalOrigenId ?? null,
+              sucursalDestinoId: t.sucursalDestinoId ?? null,
+            })),
+          });
 
-    } else {
-        return NextResponse.json({ error: "No se pudo generar la etiqueta oficial con el courier." }, { status: 500 });
+          await tx.eventoTracking.create({
+            data: {
+              envioId: envio.id,
+              estado: "BLOQUEADO_PARCIAL",
+              observacion: `Dirección corregida pero re-despacho parcial: ${dispatchResult.error || "courier no devolvió tracking"}. Tramos huérfanos persistidos: ${dispatchResult.tramos.length}. El operador debe resolver la falla manualmente.`,
+            },
+          });
+        });
+      } catch (txErr: any) {
+        console.error(`[Corregir] Falló transición a BLOQUEADO_PARCIAL para envío ${envio.id}:`, txErr);
+      }
+
+      return NextResponse.json({
+        error: `Dirección corregida, pero el re-despacho falló parcialmente. ${dispatchResult.tramos.length} tramo(s) quedaron despachados en courier(s). Operador resolverá manualmente.`,
+        bloqueadoPorTramoFallido: true,
+      }, { status: 502 });
     }
 
-    return NextResponse.json({ success: true, trackingOficial: nuevoTrackingOficial });
+    // ---------- RAMA 3: partial failure SIN tramos → mantener RETENIDO ----------
+    // Caso A/B falló o caso C tramo 1 falló desde el inicio. No hay tramos
+    // despachados → no hay tramos huérfanos en couriers. Dejamos el envío en
+    // RETENIDO para que el cliente pueda reintentar la corrección con datos
+    // diferentes desde el link público.
+    await prisma.eventoTracking.create({
+      data: {
+        envioId: envio.id,
+        estado: "RETENIDO",
+        observacion: `Intento de corrección falló en el courier: ${dispatchResult.error || "courier no devolvió tracking"}. El envío sigue en RETENIDO; el cliente puede reintentar con datos distintos.`,
+      },
+    });
+
+    return NextResponse.json({
+      error: `Dirección corregida, pero el courier rechazó la etiqueta: ${dispatchResult.error || "no devolvió tracking"}. Verificá los datos e intentá nuevamente.`,
+    }, { status: 502 });
 
   } catch (error) {
     console.error("Error corrigiendo dirección desde link público:", error);

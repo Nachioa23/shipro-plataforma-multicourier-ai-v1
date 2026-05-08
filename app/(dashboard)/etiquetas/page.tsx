@@ -370,12 +370,7 @@ export default function CentroEtiquetas() {
                                 <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider w-14 text-right">Entrega</span>
                                 <p className="font-bold text-[#233b6b] text-xs font-mono bg-blue-50 border border-blue-100 px-2 py-0.5 rounded">{envio.trackingNumber}</p>
                               </div>
-                              {envio.trackingFirstMile && (
-                                <div className="flex items-center gap-2" title="Tracking de Recolección (First-Mile)">
-                                  <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider w-14 text-right">Colecta</span>
-                                  <p className="font-bold text-purple-700 text-xs font-mono bg-purple-50 border border-purple-100 px-2 py-0.5 rounded">{envio.trackingFirstMile}</p>
-                                </div>
-                              )}
+                              {/* TODO DEUDA 29 Sub-fase 3: mostrar trackings de TramoEnvio (1..N por envío) en lugar del trackingFirstMile legacy. */}
                               {esEquipoShipro && filtroEmpresaId === "TODAS" && (
                                 <p className="text-[9px] font-bold text-indigo-500 mt-1 uppercase truncate max-w-[150px] ml-16">De: {envio.empresa?.nombre}</p>
                               )}

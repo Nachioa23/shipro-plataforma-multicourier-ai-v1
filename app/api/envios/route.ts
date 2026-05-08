@@ -27,7 +27,6 @@ export async function GET(request: Request) {
     if (search) {
       where.OR = [
         { trackingNumber: { contains: search } },
-        { trackingFirstMile: { contains: search } },
         { numeroOrden: { contains: search } },
         { destino: { nombre: { contains: search } } },
         { destino: { email: { contains: search } } },

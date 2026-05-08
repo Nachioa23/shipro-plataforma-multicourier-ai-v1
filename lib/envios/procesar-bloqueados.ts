@@ -111,6 +111,17 @@ export async function procesarEnviosBloqueados(empresaId: number): Promise<Proce
     const dispatchResult = await despacharCourier({
       credencial,
       courierNombreCanonico: envio.courier.nombre,
+      // === DEUDA 29 Sub-fase 1.C.2 ===
+      courierIdMain: envio.courierId,
+      // tipoOrigen defensivo: el campo es String en BD, normalizamos al union.
+      // Si el valor original era "drop_off_cliente", lo respetamos. Cualquier otro
+      // (incluido default "recoleccion_courier") cae al recoleccion_courier.
+      tipoOrigen: envio.tipoOrigen === "drop_off_cliente" ? "drop_off_cliente" : "recoleccion_courier",
+      // TODO DEUDA 29 Sub-fase 6: persistir sucursalOrigenId/sucursalDestinoId del
+      // envío original cuando UI lo pueble. Hoy no se persisten en Envio (solo
+      // en TramoEnvio post-despacho), así que en reintentos van como null.
+      sucursalOrigenId: null,
+      sucursalDestinoId: null,
       destinatarioNombre: envio.destino.nombre || "",
       calle: envio.destino.calle || "",
       altura: envio.destino.altura || "",
@@ -130,13 +141,43 @@ export async function procesarEnviosBloqueados(empresaId: number): Promise<Proce
     });
 
     if (!dispatchResult.tracking) {
-      await prisma.eventoTracking.create({
-        data: {
-          estado: "BLOQUEADO_SALDO",
-          observacion: `Reintento post-recarga falló: ${dispatchResult.error || "courier no devolvió tracking"}.`,
-          envioId: envio.id
-        }
-      });
+      // DEUDA 29 Sub-fase 1.C.2: PARTIAL FAILURE.
+      // El envío deja BLOQUEADO_SALDO y pasa a BLOQUEADO_PARCIAL.
+      // Persistimos los tramos efectivamente despachados (puede ser 0 o más, ej. caso C
+      // con tramo 1 OK + tramo 2 falla). NO debitamos saldo (no hubo despacho exitoso).
+      // saldoSimulado queda intacto para los próximos envíos del loop.
+      try {
+        await prisma.$transaction(async (tx) => {
+          await tx.envio.update({
+            where: { id: envio.id },
+            data: { estadoActual: "BLOQUEADO_PARCIAL" }
+          });
+
+          if (dispatchResult.tramos.length > 0) {
+            await tx.tramoEnvio.createMany({
+              data: dispatchResult.tramos.map(t => ({
+                envioId: envio.id,
+                orden: t.orden,
+                courierId: t.courierId,
+                tipo: t.tipo,
+                trackingExterno: t.trackingExterno,
+                sucursalOrigenId: t.sucursalOrigenId ?? null,
+                sucursalDestinoId: t.sucursalDestinoId ?? null,
+              })),
+            });
+          }
+
+          await tx.eventoTracking.create({
+            data: {
+              estado: "BLOQUEADO_PARCIAL",
+              observacion: `Reintento post-recarga falló: ${dispatchResult.error || "courier no devolvió tracking"}. Tramos persistidos: ${dispatchResult.tramos.length}. El operador debe resolver la falla manualmente.`,
+              envioId: envio.id
+            }
+          });
+        });
+      } catch (txErr: any) {
+        console.error(`[procesarEnviosBloqueados] Falló transición a BLOQUEADO_PARCIAL para envío ${envio.id}:`, txErr);
+      }
       fallados++;
       continue;
     }
@@ -150,11 +191,26 @@ export async function procesarEnviosBloqueados(empresaId: number): Promise<Proce
           where: { id: envio.id },
           data: {
             trackingNumber: trackingReal,
-            trackingFirstMile: dispatchResult.trackingFirstMile,
+            // TODO DEUDA 29 Sub-fase 3: tracking del first-mile ahora vive en TramoEnvio.trackingExterno.
             etiquetaUrl: dispatchResult.etiquetaUrl,
             estadoActual: "Pendiente"
           }
         });
+
+        // DEUDA 29 Sub-fase 1.C.2: persistir los TramoEnvio que dispatch.ts ejecutó.
+        if (dispatchResult.tramos.length > 0) {
+          await tx.tramoEnvio.createMany({
+            data: dispatchResult.tramos.map(t => ({
+              envioId: envio.id,
+              orden: t.orden,
+              courierId: t.courierId,
+              tipo: t.tipo,
+              trackingExterno: t.trackingExterno,
+              sucursalOrigenId: t.sucursalOrigenId ?? null,
+              sucursalDestinoId: t.sucursalDestinoId ?? null,
+            })),
+          });
+        }
 
         await tx.movimientoFinanciero.create({
           data: {

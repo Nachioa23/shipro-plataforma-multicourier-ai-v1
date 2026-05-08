@@ -754,12 +754,7 @@ export default function BandejaPedidos() {
                                 <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider w-14 text-right">Entrega</span>
                                 <p className="font-mono font-bold text-[#233b6b] text-xs bg-blue-50 border border-blue-100 px-2 py-0.5 rounded">{envio.trackingNumber || 'Pendiente'}</p>
                               </div>
-                              {envio.trackingFirstMile && (
-                                <div className="flex items-center gap-2" title="Tracking Recolección">
-                                  <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider w-14 text-right">Colecta</span>
-                                  <p className="font-mono font-bold text-purple-700 text-xs bg-purple-50 border border-purple-100 px-2 py-0.5 rounded">{envio.trackingFirstMile}</p>
-                                </div>
-                              )}
+                              {/* TODO DEUDA 29 Sub-fase 3: mostrar trackings de TramoEnvio (1..N por envío) en lugar del trackingFirstMile legacy. */}
                               {envio.numeroOrden && (
                                 <div className="flex items-center gap-2" title="Orden E-commerce">
                                   <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider w-14 text-right">Orden</span>

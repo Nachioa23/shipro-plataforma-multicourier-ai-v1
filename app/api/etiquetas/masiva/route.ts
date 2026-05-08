@@ -16,7 +16,21 @@ export async function POST(request: Request) {
 
     const envios = await prisma.envio.findMany({
       where: { id: { in: ids } },
-      include: { courier: true, empresa: true, origen: true, destino: true, ordenExterna: true }
+      include: {
+        courier: true,
+        empresa: true,
+        origen: true,
+        destino: true,
+        ordenExterna: true,
+        // DEUDA 29 Sub-fase 1.C.2: el zócalo Frankenstein con QR del recolector
+        // ahora se construye desde TramoEnvio (tipo="recoleccion"), reemplazando
+        // los campos eliminados envio.trackingFirstMile + credencial.courierRecolector.
+        tramos: {
+          where: { tipo: "recoleccion" },
+          include: { courier: true },
+          take: 1,
+        },
+      }
     });
 
     const pdfMaestro = await PDFDocument.create();
@@ -64,6 +78,26 @@ export async function POST(request: Request) {
         pageBloq.drawText(`Destinatario: ${truncar(envio.destino?.nombre, 30)}`, { x: 35, y: 175, size: 9, font: fontN, color: colorGris });
         pageBloq.drawText("Configurá un depósito predeterminado en Shipro", { x: 35, y: 135, size: 9, font: fontN });
         pageBloq.drawText("para destrabar este envío.", { x: 35, y: 122, size: 9, font: fontN });
+        continue;
+      }
+
+      // CASO BLOQUEADO_PARCIAL (DEUDA 29 Sub-fase 1.C.2): el courier rechazó la
+      // generación de etiqueta del Last-Mile. Puede haber tramos huérfanos
+      // persistidos (caso C consolidador con tramo 1 OK + tramo 2 falla). Sin
+      // etiqueta del Last-Mile el cliente no puede operar el paquete; el operador
+      // debe resolver manualmente antes de poder imprimir.
+      if (envio.estadoActual === "BLOQUEADO_PARCIAL") {
+        const colorRojo = rgb(0.85, 0.15, 0.15);
+        const pageBloq = pdfMaestro.addPage([288, 432]);
+        pageBloq.drawText("ETIQUETA BLOQUEADA", { x: 35, y: 280, size: 16, font: fontB, color: colorRojo });
+        pageBloq.drawText("DESPACHO PARCIAL O FALLIDO", { x: 35, y: 260, size: 12, font: fontB, color: colorShipro });
+        pageBloq.drawText(`Trk: ${envio.trackingNumber}`, { x: 35, y: 230, size: 10, font: fontN, color: colorGris });
+        pageBloq.drawText(`Destinatario: ${truncar(envio.destino?.nombre, 30)}`, { x: 35, y: 210, size: 9, font: fontN, color: colorGris });
+        pageBloq.drawText("El courier rechazó la generación de etiqueta.", { x: 35, y: 170, size: 9, font: fontN });
+        if (envio.tramos.length > 0) {
+          pageBloq.drawText(`Tramos despachados: ${envio.tramos.length} (revisar manualmente).`, { x: 35, y: 155, size: 9, font: fontN });
+        }
+        pageBloq.drawText("El operador debe resolver manualmente.", { x: 35, y: 135, size: 9, font: fontN });
         continue;
       }
 
@@ -160,10 +194,17 @@ export async function POST(request: Request) {
         const paginasOriginales = pdfOriginal.getPages();
         const [paginaEmbebida] = await pdfMaestro.embedPages([paginasOriginales[0]]);
 
-        const nuevaPagina = pdfMaestro.addPage([288, 432]); 
-        const tieneFirstMile = !!envio.trackingFirstMile;
-        const alturaDisponible = tieneFirstMile ? 350 : 432; 
-        
+        const nuevaPagina = pdfMaestro.addPage([288, 432]);
+
+        // DEUDA 29 Sub-fase 1.C.2: el zócalo Frankenstein con QR del recolector
+        // ahora se construye desde el tramo de tipo "recoleccion" (filtrado en el
+        // findMany). Reemplaza la lectura legacy de envio.trackingFirstMile +
+        // credencial.courierRecolector. Si no hay tramo de recolección (envío sin
+        // first-mile o legacy), tieneFirstMile=false y el zócalo no se renderiza.
+        const tramoRecoleccion = envio.tramos[0] || null;
+        const tieneFirstMile = !!tramoRecoleccion?.trackingExterno;
+        const alturaDisponible = tieneFirstMile ? 350 : 432;
+
         const factorEscala = Math.min(288 / paginaEmbebida.width, alturaDisponible / paginaEmbebida.height);
         const dimensiones = paginaEmbebida.scale(factorEscala);
 
@@ -177,7 +218,7 @@ export async function POST(request: Request) {
         // FRANKENSTEIN ZÓCALO
         if (tieneFirstMile) {
           nuevaPagina.drawLine({ start: { x: 10, y: 82 }, end: { x: 278, y: 82 }, thickness: 1, color: rgb(0.5, 0.5, 0.5), dashArray: [3, 3] });
-          const qrDataUrl = await QRCode.toDataURL(envio.trackingFirstMile as string, { margin: 0, scale: 4 });
+          const qrDataUrl = await QRCode.toDataURL(tramoRecoleccion!.trackingExterno!, { margin: 0, scale: 4 });
           const qrImage = await pdfMaestro.embedPng(qrDataUrl);
           nuevaPagina.drawImage(qrImage, { x: 10, y: 20, width: 55, height: 55 });
 
@@ -185,11 +226,12 @@ export async function POST(request: Request) {
           const remitenteDir = truncar(`${envio.origen?.calle || ''} ${envio.origen?.altura || ''}, ${envio.origen?.localidad || ''}`, 30);
           const destNombre = truncar(envio.destino?.nombre, 28);
           const destDir = truncar(`${envio.destino?.calle || ''} ${envio.destino?.altura || ''}, CP:${envio.destino?.cp || ''}`, 30);
-          
-          const recolectorNombre = (credencial?.courierRecolector && credencial.courierRecolector !== "mismo_courier") ? credencial.courierRecolector.toUpperCase() : "SHIPRO";
+
+          // El nombre del recolector viene de la FK del tramo (siempre garantizado por schema).
+          const recolectorNombre = tramoRecoleccion!.courier.nombre.toUpperCase();
 
           nuevaPagina.drawText("RECOLECCIÓN", { x: 72, y: 70, size: 8, font: fontB, color: rgb(0.2, 0.2, 0.2) });
-          nuevaPagina.drawText(`TRK: ${envio.trackingFirstMile}`, { x: 72, y: 58, size: 10, font: fontB, color: rgb(0, 0, 0) });
+          nuevaPagina.drawText(`TRK: ${tramoRecoleccion!.trackingExterno}`, { x: 72, y: 58, size: 10, font: fontB, color: rgb(0, 0, 0) });
           nuevaPagina.drawText(`Operador:`, { x: 72, y: 44, size: 6, font: fontB, color: rgb(0.4, 0.4, 0.4) });
           nuevaPagina.drawText(recolectorNombre, { x: 108, y: 44, size: 6, font: fontB, color: rgb(0, 0, 0) });
           nuevaPagina.drawText(`Traspaso a:`, { x: 72, y: 34, size: 6, font: fontB, color: rgb(0.4, 0.4, 0.4) });

@@ -37,6 +37,15 @@ export interface CrearEnvioInput {
   costoProveedor?: number | string;
   provinciaDestino?: string;
   numeroOrden?: string | null;
+
+  // === DEUDA 29 Sub-fase 1.C.2 ===
+  // Cómo arrancó el envío. Default "recoleccion_courier".
+  // - "recoleccion_courier": el courier (mismo o consolidador) retira del depósito.
+  // - "drop_off_cliente": el cliente lleva el paquete a una sucursal del Last-Mile.
+  tipoOrigen?: "recoleccion_courier" | "drop_off_cliente";
+  // Sucursales opcionales (pass-through; UI las pobla en Sub-fase 6).
+  sucursalOrigenId?: number | null;
+  sucursalDestinoId?: number | null;
 }
 
 export async function crearEnvio(input: CrearEnvioInput) {
@@ -50,15 +59,29 @@ export async function crearEnvio(input: CrearEnvioInput) {
   const {
     empresaId, depositoId: depositoIdInput, permitirBloqueoPorDeposito, destinatarioNombre, cpDestino, pesoReal, nombreCourier,
     calle, altura, piso, dpto, dni, email, telefono, localidad, modalidad,
-    valorDeclarado, costoEnvio, costoProveedor, provinciaDestino, numeroOrden
+    valorDeclarado, costoEnvio, costoProveedor, provinciaDestino, numeroOrden,
+    tipoOrigen, sucursalOrigenId, sucursalDestinoId
   } = input;
 
   let trackingOficial = "SHP-" + Math.floor(Math.random() * 900000 + 100000);
-  let trackingFirstMile: string | null = null;
   let urlEtiquetaFinal: string | null = null;
   let estadoInicialEnvio = "Pendiente";
   let falloPorPeaje = false;
   let motivoRetencion = "";
+
+  // DEUDA 29 Sub-fase 1.C.2: si despacho parcial/total falla → BLOQUEADO_PARCIAL.
+  // dispatchTramos contiene los snapshots de los tramos efectivamente despachados
+  // (puede ser 0 si todo falló, 1 si A/B exitoso o C con tramo 1 OK + 2 falla, 2 si C OK).
+  let bloqueadoPorTramoFallido = false;
+  let errorTramo: string | null = null;
+  let dispatchTramos: {
+    orden: number;
+    courierId: number;
+    tipo: "recoleccion" | "entrega" | "ciclo_completo";
+    trackingExterno: string | null;
+    sucursalOrigenId?: number | null;
+    sucursalDestinoId?: number | null;
+  }[] = [];
 
   // =========================================================
   // RESOLVER COURIER CANÓNICO
@@ -285,6 +308,11 @@ export async function crearEnvio(input: CrearEnvioInput) {
     const dispatchResult = await despacharCourier({
       credencial: credencialMain,
       courierNombreCanonico: courierReal.nombre,
+      // DEUDA 29 Sub-fase 1.C.2: courierIdMain + tipoOrigen + sucursales (pass-through).
+      courierIdMain: courierReal.id,
+      tipoOrigen: tipoOrigen ?? "recoleccion_courier",
+      sucursalOrigenId: sucursalOrigenId ?? null,
+      sucursalDestinoId: sucursalDestinoId ?? null,
       destinatarioNombre,
       calle: calle || "",
       altura: altura || "",
@@ -312,13 +340,24 @@ export async function crearEnvio(input: CrearEnvioInput) {
         email: deposito.contactoEmail || undefined,
       },
     });
+
+    // DEUDA 29 Sub-fase 1.C.2: capturar snapshots de tramos para persistirlos en la tx.
+    dispatchTramos = dispatchResult.tramos;
+
     if (dispatchResult.tracking) {
+      // Despacho exitoso (caso A, B o C con todos los tramos OK).
       trackingOficial = dispatchResult.tracking;
       urlEtiquetaFinal = dispatchResult.etiquetaUrl;
-      trackingFirstMile = dispatchResult.trackingFirstMile;
+    } else {
+      // PARTIAL FAILURE: BLOQUEADO_PARCIAL.
+      // - tracking visible queda como SHP-XXXXXX (etiqueta diferida).
+      // - Se persisten los tramos que sí se despacharon (puede ser 0 o más, ej. caso C
+      //   con tramo 1 OK + tramo 2 falla → dispatchTramos.length === 1).
+      // - Operador debe resolver la falla manualmente (Sub-fase 3 agregará reintento auto).
+      bloqueadoPorTramoFallido = true;
+      estadoInicialEnvio = "BLOQUEADO_PARCIAL";
+      errorTramo = dispatchResult.error || "Error desconocido en despacho";
     }
-    // Si dispatchResult.tracking es null, el envío queda con SHP-* y estado "Pendiente"
-    // (mismo comportamiento que tenía el catch anterior).
   }
 
   // montoDebito ya fue calculado arriba para la validación de saldo.
@@ -330,12 +369,13 @@ export async function crearEnvio(input: CrearEnvioInput) {
   let servicioSugeridoStr: string | null = null;
 
   try {
-    // HARDCODED: CP de origen del depósito.
-    // Eliminar cuando se implemente módulo Depósitos (DEUDA 4).
-    // Ver DEUDAS.md
+    // DEUDA 4 follow-up (cierre del "1050" hardcoded latente): usar CP real del
+    // depósito de origen para el cálculo de fugaFinanciera. Si deposito es null
+    // (flujo BLOQUEADO_DEPOSITO), pasamos undefined y el cotizador interno usa
+    // su fallback al predeterminado de la empresa.
     const dataCotizacion = await cotizar({
       empresaId,
-      cpOrigen: "1050",
+      cpOrigen: deposito?.codigoPostal,
       cpDestino: String(cpDestino),
       provinciaDestino,
       paquetes: [{
@@ -371,7 +411,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
     const envioCreado = await tx.envio.create({
       data: {
         trackingNumber: trackingOficial,
-        trackingFirstMile: trackingFirstMile,
+        // TODO DEUDA 29 Sub-fase 3: tracking del first-mile ahora vive en TramoEnvio.trackingExterno.
         numeroOrden: numeroOrden || null,
         etiquetaUrl: urlEtiquetaFinal,
         pesoReal: parseFloat(String(pesoReal)) || 1.0,
@@ -400,9 +440,27 @@ export async function crearEnvio(input: CrearEnvioInput) {
       include: { courier: true, destino: true, finanzas: true }
     });
 
-    // Si BLOQUEADO_SALDO o BLOQUEADO_DEPOSITO: NO crear MovimientoFinanciero ni
-    // actualizar saldo. El débito se aplica recién cuando se desbloquee.
-    if (!bloqueadoPorSaldo && !bloqueadoPorDeposito) {
+    // DEUDA 29 Sub-fase 1.C.2: persistir los TramoEnvio que dispatch.ts ejecutó.
+    // Pueden ser 0 (todo falló o flujo bloqueado pre-despacho), 1 (caso A/B exitoso
+    // o caso C con tramo 1 OK + tramo 2 falla), o 2 (caso C completo).
+    if (dispatchTramos.length > 0) {
+      await tx.tramoEnvio.createMany({
+        data: dispatchTramos.map(t => ({
+          envioId: envioCreado.id,
+          orden: t.orden,
+          courierId: t.courierId,
+          tipo: t.tipo,
+          trackingExterno: t.trackingExterno,
+          sucursalOrigenId: t.sucursalOrigenId ?? null,
+          sucursalDestinoId: t.sucursalDestinoId ?? null,
+        })),
+      });
+    }
+
+    // Si BLOQUEADO_SALDO, BLOQUEADO_DEPOSITO o BLOQUEADO_PARCIAL: NO crear
+    // MovimientoFinanciero ni actualizar saldo. El débito se aplica recién
+    // cuando se desbloquee.
+    if (!bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorTramoFallido) {
       await tx.movimientoFinanciero.create({
         data: {
           empresaId,
@@ -421,7 +479,9 @@ export async function crearEnvio(input: CrearEnvioInput) {
       });
     }
 
-    if (bloqueadoPorDeposito) {
+    if (bloqueadoPorTramoFallido) {
+      await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_PARCIAL", observacion: `Bloqueado por falla en despacho del courier: ${errorTramo}. Tramos persistidos: ${dispatchTramos.length}. El operador debe resolver la falla manualmente.`, envioId: envioCreado.id } });
+    } else if (bloqueadoPorDeposito) {
       await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_DEPOSITO", observacion: `Bloqueado: la empresa no tiene depósito predeterminado configurado. Se desbloqueará automáticamente cuando se configure uno en /configuracion/depositos.`, envioId: envioCreado.id } });
     } else if (bloqueadoPorSaldo) {
       const saldoDisponible = (empresaData?.saldoActivo || 0) + (tipoCuentaEfectivo === "POSTPAGO" ? (empresaData?.limiteDescubierto || 0) : 0);
@@ -435,9 +495,10 @@ export async function crearEnvio(input: CrearEnvioInput) {
     return envioCreado;
   });
 
-  // Mails: NO mandar si está bloqueado por saldo o por depósito (el destinatario
-  // no debe recibir notificación hasta que el envío se destrabe y tenga tracking real).
-  if (email && !bloqueadoPorSaldo && !bloqueadoPorDeposito) {
+  // Mails: NO mandar si está bloqueado por saldo, depósito o partial failure
+  // (el destinatario no debe recibir notificación hasta que el envío se destrabe
+  // y tenga tracking real).
+  if (email && !bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorTramoFallido) {
     if (falloPorPeaje) {
       const { enviarMailRetenido } = await import("@/lib/mailer");
       await enviarMailRetenido(email, trackingOficial, destinatarioNombre, `${process.env.APP_URL || "http://localhost:3000"}/corregir/${trackingOficial}`, empresaNombreParaMail);
@@ -451,6 +512,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
     trackingNumber: trackingOficial,
     bloqueadoPorSaldo,
     bloqueadoPorDeposito,
+    bloqueadoPorTramoFallido,
     estado: estadoInicialEnvio
   };
 }

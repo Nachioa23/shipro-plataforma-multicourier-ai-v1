@@ -125,17 +125,11 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
     return { domicilio: [], sucursal: [], cambio: [], devolucion: [] };
   }
 
-  const couriersAptos = couriersConfigurados.filter(courier => {
-    if (courier.tipoAlcance === "NACIONAL" || courier.tipoAlcance === "REGIONAL") {
-      if (!provinciaDestino) return true;
-      try {
-        const provincias = JSON.parse(courier.provinciasCobertura || '[]');
-        if (provincias.length === 0) return true;
-        return provincias.includes(provinciaDestino);
-      } catch (e) { return true; }
-    }
-    return true;
-  });
+  // TODO DEUDA 29 Sub-fase 4: pre-filtro real con capacidades del Courier
+  // (puedeEntregarDomicilio, puedeEntregarSucursal, modoFirstMile + recolector, etc.).
+  // El filtro previo por tipoAlcance/provinciasCobertura era inerte (todas vacías) y
+  // los campos fueron eliminados del schema en commit 1.A.
+  const couriersAptos = couriersConfigurados;
 
   let opcionesDomicilio: OpcionTarifa[] = [];
   let opcionesSucursal: OpcionTarifa[] = [];

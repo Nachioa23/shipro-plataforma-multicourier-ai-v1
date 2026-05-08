@@ -21,6 +21,9 @@ export default function TransportesTab({ empresaActivaId }: Props) {
   const [mensaje, setMensaje] = useState<{ texto: string, tipo: 'ok' | 'error' } | null>(null);
   const [configsGenerales, setConfigsGenerales] = useState({ ordenamiento: "MOTOR_PRECIO" });
   const [couriers, setCouriers] = useState<any[]>([]);
+  // DEUDA 29 Sub-fase 1.C.3: lista derivada de couriersGlobales con puedeConsolidar=true.
+  // Alimenta el dropdown condicional cuando modoFirstMile === "consolidador".
+  const [consolidadoresDisponibles, setConsolidadoresDisponibles] = useState<any[]>([]);
 
   useEffect(() => {
     if (!empresaActivaId) return;
@@ -33,6 +36,12 @@ export default function TransportesTab({ empresaActivaId }: Props) {
           if (data.empresa) setConfigsGenerales({ ordenamiento: data.empresa.ordenamientoDefault || "MOTOR_PRECIO" });
 
           if (data.couriersGlobales) {
+            // DEUDA 29 Sub-fase 1.C.3: alimentar lista de consolidadores disponibles
+            // (couriers con capacidad puedeConsolidar=true). El dropdown condicional
+            // los muestra cuando el cliente elige modoFirstMile="consolidador".
+            const consolidadores = data.couriersGlobales.filter((c: any) => c.puedeConsolidar === true);
+            setConsolidadoresDisponibles(consolidadores);
+
             const couriersDin = data.couriersGlobales.map((globalCourier: any) => {
               const configCliente = (data.credencialesCliente || []).find((c: any) => c.nombreCourier === globalCourier.nombre);
 
@@ -45,11 +54,20 @@ export default function TransportesTab({ empresaActivaId }: Props) {
                 return {
                   id: globalCourier.nombre, activo: configCliente.activo, usaPropias: configCliente.usaCredencialesPropias,
                   credenciales: configCliente.credencialesJson ? JSON.parse(configCliente.credencialesJson) : credsPorDefecto,
-                  markupClientePorcentaje: configCliente.ajusteTarifaPorcentaje || 0, markupClienteFijo: configCliente.markupFijo || 0, recolector: configCliente.courierRecolector || "pickup",
+                  markupClientePorcentaje: configCliente.ajusteTarifaPorcentaje || 0, markupClienteFijo: configCliente.markupFijo || 0,
+                  // DEUDA 29 Sub-fase 1.C.3: modoFirstMile + courierRecolectorId reemplazan al `recolector` legacy.
+                  modoFirstMile: configCliente.modoFirstMile || "mismo_courier",
+                  courierRecolectorId: configCliente.courierRecolectorId ?? null,
                   tipoCuenta: configCliente.tipoCuenta || ""
                 };
               } else {
-                return { id: globalCourier.nombre, activo: false, usaPropias: true, credenciales: credsPorDefecto, markupClientePorcentaje: 0, markupClienteFijo: 0, recolector: "pickup", tipoCuenta: "" };
+                return {
+                  id: globalCourier.nombre, activo: false, usaPropias: true, credenciales: credsPorDefecto,
+                  markupClientePorcentaje: 0, markupClienteFijo: 0,
+                  modoFirstMile: "mismo_courier",
+                  courierRecolectorId: null,
+                  tipoCuenta: ""
+                };
               }
             });
             setCouriers(couriersDin);
@@ -78,6 +96,20 @@ export default function TransportesTab({ empresaActivaId }: Props) {
   };
 
   const guardar = async () => {
+    // DEUDA 29 Sub-fase 1.C.3: validación cruzada de modoFirstMile + courierRecolectorId.
+    // Defense in depth: el backend también valida (commit Fase 1.C.1) con whitelist.
+    const couriersIncompletos = couriers.filter(c =>
+      c.activo && c.modoFirstMile === 'consolidador' && c.courierRecolectorId === null
+    );
+    if (couriersIncompletos.length > 0) {
+      setMensaje({
+        texto: `Seleccioná el courier que va a hacer la recolección antes de guardar (${couriersIncompletos.map(c => c.id).join(', ')}).`,
+        tipo: 'error'
+      });
+      setTimeout(() => setMensaje(null), 5000);
+      return;
+    }
+
     setGuardando(true);
     try {
       const res = await fetch("/api/configuracion/couriers", {
@@ -174,11 +206,47 @@ export default function TransportesTab({ empresaActivaId }: Props) {
                   <div className="space-y-8">
                     <div>
                       <h5 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-2"><Package className="w-4 h-4 text-emerald-500" /> 2. Estrategia de Despacho</h5>
-                      <select value={courier.recolector} onChange={e => handleUpdateCourier(courier.id, 'recolector', e.target.value)} className="w-full p-3 border-2 border-gray-200 rounded-xl text-sm font-bold text-gray-700 outline-none focus:border-emerald-500">
-                        <option value="pickup">{courier.id} retira los paquetes por mi depósito (Colecta)</option>
-                        <option value="dropoff">Nosotros llevamos los paquetes a la sucursal de {courier.id}</option>
-                        {courier.id !== "Moci's" && <option value="shipro_cross">Contratar Moci's Logística para inyectar en {courier.id}</option>}
+                      {/* DEUDA 29 Sub-fase 1.C.3: dropdown con los 3 valores válidos del schema.
+                          La opción "consolidador" se muestra solo si hay couriers consolidadores
+                          disponibles distintos al actual (no tiene sentido ser su propio recolector). */}
+                      <select
+                        value={courier.modoFirstMile}
+                        onChange={e => {
+                          const nuevoModo = e.target.value;
+                          handleUpdateCourier(courier.id, 'modoFirstMile', nuevoModo);
+                          // Si cambia a algo distinto de "consolidador", limpiar el ID del recolector.
+                          if (nuevoModo !== 'consolidador') {
+                            handleUpdateCourier(courier.id, 'courierRecolectorId', null);
+                          }
+                        }}
+                        className="w-full p-3 border-2 border-gray-200 rounded-xl text-sm font-bold text-gray-700 outline-none focus:border-emerald-500"
+                      >
+                        <option value="mismo_courier">El propio {courier.id} retira de mi depósito</option>
+                        {consolidadoresDisponibles.filter((cons: any) => cons.nombre !== courier.id).length > 0 && (
+                          <option value="consolidador">Un courier consolidador retira y entrega al courier final</option>
+                        )}
+                        <option value="drop_off_cliente">Yo llevo el paquete a una sucursal de {courier.id}</option>
                       </select>
+
+                      {courier.modoFirstMile === 'consolidador' && (
+                        <div className="mt-3">
+                          <label className="block text-xs font-bold text-gray-500 mb-1.5 uppercase tracking-wider">
+                            ¿Qué courier va a hacer la recolección?
+                          </label>
+                          <select
+                            value={courier.courierRecolectorId ?? ""}
+                            onChange={e => handleUpdateCourier(courier.id, 'courierRecolectorId', e.target.value ? parseInt(e.target.value) : null)}
+                            className="w-full p-3 border-2 border-gray-200 rounded-xl text-sm font-bold text-gray-700 outline-none focus:border-emerald-500"
+                          >
+                            <option value="">Seleccionar courier recolector…</option>
+                            {consolidadoresDisponibles
+                              .filter((cons: any) => cons.nombre !== courier.id)
+                              .map((cons: any) => (
+                                <option key={cons.id} value={cons.id}>{cons.nombre}</option>
+                              ))}
+                          </select>
+                        </div>
+                      )}
                     </div>
 
                     {puedeVerTipoCuenta && (

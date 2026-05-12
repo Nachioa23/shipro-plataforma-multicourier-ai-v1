@@ -149,6 +149,7 @@ model Courier {
   sucursales        SucursalCourier[]
   tramos            TramoEnvio[]
   latencias         MetricaCourierLatencia[]
+  depositosSucursalesPreferidas DepositoSucursalPreferida[]
 }
 
 // ==========================================
@@ -683,6 +684,7 @@ model SucursalCourier {
   horariosJson    String?  // JSON estructurado con horarios por día
   telefono        String?
   email           String?
+  seHaceAtencionAlCliente Boolean @default(false)
 
   // Estado y auditoría
   activa                  Boolean  @default(true)
@@ -699,6 +701,7 @@ model SucursalCourier {
   tramosOrigen        TramoEnvio[] @relation("TramoSucursalOrigen")
   tramosDestino       TramoEnvio[] @relation("TramoSucursalDestino")
   depositosPreferidos DepositoSucursalPreferida[]
+  codigosPostales     SucursalCourierCp[]
 
   @@index([courierId])
   @@index([latitud, longitud])
@@ -715,6 +718,7 @@ model DepositoSucursalPreferida {
   deposito          Deposito @relation(fields: [depositoId], references: [id])
 
   courierId         Int
+  courier           Courier  @relation(fields: [courierId], references: [id])
 
   sucursalCourierId Int
   sucursal          SucursalCourier @relation(fields: [sucursalCourierId], references: [id])
@@ -723,6 +727,7 @@ model DepositoSucursalPreferida {
   updatedAt         DateTime @updatedAt
 
   @@unique([depositoId, courierId])
+  @@index([courierId])
 }
 
 // Tramos de la cadena logística de un envío.
@@ -813,4 +818,20 @@ model HistoricoCotizaciones {
 
   @@index([courierId, cpOrigen, cpDestino])
   @@index([createdAt])
+}
+
+// CPs atendidos por cada sucursal de courier (1:N desde SucursalCourier).
+// Poblada por scripts/sincronizar-sucursales-andreani.ts a partir del
+// campo codigosPostalesAtendidos del endpoint público /v2/sucursales.
+// Permite resolver "qué sucursales atienden el CP X" sin parsear JSON.
+model SucursalCourierCp {
+  id                Int             @id @default(autoincrement())
+  sucursalCourierId Int
+  sucursal          SucursalCourier @relation(fields: [sucursalCourierId], references: [id], onDelete: Cascade)
+  codigoPostal      String
+  createdAt         DateTime        @default(now())
+
+  @@unique([sucursalCourierId, codigoPostal])
+  @@index([sucursalCourierId])
+  @@index([codigoPostal])
 }

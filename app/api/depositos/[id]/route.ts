@@ -3,6 +3,7 @@ import prisma from "@/lib/prisma";
 import { validarDepositoInput, validarPuedeEliminarOInactivar, validarHayOtroPredeterminado } from "@/lib/depositos/validar";
 import { verificarAccesoDeposito } from "@/lib/depositos/auth";
 import { procesarEnviosBloqueadosPorDeposito } from "@/lib/envios/procesar-bloqueados-deposito";
+import { geocodificarDireccion } from "@/lib/geo/geocodificar-direccion";
 
 // ==========================================
 // GET /api/depositos/[id]
@@ -86,6 +87,50 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     });
   });
 
+  // DEUDA 29 Sub-fase 2.B.0: re-geocodificar solo si cambió alguno de los 5
+  // campos de dirección. Política híbrida ante fallo:
+  //   - Sin cambio → no tocar coords ni timestamp.
+  //   - Cambio + Google OK → actualizar coords + timestamp.
+  //   - Cambio + Google FALLA → mantener coords viejas (stale, mejor para
+  //     Haversine que null) pero setear ultimaGeocodificacion=null como señal
+  //     de desactualización. Queries futuras pueden detectar
+  //     (latitud IS NOT NULL AND ultimaGeocodificacion IS NULL) para
+  //     re-geocodificar o flagear "coordsActualizadas: false" en la UI.
+  const direccionCambio =
+    previo.direccionCalle !== actualizado.direccionCalle ||
+    previo.direccionAltura !== actualizado.direccionAltura ||
+    previo.codigoPostal !== actualizado.codigoPostal ||
+    previo.localidad !== actualizado.localidad ||
+    previo.provincia !== actualizado.provincia;
+
+  let depositoConCoords = actualizado;
+  if (direccionCambio) {
+    const coords = await geocodificarDireccion({
+      direccionCalle: actualizado.direccionCalle,
+      direccionAltura: actualizado.direccionAltura,
+      codigoPostal: actualizado.codigoPostal,
+      localidad: actualizado.localidad,
+      provincia: actualizado.provincia,
+      pais: actualizado.pais,
+    });
+    if (coords) {
+      depositoConCoords = await prisma.deposito.update({
+        where: { id: depositoId },
+        data: {
+          latitud: coords.latitud,
+          longitud: coords.longitud,
+          ultimaGeocodificacion: new Date(),
+        },
+      });
+    } else {
+      console.warn(`[depositos] WARN: PUT id=${depositoId} (${actualizado.nombre}) — geocoding falló, coords stale (ultimaGeocodificacion=null como señal).`);
+      depositoConCoords = await prisma.deposito.update({
+        where: { id: depositoId },
+        data: { ultimaGeocodificacion: null },
+      });
+    }
+  }
+
   // DEUDA 4: si este update pasó a predeterminado (transición false → true),
   // disparar destrabado de envíos en BLOQUEADO_DEPOSITO.
   let recovery;
@@ -93,7 +138,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     recovery = await procesarEnviosBloqueadosPorDeposito(previo.empresaId);
   }
 
-  return NextResponse.json(recovery ? { ...actualizado, recovery } : actualizado);
+  return NextResponse.json(recovery ? { ...depositoConCoords, recovery } : depositoConCoords);
 }
 
 // ==========================================

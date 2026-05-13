@@ -3,6 +3,7 @@ import prisma from "@/lib/prisma";
 import { validarDepositoInput } from "@/lib/depositos/validar";
 import { ROLES_ESCRITURA, ROLES_LECTURA, resolverEmpresaIdParaCrear } from "@/lib/depositos/auth";
 import { procesarEnviosBloqueadosPorDeposito } from "@/lib/envios/procesar-bloqueados-deposito";
+import { geocodificarDireccion } from "@/lib/geo/geocodificar-direccion";
 
 // ==========================================
 // GET /api/depositos
@@ -90,6 +91,31 @@ export async function POST(request: Request) {
     });
   });
 
+  // DEUDA 29 Sub-fase 2.B.0: geocodificar la dirección del depósito recién
+  // creado. Si Google falla → coords y timestamp quedan en null (estado natural
+  // pre-geocoding). El helper nunca lanza, NO bloquea el alta.
+  const coords = await geocodificarDireccion({
+    direccionCalle: deposito.direccionCalle,
+    direccionAltura: deposito.direccionAltura,
+    codigoPostal: deposito.codigoPostal,
+    localidad: deposito.localidad,
+    provincia: deposito.provincia,
+    pais: deposito.pais,
+  });
+  let depositoConCoords = deposito;
+  if (coords) {
+    depositoConCoords = await prisma.deposito.update({
+      where: { id: deposito.id },
+      data: {
+        latitud: coords.latitud,
+        longitud: coords.longitud,
+        ultimaGeocodificacion: new Date(),
+      },
+    });
+  } else {
+    console.warn(`[depositos] WARN: POST id=${deposito.id} (${deposito.nombre}) — geocoding falló, alta sin coords.`);
+  }
+
   // DEUDA 4: si este depósito quedó como predeterminado (porque era el primero
   // o porque el body lo pidió), intentar destrabar envíos en BLOQUEADO_DEPOSITO.
   let recovery;
@@ -97,5 +123,5 @@ export async function POST(request: Request) {
     recovery = await procesarEnviosBloqueadosPorDeposito(ctx.empresaId);
   }
 
-  return NextResponse.json(recovery ? { ...deposito, recovery } : deposito);
+  return NextResponse.json(recovery ? { ...depositoConCoords, recovery } : depositoConCoords);
 }

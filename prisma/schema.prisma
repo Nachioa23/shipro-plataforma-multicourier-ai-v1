@@ -76,6 +76,16 @@ model Deposito {
   provincia         String
   pais              String   @default("Argentina")
 
+  // DEUDA 29 Sub-fase 2.B.0: coordenadas geocodificadas vía Google Maps.
+  // Pobladas al crear/editar el depósito (cambios de dirección) y por
+  // scripts/backfill-coordenadas-depositos.ts para filas legacy.
+  // Nullable: si Google falla o no resuelve, el depósito queda sin coords
+  // (degradación elegante: el endpoint de sucursales cercanas excluye/aplica
+  // fallback según política del caller).
+  latitud                Float?
+  longitud               Float?
+  ultimaGeocodificacion  DateTime?
+
   // Horarios estructurados (JSON: 7 días × 3 franjas estándar 09-12 / 12-15 / 15-18)
   horarios          String
 

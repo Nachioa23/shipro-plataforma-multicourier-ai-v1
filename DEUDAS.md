@@ -490,44 +490,52 @@ Implementar como helper `lib/permisos.ts` con `puedeEditarCampo(rol, campo): boo
 
 ## DEUDA 29 — Adapters de couriers cotizan ignorando `cpOrigen` (CRÍTICA pre-deploy MVP)
 
-**Status:** Identificada el 2026-05-04 durante smoke test final de DEUDA 4 (Test 4). PENDIENTE — sesión dedicada estimada 3-4 horas. Bloquea la integración de couriers nuevos (mismo bug potencial en cada adapter).
+**Estado:** PARCIALMENTE RESUELTA (5 de 9 sub-fases cerradas).
 
-**Contexto operacional descubierto durante diseño:** El flujo microhub/dropoff (cadena Mocis-Andreani como First-Mile + Last-Mile) NUNCA corrió end-to-end en producción. La consulta SQL al momento del diseño mostró 0 envíos con `trackingFirstMile` no nulo. El código de despacho first-mile (`lib/envios/dispatch.ts`), cancelación en cascada (`envios/cancelar/route.ts`), re-despacho (`envios/corregir/route.ts`) y etiquetado masivo (`etiquetas/masiva/route.ts`) está implementado pero nunca fue ejercitado por data productiva. El refactor de DEUDA 29 será el primer test real de la cadena Mocis-Andreani. Esto reduce el riesgo de migración (no hay data crítica que romper) pero aumenta el alcance de testing al implementar (hay que probar end-to-end por primera vez).
+**Identificada:** 2026-05-04 durante smoke test final de DEUDA 4 (Test 4).
 
-**Bug:**
-- `lib/couriers/MocisAdapter.ts` (cotizar() ~línea 121-170): solo envía `cpDestino` al endpoint de Akeron. El parámetro `params.cpOrigen` se recibe pero nunca se lee.
-- `lib/couriers/AndreaniAdapter.ts` (cotizar() ~línea 79-108): solo envía `cpDestino` al endpoint `/v1/tarifas` de Andreani. `params.cpOrigen` se recibe pero nunca se manda al API.
+**Origen:** bug en adapters Mocis + Andreani — sucursal de origen hardcodeada, ignoraba el depósito real del cliente. Expandida a refactor multi-sub-fase tras el diseño de `docs/ARQUITECTURA-MULTICOURIER.md` (commit `3ee9026` del 2026-05-07).
 
-**Impacto operacional:**
-- Cotizaciones incorrectas cuando el origen real del cliente no es AMBA.
-- Mocis aparece como opción aunque el origen esté fuera de su zona de cobertura.
-- Andreani devuelve tarifa AMBA→destino en lugar de origen→destino, subestimando el costo real (especialmente origenes de interior).
+### Sub-fases
 
-**Detección concreta:**
-- Smoke test final de DEUDA 4: cotización origen 5000 (Córdoba, Alto Alberdi) → destino 1900 (La Plata) devolvió $8.000-$8.857 de Andreani y un Same Day de Mocis. La tarifa real de Córdoba→La Plata vía Andreani debería rondar los $15.000-$25.000; Mocis no debería aparecer (solo opera AMBA).
+**✅ Sub-fase 1 — Schema, interface y código base** (viernes 8 de mayo, 4 commits, +1576 líneas)
+- `1.A` (`252f7f5`): Schema y migración (6 tablas nuevas, 10 capacidades en Courier).
+- `1.B` (`b71e648`): Resolver colisión TS `SucursalCourier` → `SucursalInfo`.
+- `1.C` (`fc87063`): Adaptación TypeScript (14 archivos, refactor `dispatch.ts`, 3 callers, 3 lectores, `TransportesTab.tsx`).
+- `1.D` (`26d5e51`): Capacidades iniciales Andreani(id=1) + Mocis(id=2).
 
-**Por qué no se vio antes:**
-Hasta DEUDA 4, `/nuevo-envio/page.tsx` tenía `const cpOrigen = "1050"` hardcoded. Origen siempre era CABA, así que la tarifa AMBA→destino que devolvía cada API coincidía con el origen real. Cero discrepancia visible. Al hacer real el origen (DEUDA 4), el bug latente quedó expuesto.
+**✅ Sub-fase 2.A — Sincronización sucursales Andreani** (martes 12 de mayo, commit `3e36967`, +342 líneas)
+- Schema: `SucursalCourierCp` + FK formal `courierId` en `DepositoSucursalPreferida` + campo `seHaceAtencionAlCliente`.
+- Script: `scripts/sincronizar-sucursales-andreani.ts` (filtro `canal=B2C AND seHaceAtencionAlCliente=true`).
+- Resultado: 154 sucursales + 3359 CPs en BD.
+- TODO Sub-fase 5: 22 sucursales sin CPs públicos (completar con `/v2/puntos-de-tercero` autenticado).
 
-**Filosofía para el fix (NO mantener listas hardcoded):**
-- El courier es la fuente de verdad de su cobertura. NO mantener listas hardcoded de "Mocis solo opera en estos CPs".
-- Nosotros mandamos `cpOrigen` + `cpDestino`. El courier responde:
-  - Tarifa si hay cobertura.
-  - Error si no hay cobertura → el cotizador ya hace `try/catch` per courier ([lib/cotizador.ts:182-197](lib/cotizador.ts#L182-L197)) y lo skipea silenciosamente.
-- Eso evita drift de listas y respeta el contrato del courier.
+**✅ Sub-fase 2.B.0 — Geocodificación de depósitos** (miércoles 13 de mayo, commit `1f34e3c`, +294 líneas)
+- Schema: `latitud`/`longitud`/`ultimaGeocodificacion` en `Deposito`.
+- Helper: `lib/geo/geocodificar-direccion.ts` (Google Maps Geocoding API, contrato "nunca lanza").
+- Script: `scripts/backfill-coordenadas-depositos.ts`.
+- Integración: POST + PUT depósitos con geocoding automático.
+- Política híbrida: stale + señal de desactualización ante fallo (`latitud IS NOT NULL AND ultimaGeocodificacion IS NULL`).
+- Backfill: 2 depósitos Mowi geocodificados exitosamente.
 
-**Documentación oficial de los APIs:**
-- Mocis (Akeron): https://documenter.getpostman.com/view/18644794/UVJhCaAn
-- Andreani Developers: https://developers.andreani.com/document
+**🟡 Sub-fase 2.B — Endpoint API sucursales preferidas** (PENDIENTE)
+`GET /api/depositos/[id]/sucursales-courier/[courierId]`. Haversine puro contra BD, sin Google en runtime.
 
-**How to apply (3-4 horas):**
-1. Mocis adapter: revisar doc Akeron, identificar el campo correcto para `cpOrigen` en `/shipping/price` y enviarlo. Si Akeron rechaza con error de cobertura cuando el origen no aplica, el cotizador ya lo skipea.
-2. Andreani adapter: revisar doc developers, identificar el campo de origen en `/v1/tarifas` (probablemente `cpOrigen` o `codigoPostalOrigen`), enviarlo en la query.
-3. Agregar logging de request/response de cotización (con redacción de credenciales) para debugging futuro de tarifas raras.
-4. Smoke test 5 combinaciones: AMBA-AMBA, AMBA-Interior, Interior-AMBA, Interior-Interior, origen sin cobertura del courier.
+**🟡 Sub-fase 2.C — UI configuración sucursales preferidas** (PENDIENTE)
+Pantalla separada accesible desde listado de depósitos.
 
-**Bloquea:**
-Integración de couriers nuevos. Cualquier adapter nuevo replicaría el mismo bug si no se aclara la convención. Una vez resuelto este, documentar la convención en `lib/couriers/CourierInterface.ts` (JSDoc en `cotizar()` exigiendo respeto a `cpOrigen`).
+**🟡 Sub-fase 2.D — Lógica resolución `sucursalOrigen` en `AndreaniAdapter`** (PENDIENTE)
+
+**🟡 Sub-fase 2.E — Remitente real desde BD** (PENDIENTE)
+
+**🟡 Sub-fase 2.F — Tokens robustos** (24h Andreani / 6h Mocis) (PENDIENTE)
+
+**🟡 Sub-fase 2.G — Connection pooling `httpAgent.ts`** (PENDIENTE)
+
+**🟡 Sub-fase 2.H — Fix mismatch frontend `sucursal_origen`** (PENDIENTE)
+
+**🟡 Sub-fase 3-6 — Refactor restante** (PENDIENTE)
+Ver `docs/ARQUITECTURA-MULTICOURIER.md` para detalle.
 
 ## Otras deudas menores (no críticas, registradas para no perderlas)
 

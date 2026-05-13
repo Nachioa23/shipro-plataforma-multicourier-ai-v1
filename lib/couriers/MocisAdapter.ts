@@ -18,6 +18,15 @@ export class MocisAdapter implements ICourierIntegrator {
     this.clientSecret = clientSecret;
   }
 
+  // DEUDA 29 Sub-fase 2.G (no implementada por decisión):
+  // Connection pooling con HTTP Agent explícito fue evaluado y descartado.
+  // Node 18+ con undici embebido ya hace pooling per-host con keep-alive de
+  // 4s, suficiente para los flows internos de Shipro (cotizar+despachar
+  // consecutivos en <1s). El beneficio medible con volumen actual
+  // (~10 envíos/día) es marginal vs la latencia variable de los APIs de
+  // couriers (100-1000ms por request). Revisar si APM muestra handshake
+  // TLS como bottleneck real. Análisis completo en commit message de 2.G.
+
   // ==========================================
   // 1. AUTENTICACIÓN
   //

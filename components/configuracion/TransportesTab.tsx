@@ -46,7 +46,7 @@ export default function TransportesTab({ empresaActivaId }: Props) {
               const configCliente = (data.credencialesCliente || []).find((c: any) => c.nombreCourier === globalCourier.nombre);
 
               let credsPorDefecto: Record<string, string> = {};
-              if (globalCourier.nombre === 'Andreani') credsPorDefecto = { usuario: "", password: "", cliente: "", contrato_dom: "", contrato_suc: "", contrato_cambio: "", contrato_devolucion: "", sucursal_origen: "" };
+              if (globalCourier.nombre === 'Andreani') credsPorDefecto = { username: "", password: "", cliente: "", contrato_domicilio: "", contrato_sucursal: "", contrato_cambio: "", contrato_devolucion: "", id_sucursal_origen: "" };
               else if (globalCourier.nombre === "Moci's") credsPorDefecto = { client_api: "", client_secret: "" };
               else credsPorDefecto = { api_key: "", api_secret: "" };
 

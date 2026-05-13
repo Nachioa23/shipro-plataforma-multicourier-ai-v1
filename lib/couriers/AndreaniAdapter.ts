@@ -154,11 +154,29 @@ export class AndreaniAdapter implements ICourierIntegrator {
       destinoConfig = { sucursal: { id: params.sucursalDestinoId } };
     }
 
+    // DEUDA 29 Sub-fase 2.E: remitente parametrizado desde Empresa + Depósito.
+    // Logs warning cuando se usan fallbacks (visibilidad de uso indebido).
+    if (!params.remitente) {
+      console.warn('[andreani] WARN: despachar() sin params.remitente — usando fallback hardcoded Shipro');
+    }
+    if (params.remitente && !params.remitente.email) {
+      console.warn(`[andreani] WARN: empresa "${params.remitente.nombre}" (CUIT ${params.remitente.cuit}) sin email — usando fallback hardcoded`);
+    }
+    if (params.remitente && !params.remitente.telefono) {
+      console.warn(`[andreani] WARN: empresa "${params.remitente.nombre}" sin teléfono — usando fallback hardcoded`);
+    }
+
     const body = {
       contrato: contratoAUsar,
       origen: origenConfig,
       destino: destinoConfig,
-      remitente: { nombreCompleto: "Shipro / Cliente", email: "logistica@shipro.pro", documentoTipo: "CUIT", documentoNumero: "30712371729", telefonos: [{ tipo: 1, numero: "1155772580" }] },
+      remitente: {
+        nombreCompleto: params.remitente?.nombre || "Shipro / Cliente",
+        email: params.remitente?.email || "logistica@shipro.pro",
+        documentoTipo: "CUIT",
+        documentoNumero: params.remitente?.cuit || "30712371729",
+        telefonos: [{ tipo: 1, numero: params.remitente?.telefono || "1155772580" }],
+      },
       destinatario: [{ nombreCompleto: params.destinatarioNombre, eMail: params.email || "sin_mail@shipro.io", documentoTipo: "DNI", documentoNumero: params.dni || "11111111", telefonos: [{ tipo: 2, numero: params.telefono || "1100000000" }] }],
       bultos: [{
         kilos: paquetePrincipal?.pesoKg || 1,

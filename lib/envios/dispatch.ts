@@ -106,6 +106,23 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
     return { tracking: null, etiquetaUrl: null, tramos: [], error: "Credencial inactiva" };
   }
 
+  // DEUDA 29 Sub-fase 2.E: lookup de Empresa para construir el remitente real
+  // que se manda al courier (Andreani usa nombre + cuit en la etiqueta).
+  // Edge teórico: la FK garantiza existencia, pero defendemos contra borrado
+  // accidental devolviendo error parseable en lugar de explotar.
+  const empresa = await prisma.empresa.findUnique({
+    where: { id: credencial.empresaId },
+    select: { nombre: true, cuit: true },
+  });
+  if (!empresa) {
+    return {
+      tracking: null,
+      etiquetaUrl: null,
+      tramos: [],
+      error: `Empresa id=${credencial.empresaId} no encontrada`,
+    };
+  }
+
   const courierMainNombreLimpio = normalizarParaComparacion(courierNombreCanonico);
 
   // ============================================================
@@ -118,7 +135,7 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
       ? parsearCredencialesPropias(courierMainNombreLimpio, credencial.credencialesJson)
       : obtenerCredencialesShipro(courierMainNombreLimpio);
     motorMain = CourierFactory.crear(courierMainNombreLimpio, llavesMain);
-    paramsDespacho = construirParamsDespacho(input);
+    paramsDespacho = construirParamsDespacho(input, empresa);
   } catch (err: any) {
     console.warn(`[Shipro] Setup falló para courier ${courierNombreCanonico}:`, err?.message || err);
     return { tracking: null, etiquetaUrl: null, tramos: [], error: err?.message || "Error en setup del despacho" };
@@ -336,7 +353,10 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
 // HELPER: construcción de paramsDespacho
 // Factorizado del flujo principal para no duplicarlo entre los 3 casos.
 // ============================================================
-function construirParamsDespacho(input: DispatchInput): any {
+function construirParamsDespacho(
+  input: DispatchInput,
+  empresa: { nombre: string; cuit: string }
+): any {
   let tipoEntregaFormateado: "sucursal" | "domicilio" | "inversa" | "cambio" = "domicilio";
   const mod = input.modalidad?.toLowerCase() || "";
   if (mod.includes('sucursal')) tipoEntregaFormateado = "sucursal";
@@ -368,6 +388,16 @@ function construirParamsDespacho(input: DispatchInput): any {
     referencia: input.numeroOrden ? `ORDEN-${input.numeroOrden}` : `ORDEN-${Date.now()}`,
     tipoEntrega: tipoEntregaFormateado,
     origen: input.origen,  // DEUDA 4: datos del depósito real (puede ser undefined → adapter usa fallback)
+    // DEUDA 29 Sub-fase 2.E: remitente real desde Empresa (nombre + cuit) y
+    // Depósito (telefono + email vía input.origen). Andreani usa estos datos
+    // en la etiqueta física. Si falta telefono/email del depósito, el adapter
+    // usa fallbacks hardcoded con log warning [andreani] WARN.
+    remitente: {
+      nombre: empresa.nombre,
+      cuit: empresa.cuit,
+      telefono: input.origen?.telefono,
+      email: input.origen?.email,
+    },
   };
 }
 

@@ -69,6 +69,17 @@ export interface DespachoParams {
     telefono?: string;
     email?: string;
   };
+
+  // DEUDA 29 Sub-fase 2.E: remitente real desde Empresa + Depósito.
+  // Opcional para no romper adapters que no lo usen (Mocis es last-mile zonal,
+  // no maneja remitente). Andreani lo consume; si no viene, cae a fallback
+  // hardcoded con log warning (defense-in-depth).
+  remitente?: {
+    nombre: string;     // Empresa.nombre (razón social/comercial)
+    cuit: string;       // Empresa.cuit
+    telefono?: string;  // Deposito.contactoTelefono
+    email?: string;     // Deposito.contactoEmail (nullable en BD)
+  };
 }
 
 // ==========================================================

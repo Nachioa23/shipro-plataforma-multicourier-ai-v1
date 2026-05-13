@@ -7,7 +7,9 @@ export class MocisAdapter implements ICourierIntegrator {
   
   private tokenActual: string | null = null;
   private tokenExpira: number = 0;
-  
+  // DEUDA 29 Sub-fase 2.F: lock anti-race-condition para refresh de token.
+  private tokenPromise: Promise<string> | null = null;
+
   // Caché en memoria para no consultar las provincias en cada envío
   private provinciasAkeron: { id: number, name: string }[] = [];
 
@@ -18,19 +20,46 @@ export class MocisAdapter implements ICourierIntegrator {
 
   // ==========================================
   // 1. AUTENTICACIÓN
+  //
+  // DEUDA 29 Sub-fase 2.F: cache de token con expiración + lock anti-race.
+  //   - Margen de 5 min antes de exp (api_expire_in viene en epoch absoluto).
+  //   - Vida típica del token: 6h.
+  //   - Lock con tokenPromise para que N requests concurrentes con cache
+  //     vencido hagan UNA sola llamada a /auth/token.
+  //
+  // TODO Sub-fase 3: retry on 401 mid-request (mismo patrón que Andreani).
   // ==========================================
   private async getToken(): Promise<string> {
     const ahora = Math.floor(Date.now() / 1000);
-    // Reusamos el token si le queda más de 1 minuto de vida (dura 6 horas según DOCS)
-    if (this.tokenActual && this.tokenExpira > ahora + 60) return this.tokenActual;
+    const MARGEN_SEGUNDOS = 300; // 5 min
 
+    // Cache válido
+    if (this.tokenActual && this.tokenExpira > ahora + MARGEN_SEGUNDOS) {
+      return this.tokenActual;
+    }
+
+    // Refresh en vuelo: esperar el que ya está corriendo.
+    if (this.tokenPromise) {
+      return this.tokenPromise;
+    }
+
+    // Disparar nuevo refresh
+    this.tokenPromise = this.refreshToken();
+    try {
+      return await this.tokenPromise;
+    } finally {
+      this.tokenPromise = null;
+    }
+  }
+
+  private async refreshToken(): Promise<string> {
     const formData = new URLSearchParams();
     formData.append('client_api', this.clientApi);
     formData.append('client_secret', this.clientSecret);
 
     const res = await fetch(`${this.API_URL}/auth/token`, { method: 'POST', body: formData });
     const data = await res.json();
-    
+
     if (!data.status || !data.result || data.result.length === 0) {
       throw new Error("Moci's rechazó las credenciales. Verificá tu Client API y Secret.");
     }

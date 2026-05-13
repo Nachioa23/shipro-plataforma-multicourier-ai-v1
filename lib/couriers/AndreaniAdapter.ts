@@ -23,7 +23,14 @@ export interface CredencialesAndreani {
 export class AndreaniAdapter implements ICourierIntegrator {
   private API_URL = 'https://apis.andreani.com';
   private creds: CredencialesAndreani;
-  private tokenActual: string | null = null;
+
+  // DEUDA 29 Sub-fase 2.F: cache de token con expiración real (extraída del JWT)
+  // y lock anti-race-condition. La vida típica del token es 24h, pero la fuente
+  // de verdad es el claim `exp` del JWT mismo — Andreani NO devuelve un campo
+  // `expires_in` al top-level (solo `token` y `refreshToken`, ambos JWTs).
+  private tokenValor: string | null = null;
+  private tokenExpiraAt: number = 0;                  // epoch absoluto en segundos
+  private tokenPromise: Promise<string> | null = null; // lock: refresh en vuelo
 
   constructor(credenciales: CredencialesAndreani) {
     this.creds = credenciales;
@@ -31,24 +38,92 @@ export class AndreaniAdapter implements ICourierIntegrator {
 
   // ==============================================================
   // LOGIN Y MANEJO DE TOKEN
+  //
+  // Política de cache:
+  //   - Cache válido (expira en > 5min) → reutilizar.
+  //   - Cache vencido y NO hay refresh en vuelo → disparar refresh.
+  //   - Cache vencido y SÍ hay refresh en vuelo → esperar al mismo promise
+  //     (evita que N requests concurrentes peguen N veces a /login).
+  //   - Margen de 5min antes de exp para no servir tokens que vencen mid-request.
+  //
+  // El `exp` real se extrae del JWT (claim payload.exp). Si el JWT es
+  // malformado, fallback a +24h conservador (defense-in-depth).
   // ==============================================================
   private async getToken(): Promise<string> {
-    if (this.tokenActual) return this.tokenActual;
-    
+    const ahora = Math.floor(Date.now() / 1000);
+    const MARGEN_SEGUNDOS = 300; // 5 min
+
+    // Cache válido
+    if (this.tokenValor && this.tokenExpiraAt > ahora + MARGEN_SEGUNDOS) {
+      return this.tokenValor;
+    }
+
+    // Refresh en vuelo: esperar el que ya está corriendo (race-condition lock).
+    if (this.tokenPromise) {
+      return this.tokenPromise;
+    }
+
+    // Disparar nuevo refresh
+    this.tokenPromise = this.refreshToken();
+    try {
+      return await this.tokenPromise;
+    } finally {
+      this.tokenPromise = null;
+    }
+  }
+
+  /**
+   * Extrae el claim "exp" (epoch absoluto en segundos) del payload de un JWT.
+   * Devuelve null si el JWT está malformado o no tiene el claim.
+   */
+  private parseJwtExp(jwt: string): number | null {
+    try {
+      const parts = jwt.split('.');
+      if (parts.length !== 3) return null;
+      const pad = (4 - parts[1].length % 4) % 4;
+      const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/') + '='.repeat(pad);
+      const payload = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'));
+      return typeof payload.exp === 'number' ? payload.exp : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async refreshToken(): Promise<string> {
     const credencialesBase64 = Buffer.from(`${this.creds.username}:${this.creds.password}`).toString('base64');
-    
+
     const res = await fetch(`${this.API_URL}/login`, {
       method: 'GET',
       headers: { 'Authorization': `Basic ${credencialesBase64}` }
     });
 
     if (!res.ok) throw new Error("Falló la autenticación con Andreani");
-    
+
     const data = await res.json();
     if (!data.token) throw new Error("Andreani no devolvió el token");
-    
+
     const nuevoToken = String(data.token).trim();
-    this.tokenActual = nuevoToken;
+
+    // La expiración está embebida en el JWT (claim exp). Fallback a +24h si el
+    // JWT está malformado (defense-in-depth — verificado empíricamente que el
+    // token actual vive 24h, pero confiamos primero en el JWT por si cambia).
+    const ahora = Math.floor(Date.now() / 1000);
+    const expFromJwt = this.parseJwtExp(nuevoToken);
+    if (expFromJwt === null) {
+      console.warn('[andreani] WARN: no se pudo extraer claim exp del JWT. Usando fallback +24h.');
+    }
+
+    this.tokenValor = nuevoToken;
+    this.tokenExpiraAt = expFromJwt ?? (ahora + 86400);
+
+    // TODO Sub-fase futura: Andreani devuelve refreshToken en data.refreshToken
+    // (también JWT de 24h). Hoy NO lo usamos porque Basic Auth con credenciales
+    // fijas funciona siempre. Evaluarlo si Andreani limita llamadas a /login.
+    //
+    // TODO Sub-fase 3: retry on 401 mid-request. Si Andreani revoca el token
+    // entre getToken() y la llamada HTTP siguiente, hoy explota. Sub-fase 3
+    // captura 401 → resetea cache → reintenta 1 vez.
+
     return nuevoToken;
   }
 

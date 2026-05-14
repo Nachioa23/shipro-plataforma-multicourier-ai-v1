@@ -50,6 +50,13 @@ export interface DespachoParams {
   // Lista unificada para que TypeScript no tire errores
   tipoEntrega?: 'domicilio' | 'sucursal' | 'inversa' | 'cambio' | 'devolucion';
 
+  // DEUDA 29 Sub-fase 2.D.despachar: idExterno de la sucursal de imposición
+  // a usar como origen. Resolución: dispatch.ts consulta
+  // DepositoSucursalPreferida (depositoId + courierId) y pasa el idExterno
+  // resuelto. Si null/undefined, el adapter cae a fallback chain
+  // (creds.id_sucursal_origen → params.origen → hardcoded).
+  sucursalOrigenId?: string;
+
   // VITAL: Si es a sucursal, acá viene el ID de la sucursal elegida en el checkout
   sucursalDestinoId?: string;
 

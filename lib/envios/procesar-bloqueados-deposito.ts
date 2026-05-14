@@ -158,6 +158,11 @@ export async function procesarEnviosBloqueadosPorDeposito(empresaId: number): Pr
       courierNombreCanonico: envio.courier.nombre,
       // === DEUDA 29 Sub-fase 1.C.2 ===
       courierIdMain: envio.courierId,
+      // DEUDA 29 Sub-fase 2.D.despachar: depositoId para resolver sucursal
+      // preferida. En este flow envio.depositoId siempre está poblado (porque
+      // el destrabe ya asignó el depósito predeterminado antes de llegar acá),
+      // pero defensivamente normalizamos null → undefined.
+      depositoId: envio.depositoId ?? undefined,
       // tipoOrigen defensivo: el campo es String en BD, normalizamos al union.
       // Si el valor original era "drop_off_cliente", lo respetamos. Cualquier otro
       // (incluido default "recoleccion_courier") cae al recoleccion_courier.

@@ -48,6 +48,15 @@ export interface DispatchInput {
   // Sucursales opcionales (pass-through; UI las pobla en Sub-fase 6).
   sucursalOrigenId?: number | null;
   sucursalDestinoId?: number | null;
+
+  /**
+   * DEUDA 29 Sub-fase 2.D.despachar: ID del depósito de origen para resolver
+   * la sucursal de imposición preferida del cliente via DepositoSucursalPreferida.
+   * Opcional para compatibilidad — si no viene (caller no migrado o caso
+   * inversa), no se resuelve la preferencia y el adapter cae al fallback chain
+   * (creds.id_sucursal_origen → params.origen → hardcoded).
+   */
+  depositoId?: number;
 }
 
 export interface TramoSnapshot {
@@ -123,6 +132,46 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
     };
   }
 
+  // DEUDA 29 Sub-fase 2.D.despachar: resolver sucursal de imposición preferida
+  // para este (depósito, courier) si está configurada en BD. La preferencia
+  // tiene prioridad sobre creds.id_sucursal_origen. Skipear cuando:
+  //   - no viene depositoId (caller legacy / logística inversa)
+  //   - el courier no maneja sucursales (Mocis: tieneSucursales=false)
+  //   - la sucursal preferida fue soft-deleteada (coherente con 2.A: no
+  //     limpiar la tabla puente, el runtime tolera y cae al fallback)
+  let sucursalOrigenIdExterno: string | undefined;
+  if (input.depositoId) {
+    const courier = await prisma.courier.findUnique({
+      where: { id: input.courierIdMain },
+      select: { tieneSucursales: true },
+    });
+
+    if (courier?.tieneSucursales) {
+      const pref = await prisma.depositoSucursalPreferida.findUnique({
+        where: {
+          depositoId_courierId: {
+            depositoId: input.depositoId,
+            courierId: input.courierIdMain,
+          },
+        },
+        include: {
+          sucursal: { select: { idExterno: true, eliminada: true } },
+        },
+      });
+
+      if (pref && !pref.sucursal.eliminada) {
+        sucursalOrigenIdExterno = pref.sucursal.idExterno;
+      } else if (pref && pref.sucursal.eliminada) {
+        console.warn(
+          `[dispatch] WARN: DepositoSucursalPreferida ` +
+          `(deposito=${input.depositoId}, courier=${input.courierIdMain}) ` +
+          `apunta a sucursal eliminada → ignorando preferencia, ` +
+          `usando fallback creds.id_sucursal_origen`
+        );
+      }
+    }
+  }
+
   const courierMainNombreLimpio = normalizarParaComparacion(courierNombreCanonico);
 
   // ============================================================
@@ -135,7 +184,7 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
       ? parsearCredencialesPropias(courierMainNombreLimpio, credencial.credencialesJson)
       : obtenerCredencialesShipro(courierMainNombreLimpio);
     motorMain = CourierFactory.crear(courierMainNombreLimpio, llavesMain);
-    paramsDespacho = construirParamsDespacho(input, empresa);
+    paramsDespacho = construirParamsDespacho(input, empresa, sucursalOrigenIdExterno);
   } catch (err: any) {
     console.warn(`[Shipro] Setup falló para courier ${courierNombreCanonico}:`, err?.message || err);
     return { tracking: null, etiquetaUrl: null, tramos: [], error: err?.message || "Error en setup del despacho" };
@@ -355,7 +404,8 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
 // ============================================================
 function construirParamsDespacho(
   input: DispatchInput,
-  empresa: { nombre: string; cuit: string }
+  empresa: { nombre: string; cuit: string },
+  sucursalOrigenIdExterno?: string
 ): any {
   let tipoEntregaFormateado: "sucursal" | "domicilio" | "inversa" | "cambio" = "domicilio";
   const mod = input.modalidad?.toLowerCase() || "";
@@ -388,6 +438,10 @@ function construirParamsDespacho(
     referencia: input.numeroOrden ? `ORDEN-${input.numeroOrden}` : `ORDEN-${Date.now()}`,
     tipoEntrega: tipoEntregaFormateado,
     origen: input.origen,  // DEUDA 4: datos del depósito real (puede ser undefined → adapter usa fallback)
+    // DEUDA 29 Sub-fase 2.D.despachar: idExterno de la sucursal preferida del
+    // cliente para este depósito × courier (resuelto arriba en despacharCourier).
+    // Si undefined, el adapter cae al fallback chain (creds → origen → hardcoded).
+    sucursalOrigenId: sucursalOrigenIdExterno,
     // DEUDA 29 Sub-fase 2.E: remitente real desde Empresa (nombre + cuit) y
     // Depósito (telefono + email vía input.origen). Andreani usa estos datos
     // en la etiqueta física. Si falta telefono/email del depósito, el adapter

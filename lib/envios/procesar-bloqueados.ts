@@ -113,6 +113,10 @@ export async function procesarEnviosBloqueados(empresaId: number): Promise<Proce
       courierNombreCanonico: envio.courier.nombre,
       // === DEUDA 29 Sub-fase 1.C.2 ===
       courierIdMain: envio.courierId,
+      // DEUDA 29 Sub-fase 2.D.despachar: depositoId para resolver sucursal
+      // preferida. En envíos legacy depositoId puede ser null → undefined
+      // skipea el lookup (adapter cae a fallback creds.id_sucursal_origen).
+      depositoId: envio.depositoId ?? undefined,
       // tipoOrigen defensivo: el campo es String en BD, normalizamos al union.
       // Si el valor original era "drop_off_cliente", lo respetamos. Cualquier otro
       // (incluido default "recoleccion_courier") cae al recoleccion_courier.

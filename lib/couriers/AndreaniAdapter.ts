@@ -200,13 +200,18 @@ export class AndreaniAdapter implements ICourierIntegrator {
 
     const contratoAUsar = this.determinarContrato(params.tipoEntrega || 'domicilio', 'sucursal');
 
-    // Origen del despacho:
-    // 1. Si la credencial tiene id_sucursal_origen configurado → Andreani retira de esa sucursal.
-    // 2. Sino, si params.origen viene (DEUDA 4) → usar datos del depósito real del cliente.
-    // 3. Sino → fallback hardcoded (deuda futura: eliminar este fallback cuando todos los
-    //    callers pasen origen explícito; hoy se mantiene por compatibilidad temporal).
+    // DEUDA 29 Sub-fase 2.D.despachar: jerarquía de resolución de sucursal
+    // de imposición:
+    //   1. params.sucursalOrigenId (preferencia del cliente configurada en BD,
+    //      resuelta en dispatch.ts vía DepositoSucursalPreferida).
+    //   2. creds.id_sucursal_origen (.env o credenciales propias del cliente).
+    //   3. params.origen (CP del depósito real, DEUDA 4).
+    //   4. Fallback hardcoded (defense-in-depth, deuda futura: eliminar cuando
+    //      todos los callers pasen origen explícito).
     let origenConfig: any;
-    if (this.creds.id_sucursal_origen) {
+    if (params.sucursalOrigenId) {
+      origenConfig = { sucursal: { id: params.sucursalOrigenId } };
+    } else if (this.creds.id_sucursal_origen) {
       origenConfig = { sucursal: { id: this.creds.id_sucursal_origen } };
     } else if (params.origen) {
       origenConfig = {

@@ -313,6 +313,9 @@ export async function crearEnvio(input: CrearEnvioInput) {
       tipoOrigen: tipoOrigen ?? "recoleccion_courier",
       sucursalOrigenId: sucursalOrigenId ?? null,
       sucursalDestinoId: sucursalDestinoId ?? null,
+      // DEUDA 29 Sub-fase 2.D.despachar: depositoId para que dispatch.ts resuelva
+      // la sucursal de imposición preferida del cliente (DepositoSucursalPreferida).
+      depositoId: deposito.id,
       destinatarioNombre,
       calle: calle || "",
       altura: altura || "",

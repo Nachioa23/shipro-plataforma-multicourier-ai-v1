@@ -108,6 +108,10 @@ export async function POST(request: Request) {
       credencial: credencialMain,
       courierNombreCanonico: envio.courier.nombre,
       courierIdMain: envio.courierId,
+      // DEUDA 29 Sub-fase 2.D.despachar: depositoId para resolver sucursal
+      // preferida. En envíos legacy depositoId puede ser null → undefined
+      // skipea el lookup (adapter cae a fallback creds.id_sucursal_origen).
+      depositoId: envio.depositoId ?? undefined,
       // tipoOrigen defensivo: el campo es String en BD, normalizamos al union.
       tipoOrigen: envio.tipoOrigen === "drop_off_cliente" ? "drop_off_cliente" : "recoleccion_courier",
       // TODO DEUDA 29 Sub-fase 6: persistir sucursalOrigenId/sucursalDestinoId del

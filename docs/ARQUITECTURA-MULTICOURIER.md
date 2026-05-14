@@ -45,7 +45,11 @@ Esta lista enumera cada decision tomada durante la sesion de diseno. Claude Code
 10. **Columnas explicitas para todo campo que se use en logica**: aceptaB2B, aceptaB2C, tieneBuzonInteligente, aceptaAdmision, aceptaEntrega, aceptaDevolucion.
 11. **Soft delete con fechaUltimaConfirmacion.** Las sucursales no se borran porque hay envios historicos que las referencian.
 12. **Sincronizacion manual desde admin_shipro en el MVP** (boton "Sincronizar sucursales de X" con logging). Sincronizacion automatica queda como deuda post-MVP.
-13. **Sucursal preferida por deposito**: la plataforma sugiere la mas cercana con Haversine, el cliente confirma con un click. NO se guarda automaticamente. Coherente con "el usuario manda" (Escenario 3 de DEUDA 4).
+13. **Sucursal del deposito por courier**: la asignacion depende de la modalidad operativa del courier configurada por el cliente en Mis Transportes.
+    - Si el courier recoge en el deposito del cliente: la sucursal se **asigna automaticamente** buscando cual atiende el CP del deposito. El cliente NO elige. La plataforma confia en la operativa del courier.
+    - Si el cliente lleva los paquetes a una sucursal del courier (drop-off): el cliente **elige manualmente** entre las sucursales del courier, con sugerencia automatica de la mas cercana al deposito. La eleccion se guarda en DepositoSucursalPreferida.
+    - Si hay courier recolector consolidador: la sucursal del courier recolector se asigna automaticamente (por CP del deposito del cliente). La sucursal de los couriers de ultima milla tambien se asigna automaticamente, pero usando el CP del deposito del courier recolector (no del cliente).
+    Almacenamiento: solo se persiste la eleccion manual del cliente (caso drop-off). Las asignaciones automaticas se calculan al momento del despacho usando SucursalCourierCp, para que reflejen siempre la operativa vigente del courier.
 14. **Haversine en servidor para distancias, Google Maps solo para autocompletado de direcciones.** Haversine es matematica pura, gratis y sin rate limit. Google Maps se reserva para donde realmente se necesita.
 15. **Performance geoespacial: bounding box + Haversine.** Pre-filtrar por rango aritmetico de latitud/longitud (usa indice), despues calcular distancia Haversine solo sobre el subconjunto.
 
@@ -95,6 +99,12 @@ Esta lista enumera cada decision tomada durante la sesion de diseno. Claude Code
 
 46. **UX comparativa en 2 secciones:** "Envio a domicilio" y "Retiro en punto". Cada seccion con sus opciones ordenadas segun configuracion del cliente.
 47. **SLA pactado en checkout** (lo que el courier promete), SLA real en motor de ruteo interno.
+
+48. **Modalidad de asignacion de sucursal por courier (logica hibrida BD + codigo).** Cada courier tiene su propia politica de como se asigna la sucursal operativa para un deposito. La plataforma se adapta a 3 tipos:
+    - `por_cp_origen`: el courier define que sucursal atiende cada CP (ejemplo: Andreani). La plataforma usa SucursalCourierCp para auto-asignar.
+    - `libre_cercania`: el courier acepta operar desde cualquier sucursal (decision interna del courier que camioneta envia). El cliente elige entre las top 3-5 sucursales mas cercanas (ejemplo potencial: OCA, Correo Argentino).
+    - `sucursal_unica`: el courier tiene 1 sola sucursal operativa. Asignacion trivial (ejemplo: Mocis).
+    Implementacion: el tipo vive en el codigo del adapter de cada courier (no hay campo en BD por ahora). Si en el futuro aparece necesidad de cambiar la modalidad sin tocar codigo, evaluamos agregar campo `modalidadAsignacionSucursal` en tabla Courier. YAGNI hasta que se justifique con un caso real.
 
 ---
 
@@ -745,21 +755,89 @@ FUNCION filtrarCouriersCandidatos(empresa, deposito, destino, tipoEntrega):
 
 ---
 
-## 8. UX Y WIZARD DE CONFIGURACION
+## 8. UX Y FLOW DE CONFIGURACION
 
-### Wizard de activacion de courier (5 pasos)
+### Onboarding completo: las 3 condiciones para operar
 
-**Paso 1 - Elegir courier:** Vista del catalogo con logos. Solo couriers activos.
+Un cliente no puede crear envios hasta tener completas las 3 condiciones:
 
-**Paso 2 - Credenciales:** Si empresa.modeloAHabilitado == true: opciones A o B. Si false: solo B. Default: Modelo A si habilitado.
+1. **Couriers activos y configurados** (/configuracion/transportes)
+2. **Depositos con sucursales asignadas** (/configuracion/depositos)
+3. **Plata cargada o cuenta corriente aprobada** (Billetera)
 
-**Paso 3 - First-Mile:** Tres tarjetas: "Courier retira" (mismo_courier) | "Recolector externo" (consolidador, solo si hay courier consolidador activo) | "Yo llevo a sucursal" (drop_off_cliente, solo si courier acepta). Default: mismo_courier.
+El orden de las pestañas refleja el orden logico: el cliente primero define con quien va a operar (couriers), despues donde va a operar desde (depositos), despues como paga.
 
-**Paso 4 - Sucursal de imposicion:** Solo si courier tiene sucursales. Sugiere la mas cercana con Haversine. Cliente confirma o elige otra.
+### Pestaña 1 — Mis Transportes
 
-**Paso 5 - Ajustes comerciales:** Markup %, costo fijo, fecha caducidad. Colapsable. Defaults en 0.
+Wizard de activacion por courier (4 pasos):
 
-**Resumen antes de confirmar.**
+- **Paso 1:** Elegir courier del catalogo (solo couriers activos).
+- **Paso 2:** Credenciales. Si empresa.modeloAHabilitado == true: opciones A o B. Si false: solo B. Default: Modelo A si habilitado.
+- **Paso 3:** Modalidad de First-Mile (3 opciones):
+    - "Este courier recoge en mi deposito" (mismo_courier)
+    - "Yo llevo los paquetes a su sucursal" (drop_off_cliente, solo si courier acepta drop-off)
+    - "Este courier consolida envios de otros" (consolidador, solo si courier puedeConsolidar)
+- **Paso 4:** Ajustes comerciales (markup %, costo fijo, fecha caducidad). Colapsable. Defaults en 0.
+
+**Nota:** ya NO existe el paso "Sucursal de imposicion" en este wizard. La sucursal se asigna/elige en la pestaña Depositos, segun la modalidad de First-Mile elegida aca.
+
+### Pestaña 2 — Depositos
+
+**Pre-requisito:** el cliente debe tener al menos 1 courier activo en Mis Transportes antes de poder crear un deposito. Si entra a Depositos sin couriers activos, ve un mensaje con boton directo a Mis Transportes.
+
+**Al crear o editar un deposito**, el formulario tiene dos partes:
+
+**Parte A — Datos del deposito (actual):** nombre, direccion, contacto, codigo postal, localidad, provincia, horarios, observaciones.
+
+**Parte B — Configuracion por courier (nuevo):** una seccion por cada courier activo del cliente. El comportamiento depende de la modalidad de First-Mile configurada en Mis Transportes y de la modalidad de asignacion de sucursal del courier (decision 48):
+
+**Caso 1 — Courier recoge en mi deposito + courier usa `por_cp_origen`:**
+
+Auto-asignacion. Sin selector. La plataforma muestra que sucursal queda asignada para transparencia. Ejemplo:
+
+> Andreani:
+> ℹ️ Auto-asignado: San Miguel (Centro) — atiende tu CP 1614
+> Andreani decide que sucursal recoge segun tu zona.
+
+**Caso 2 — Yo llevo los paquetes a sucursal del courier (drop-off):**
+
+Dropdown con sugerencia automatica de la mas cercana. El cliente puede cambiar. Ejemplo:
+
+> Andreani — Elegi donde vas a llevar tus paquetes:
+> [ Seleccionar sucursal ▼ ]
+>   ├── San Miguel (Centro) — 3.82 km ✓ Sugerida
+>   ├── Jose C. Paz (Centro) — 5.68 km 📮 Cubre tu CP
+>   ├── Tigre — 8.44 km
+>   └── ... [Ver mas]
+
+**Caso 3 — Courier es consolidador (recolector):**
+
+Las 2 sucursales se calculan automaticamente. La sucursal del courier recolector se asigna por CP del deposito del cliente. La sucursal del courier de ultima milla se asigna por CP del deposito del courier recolector. Ejemplo:
+
+> Mocis (recolector):
+> ℹ️ Auto-asignado: Deposito Central Mocis — unica sucursal operativa
+>
+> Andreani (entrega ultima milla):
+> ℹ️ Auto-asignado: Sucursal X — atiende el CP del deposito Mocis
+
+**Caso 4 — Courier sin sucursales que atiendan el CP del deposito:**
+
+Aviso claro. El courier queda bloqueado para ese deposito especifico. Ejemplo:
+
+> Hop:
+> ⚠️ Hop no opera en la zona de este deposito (CP 9405).
+> No vas a poder usar Hop desde aca.
+
+### Regla de bloqueo selectivo
+
+Si un cliente tiene 3 couriers activos y solo configuro sucursal para 2 en un deposito determinado, **el deposito puede operar con los 2 configurados** pero NO con el tercero. El cliente ve el deposito con un cartel claro indicando que falta.
+
+### Cambios posteriores
+
+- **Cliente activa un courier nuevo despues de tener depositos:** todos los depositos quedan con flag "configuracion incompleta para ese courier" hasta que el cliente entre a editar cada uno.
+- **Cliente elimina un courier:** las preferencias de sucursal vinculadas a ese courier se ignoran automaticamente. No se eliminan en BD (auditoria).
+- **Cliente modifica modalidad de First-Mile de un courier:** los depositos vinculados quedan marcados como "necesita revision" hasta que el cliente confirme la nueva configuracion.
+- **Cliente modifica direccion del deposito (cambia CP):** auto-asignaciones se recalculan al guardar. Si quedan sucursales sin asignacion valida, aviso claro al cliente.
 
 ### Cotizacion comparativa (checkout)
 
@@ -852,10 +930,21 @@ Torre de Control: calidad de datos por cliente (verde/amarillo/rojo). Panel del 
 - Archivos: crear app/api/admin/sucursales/sync/route.ts.
 - Listo cuando: admin_shipro puede sincronizar sucursales.
 
-**Sub-fase 6: UI de configuracion (2-3 dias)**
-- Wizard 5 pasos en TransportesTab + seleccion sucursal con Haversine + validaciones.
-- Archivos: components/configuracion/TransportesTab.tsx + componentes wizard.
-- Listo cuando: gerente_cliente puede activar courier con wizard completo.
+**Sub-fase 6: UI de configuracion (3-4 dias)**
+
+Sub-fase 6 cubre la UI de las pestañas que completan el flow de onboarding. NO es un solo commit; se divide en sub-commits manejables:
+
+- **6.A — TransportesTab actualizado:** ajustar wizard de activacion a la nueva estructura (4 pasos en vez de 5, sin paso de "Sucursal de imposicion"). Ya tiene modoFirstMile + courierRecolectorId implementados desde 1.C.3.
+
+- **6.B — DepositoForm extendido con Parte B:** agregar al formulario de crear/editar deposito la seccion de configuracion por courier (los 4 casos descriptos en seccion 8). Consume endpoint 2.B (sucursales cercanas) + nuevo endpoint de auto-asignacion por CP.
+
+- **6.C — Validaciones de bloqueo operacional:** implementar la regla "no opera sin tener las 3 condiciones completas." Backend valida en cada accion operativa. Frontend muestra carteles claros en cada pestaña.
+
+- **6.D — Endpoint de auto-asignacion:** nuevo helper `GET /api/depositos/[id]/sucursal-asignada/[courierId]` que devuelve que sucursal del courier atiende el CP del deposito (usando SucursalCourierCp). Reusado en Parte B del formulario y al momento del despacho.
+
+- **6.E — Manejo de cambios posteriores:** logica de re-marcado de depositos como "incompletos" cuando el cliente modifica algo en Mis Transportes.
+
+Listo cuando: cliente nuevo puede recorrer el onboarding completo (Mis Transportes → Depositos → Billetera) y operar.
 
 ### Fase post-MVP (7 meses)
 

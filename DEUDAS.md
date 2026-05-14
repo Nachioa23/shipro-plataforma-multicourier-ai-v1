@@ -490,7 +490,7 @@ Implementar como helper `lib/permisos.ts` con `puedeEditarCampo(rol, campo): boo
 
 ## DEUDA 29 — Adapters de couriers cotizan ignorando `cpOrigen` (CRÍTICA pre-deploy MVP)
 
-**Estado:** PARCIALMENTE RESUELTA (5 de 9 sub-fases cerradas).
+**Estado:** SUB-FASE 2 CERRADA FUNCIONALMENTE (8 sub-fases resueltas + 2 decisiones documentadas; única pendiente activa: 2.C UI).
 
 **Identificada:** 2026-05-04 durante smoke test final de DEUDA 4 (Test 4).
 
@@ -518,21 +518,76 @@ Implementar como helper `lib/permisos.ts` con `puedeEditarCampo(rol, campo): boo
 - Política híbrida: stale + señal de desactualización ante fallo (`latitud IS NOT NULL AND ultimaGeocodificacion IS NULL`).
 - Backfill: 2 depósitos Mowi geocodificados exitosamente.
 
-**🟡 Sub-fase 2.B — Endpoint API sucursales preferidas** (PENDIENTE)
-`GET /api/depositos/[id]/sucursales-courier/[courierId]`. Haversine puro contra BD, sin Google en runtime.
+**✅ Sub-fase 2.B — Endpoint API sucursales preferidas** (miércoles 13 de mayo, commit `5d03552`, +189 líneas)
+- Helper: `lib/geo/haversine.ts` (función pura, fórmula clásica, radio Tierra 6371 km).
+- Endpoint: `GET /api/depositos/[id]/sucursales-courier/[courierId]`.
+- 3 queries Prisma paralelas: sucursales activas + matches por CP + preferencia configurada.
+- Haversine en JS: top 20 sucursales ordenadas por cercanía si depósito tiene lat/lng.
+- Defense-in-depth: proxy → ownership → courier check → response.
+- 6/6 tests end-to-end validados con curl (login real + cookie de cliente@demo.com).
+- TODO futuro: DRY del `calcularDistancia` inline en `/api/envios/sucursales/route.ts`.
 
-**🟡 Sub-fase 2.C — UI configuración sucursales preferidas** (PENDIENTE)
-Pantalla separada accesible desde listado de depósitos.
+**🟡 Sub-fase 2.C — UI configuración sucursales preferidas** (PENDIENTE — única pendiente activa)
+Pantalla separada accesible desde listado de depósitos. Consume endpoint 2.B y persiste en `DepositoSucursalPreferida` que 2.D.despachar ya consume.
 
-**🟡 Sub-fase 2.D — Lógica resolución `sucursalOrigen` en `AndreaniAdapter`** (PENDIENTE)
+**Sub-fase 2.D — Lógica resolución `sucursalOrigen`** (dividida en cotizar + despachar tras hallazgo empírico)
 
-**🟡 Sub-fase 2.E — Remitente real desde BD** (PENDIENTE)
+  **⚪ Sub-fase 2.D.cotizar — Decisión: no implementar** (jueves 14 de mayo, commit `df25818`, empty commit)
+  Tras 13 curls de verificación empírica a `GET /v1/tarifas`, se confirmó que Andreani NO acepta override de origen en cotización — la tarifa es función exclusiva de `(contrato, cliente, cpDestino, peso, volumen)`. Implementar este sub-commit sería código no-op. Implicancia comercial documentada en commit message: para clientes fuera de AMBA, la solución es Modelo B (credenciales propias del cliente con contrato firmado desde su zona), no código de adapter.
 
-**🟡 Sub-fase 2.F — Tokens robustos** (24h Andreani / 6h Mocis) (PENDIENTE)
+  **✅ Sub-fase 2.D.despachar — Sucursal de imposición resuelta desde BD** (jueves 14 de mayo, commit `a3d79c0`, +90 / -8 líneas en 7 archivos)
+  - Jerarquía 4-niveles en `AndreaniAdapter.despachar()`:
+    1. `params.sucursalOrigenId` (preferencia BD ← NUEVO)
+    2. `creds.id_sucursal_origen` (.env o credenciales propias)
+    3. `params.origen` (CP depósito, DEUDA 4)
+    4. Fallback hardcoded (defense-in-depth)
+  - `dispatch.ts` agrega lookup de `DepositoSucursalPreferida` (skip inteligente: !depositoId o Mocis sin sucursales).
+  - Manejo de sucursal soft-deleteada: log warning + fallback (no rompe).
+  - 4 callers de `despacharCourier` modificados con `depositoId: envio.depositoId`.
+  - Logística inversa NO tocada (no usa `despacharCourier`).
+  - Cero modificaciones a `cotizar()` (irresoluble por contrato, ver 2.D.cotizar).
 
-**🟡 Sub-fase 2.G — Connection pooling `httpAgent.ts`** (PENDIENTE)
+**✅ Sub-fase 2.E — Remitente real desde BD** (miércoles 13 de mayo, commit `e9ce533`, +62 / -3 líneas en 3 archivos)
+- Reemplaza remitente hardcoded ("Shipro / Cliente" + CUIT 30712371729) por datos reales.
+- Lookup de Empresa (nombre + cuit) en `dispatch.ts` después del check `credencial.activo`.
+- 3 logs `[andreani] WARN` condicionales: sin remitente, sin email, sin teléfono.
+- Approach centralizado en `dispatch.ts` (3 archivos vs alternativa de tocar 7 callers).
 
-**🟡 Sub-fase 2.H — Fix mismatch frontend `sucursal_origen`** (PENDIENTE)
+**✅ Sub-fase 2.F — Tokens robustos con cache + lock + expiración real** (miércoles 13 de mayo, commit `9e21777`, +115 / -11 líneas en 2 archivos)
+- Verificación empírica previa: curl a `/login` confirmó shape `{token, refreshToken}` (sin `expires_in` al top-level). Expiración embebida en JWT (claim `exp`).
+- `AndreaniAdapter`: cache con margen 5 min + lock `tokenPromise` anti-race + `parseJwtExp` helper + fallback +24h.
+- `MocisAdapter`: margen 60s → 300s + lock idéntico + `refreshToken` extraído.
+- TODO Sub-fase 3: retry on 401 mid-request en ambos adapters.
+
+**⚪ Sub-fase 2.G — Connection pooling: decisión de no implementar** (miércoles 13 de mayo, commit `178c259`, +18 líneas de comentarios doc)
+- Análisis empírico: Node v24 con undici embebido ya hace pooling per-host con `keepAliveTimeout=4s`.
+- Flows internos de Shipro (cotizar+despachar consecutivos en <1s) YA reúsan conexión automáticamente.
+- Beneficio medible con volumen actual (~10 envíos/día): 1-3 segundos/día ahorrados. Marginal vs latencia variable de couriers.
+- Riesgos descartados: `setGlobalDispatcher` afecta TODO el proyecto; per-fetch dispatcher requeriría boilerplate en 16 `fetch()` calls sin beneficio medible.
+- Revisitar cuando: APM/observabilidad incorporada, métricas muestren handshake TLS como bottleneck, volumen >1000+ envíos/día.
+
+**✅ Sub-fase 2.H — Fix mismatch keys credenciales Andreani** (miércoles 13 de mayo, commit `ee88368`, +1 / -1 línea)
+- 4 keys del frontend renombradas para alinear con backend `parsearPropias`:
+  - `usuario` → `username` (CRÍTICO: backend valida obligatoriamente, clientes Modelo B bloqueados de plano)
+  - `contrato_dom` → `contrato_domicilio`
+  - `contrato_suc` → `contrato_sucursal`
+  - `sucursal_origen` → `id_sucursal_origen`
+- 0 filas afectadas en BD (`usaCredencialesPropias=0` para todos los clientes actuales).
+- 4 keys opcionales no cubiertas (contratos compuestos cruzados): fuera de scope MVP, para sub-fase futura de UX completa.
+
+### Insight arquitectónico documentado
+
+**Commit `346658e`** (jueves 14 de mayo, empty commit): documenta el cambio de modelo mental para clientes multi-zona tras hallazgo de 2.D.cotizar + investigación en docs oficial Andreani + plataformas competidoras (Tiendanube, Empretienda, PrestaShop).
+
+**Hallazgo principal:** Andreani modela contratos por MODALIDAD (`CONTRATO_DOMICILIO`, `CONTRATO_SUCURSAL`), no por zona geográfica. La zona vive en el concepto operativo "Sucursal de Imposición" configurado caso por caso con ejecutivo comercial.
+
+**Distinción crítica:** Sucursal de Imposición (donde el cliente entrega el paquete) ≠ Sucursal de Distribución (donde se entrega al destinatario final).
+
+**Oportunidad competitiva identificada:** Tiendanube tiene feature "Multidepósito" pero NO calcula tarifa por depósito (solo desde dirección principal, documentado por ellos). Shipro puede resolver este caso real para clientes multi-zona.
+
+**Modelo de datos propuesto para futuro refactor:** `Empresa → CredencialCourier → ContratoCourier (N) → DepositoSucursalImposicion (mapeo)`. Pendiente: 5 preguntas para validar con ejecutivo Andreani antes de implementar.
+
+### Pendientes
 
 **🟡 Sub-fase 3-6 — Refactor restante** (PENDIENTE)
 Ver `docs/ARQUITECTURA-MULTICOURIER.md` para detalle.

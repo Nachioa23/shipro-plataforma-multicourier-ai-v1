@@ -205,7 +205,7 @@ export default function TransportesTab({ empresaActivaId }: Props) {
 
                   <div className="space-y-8">
                     <div>
-                      <h5 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-2"><Package className="w-4 h-4 text-emerald-500" /> 2. Estrategia de Despacho</h5>
+                      <h5 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-2"><Package className="w-4 h-4 text-emerald-500" /> 2. Modalidad de First-Mile</h5>
                       {/* DEUDA 29 Sub-fase 1.C.3: dropdown con los 3 valores válidos del schema.
                           La opción "consolidador" se muestra solo si hay couriers consolidadores
                           disponibles distintos al actual (no tiene sentido ser su propio recolector). */}
@@ -281,6 +281,17 @@ export default function TransportesTab({ empresaActivaId }: Props) {
                         </div>
                       </div>
                     </div>
+                  </div>
+
+                  {/* DEUDA 29 Sub-fase 6.A: nota de señalización del flow de onboarding.
+                      Aparece después de configurar el courier, dirige al cliente al
+                      siguiente paso (Depósitos) según la decisión 47 del documento
+                      ARQUITECTURA-MULTICOURIER.md (3 condiciones para operar). */}
+                  <div className="md:col-span-2 bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
+                    <span className="text-xl flex-shrink-0" aria-hidden="true">💡</span>
+                    <p className="text-sm text-amber-900 leading-relaxed">
+                      <strong>Próximo paso:</strong> una vez que tengas tus couriers configurados, andá a <strong>"Depósitos"</strong> para definir desde dónde van a operar.
+                    </p>
                   </div>
                 </div>
               )}

@@ -11,38 +11,38 @@ datasource db {
 // 1. NÚCLEO DEL NEGOCIO (Multi-Tenant)
 // ==========================================
 model Empresa {
-  id                  Int          @id @default(autoincrement())
-  nombre              String
-  cuit                String       @unique
-  activo              Boolean      @default(true) // <--- ¡ESTE ES EL CAMPO VITAL QUE FALTABA!
+  id     Int     @id @default(autoincrement())
+  nombre String
+  cuit   String  @unique
+  activo Boolean @default(true) // <--- ¡ESTE ES EL CAMPO VITAL QUE FALTABA!
 
-  apiKey              String?      @unique
-  apiKeyActiva        Boolean      @default(true)
-  apiKeyCreadaEn      DateTime?
+  apiKey         String?   @unique
+  apiKeyActiva   Boolean   @default(true)
+  apiKeyCreadaEn DateTime?
 
   // --- FINANZAS Y BILLETERA ---
-  saldoActivo         Float        @default(0.0)
-  modalidadPago       String       @default("POSTPAGO") // PREPAGO (Billetera) o POSTPAGO (Crédito)
-  limiteDescubierto   Float        @default(0.0)        // Cuánto le permitimos adeudar
-  
-  ordenamientoDefault String       @default("PRECIO_ASC") // PRECIO_ASC, SLA, HISTORICO
-  
-  usuarios            Usuario[]
-  envios              Envio[]
-  manifiestos         Manifiesto[]
-  credenciales        CredencialCourier[]
-  encuestasNPS        EncuestaNPS[]
-  movimientos         MovimientoFinanciero[]
-  liquidaciones       LiquidacionMensual[]   // NUEVO: Agrupador de facturas a fin de mes
-  depositos           Deposito[]             // DEUDA 4: depósitos físicos del cliente
+  saldoActivo       Float  @default(0.0)
+  modalidadPago     String @default("POSTPAGO") // PREPAGO (Billetera) o POSTPAGO (Crédito)
+  limiteDescubierto Float  @default(0.0) // Cuánto le permitimos adeudar
+
+  ordenamientoDefault String @default("PRECIO_ASC") // PRECIO_ASC, SLA, HISTORICO
+
+  usuarios      Usuario[]
+  envios        Envio[]
+  manifiestos   Manifiesto[]
+  credenciales  CredencialCourier[]
+  encuestasNPS  EncuestaNPS[]
+  movimientos   MovimientoFinanciero[]
+  liquidaciones LiquidacionMensual[] // NUEVO: Agrupador de facturas a fin de mes
+  depositos     Deposito[] // DEUDA 4: depósitos físicos del cliente
 
   // DEUDA 29: si true, el cliente puede usar credenciales Shipro (Modelo A) al activar
   // couriers. Inmutabilidad direccional: gerente_cliente puede ir A→B (obtener
   // credenciales propias), pero NO B→A. Decidido por admin_shipro en onboarding.
-  modeloAHabilitado   Boolean      @default(false)
+  modeloAHabilitado Boolean @default(false)
 
-  createdAt           DateTime     @default(now())
-  reglasRuteo         ReglaRuteo[]
+  createdAt   DateTime     @default(now())
+  reglasRuteo ReglaRuteo[]
 }
 
 // ==========================================
@@ -52,29 +52,29 @@ model Empresa {
 // El cliente elige al crear envío manual cuando hay >1.
 // ==========================================
 model Deposito {
-  id                Int      @id @default(autoincrement())
+  id Int @id @default(autoincrement())
 
-  empresaId         Int
-  empresa           Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId Int
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
 
-  nombre            String
-  esPredeterminado  Boolean  @default(false)
-  activo            Boolean  @default(true)
+  nombre           String
+  esPredeterminado Boolean @default(false)
+  activo           Boolean @default(true)
 
   // Contacto del depósito (para coordinar colectas)
-  contactoNombre    String
-  contactoTelefono  String
-  contactoEmail     String?
+  contactoNombre   String
+  contactoTelefono String
+  contactoEmail    String?
 
   // Dirección física (datos para etiqueta y CP origen)
-  direccionCalle    String
-  direccionAltura   String
-  direccionPiso     String?
-  direccionDpto     String?
-  codigoPostal      String
-  localidad         String
-  provincia         String
-  pais              String   @default("Argentina")
+  direccionCalle  String
+  direccionAltura String
+  direccionPiso   String?
+  direccionDpto   String?
+  codigoPostal    String
+  localidad       String
+  provincia       String
+  pais            String  @default("Argentina")
 
   // DEUDA 29 Sub-fase 2.B.0: coordenadas geocodificadas vía Google Maps.
   // Pobladas al crear/editar el depósito (cambios de dirección) y por
@@ -82,48 +82,51 @@ model Deposito {
   // Nullable: si Google falla o no resuelve, el depósito queda sin coords
   // (degradación elegante: el endpoint de sucursales cercanas excluye/aplica
   // fallback según política del caller).
-  latitud                Float?
-  longitud               Float?
-  ultimaGeocodificacion  DateTime?
+  latitud               Float?
+  longitud              Float?
+  ultimaGeocodificacion DateTime?
 
   // Horarios estructurados (JSON: 7 días × 3 franjas estándar 09-12 / 12-15 / 15-18)
-  horarios          String
+  horarios String
 
-  observaciones     String?
+  observaciones String?
 
   // Soft delete (DEUDA 4): los depósitos no se borran físicamente porque
   // tienen valor histórico (envíos los referencian). El endpoint DELETE
   // en realidad hace UPDATE eliminado=true, activo=false, esPredeterminado=false.
   // La FK desde Envio usa onDelete: Restrict (defense-in-depth: aunque el
   // endpoint nunca borra, la BD rechaza un DELETE accidental).
-  eliminado         Boolean  @default(false)
+  eliminado Boolean @default(false)
 
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  enviosOrigen      Envio[]
+  enviosOrigen Envio[]
 
   // DEUDA 29: sucursal preferida del cliente para imposición/recolección, por courier.
   sucursalesPreferidas DepositoSucursalPreferida[]
+
+  // DEUDA 29 Sub-fase 6.D.1: configuración operativa de cada courier en este depósito.
+  courierConfigs DepositoCourierConfig[]
 
   @@index([empresaId])
 }
 
 model Usuario {
-  id            Int      @id @default(autoincrement())
-  email         String   @unique
-  password      String   
-  nombre        String
-  rol           String   @default("operador_cliente")
+  id       Int    @id @default(autoincrement())
+  email    String @unique
+  password String
+  nombre   String
+  rol      String @default("operador_cliente")
 
-  empresaId     Int?
-  empresa       Empresa? @relation(fields: [empresaId], references: [id])
+  empresaId Int?
+  empresa   Empresa? @relation(fields: [empresaId], references: [id])
 }
 
 model Courier {
-  id                Int      @id @default(autoincrement())
-  nombre            String   @unique
-  activo            Boolean  @default(true)
+  id     Int     @id @default(autoincrement())
+  nombre String  @unique
+  activo Boolean @default(true)
 
   // --- CAMPOS NUEVOS PARA EL ABM MAESTRO ---
   emailSoporte      String?
@@ -134,12 +137,17 @@ model Courier {
   // --- DEUDA 29: Capacidades de cadena ---
   // Se usan en pre-filtro al cotizar y al validar combinaciones cliente↔courier.
   // Cada courier real declara qué puede hacer; la plataforma filtra candidatos.
-  puedeRecogerDomicilio        Boolean @default(true)
-  puedeConsolidar              Boolean @default(false)
-  puedeEntregarDomicilio       Boolean @default(true)
-  puedeEntregarSucursal        Boolean @default(false)
-  aceptaDropOff                Boolean @default(false)
-  tieneSucursales              Boolean @default(false)
+  puedeRecogerDomicilio  Boolean @default(true)
+  puedeConsolidar        Boolean @default(false)
+  cpDepositoConsolidador String?
+  // DEUDA 29 Sub-fase 6.D.1: CP del depósito central del courier consolidador.
+  // Se usa cuando este courier es elegido como recolector por un cliente —
+  // los couriers de última milla cotizan desde este CP en vez del CP del
+  // depósito del cliente. NULL para couriers no consolidadores.
+  puedeEntregarDomicilio Boolean @default(true)
+  puedeEntregarSucursal  Boolean @default(false)
+  aceptaDropOff          Boolean @default(false)
+  tieneSucursales        Boolean @default(false)
 
   // --- DEUDA 29: Capacidades de logística inversa (granulares) ---
   aceptaInversaCambioMercaderia Boolean @default(false)
@@ -147,33 +155,40 @@ model Courier {
   aceptaInversaDropOff          Boolean @default(false)
 
   // --- DEUDA 29: Performance — timeout por courier al cotizar ---
-  timeoutCotizacionMs          Int     @default(7000)
+  timeoutCotizacionMs Int @default(7000)
 
-  envios            Envio[]
-  nomencladores     Nomenclador[]
-  encuestasNPS      EncuestaNPS[]
-  metricasSLA       MetricaSLA[]
-  slas              SlaCourier[]
+  envios        Envio[]
+  nomencladores Nomenclador[]
+  encuestasNPS  EncuestaNPS[]
+  metricasSLA   MetricaSLA[]
+  slas          SlaCourier[]
 
   // --- DEUDA 29: Relaciones nuevas ---
-  sucursales        SucursalCourier[]
-  tramos            TramoEnvio[]
-  latencias         MetricaCourierLatencia[]
+  sucursales                    SucursalCourier[]
+  tramos                        TramoEnvio[]
+  latencias                     MetricaCourierLatencia[]
   depositosSucursalesPreferidas DepositoSucursalPreferida[]
+
+  // DEUDA 29 Sub-fase 6.D.1: relaciones inversas con DepositoCourierConfig.
+  // Dos relaciones porque un courier puede ser:
+  // (a) el courier "principal" al que se configura una modalidad operativa
+  // (b) el courier "recolector" elegido como consolidador para otros couriers
+  depositoConfigsComoCourier    DepositoCourierConfig[] @relation("ConfigCourierPrincipal")
+  depositoConfigsComoRecolector DepositoCourierConfig[] @relation("ConfigCourierRecolector")
 }
 
 // ==========================================
 // 1.5. CREDENCIALES COURIERS (El Cerebro)
 // ==========================================
 model CredencialCourier {
-  id                     Int      @id @default(autoincrement())
-  empresaId              Int
-  empresa                Empresa  @relation(fields: [empresaId], references: [id])
+  id        Int     @id @default(autoincrement())
+  empresaId Int
+  empresa   Empresa @relation(fields: [empresaId], references: [id])
 
-  nombreCourier          String   
-  activo                 Boolean  @default(true)
+  nombreCourier String
+  activo        Boolean @default(true)
 
-  usaCredencialesPropias Boolean  @default(true)
+  usaCredencialesPropias Boolean @default(true)
   credencialesJson       String?
 
   // Tipo de cuenta para esta combinación cliente↔courier (DEUDA 16).
@@ -181,7 +196,7 @@ model CredencialCourier {
   // PREPAGO: validar saldoActivo >= costo antes de despachar.
   // POSTPAGO: validar saldoActivo + limiteDescubierto >= costo.
   // Si no alcanza: envío queda en estado BLOQUEADO_SALDO sin tracking real.
-  tipoCuenta             String?
+  tipoCuenta String?
 
   // --- DEUDA 29: First-Mile reemplaza el string libre `courierRecolector` legacy ---
   // Valores válidos:
@@ -190,35 +205,35 @@ model CredencialCourier {
   //   courier de Last-Mile. Requiere courierRecolectorId no nulo.
   // - "drop_off_cliente": el cliente lleva el paquete a una sucursal del
   //   courier de Last-Mile. NO requiere courierRecolectorId.
-  modoFirstMile          String   @default("mismo_courier")
-  courierRecolectorId    Int?
+  modoFirstMile       String @default("mismo_courier")
+  courierRecolectorId Int?
 
-  ofreceDomicilio        Boolean  @default(true)
-  ofreceSucursal         Boolean  @default(true)
+  ofreceDomicilio Boolean @default(true)
+  ofreceSucursal  Boolean @default(true)
 
   // --- REGLAS DE PRICING PARTICULAR ---
-  tarifaIncluyeIva       Boolean  @default(true)
-  ajusteTarifaPorcentaje Float    @default(0.0) // Markup en %
-  markupFijo             Float    @default(0.0) // Fee fijo por paquete (Ej: +$500)
-  fechaCaducidadPromo    DateTime?              // Fecha límite de esta condición comercial
+  tarifaIncluyeIva       Boolean   @default(true)
+  ajusteTarifaPorcentaje Float     @default(0.0) // Markup en %
+  markupFijo             Float     @default(0.0) // Fee fijo por paquete (Ej: +$500)
+  fechaCaducidadPromo    DateTime? // Fecha límite de esta condición comercial
 
-  ordenamientoDefault    String   @default("PRECIO_ASC")
+  ordenamientoDefault String @default("PRECIO_ASC")
 
-  serviciosActivos       String?
+  serviciosActivos String?
 
   // DEUDA 29: campos eliminados (tipoAlcance, provinciasCobertura, localidadesActivas).
   // Cobertura ahora se consulta al courier en cada cotización (trust the source of truth).
 
-  ordenamientoDomicilio  String   @default("PRECIO_ASC")
-  ordenamientoSucursal   String   @default("PRECIO_ASC")
+  ordenamientoDomicilio String @default("PRECIO_ASC")
+  ordenamientoSucursal  String @default("PRECIO_ASC")
 
-  requiereSeguro         Boolean  @default(false)
-  slaPromedioHs          Int      @default(48) 
+  requiereSeguro Boolean @default(false)
+  slaPromedioHs  Int     @default(48)
 
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  @@unique([empresaId, nombreCourier]) 
+  @@unique([empresaId, nombreCourier])
 }
 
 // ==========================================
@@ -226,300 +241,300 @@ model CredencialCourier {
 // ==========================================
 
 model Direccion {
-  id            Int      @id @default(autoincrement())
-  nombre        String?
-  documento     String?
-  telefono      String?
-  email         String?
-  cp            String
-  calle         String?
-  altura        String?
-  piso          String?
-  dpto          String?
-  localidad     String?
-  provincia     String?
-  pais          String   @default("Argentina")
-  observacion   String?
+  id          Int     @id @default(autoincrement())
+  nombre      String?
+  documento   String?
+  telefono    String?
+  email       String?
+  cp          String
+  calle       String?
+  altura      String?
+  piso        String?
+  dpto        String?
+  localidad   String?
+  provincia   String?
+  pais        String  @default("Argentina")
+  observacion String?
 
-  enviosOrigen  Envio[]  @relation("EnvioOrigen")
-  enviosDestino Envio[]  @relation("EnvioDestino")
+  enviosOrigen  Envio[] @relation("EnvioOrigen")
+  enviosDestino Envio[] @relation("EnvioDestino")
 }
 
 model OrdenExterna {
-  id                     Int      @id @default(autoincrement())
-  canal                  String?  
-  idTienda               String?  
-  ordenId                String?  
-  referencia             String?  
-  mercadolibreShipmentId String?  
-  
-  envio                  Envio?
+  id                     Int     @id @default(autoincrement())
+  canal                  String?
+  idTienda               String?
+  ordenId                String?
+  referencia             String?
+  mercadolibreShipmentId String?
+
+  envio Envio?
 }
 
 // ==========================================
 // 2.3 FINANZAS DE ENVÍO (El Escudo Contable)
 // ==========================================
 model FinanzasEnvio {
-  id                      Int      @id @default(autoincrement())
-  
+  id Int @id @default(autoincrement())
+
   // 1. Lo que mostramos / cobramos
-  precioMostrado          Float?   // Lo que el comprador vio en el checkout
-  precioFactura           Float?   // Lo que Shipro le debita a la empresa
+  precioMostrado          Float? // Lo que el comprador vio en el checkout
+  precioFactura           Float? // Lo que Shipro le debita a la empresa
   porcentajePrecioFactura Float?
-  valorDeclarado          Float?   // Seguro de la mercadería (Terceros)
-  
+  valorDeclarado          Float? // Seguro de la mercadería (Terceros)
+
   // 2. Auditoría del Courier (Escudo Tarifario)
-  precioProveedor         Float?   // Costo cotizado al crear la etiqueta
-  costoCourierEsperado    Float?   // NUEVO: Lo que DEBERÍA cobrar el courier según el aforo final
-  costoCourierFacturado   Float?   // NUEVO: Lo que REALMENTE vino en el Excel del courier
-  estadoAuditoria         String   @default("PENDIENTE") // OK, DOBLE_COBRO, SOBREPRECIO_RECLAMAR
-  facturaCourierRef       String?  // NUEVO: Escudo anti-UPS (Ej: "FC-0001-9992")
+  precioProveedor       Float? // Costo cotizado al crear la etiqueta
+  costoCourierEsperado  Float? // NUEVO: Lo que DEBERÍA cobrar el courier según el aforo final
+  costoCourierFacturado Float? // NUEVO: Lo que REALMENTE vino en el Excel del courier
+  estadoAuditoria       String  @default("PENDIENTE") // OK, DOBLE_COBRO, SOBREPRECIO_RECLAMAR
+  facturaCourierRef     String? // NUEVO: Escudo anti-UPS (Ej: "FC-0001-9992")
 
   // 3. Auditoría de Peso Físico
-  pesoCobrado             Float?   // Peso cotizado inicialmente (Ej: 1kg)
-  pesoAforado             Float?   // Peso real facturado a fin de mes (Ej: 5kg)
-  costoAforo              Float?   // Diferencia monetaria del desvío cobrada al cliente
-  
-  // 4. Auditoría de Ruteo Inteligente (Costo de Oportunidad)
-  fugaFinanciera          Float?   @default(0.0) // Diferencia $ vs la mejor opción
-  courierSugerido         String?  // Quién era el más barato para esta modalidad
-  servicioSugerido        String?  // Qué servicio era el más barato
+  pesoCobrado Float? // Peso cotizado inicialmente (Ej: 1kg)
+  pesoAforado Float? // Peso real facturado a fin de mes (Ej: 5kg)
+  costoAforo  Float? // Diferencia monetaria del desvío cobrada al cliente
 
-  envio                   Envio?
+  // 4. Auditoría de Ruteo Inteligente (Costo de Oportunidad)
+  fugaFinanciera   Float?  @default(0.0) // Diferencia $ vs la mejor opción
+  courierSugerido  String? // Quién era el más barato para esta modalidad
+  servicioSugerido String? // Qué servicio era el más barato
+
+  envio Envio?
 }
 
 // ==========================================
 // 2.5 EL EXTRACTO BANCARIO 
 // ==========================================
 model MovimientoFinanciero {
-  id              Int      @id @default(autoincrement())
-  empresaId       Int
-  empresa         Empresa  @relation(fields: [empresaId], references: [id])
-  
-  tipo            String   // Ej: "DEBITO_ENVIO", "CREDITO_RECARGA", "AJUSTE_AFORO"
-  monto           Float    // Negativo (débito) o Positivo (crédito)
-  saldoPosterior  Float    // Foto del saldo después del movimiento
-  
-  referencia      String?  // Ej: "Tracking #12345" o "Transf. MP #999"
-  descripcion     String?  // Ej: "Ajuste por aforo de 1kg a 5kg"
-  
-  envioId         Int?     // Vinculación directa a un paquete (opcional)
-  envio           Envio?   @relation(fields: [envioId], references: [id])
-  
-  fecha           DateTime @default(now())
+  id        Int     @id @default(autoincrement())
+  empresaId Int
+  empresa   Empresa @relation(fields: [empresaId], references: [id])
+
+  tipo           String // Ej: "DEBITO_ENVIO", "CREDITO_RECARGA", "AJUSTE_AFORO"
+  monto          Float // Negativo (débito) o Positivo (crédito)
+  saldoPosterior Float // Foto del saldo después del movimiento
+
+  referencia  String? // Ej: "Tracking #12345" o "Transf. MP #999"
+  descripcion String? // Ej: "Ajuste por aforo de 1kg a 5kg"
+
+  envioId Int? // Vinculación directa a un paquete (opcional)
+  envio   Envio? @relation(fields: [envioId], references: [id])
+
+  fecha DateTime @default(now())
 }
 
 // ==========================================
 // 2.6 LIQUIDACIÓN MENSUAL (El Cierre Fiscal)
 // ==========================================
 model LiquidacionMensual {
-  id               Int      @id @default(autoincrement())
-  empresaId        Int
-  empresa          Empresa  @relation(fields: [empresaId], references: [id])
-  
-  periodo          String   // Ej: "2026-04" o "Abril 2026"
-  montoTotal       Float    // La suma de todos los envíos y aforos del mes
-  estado           String   @default("EMITIDA") // EMITIDA, PAGADA
-  
-  excelProformaUrl String?  // El link al Excel consolidado con el detalle
-  facturaXubioUrl  String?  // El link al PDF legal de la AFIP generado por Xubio
-  
-  fechaCreacion    DateTime @default(now())
-  
-  envios           Envio[]  // Todos los envíos que entraron en esta liquidación
+  id        Int     @id @default(autoincrement())
+  empresaId Int
+  empresa   Empresa @relation(fields: [empresaId], references: [id])
+
+  periodo    String // Ej: "2026-04" o "Abril 2026"
+  montoTotal Float // La suma de todos los envíos y aforos del mes
+  estado     String @default("EMITIDA") // EMITIDA, PAGADA
+
+  excelProformaUrl String? // El link al Excel consolidado con el detalle
+  facturaXubioUrl  String? // El link al PDF legal de la AFIP generado por Xubio
+
+  fechaCreacion DateTime @default(now())
+
+  envios Envio[] // Todos los envíos que entraron en esta liquidación
 }
 
 // ==========================================
 // 3. EL CORAZÓN OPERATIVO (El Envío)
 // ==========================================
 model Envio {
-  id                Int        @id @default(autoincrement())
+  id Int @id @default(autoincrement())
 
-  trackingNumber    String     @unique
+  trackingNumber         String  @unique
   // DEUDA 29: trackingFirstMile eliminado. La info ahora vive en TramoEnvio.
   // Verificado pre-refactor: 0 envíos productivos referenciaban este campo.
   diasPrometidosCheckout Int?
-  numeroOrden       String?
+  numeroOrden            String?
 
   // DEUDA 29: cómo arrancó el envío.
   // - "recoleccion_courier": un courier (mismo o consolidador) retira del depósito.
   // - "drop_off_cliente": el cliente llevó el paquete a una sucursal del courier.
-  tipoOrigen        String     @default("recoleccion_courier")
+  tipoOrigen String @default("recoleccion_courier")
 
-  etiquetaUrl       String?    
-  
-  pesoReal          Float
-  pesoVolumetrico   Float?   
-  pesoFacturado     Float?    
-  fragil            Boolean   @default(false)
-  
-  tipo              String?   
-  modalidad         String    @default("Estándar") 
-  servicioId        String?   
-  
-  estadoActual      String    @default("IMPRESO")
-  
+  etiquetaUrl String?
+
+  pesoReal        Float
+  pesoVolumetrico Float?
+  pesoFacturado   Float?
+  fragil          Boolean @default(false)
+
+  tipo       String?
+  modalidad  String  @default("Estándar")
+  servicioId String?
+
+  estadoActual String @default("IMPRESO")
+
   // NUEVO: Control de Liquidación (Evita facturar dos veces)
-  estadoLiquidacion String    @default("PENDIENTE") // PENDIENTE, LIQUIDADO
+  estadoLiquidacion String              @default("PENDIENTE") // PENDIENTE, LIQUIDADO
   liquidacionId     Int?
   liquidacion       LiquidacionMensual? @relation(fields: [liquidacionId], references: [id])
 
-  fechaImpresion    DateTime  @default(now())   
-  fechaColecta      DateTime?  // Cuándo el courier hizo la recolección física
-  fechaEntrega      DateTime?  // Cuándo llegó a manos del cliente
-  
-  empresaId         Int
-  empresa           Empresa   @relation(fields: [empresaId], references: [id])
-  
-  courierId         Int
-  courier           Courier   @relation(fields: [courierId], references: [id])
+  fechaImpresion DateTime  @default(now())
+  fechaColecta   DateTime? // Cuándo el courier hizo la recolección física
+  fechaEntrega   DateTime? // Cuándo llegó a manos del cliente
 
-  origenId          Int?
-  origen            Direccion? @relation("EnvioOrigen", fields: [origenId], references: [id])
+  empresaId Int
+  empresa   Empresa @relation(fields: [empresaId], references: [id])
+
+  courierId Int
+  courier   Courier @relation(fields: [courierId], references: [id])
+
+  origenId Int?
+  origen   Direccion? @relation("EnvioOrigen", fields: [origenId], references: [id])
 
   // DEUDA 4: referencia al Deposito que originó el envío. La Direccion en
   // origenId es un snapshot al momento de creación; depositoId apunta al
   // registro vivo (que el cliente puede haber editado después).
   // onDelete: Restrict — defense-in-depth contra borrado físico. El endpoint
   // DELETE hace soft delete (eliminado=true). La BD rechaza un DELETE accidental.
-  depositoId        Int?
-  deposito          Deposito?  @relation(fields: [depositoId], references: [id], onDelete: Restrict)
+  depositoId Int?
+  deposito   Deposito? @relation(fields: [depositoId], references: [id], onDelete: Restrict)
 
-  destinoId         Int?
-  destino           Direccion? @relation("EnvioDestino", fields: [destinoId], references: [id])
+  destinoId Int?
+  destino   Direccion? @relation("EnvioDestino", fields: [destinoId], references: [id])
 
-  ordenExternaId    Int?       @unique
-  ordenExterna      OrdenExterna? @relation(fields: [ordenExternaId], references: [id])
+  ordenExternaId Int?          @unique
+  ordenExterna   OrdenExterna? @relation(fields: [ordenExternaId], references: [id])
 
-  finanzasId        Int?       @unique
-  finanzas          FinanzasEnvio? @relation(fields: [finanzasId], references: [id])
+  finanzasId Int?           @unique
+  finanzas   FinanzasEnvio? @relation(fields: [finanzasId], references: [id])
 
-  manifiestoId      Int?
-  manifiesto        Manifiesto? @relation(fields: [manifiestoId], references: [id])
+  manifiestoId Int?
+  manifiesto   Manifiesto? @relation(fields: [manifiestoId], references: [id])
 
-  eventos           EventoTracking[]
-  tickets           TicketSoporte[]
-  movimientos       MovimientoFinanciero[]
-  encuestaNPS       EncuestaNPS?
+  eventos     EventoTracking[]
+  tickets     TicketSoporte[]
+  movimientos MovimientoFinanciero[]
+  encuestaNPS EncuestaNPS?
 
   // DEUDA 29: cadena de tramos (recolección, entrega, ciclo_completo).
   // Cada tramo tiene su propio courier responsable y trackingExterno.
-  tramos            TramoEnvio[]
+  tramos TramoEnvio[]
 }
 
 // ==========================================
 // 4. TRAZABILIDAD (Historial de Estados)
 // ==========================================
 model EventoTracking {
-  id            Int      @id @default(autoincrement())
-  estado        String   
-  observacion   String?
-  fecha         DateTime @default(now())
-  
-  envioId       Int
-  envio         Envio    @relation(fields: [envioId], references: [id], onDelete: Cascade)
+  id          Int      @id @default(autoincrement())
+  estado      String
+  observacion String?
+  fecha       DateTime @default(now())
+
+  envioId Int
+  envio   Envio @relation(fields: [envioId], references: [id], onDelete: Cascade)
 }
 
 // ==========================================
 // 5. CONFIGURACIÓN Y REGLAS DE NEGOCIO
 // ==========================================
 model Nomenclador {
-  id            Int      @id @default(autoincrement())
-  estadoCrudo   String   
-  codigoApi     String?  
-  estadoShipro  String?  
-  
-  courierId     Int
-  courier       Courier  @relation(fields: [courierId], references: [id])
+  id           Int     @id @default(autoincrement())
+  estadoCrudo  String
+  codigoApi    String?
+  estadoShipro String?
 
-  @@unique([courierId, estadoCrudo]) 
+  courierId Int
+  courier   Courier @relation(fields: [courierId], references: [id])
+
+  @@unique([courierId, estadoCrudo])
 }
 
 // ==========================================
 // 6. MESA DE AYUDA (Atención al Cliente)
 // ==========================================
 model TicketSoporte {
-  id            Int      @id @default(autoincrement())
-  motivo        String   
-  estado        String   @default("ABIERTO") 
-  observacion   String?  
-  
-  fechaCreacion DateTime @default(now())
+  id          Int     @id @default(autoincrement())
+  motivo      String
+  estado      String  @default("ABIERTO")
+  observacion String?
+
+  fechaCreacion DateTime  @default(now())
   fechaCierre   DateTime?
 
-  envioId       Int
-  envio         Envio    @relation(fields: [envioId], references: [id], onDelete: Cascade)
+  envioId Int
+  envio   Envio @relation(fields: [envioId], references: [id], onDelete: Cascade)
 
-  auditorias    AuditoriaSoporte[]
+  auditorias AuditoriaSoporte[]
 }
 
 // ==========================================
 // 7. AUDITORÍA Y TRAZABILIDAD (CRM)
 // ==========================================
 model AuditoriaSoporte {
-  id            Int      @id @default(autoincrement())
-  accion        String   
-  detalle       String?  
-  fecha         DateTime @default(now())
-  
-  usuarioEmail  String?  
-  
-  ticketId      Int
-  ticket        TicketSoporte @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  id      Int      @id @default(autoincrement())
+  accion  String
+  detalle String?
+  fecha   DateTime @default(now())
+
+  usuarioEmail String?
+
+  ticketId Int
+  ticket   TicketSoporte @relation(fields: [ticketId], references: [id], onDelete: Cascade)
 }
 
 // ==========================================
 // 8. AUDITORÍA DE CHECKOUTS (El Peaje)
 // ==========================================
 model AuditoriaCheckout {
-  id                 Int      @id @default(autoincrement())
-  tienda             String   
-  comprador          String
-  email              String
-  telefono           String?
-  direccionCruda     String   
-  
-  score              Int      @default(0)
-  problemas          String?  
-  
-  calle              String?
-  altura             String?
-  piso               String?
-  dpto               String?
-  cp                 String?
-  localidad          String?
-  provincia          String?
-  entrecalles        String?
+  id             Int     @id @default(autoincrement())
+  tienda         String
+  comprador      String
+  email          String
+  telefono       String?
+  direccionCruda String
 
-  resuelto           Boolean  @default(false)
-  fechaCreacion      DateTime @default(now())
+  score     Int     @default(0)
+  problemas String?
+
+  calle       String?
+  altura      String?
+  piso        String?
+  dpto        String?
+  cp          String?
+  localidad   String?
+  provincia   String?
+  entrecalles String?
+
+  resuelto      Boolean  @default(false)
+  fechaCreacion DateTime @default(now())
 }
 
 // ==========================================
 // 9. DATOS MAESTROS (Geografía Argentina)
 // ==========================================
 model Provincia {
-  id          Int         @id @default(autoincrement())
-  nombre      String      @unique 
-  
+  id     Int    @id @default(autoincrement())
+  nombre String @unique
+
   localidades Localidad[]
 }
 
 model Localidad {
-  id          Int         @id @default(autoincrement())
-  nombre      String      
-  
+  id     Int    @id @default(autoincrement())
+  nombre String
+
   provinciaId Int
-  provincia   Provincia   @relation(fields: [provinciaId], references: [id], onDelete: Cascade)
-  
-  codigos     CodigoPostal[] 
+  provincia   Provincia @relation(fields: [provinciaId], references: [id], onDelete: Cascade)
+
+  codigos CodigoPostal[]
 }
 
 model CodigoPostal {
-  id          Int         @id @default(autoincrement())
-  codigo      String      @unique 
-  
-  localidades Localidad[] 
+  id     Int    @id @default(autoincrement())
+  codigo String @unique
+
+  localidades Localidad[]
 }
 
 // ==========================================
@@ -527,84 +542,84 @@ model CodigoPostal {
 // ==========================================
 model Manifiesto {
   id                Int      @id @default(autoincrement())
-  numeroCorrelativo Int      
+  numeroCorrelativo Int
   fechaCreacion     DateTime @default(now())
   courier           String
   cantidadPaquetes  Int
-  pdfUrl            String?  
-  
-  empresaId         Int
-  empresa           Empresa  @relation(fields: [empresaId], references: [id])
-  
-  envios            Envio[]  
+  pdfUrl            String?
+
+  empresaId Int
+  empresa   Empresa @relation(fields: [empresaId], references: [id])
+
+  envios Envio[]
 }
 
 // ==========================================
 // 11. EXPERIENCIA DE CLIENTE (NPS Transaccional)
 // ==========================================
 model EncuestaNPS {
-  id                   Int      @id @default(autoincrement())
-  
+  id Int @id @default(autoincrement())
+
   // Q1: NPS Principal (0-10)
-  score                Int      
-  categoria            String   // PROMOTOR, PASIVO, DETRACTOR (Calculado automáticamente)
-  
+  score     Int
+  categoria String // PROMOTOR, PASIVO, DETRACTOR (Calculado automáticamente)
+
   // Q2: Motivo Principal
-  comentario           String?  
-  
+  comentario String?
+
   // Q3: Experiencia de Entrega
-  experienciaEntrega   String?  // Ej: "A tiempo", "Demorado", "Paquete dañado"
-  
+  experienciaEntrega String? // Ej: "A tiempo", "Demorado", "Paquete dañado"
+
   // Q4: Satisfacción Producto
-  satisfaccionProducto Int?     // Escala 1-5
-  
+  satisfaccionProducto Int? // Escala 1-5
+
   // Q5: Intención de Recompra
-  probabilidadRecompra Int?     // Escala 0-10
-  
+  probabilidadRecompra Int? // Escala 0-10
+
   // Q6: Sugerencia de Mejora
-  sugerenciaMejora     String?  
+  sugerenciaMejora String?
 
   // --- DATOS DE CONTEXTO ---
-  slaCumplido          Boolean? // Cruzamos si el correo cumplió el SLA vs lo que el cliente sintió
-  cpDestino            String?
-  provincia            String?
-  modalidad            String?  
-  
-  envioId              Int      @unique
-  envio                Envio    @relation(fields: [envioId], references: [id], onDelete: Cascade)
-  
-  empresaId            Int
-  empresa              Empresa  @relation(fields: [empresaId], references: [id])
-  
-  courierId            Int
-  courier              Courier  @relation(fields: [courierId], references: [id])
+  slaCumplido Boolean? // Cruzamos si el correo cumplió el SLA vs lo que el cliente sintió
+  cpDestino   String?
+  provincia   String?
+  modalidad   String?
 
-  fechaVoto            DateTime @default(now())
+  envioId Int   @unique
+  envio   Envio @relation(fields: [envioId], references: [id], onDelete: Cascade)
+
+  empresaId Int
+  empresa   Empresa @relation(fields: [empresaId], references: [id])
+
+  courierId Int
+  courier   Courier @relation(fields: [courierId], references: [id])
+
+  fechaVoto DateTime @default(now())
 }
 
 // ==========================================
 // 12. MOTOR DE RUTEO INTELIGENTE (Reglas Globales)
 // ==========================================
 model ReglaRuteo {
-  id                Int      @id @default(autoincrement())
-  
+  id Int @id @default(autoincrement())
+
   // ---> AGREGAMOS ESTO PARA QUE CADA CLIENTE TENGA SUS REGLAS <---
-  empresaId         Int?     // Si es NULL, es una plantilla global de Shipro
-  empresa           Empresa? @relation(fields: [empresaId], references: [id])
-  
-  nombre            String   // Ej: "Protección de Margen" o "Clientes VIP"
-  prioridad         Int      // El orden de ejecución (1 se ejecuta primero)
-  
-  condicionVariable String   // Ej: "VALOR_CARRITO", "PESO_PAQUETE", "PROVINCIA_DESTINO"
-  condicionOperador String   // Ej: "MAYOR_A", "MENOR_A", "ENTRE", "IGUAL_A"
-  condicionValor1   Float?   // Ej: 80000
-  condicionValor2   Float?   // Ej: 200000 
-  
-  accionTipo        String   // Ej: "PRIORIZAR_SLA", "TOPE_COSTO_PORCENTAJE", "FORZAR_COURIER"
-  accionValor       String?  // Ej: "10" o "1" 
-  
-  activa            Boolean  @default(false) // Por defecto apagadas para que el cliente decida
-  fechaCreacion     DateTime @default(now())
+  empresaId Int? // Si es NULL, es una plantilla global de Shipro
+  empresa   Empresa? @relation(fields: [empresaId], references: [id])
+
+  nombre    String // Ej: "Protección de Margen" o "Clientes VIP"
+  prioridad Int // El orden de ejecución (1 se ejecuta primero)
+
+  condicionVariable String // Ej: "VALOR_CARRITO", "PESO_PAQUETE", "PROVINCIA_DESTINO"
+  condicionOperador String // Ej: "MAYOR_A", "MENOR_A", "ENTRE", "IGUAL_A"
+  condicionValor1   Float? // Ej: 80000
+  condicionValor2   Float? // Ej: 200000 
+
+  accionTipo  String // Ej: "PRIORIZAR_SLA", "TOPE_COSTO_PORCENTAJE", "FORZAR_COURIER"
+  accionValor String? // Ej: "10" o "1" 
+
+  activa             Boolean  @default(false) // Por defecto apagadas para que el cliente decida
+  fechaCreacion      DateTime @default(now())
   fechaActualizacion DateTime @updatedAt
 }
 
@@ -613,36 +628,36 @@ model ReglaRuteo {
 // ==========================================
 
 model MetricaSLA {
-  id                 Int      @id @default(autoincrement())
-  
-  courierId          Int
-  courier            Courier  @relation(fields: [courierId], references: [id], onDelete: Cascade)
-  
-  provinciaDestino   String   // Ej: "Córdoba"
-  
+  id Int @id @default(autoincrement())
+
+  courierId Int
+  courier   Courier @relation(fields: [courierId], references: [id], onDelete: Cascade)
+
+  provinciaDestino String // Ej: "Córdoba"
+
   // La matemática pre-calculada
-  slaPromedioHs      Int      // El SLA real calculado (Ej: 55)
-  muestraEnvios      Int      // Envíos que formaron el promedio (Ej: 42)
-  
+  slaPromedioHs Int // El SLA real calculado (Ej: 55)
+  muestraEnvios Int // Envíos que formaron el promedio (Ej: 42)
+
   fechaActualizacion DateTime @default(now()) @updatedAt
 
   // Evitamos que haya dos métricas para el mismo courier y destino
-  @@unique([courierId, provinciaDestino]) 
+  @@unique([courierId, provinciaDestino])
 }
 
 model Feriado {
   id          Int      @id @default(autoincrement())
-  fecha       DateTime @unique  // Ej: 2026-05-01 (1 de Mayo)
-  descripcion String?           // Ej: "Día del Trabajador"
+  fecha       DateTime @unique // Ej: 2026-05-01 (1 de Mayo)
+  descripcion String? // Ej: "Día del Trabajador"
   activo      Boolean  @default(true)
 }
 
 model SlaCourier {
-  id           Int      @id @default(autoincrement())
+  id           Int     @id @default(autoincrement())
   courierId    Int
-  zonaNombre   String   // Ejemplo: "Interior 1", "AMBA", "Patagonia"
-  diasPactados Int      // Ejemplo: 3
-  courier      Courier  @relation(fields: [courierId], references: [id])
+  zonaNombre   String // Ejemplo: "Interior 1", "AMBA", "Patagonia"
+  diasPactados Int // Ejemplo: 3
+  courier      Courier @relation(fields: [courierId], references: [id])
 
   @@unique([courierId, zonaNombre])
 }
@@ -656,16 +671,16 @@ model SlaCourier {
 // Tabla única para todos los couriers; columnas explícitas en lo que se usa para
 // lógica (filtros, índices), JSON solo para datos de display.
 model SucursalCourier {
-  id              Int      @id @default(autoincrement())
+  id Int @id @default(autoincrement())
 
-  courierId       Int
-  courier         Courier  @relation(fields: [courierId], references: [id])
+  courierId Int
+  courier   Courier @relation(fields: [courierId], references: [id])
 
   // Identidad
-  idExterno       String   // ID que el courier usa en su API
-  codigo          String?  // Código corto humano (ej. "SFN", "CNQ")
-  nombre          String   // Nombre legible (ej. "SANTA FE (CENTRO)")
-  tipo            String   @default("sucursal_propia")
+  idExterno String // ID que el courier usa en su API
+  codigo    String? // Código corto humano (ej. "SFN", "CNQ")
+  nombre    String // Nombre legible (ej. "SANTA FE (CENTRO)")
+  tipo      String  @default("sucursal_propia")
   // Valores: "sucursal_propia" | "punto_red" | "locker"
 
   // Dirección
@@ -676,11 +691,11 @@ model SucursalCourier {
   codigoPostal    String
   localidad       String
   provincia       String
-  pais            String   @default("Argentina")
+  pais            String  @default("Argentina")
 
   // Geolocalización (crítico para búsqueda de cercanía con Haversine)
-  latitud         Float?
-  longitud        Float?
+  latitud  Float?
+  longitud Float?
 
   // Capacidades operativas (columnas indexables, NO JSON)
   aceptaAdmision        Boolean @default(false)
@@ -691,50 +706,83 @@ model SucursalCourier {
   tieneBuzonInteligente Boolean @default(false)
 
   // Atención
-  horariosJson    String?  // JSON estructurado con horarios por día
-  telefono        String?
-  email           String?
+  horariosJson            String? // JSON estructurado con horarios por día
+  telefono                String?
+  email                   String?
   seHaceAtencionAlCliente Boolean @default(false)
 
   // Estado y auditoría
-  activa                  Boolean  @default(true)
-  eliminada               Boolean  @default(false)  // Soft delete
-  fechaUltimaConfirmacion DateTime?                 // Última sincronización
+  activa                  Boolean   @default(true)
+  eliminada               Boolean   @default(false) // Soft delete
+  fechaUltimaConfirmacion DateTime? // Última sincronización
 
   // Datos no-lógicos (display, descripciones largas)
-  metadatosJson   String?
+  metadatosJson String?
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relaciones
-  tramosOrigen        TramoEnvio[] @relation("TramoSucursalOrigen")
-  tramosDestino       TramoEnvio[] @relation("TramoSucursalDestino")
+  tramosOrigen        TramoEnvio[]                @relation("TramoSucursalOrigen")
+  tramosDestino       TramoEnvio[]                @relation("TramoSucursalDestino")
   depositosPreferidos DepositoSucursalPreferida[]
   codigosPostales     SucursalCourierCp[]
 
+  @@unique([courierId, idExterno])
   @@index([courierId])
   @@index([latitud, longitud])
   @@index([courierId, codigoPostal])
-  @@unique([courierId, idExterno])
 }
 
 // Sucursal preferida por depósito × courier. La plataforma sugiere con Haversine,
 // el cliente confirma con un click ("el usuario manda" — Escenario 3 DEUDA 4).
 model DepositoSucursalPreferida {
-  id                Int      @id @default(autoincrement())
+  id Int @id @default(autoincrement())
 
-  depositoId        Int
-  deposito          Deposito @relation(fields: [depositoId], references: [id])
+  depositoId Int
+  deposito   Deposito @relation(fields: [depositoId], references: [id])
 
-  courierId         Int
-  courier           Courier  @relation(fields: [courierId], references: [id])
+  courierId Int
+  courier   Courier @relation(fields: [courierId], references: [id])
 
   sucursalCourierId Int
   sucursal          SucursalCourier @relation(fields: [sucursalCourierId], references: [id])
 
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([depositoId, courierId])
+  @@index([courierId])
+}
+
+// DEUDA 29 Sub-fase 6.D.1: configuración de la modalidad operativa de cada courier
+// activo del cliente para cada uno de sus depósitos. Reemplaza a CredencialCourier.modoFirstMile
+// (que se deprecará en 6.D.6) porque la realidad operativa es por depósito × courier,
+// no por empresa × courier. Un cliente con depósito en BA y otro en Córdoba puede
+// tener distinto recolector consolidador en cada zona (o ninguno).
+//
+// Regla de negocio: 1 sola fila con modoFirstMile="consolidador" por depósito (no se
+// pueden tener 2 couriers recolectores activos al mismo tiempo en el mismo depósito).
+// Validación en backend cuando se crea/actualiza una config.
+model DepositoCourierConfig {
+  id Int @id @default(autoincrement())
+
+  depositoId Int
+  deposito   Deposito @relation(fields: [depositoId], references: [id])
+
+  courierId Int
+  courier   Courier @relation("ConfigCourierPrincipal", fields: [courierId], references: [id])
+
+  // Modalidad operativa del courier para este depósito.
+  modoFirstMile String @default("mismo_courier")
+  // Valores: "mismo_courier" | "consolidador" | "drop_off_cliente"
+
+  courierRecolectorId Int?
+  courierRecolector   Courier? @relation("ConfigCourierRecolector", fields: [courierRecolectorId], references: [id])
+  // FK opcional al courier consolidador. Solo se llena cuando modoFirstMile="consolidador".
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([depositoId, courierId])
   @@index([courierId])
@@ -743,40 +791,40 @@ model DepositoSucursalPreferida {
 // Tramos de la cadena logística de un envío.
 // Cada tramo tiene su propio courier y trackingExterno. N tramos desde el inicio.
 model TramoEnvio {
-  id              Int      @id @default(autoincrement())
+  id Int @id @default(autoincrement())
 
-  envioId         Int
-  envio           Envio    @relation(fields: [envioId], references: [id], onDelete: Cascade)
+  envioId Int
+  envio   Envio @relation(fields: [envioId], references: [id], onDelete: Cascade)
 
-  orden           Int      // 1, 2, 3... Secuencia cronológica.
+  orden Int // 1, 2, 3... Secuencia cronológica.
 
-  courierId       Int
-  courier         Courier  @relation(fields: [courierId], references: [id])
+  courierId Int
+  courier   Courier @relation(fields: [courierId], references: [id])
 
-  tipo            String
+  tipo String
   // Valores: "recoleccion" | "entrega" | "ciclo_completo"
 
-  trackingExterno String?  // Tracking propio del courier para este tramo.
+  trackingExterno String? // Tracking propio del courier para este tramo.
 
-  estadoActual    String   @default("PENDIENTE")
+  estadoActual String @default("PENDIENTE")
   // Estado homogeneizado por Nomenclador (lenguaje Shipro).
 
   estadoCrudoUltimo String? // Último estado raw del courier, para auditoría.
 
-  sucursalOrigenId  Int?
-  sucursalOrigen    SucursalCourier? @relation("TramoSucursalOrigen", fields: [sucursalOrigenId], references: [id])
+  sucursalOrigenId Int?
+  sucursalOrigen   SucursalCourier? @relation("TramoSucursalOrigen", fields: [sucursalOrigenId], references: [id])
 
   sucursalDestinoId Int?
   sucursalDestino   SucursalCourier? @relation("TramoSucursalDestino", fields: [sucursalDestinoId], references: [id])
 
-  fechaCreacion   DateTime @default(now())
-  fechaInicio     DateTime? // Cuando el courier tomó posesión (primer evento real).
-  fechaFin        DateTime? // Cuando el tramo se cerró.
+  fechaCreacion DateTime  @default(now())
+  fechaInicio   DateTime? // Cuando el courier tomó posesión (primer evento real).
+  fechaFin      DateTime? // Cuando el tramo se cerró.
 
-  metadatosJson   String?
+  metadatosJson String?
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([envioId, orden])
   @@index([envioId])
@@ -788,26 +836,26 @@ model TramoEnvio {
 // tracking de conversión. NO se usa para validar precios al cierre de venta
 // (en logística la cotización es estimación referencial, no contractual).
 model CotizacionSnapshot {
-  id                    Int      @id @default(autoincrement())
-  empresaId             Int
-  depositoOrigenId      Int
-  destinoSnapshotJson   String
-  paqueteSnapshotJson   String
-  opcionesSnapshotJson  String
-  usadaEnEnvioId        Int?
-  createdAt             DateTime @default(now())
+  id                   Int      @id @default(autoincrement())
+  empresaId            Int
+  depositoOrigenId     Int
+  destinoSnapshotJson  String
+  paqueteSnapshotJson  String
+  opcionesSnapshotJson String
+  usadaEnEnvioId       Int?
+  createdAt            DateTime @default(now())
 }
 
 // Métrica de latencia por llamada a courier. Para detectar degradación de servicio.
 model MetricaCourierLatencia {
-  id            Int      @id @default(autoincrement())
-  courierId     Int
-  courier       Courier  @relation(fields: [courierId], references: [id])
-  operacion     String   // "cotizar" | "despachar" | "tracking" | "etiqueta"
-  latenciaMs    Int
-  status        String   // "success" | "timeout" | "error"
-  envioId       Int?
-  createdAt     DateTime @default(now())
+  id         Int      @id @default(autoincrement())
+  courierId  Int
+  courier    Courier  @relation(fields: [courierId], references: [id])
+  operacion  String // "cotizar" | "despachar" | "tracking" | "etiqueta"
+  latenciaMs Int
+  status     String // "success" | "timeout" | "error"
+  envioId    Int?
+  createdAt  DateTime @default(now())
 
   @@index([courierId, operacion])
   @@index([createdAt])
@@ -817,14 +865,14 @@ model MetricaCourierLatencia {
 // Se busca promedio de los últimos 30 días para combinación origen-destino-peso.
 // Limpieza periódica de registros > 30 días.
 model HistoricoCotizaciones {
-  id            Int      @id @default(autoincrement())
-  courierId     Int
-  cpOrigen      String
-  cpDestino     String
-  pesoKg        Float
-  precio        Float
-  servicio      String?
-  createdAt     DateTime @default(now())
+  id        Int      @id @default(autoincrement())
+  courierId Int
+  cpOrigen  String
+  cpDestino String
+  pesoKg    Float
+  precio    Float
+  servicio  String?
+  createdAt DateTime @default(now())
 
   @@index([courierId, cpOrigen, cpDestino])
   @@index([createdAt])

@@ -33,6 +33,22 @@ async function main() {
       data: [{ nombre: 'Andreani' }, { nombre: "Moci's" }, { nombre: 'Moova' }, { nombre: 'Javit' }]
     });
   }
+
+  // DEUDA 29 Sub-fase 6.D.1: setear cpDepositoConsolidador en couriers consolidadores.
+  // Usa upsert idempotente: si el courier ya existe (caso productivo), actualiza el campo.
+  // Si el courier no existe todavía, lo crea con el valor. Cuando se integre un nuevo
+  // courier consolidador en el futuro, agregar su entrada al array.
+  const couriersConCpConsolidador = [
+    { nombre: "Moci's", cpDepositoConsolidador: '1702' },
+  ];
+  for (const c of couriersConCpConsolidador) {
+    await prisma.courier.upsert({
+      where: { nombre: c.nombre },
+      update: { cpDepositoConsolidador: c.cpDepositoConsolidador },
+      create: { nombre: c.nombre, cpDepositoConsolidador: c.cpDepositoConsolidador },
+    });
+  }
+
   console.log('✅ Empresa, Usuario Admin y Couriers listos.');
 
 

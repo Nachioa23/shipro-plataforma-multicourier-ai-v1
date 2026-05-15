@@ -769,17 +769,18 @@ El orden de las pestañas refleja el orden logico: el cliente primero define con
 
 ### Pestaña 1 — Mis Transportes
 
-Wizard de activacion por courier (4 pasos):
+Pantalla de tarjetas (no wizard step-by-step). Cada courier se presenta como una tarjeta con toggle de activacion. Al activar un courier, se expanden 4 secciones de configuracion visibles en simultaneo:
 
-- **Paso 1:** Elegir courier del catalogo (solo couriers activos).
-- **Paso 2:** Credenciales. Si empresa.modeloAHabilitado == true: opciones A o B. Si false: solo B. Default: Modelo A si habilitado.
-- **Paso 3:** Modalidad de First-Mile (3 opciones):
+- **Seccion 1 — Accesos API:** credenciales. Si empresa.modeloAHabilitado == true: opciones A (Cuenta Shipro) o B (Cuenta Propia). Si false: solo B. Default: Modelo A si habilitado.
+- **Seccion 2 — Modalidad de First-Mile:** dropdown con 3 opciones:
     - "Este courier recoge en mi deposito" (mismo_courier)
     - "Yo llevo los paquetes a su sucursal" (drop_off_cliente, solo si courier acepta drop-off)
     - "Este courier consolida envios de otros" (consolidador, solo si courier puedeConsolidar)
-- **Paso 4:** Ajustes comerciales (markup %, costo fijo, fecha caducidad). Colapsable. Defaults en 0.
+- **Seccion 2.5 — Tipo de Cuenta** (solo admin/gerente): PREPAGO o POSTPAGO. Fuera del flow visible para operadores.
+- **Seccion 3 — Ajustes Comerciales:** markup %, costo fijo, fecha caducidad. Defaults en 0.
+- **Nota de señalizacion al pie:** mensaje informativo que dirige al cliente al siguiente paso del onboarding (Depositos).
 
-**Nota:** ya NO existe el paso "Sucursal de imposicion" en este wizard. La sucursal se asigna/elige en la pestaña Depositos, segun la modalidad de First-Mile elegida aca.
+**Diseño:** form plano permite ver todo el estado del courier de un vistazo sin navegacion paso a paso. Decision tomada en Sub-fase 6.A tras evaluar que un wizard real seria overhead innecesario (4-6 horas) sin beneficio funcional. La sucursal NO se configura aca — se asigna/elige en la pestaña Depositos segun la modalidad de First-Mile elegida.
 
 ### Pestaña 2 — Depositos
 
@@ -934,7 +935,7 @@ Torre de Control: calidad de datos por cliente (verde/amarillo/rojo). Panel del 
 
 Sub-fase 6 cubre la UI de las pestañas que completan el flow de onboarding. NO es un solo commit; se divide en sub-commits manejables:
 
-- **6.A — TransportesTab actualizado:** ajustar wizard de activacion a la nueva estructura (4 pasos en vez de 5, sin paso de "Sucursal de imposicion"). Ya tiene modoFirstMile + courierRecolectorId implementados desde 1.C.3.
+- **6.A — TransportesTab actualizado** [IMPLEMENTADA — commit 4f9702e del viernes 15 mayo 2026]: alineacion de naming ("Estrategia de Despacho" → "Modalidad de First-Mile") y señalizacion visual del flow de onboarding al pie de cada tarjeta de courier. NO es refactor estructural — el form plano funciona bien y convertirlo a wizard step-by-step seria overhead innecesario (4-6 horas). La estructura conceptual (form plano con secciones numeradas) ya estaba correcta desde 1.C.3. Backend sin cambios (ya alineado).
 
 - **6.B — DepositoForm extendido con Parte B:** agregar al formulario de crear/editar deposito la seccion de configuracion por courier (los 4 casos descriptos en seccion 8). Consume endpoint 2.B (sucursales cercanas) + nuevo endpoint de auto-asignacion por CP.
 

@@ -45,7 +45,7 @@ Esta lista enumera cada decision tomada durante la sesion de diseno. Claude Code
 10. **Columnas explicitas para todo campo que se use en logica**: aceptaB2B, aceptaB2C, tieneBuzonInteligente, aceptaAdmision, aceptaEntrega, aceptaDevolucion.
 11. **Soft delete con fechaUltimaConfirmacion.** Las sucursales no se borran porque hay envios historicos que las referencian.
 12. **Sincronizacion manual desde admin_shipro en el MVP** (boton "Sincronizar sucursales de X" con logging). Sincronizacion automatica queda como deuda post-MVP.
-13. **Sucursal del deposito por courier**: la asignacion depende de la modalidad operativa del courier configurada por el cliente en Mis Transportes.
+13. **Sucursal del deposito por courier**: la asignacion depende de la modalidad operativa del courier deducida por el sistema segun la configuracion del cliente en Mis Transportes.
     - Si el courier recoge en el deposito del cliente: la sucursal se **asigna automaticamente** buscando cual atiende el CP del deposito. El cliente NO elige. La plataforma confia en la operativa del courier.
     - Si el cliente lleva los paquetes a una sucursal del courier (drop-off): el cliente **elige manualmente** entre las sucursales del courier, con sugerencia automatica de la mas cercana al deposito. La eleccion se guarda en DepositoSucursalPreferida.
     - Si hay courier recolector consolidador: la sucursal del courier recolector se asigna automaticamente (por CP del deposito del cliente). La sucursal de los couriers de ultima milla tambien se asigna automaticamente, pero usando el CP del deposito del courier recolector (no del cliente).
@@ -56,11 +56,15 @@ Esta lista enumera cada decision tomada durante la sesion de diseno. Claude Code
 ### Configuracion del courier por cliente
 
 16. **First-Mile es configuracion global por courier (Opcion A pura).** Se decide al activar el courier. NO hay override por envio. Las excepciones puntuales se resuelven operacionalmente: el cliente no le entrega el paquete a Mocis y lo lleva directo a la sucursal del courier de ultima milla. La etiqueta ya esta emitida y es valida. Sin codigo adicional.
+
+    **[ACTUALIZACION - 2026-05-19]:** Decision invalidada. El First-Mile NO se configura globalmente por courier ni se decide al activar el courier. Es deducido por el sistema segun cobertura del CP del deposito + flag dropOffCliente del par. Ver decision #49.
 17. **Logistica inversa granular: 3 sub-capacidades.** aceptaInversaCambioMercaderia, aceptaInversaSoloRetiro, aceptaInversaDropOff. Cada una mapea a un flujo de negocio distinto.
 18. **9 capacidades booleanas en la tabla Courier.** Son la base para validar combinaciones y filtrar couriers candidatos.
 19. **Inmutabilidad direccional Modelo A/B.** admin_shipro decide en onboarding si el cliente puede usar Modelo A (credenciales Shipro). El gerente_cliente puede ir A->B (obtener credenciales propias), pero NO B->A (las credenciales de Shipro son recurso comercial).
 20. **Empresa.modeloAHabilitado** (boolean, default segun admin_shipro).
 21. **modoFirstMile + courierRecolectorId reemplazan** el string legacy courierRecolector. Migracion: "pickup" -> modoFirstMile = "mismo_courier", courierRecolectorId = null.
+
+    **[ACTUALIZACION - 2026-05-19]:** Decision modificada. Al profundizar en el ejemplo operativo de 3 couriers (Mocis consolidador + Andreani + un tercer courier con coberturas mixtas en CABA/GBA/Cordoba), se detecto que el modelo era incorrecto. modoFirstMile NO es un atributo configurado por el cliente: es deducido por el sistema segun cobertura del CP del deposito + flag dropOffCliente del par. courierRecolectorId NO va por par: hay como maximo 1 recolector por deposito (regla operativa: una camioneta no pasa 2 veces por el mismo deposito), asi que se modela como Deposito.courierRecolectorId. Lo unico que el cliente decide por par (deposito x courier) es dropOffCliente y recogeViaConsolidador (booleans). Ver decision #49 (al final de esta seccion) y secciones 6.11 (DepositoCourierConfig rectificada) y 6.12 (Deposito - campo nuevo) para el modelo final.
 22. **Validaciones cruzadas** capacidades del courier vs. configuracion del cliente al activar, en frontend (feedback inmediato) Y backend (defense in depth).
 23. **Wizard de 5 pasos** para activar un courier: elegir courier -> credenciales -> First-Mile -> sucursal de imposicion -> ajustes comerciales. Defaults inteligentes en cada paso.
 24. **Defaults inteligentes**: Modelo A si esta habilitado, First-Mile "mismo_courier", sucursal mas cercana al deposito, markup 0%.
@@ -105,6 +109,22 @@ Esta lista enumera cada decision tomada durante la sesion de diseno. Claude Code
     - `libre_cercania`: el courier acepta operar desde cualquier sucursal (decision interna del courier que camioneta envia). El cliente elige entre las top 3-5 sucursales mas cercanas (ejemplo potencial: OCA, Correo Argentino).
     - `sucursal_unica`: el courier tiene 1 sola sucursal operativa. Asignacion trivial (ejemplo: Mocis).
     Implementacion: el tipo vive en el codigo del adapter de cada courier (no hay campo en BD por ahora). Si en el futuro aparece necesidad de cambiar la modalidad sin tocar codigo, evaluamos agregar campo `modalidadAsignacionSucursal` en tabla Courier. YAGNI hasta que se justifique con un caso real.
+
+49. **Modelo de First-Mile rectificado (2026-05-19).** Despues de analizar el ejemplo operativo de 3 couriers (Mocis consolidador + Andreani + un tercer courier con coberturas mixtas), se descarta el modelo de "modoFirstMile como atributo configurado por el cliente". Nueva descomposicion:
+
+    a) **El modo de First-Mile es DEDUCIDO, no configurado.** Lo deduce el sistema combinando: (i) si existe un `Deposito.courierRecolectorId` Y el courier cubre el CP del recolector, modo "consolidador" via recogeViaConsolidador del par; (ii) si `DepositoCourierConfig.dropOffCliente=true`, modo "drop_off_cliente"; (iii) caso contrario, modo "mismo_courier" (courier recoge en CP del deposito del cliente). El cliente no elige el modo: elige los inputs (recogeViaConsolidador, dropOffCliente).
+
+    b) **El recolector es por deposito, no por par.** Hay como maximo 1 recolector activo por deposito (regla operativa: una camioneta de Mocis no puede pasar 2 veces por el mismo deposito). Se modela como `Deposito.courierRecolectorId` (FK opcional al Courier consolidador). La regla "1 solo recolector por deposito" pasa de ser validacion explicita en endpoint a ser limitacion estructural de la fila.
+
+    c) **Lo unico que el cliente decide por par (deposito x courier) es:**
+       - `dropOffCliente: Boolean` (default false). Cuando true, fuerza modo "drop_off_cliente" para ese courier desde ese deposito.
+       - `recogeViaConsolidador: Boolean` (default false). Cuando true (y existe `Deposito.courierRecolectorId`), el courier recoge en el deposito del consolidador (usa `Courier.cpDepositoConsolidador` del recolector). Cuando false, el courier recoge en el deposito del cliente.
+
+    d) **Reglas de elegibilidad para activar un courier:** un courier solo aparece como opcion para un deposito si cubre uno de estos 2 CPs: (i) el CP del deposito del cliente, (ii) el CP del consolidador del deposito (si esta configurado). Si no cubre ninguno, el courier NO es elegible. La validacion la hace el sistema al ofrecer opciones (no la elige el cliente). El cliente confirma una de las opciones elegibles.
+
+    e) **`Courier.cpDepositoConsolidador` se mantiene.** Es el CP central del consolidador (donde otros couriers vienen a recoger tras la consolidacion). Para Mocis = "1702".
+
+    Migracion: la tabla `DepositoCourierConfig` (creada en commit 6.D.1 con `modoFirstMile` + `courierRecolectorId`) se reestructura en commit 2 de esta rectificacion para tener solo `dropOffCliente` + `recogeViaConsolidador`. Los campos `modoFirstMile` y `courierRecolectorId` de CredencialCourier (decision #21) se eliminan; el segundo se materializa como `Deposito.courierRecolectorId`. Detalle completo en secciones 6.11 (DepositoCourierConfig rectificada) y 6.12 (Deposito - campo nuevo).
 
 ---
 
@@ -332,6 +352,8 @@ model CredencialCourier {
   @@unique([empresaId, nombreCourier])
 }
 ```
+
+**[ACTUALIZACION - 2026-05-19]:** Los campos `modoFirstMile` y `courierRecolectorId` quedan deprecados y se eliminan de CredencialCourier en el commit 2 de la rectificacion 6.D. Razon: el modo de First-Mile pasa a ser deducido por el sistema (no configurado por el cliente), y el recolector pasa a ser atributo del Deposito (no de la credencial empresa-level). Ver decision #49 (Seccion 2) y nuevas secciones 6.11 (DepositoCourierConfig rectificada) y 6.12 (Deposito - campo nuevo courierRecolectorId).
 
 **Migracion de datos:**
 - Las 4 filas existentes tienen courierRecolector = "pickup".
@@ -574,9 +596,64 @@ model HistoricoCotizaciones {
 
 Proposito: fallback para cuando TODOS los couriers fallan. Se busca promedio de ultimos 30 dias. Limpieza periodica de registros > 30 dias.
 
+### 6.11 Tabla DepositoCourierConfig - RECTIFICADA (2026-05-19)
+
+Version rectificada del modelo original de 6.D.1. Lo unico que el cliente decide explicitamente por par (deposito x courier).
+
+```prisma
+model DepositoCourierConfig {
+  id          Int      @id @default(autoincrement())
+  depositoId  Int
+  deposito    Deposito @relation(fields: [depositoId], references: [id], onDelete: Restrict)
+  courierId   Int
+  courier     Courier  @relation(fields: [courierId], references: [id], onDelete: Restrict)
+
+  // Cliente elige llevar fisicamente los paquetes a la sucursal del courier
+  // en vez de que el courier recoja en el deposito. Fuerza modo "drop_off_cliente".
+  dropOffCliente        Boolean @default(false)
+
+  // Cliente elige que ESTE courier (last-mile) recoja en el deposito del
+  // consolidador en vez de en el deposito del cliente. Requiere que
+  // Deposito.courierRecolectorId este seteado. El sistema deduce modo
+  // "consolidador" cuando este flag es true.
+  recogeViaConsolidador Boolean @default(false)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([depositoId, courierId])
+  @@index([courierId])
+}
+```
+
+**Cambios respecto a la version de 6.D.1:**
+- Eliminados: `modoFirstMile`, `courierRecolectorId`, FK `courierRecolector` (apuntaba a Courier).
+- Agregados: `dropOffCliente`, `recogeViaConsolidador`.
+- La regla "1 solo recolector por deposito" deja de vivir aca y pasa a ser limitacion estructural de `Deposito.courierRecolectorId` (FK nullable, no array). Ver 6.12.
+
+### 6.12 Tabla Deposito - campo nuevo courierRecolectorId (2026-05-19)
+
+Agregar a la tabla Deposito existente:
+
+```prisma
+courierRecolectorId Int?
+courierRecolector   Courier? @relation("DepositoRecolector", fields: [courierRecolectorId], references: [id], onDelete: SetNull)
+```
+
+**Semantica:** identifica al unico courier consolidador que recoge en este deposito. null = no hay recoleccion consolidada configurada (el deposito opera con cada courier de forma directa o con drop-off del cliente, sin recolector intermedio).
+
+**Por que va en Deposito y no en DepositoCourierConfig:** la regla operativa "una camioneta no pasa 2 veces por el mismo deposito" implica que hay como maximo 1 recolector por deposito. Modelarlo como columna en Deposito hace que esa regla sea estructural (impuesta por el schema) en vez de validacion runtime en endpoint. Ademas, simplifica el modelo: el recolector NO depende de que se haya creado un par con ese courier; es atributo independiente del deposito.
+
+**Inverso en Courier:**
+```prisma
+depositosDondeRecolecta Deposito[] @relation("DepositoRecolector")
+```
+
 ---
 
 ## 7. LOGICA DE NEGOCIO
+
+**[ACTUALIZACION - 2026-05-19]:** El pseudo-codigo de esta seccion lee `credencialCourier.modoFirstMile` y `credencialCourier.courierRecolectorId`. Esos campos quedan deprecados (ver decision #49 y secciones 6.11/6.12). El refactor del pseudo-codigo para leer desde `DepositoCourierConfig.dropOffCliente` + `DepositoCourierConfig.recogeViaConsolidador` + `Deposito.courierRecolectorId` se hace en Sub-fase 6.D.5 (rectificada). Hasta entonces, considerar este pseudo-codigo como descripcion del flujo logico de First-Mile y NO como contrato literal de campos de BD.
 
 ### 7.1 Generacion de tramos al crear un envio
 
@@ -905,7 +982,7 @@ Torre de Control: calidad de datos por cliente (verde/amarillo/rojo). Panel del 
 **Sub-fase 1: Modelo de datos (2-3 dias)**
 - Crear tablas nuevas: SucursalCourier, TramoEnvio, DepositoSucursalPreferida, CotizacionSnapshot, MetricaCourierLatencia, HistoricoCotizaciones.
 - Modificar: Courier (+capacidades +timeout), CredencialCourier (-4campos +2campos), Empresa (+modeloAHabilitado), Envio (+tipoOrigen -trackingFirstMile).
-- Migracion: courierRecolector "pickup" -> modoFirstMile "mismo_courier".
+- Migracion: courierRecolector "pickup" -> modoFirstMile "mismo_courier". **[ACTUALIZACION - 2026-05-19]:** la migracion en CredencialCourier queda obsoleta; modoFirstMile y courierRecolectorId se eliminan de esa tabla (ver decision #49). La migracion real ahora es: (a) crear Deposito.courierRecolectorId, (b) crear DepositoCourierConfig.dropOffCliente + recogeViaConsolidador, (c) eliminar CredencialCourier.modoFirstMile + courierRecolectorId despues de migrar datos. Cubierto en commit 2 de la rectificacion 6.D.
 - Archivos: prisma/schema.prisma + crear migracion.
 - Listo cuando: npx prisma migrate dev corre sin errores.
 
@@ -967,6 +1044,7 @@ Listo cuando: cliente nuevo puede recorrer el onboarding completo (Mis Transport
 | DEUDA 31 | Sincronizacion automatica sucursales | Post-MVP | Mas de 5 couriers integrados |
 | Bug menor | "pickup" en BD perpetuado por TransportesTab | Se resuelve con DEUDA 29 | N/A |
 | Bug menor | etiquetas/masiva.ts no neutraliza "pickup" | Se resuelve con DEUDA 29 | N/A |
+| DEUDA 32 | Sincronizacion periodica de cobertura de couriers en background | Post-MVP | BD local con sync nocturno/semanal para mantener latencia <100ms en cotizacion sin perder frescura de datos. Detectada 2026-05-19 durante rectificacion de 6.D. |
 
 ---
 

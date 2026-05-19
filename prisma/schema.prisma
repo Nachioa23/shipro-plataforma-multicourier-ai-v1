@@ -109,6 +109,12 @@ model Deposito {
   // DEUDA 29 Sub-fase 6.D.1: configuración operativa de cada courier en este depósito.
   courierConfigs DepositoCourierConfig[]
 
+  // DEUDA 29 Sub-fase 6.D (rectificación, 2026-05-19): courier consolidador único por depósito.
+  // Decisión #49: el recolector va aquí (no en DepositoCourierConfig) porque hay 1 sólo
+  // por depósito como regla operativa estructural.
+  courierRecolectorId Int?
+  courierRecolector   Courier? @relation("DepositoRecolector", fields: [courierRecolectorId], references: [id], onDelete: SetNull)
+
   @@index([empresaId])
 }
 
@@ -169,12 +175,12 @@ model Courier {
   latencias                     MetricaCourierLatencia[]
   depositosSucursalesPreferidas DepositoSucursalPreferida[]
 
-  // DEUDA 29 Sub-fase 6.D.1: relaciones inversas con DepositoCourierConfig.
-  // Dos relaciones porque un courier puede ser:
-  // (a) el courier "principal" al que se configura una modalidad operativa
-  // (b) el courier "recolector" elegido como consolidador para otros couriers
-  depositoConfigsComoCourier    DepositoCourierConfig[] @relation("ConfigCourierPrincipal")
-  depositoConfigsComoRecolector DepositoCourierConfig[] @relation("ConfigCourierRecolector")
+  // DEUDA 29 Sub-fase 6.D.1: relación inversa con DepositoCourierConfig (par depósito × courier).
+  depositoConfigsComoCourier DepositoCourierConfig[] @relation("ConfigCourierPrincipal")
+
+  // DEUDA 29 Sub-fase 6.D (rectificación, 2026-05-19): inversa de Deposito.courierRecolectorId.
+  // Identifica todos los depósitos donde este courier es el consolidador recolector.
+  depositosDondeRecolecta Deposito[] @relation("DepositoRecolector")
 }
 
 // ==========================================
@@ -755,15 +761,17 @@ model DepositoSucursalPreferida {
   @@index([courierId])
 }
 
-// DEUDA 29 Sub-fase 6.D.1: configuración de la modalidad operativa de cada courier
-// activo del cliente para cada uno de sus depósitos. Reemplaza a CredencialCourier.modoFirstMile
-// (que se deprecará en 6.D.6) porque la realidad operativa es por depósito × courier,
-// no por empresa × courier. Un cliente con depósito en BA y otro en Córdoba puede
-// tener distinto recolector consolidador en cada zona (o ninguno).
+// DEUDA 29 Sub-fase 6.D (rectificación, 2026-05-19): configuración del cliente por par
+// (depósito × courier). El modo de First-Mile NO se guarda aquí — es deducido por el
+// sistema según cobertura del CP del depósito + flag dropOffCliente del par + presencia
+// de Deposito.courierRecolectorId. Ver decisión #49 en docs/ARQUITECTURA-MULTICOURIER.md.
 //
-// Regla de negocio: 1 sola fila con modoFirstMile="consolidador" por depósito (no se
-// pueden tener 2 couriers recolectores activos al mismo tiempo en el mismo depósito).
-// Validación en backend cuando se crea/actualiza una config.
+// Reemplaza el modelo anterior (commit 6.D.1) que tenía modoFirstMile + courierRecolectorId
+// como atributos del par. Esos campos eran incorrectos conceptualmente:
+// - modoFirstMile: pasaba a ser deducido (no configurado)
+// - courierRecolectorId: pasaba a Deposito (1 sólo recolector por depósito)
+//
+// Lo único que el cliente decide explícitamente por par son 2 booleans:
 model DepositoCourierConfig {
   id Int @id @default(autoincrement())
 
@@ -773,13 +781,16 @@ model DepositoCourierConfig {
   courierId Int
   courier   Courier @relation("ConfigCourierPrincipal", fields: [courierId], references: [id])
 
-  // Modalidad operativa del courier para este depósito.
-  modoFirstMile String @default("mismo_courier")
-  // Valores: "mismo_courier" | "consolidador" | "drop_off_cliente"
+  // Si true, el cliente lleva físicamente sus paquetes a una sucursal del courier.
+  // Fuerza modo "drop_off_cliente" para ese par. El sistema NO auto-asigna sucursal;
+  // el cliente elige manualmente entre sucursales del courier cercanas a su depósito.
+  dropOffCliente Boolean @default(false)
 
-  courierRecolectorId Int?
-  courierRecolector   Courier? @relation("ConfigCourierRecolector", fields: [courierRecolectorId], references: [id])
-  // FK opcional al courier consolidador. Solo se llena cuando modoFirstMile="consolidador".
+  // Si true, el courier recoge en el depósito del consolidador (no en el depósito del
+  // cliente). Requiere que Deposito.courierRecolectorId esté seteado Y que el courier
+  // cubra el CP del consolidador. Fuerza modo "consolidador" para ese par. Si false,
+  // el courier recoge en el CP del depósito del cliente (modo "mismo_courier" por defecto).
+  recogeViaConsolidador Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

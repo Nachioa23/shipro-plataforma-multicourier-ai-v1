@@ -1,15 +1,14 @@
 // =============================================================================
-// MIGRACIÓN DE DATOS: DepositoCourierConfig (DEUDA 29 Sub-fase 6.D.1)
+// MIGRACIÓN DE DATOS: DepositoCourierConfig (DEUDA 29 Sub-fase 6.D RECTIFICADA)
 // =============================================================================
 //
-// Genera filas iniciales en DepositoCourierConfig basadas en el estado actual
-// de CredencialCourier × Deposito por empresa. La configuración operativa de
-// First-Mile (modoFirstMile + courierRecolectorId) se replica desde la
-// credencial empresa-level a cada par (depósito × courier) de esa empresa.
+// Crea filas en DepositoCourierConfig para cada par (depósito × courier_activo)
+// de cada empresa. Las filas arrancan con dropOffCliente=false y
+// recogeViaConsolidador=false (defaults neutros).
 //
 // Idempotente: usa upsert con el constraint único (depositoId, courierId).
-// Re-ejecutar el script no duplica filas; solo actualiza modoFirstMile si
-// cambió en la credencial origen.
+// Re-ejecutar el script no duplica filas; si una fila ya existe, NO modifica
+// los flags del cliente (solo actualiza updatedAt como side effect).
 //
 // Procesamiento:
 // - Solo credenciales con activo=true (las inactivas se ignoran).
@@ -17,12 +16,17 @@
 // - Si nombreCourier de la credencial no resuelve a un Courier en BD,
 //   log warning y skip esa credencial (no aborta el script).
 //
-// Uso: npx tsx scripts/migrar-deposito-courier-config.ts
+// CONTEXTO RECTIFICACIÓN (2026-05-19):
+// El script anterior copiaba modoFirstMile + courierRecolectorId desde
+// CredencialCourier a DepositoCourierConfig. Tras la rectificación del modelo
+// (decisión #49), esos campos ya no viven en DepositoCourierConfig:
+//   - modoFirstMile: pasó a ser deducido por el sistema
+//   - courierRecolectorId: pasó a Deposito (1 sólo por depósito)
+// Ahora el script solo asegura que cada par (depósito × courier_activo) tenga
+// una fila inicial con defaults. La configuración explícita (dropOffCliente
+// y recogeViaConsolidador) se hace después vía endpoint PUT /api/depositos/[id]/courier-configs.
 //
-// Estado esperado post-ejecución (BD actual con 1 empresa Mowi):
-//   2 credenciales activas × 2 depósitos = 4 filas insertadas en
-//   DepositoCourierConfig, todas con modoFirstMile="mismo_courier" y
-//   courierRecolectorId=null (estado actual de las credenciales).
+// Uso: npx tsx scripts/migrar-deposito-courier-config.ts
 // =============================================================================
 
 import { PrismaClient } from "@prisma/client";
@@ -36,27 +40,19 @@ async function main() {
   let totalCredencialesProcesadas = 0;
   let totalCredencialesSkipped = 0;
   let totalFilasInsertadas = 0;
-  let totalFilasActualizadas = 0;
+  let totalFilasExistentes = 0;
   let totalErrores = 0;
 
   try {
-    // Obtener todas las empresas que tienen credenciales activas Y depósitos activos.
+    // Empresas con al menos 1 credencial activa Y al menos 1 depósito activo.
     const empresas = await prisma.empresa.findMany({
       where: {
-        credenciales: {
-          some: { activo: true },
-        },
-        depositos: {
-          some: { eliminado: false },
-        },
+        credenciales: { some: { activo: true } },
+        depositos: { some: { eliminado: false } },
       },
       include: {
-        credenciales: {
-          where: { activo: true },
-        },
-        depositos: {
-          where: { eliminado: false },
-        },
+        credenciales: { where: { activo: true } },
+        depositos: { where: { eliminado: false } },
       },
     });
 
@@ -67,7 +63,6 @@ async function main() {
       console.log(`\n[empresa ${empresa.id}] ${empresa.nombre} (${empresa.credenciales.length} credenciales activas, ${empresa.depositos.length} depósitos activos)`);
 
       for (const credencial of empresa.credenciales) {
-        // Resolver el courierId real desde el nombreCourier.
         const courier = await prisma.courier.findFirst({
           where: { nombre: credencial.nombreCourier },
         });
@@ -80,38 +75,38 @@ async function main() {
 
         totalCredencialesProcesadas++;
 
-        // Para cada depósito de la empresa, hacer upsert en DepositoCourierConfig.
         for (const deposito of empresa.depositos) {
           try {
-            const result = await prisma.depositoCourierConfig.upsert({
+            // Verificar si la fila ya existe ANTES de upsert
+            // para distinguir entre INSERT real y "no-op" (no queremos modificar
+            // dropOffCliente/recogeViaConsolidador si el cliente ya los configuró).
+            const existente = await prisma.depositoCourierConfig.findUnique({
               where: {
                 depositoId_courierId: {
                   depositoId: deposito.id,
                   courierId: courier.id,
                 },
               },
-              update: {
-                modoFirstMile: credencial.modoFirstMile,
-                courierRecolectorId: credencial.courierRecolectorId,
-              },
-              create: {
+            });
+
+            if (existente) {
+              totalFilasExistentes++;
+              console.log(`  [EXISTE] depósito=${deposito.id} (${deposito.nombre}) courier=${courier.id} (${courier.nombre}) — sin cambios`);
+              continue;
+            }
+
+            // Crear fila con defaults neutros.
+            await prisma.depositoCourierConfig.create({
+              data: {
                 depositoId: deposito.id,
                 courierId: courier.id,
-                modoFirstMile: credencial.modoFirstMile,
-                courierRecolectorId: credencial.courierRecolectorId,
+                // dropOffCliente: false (default Prisma)
+                // recogeViaConsolidador: false (default Prisma)
               },
             });
 
-            // Detección heurística de insert vs update por createdAt vs updatedAt.
-            const esNueva =
-              Math.abs(result.createdAt.getTime() - result.updatedAt.getTime()) < 100;
-            if (esNueva) {
-              totalFilasInsertadas++;
-              console.log(`  [INSERT] depósito=${deposito.id} (${deposito.nombre}) courier=${courier.id} (${courier.nombre}) modo=${credencial.modoFirstMile}`);
-            } else {
-              totalFilasActualizadas++;
-              console.log(`  [UPDATE] depósito=${deposito.id} (${deposito.nombre}) courier=${courier.id} (${courier.nombre}) modo=${credencial.modoFirstMile}`);
-            }
+            totalFilasInsertadas++;
+            console.log(`  [INSERT] depósito=${deposito.id} (${deposito.nombre}) courier=${courier.id} (${courier.nombre}) — defaults aplicados`);
           } catch (e) {
             totalErrores++;
             console.error(`  [ERROR] depósito=${deposito.id} courier=${courier.id}: ${e instanceof Error ? e.message : String(e)}`);
@@ -125,14 +120,14 @@ async function main() {
     console.log(`  Empresas procesadas:       ${totalEmpresas}`);
     console.log(`  Credenciales procesadas:   ${totalCredencialesProcesadas}`);
     console.log(`  Credenciales saltadas:     ${totalCredencialesSkipped}`);
-    console.log(`  Filas insertadas:          ${totalFilasInsertadas}`);
-    console.log(`  Filas actualizadas:        ${totalFilasActualizadas}`);
+    console.log(`  Filas insertadas (nuevas): ${totalFilasInsertadas}`);
+    console.log(`  Filas ya existentes:       ${totalFilasExistentes}`);
     console.log(`  Errores:                   ${totalErrores}`);
     console.log("[migrar-deposito-courier-config] ============================");
 
     if (totalErrores > 0) {
       console.warn(`[migrar-deposito-courier-config] Completado con ${totalErrores} errores. Revisar logs.`);
-      process.exit(0); // exit 0 con warnings (no fatal)
+      process.exit(0);
     } else {
       console.log("[migrar-deposito-courier-config] ✅ Completado sin errores.");
       process.exit(0);

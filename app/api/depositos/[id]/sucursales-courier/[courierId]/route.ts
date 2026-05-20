@@ -18,32 +18,8 @@ import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { verificarAccesoDeposito } from "@/lib/depositos/auth";
 import { calcularDistanciaKm } from "@/lib/geo/haversine";
+import { formatSucursal } from "@/lib/sucursales/format";
 import type { SucursalCourier } from "@prisma/client";
-
-// Estructura del shape de sucursal en la respuesta. distanciaKm solo se
-// incluye cuando la sucursal viene del cálculo Haversine (sucursalesCercanas).
-function formatSucursal(s: SucursalCourier, distanciaKm?: number) {
-  return {
-    id: s.id,
-    idExterno: s.idExterno,
-    codigo: s.codigo,
-    nombre: s.nombre,
-    direccionCalle: s.direccionCalle,
-    direccionAltura: s.direccionAltura,
-    codigoPostal: s.codigoPostal,
-    localidad: s.localidad,
-    provincia: s.provincia,
-    latitud: s.latitud,
-    longitud: s.longitud,
-    ...(distanciaKm !== undefined && { distanciaKm: parseFloat(distanciaKm.toFixed(2)) }),
-    aceptaAdmision: s.aceptaAdmision,
-    aceptaEntrega: s.aceptaEntrega,
-    seHaceAtencionAlCliente: s.seHaceAtencionAlCliente,
-    tieneBuzonInteligente: s.tieneBuzonInteligente,
-    telefono: s.telefono,
-    horariosJson: s.horariosJson,
-  };
-}
 
 type SucursalConDistancia = SucursalCourier & { distanciaKm: number };
 

@@ -126,6 +126,17 @@ Esta lista enumera cada decision tomada durante la sesion de diseno. Claude Code
 
     Migracion: la tabla `DepositoCourierConfig` (creada en commit 6.D.1 con `modoFirstMile` + `courierRecolectorId`) se reestructura en commit 2 de esta rectificacion para tener solo `dropOffCliente` + `recogeViaConsolidador`. Los campos `modoFirstMile` y `courierRecolectorId` de CredencialCourier (decision #21) se eliminan; el segundo se materializa como `Deposito.courierRecolectorId`. Detalle completo en secciones 6.11 (DepositoCourierConfig rectificada) y 6.12 (Deposito - campo nuevo).
 
+    **Cascada inteligente al PUT del deposito (implementada en commit 3add6cc, 2026-05-20):** cuando el cliente cambia `Deposito.courierRecolectorId` via PUT al endpoint del deposito, el backend ejecuta una cascada atomica:
+       - **Set null (quita consolidador):** resetea `recogeViaConsolidador=false` en todas las configs del deposito que lo usaban.
+       - **Set X (asigna por primera vez, previo era null):** NO auto-setea nada. Reporta en `response.cambiosCascada.eligiblesParaActivar` los couriers que cubren `Courier.cpDepositoConsolidador` del nuevo recolector. El cliente decide despues si activar `recogeViaConsolidador=true` en cada par via PUT al endpoint de courier-configs.
+       - **Set Y (cambia consolidador, previo era X≠Y):** para cada config con `recogeViaConsolidador=true`, verifica si su courier cubre `Courier.cpDepositoConsolidador` de Y. Si cubre, preserva el flag (reporta en `recogeViaConsolidadorPreservado`). Si no cubre, resetea a false (reporta en `recogeViaConsolidadorReset`).
+
+    La cascada y el update del `Deposito.courierRecolectorId` van en la misma transaccion Prisma (atomicidad garantizada). El response incluye `cambiosCascada` solo cuando hubo cambio real (no-op si previo === nuevo).
+
+    Validacion best-effort de cobertura del CP del deposito por el consolidador: si el consolidador no tiene filas en `SucursalCourierCp` (caso Mocis, modelado con sucursal unica via `cpDepositoConsolidador`), SKIP la validacion y reporta el motivo en `skipsDeValidacion`. Resolvera DEUDA 32 post-MVP.
+
+    **Pendiente UX (DEUDA 33):** el modal del frontend que muestra los couriers afectados al cliente antes de confirmar el cambio de consolidador. Hoy el backend ejecuta la cascada y reporta; falta solo la confirmacion visual.
+
 ---
 
 ## 3. QUE PROBLEMA RESUELVE
@@ -1045,6 +1056,7 @@ Listo cuando: cliente nuevo puede recorrer el onboarding completo (Mis Transport
 | Bug menor | "pickup" en BD perpetuado por TransportesTab | Se resuelve con DEUDA 29 | N/A |
 | Bug menor | etiquetas/masiva.ts no neutraliza "pickup" | Se resuelve con DEUDA 29 | N/A |
 | DEUDA 32 | Sincronizacion periodica de cobertura de couriers en background | Post-MVP | BD local con sync nocturno/semanal para mantener latencia <100ms en cotizacion sin perder frescura de datos. Detectada 2026-05-19 durante rectificacion de 6.D. |
+| DEUDA 33 | UX de gestion de consolidador con modal de confirmacion PRE-accion | Pre-produccion (Sub-fase 6.D.6) | Backend ya implementa cascada inteligente (commit 3add6cc) y reporta cambios afectados en response.cambiosCascada al PUT del deposito. Falta el modal frontend que muestre al cliente los couriers afectados (eligiblesParaActivar / recogeViaConsolidadorReset / recogeViaConsolidadorPreservado) antes de confirmar. Detectada 2026-05-20 durante implementacion de cascada (Commit 3 de rectificacion 6.D). NOTA: el commit message 3add6cc se refiere a esta deuda como "DEUDA 34"; la numeracion canonica establecida en el doc es DEUDA 33 (correlativo sin gap). |
 
 ---
 

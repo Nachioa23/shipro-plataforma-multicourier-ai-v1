@@ -57,6 +57,184 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     return NextResponse.json({ error: 'Un depósito predeterminado no puede estar inactivo.' }, { status: 400 });
   }
 
+  // ==========================================
+  // DEUDA 29 Sub-fase 6.D rectificación (2026-05-19): manejo opcional de
+  // courierRecolectorId con cascada inteligente.
+  //
+  // Si el body trae el campo, validar y permitir asignar/quitar el consolidador.
+  // Si no viene, no se toca (comportamiento idéntico al anterior).
+  //
+  // Casos:
+  //  - CASO 1 (set null cuando previo no era null): cascada de reset
+  //    recogeViaConsolidador=false en todas las configs del depósito.
+  //  - CASO 2a (set X cuando previo era null): solo REPORTAR elegibilidad,
+  //    NO auto-setear recogeViaConsolidador.
+  //  - CASO 2b (set Y cuando previo era X≠Y): resetear configs con
+  //    recogeViaConsolidador=true cuyo courier no cubre cpDepositoConsolidador
+  //    de Y. Reportar reset + preservado + elegibles para el nuevo recolector.
+  //  - No-op (set X igual al previo): validar y seguir, sin cascada.
+  //
+  // Validación de cobertura del consolidador (best-effort MVP):
+  //  El consolidador X debe cubrir el CP del depósito. Si X no tiene filas
+  //  en SucursalCourierCp (caso Mocis), SKIP — se reportará en skipsDeValidacion
+  //  y se cerrará vía DEUDA 32 post-MVP (sync de cobertura en background).
+  // ==========================================
+  let courierRecolectorIdNuevo: number | null | undefined = undefined;
+  let cambiosCascada:
+    | {
+        motivo: "consolidador_removido" | "consolidador_asignado" | "consolidador_cambiado";
+        recogeViaConsolidadorReset: { courierId: number; courierNombre: string }[];
+        recogeViaConsolidadorPreservado: { courierId: number; courierNombre: string }[];
+        eligiblesParaActivar: { courierId: number; courierNombre: string }[];
+        skipsDeValidacion: string[];
+      }
+    | undefined = undefined;
+  let idsConfigsAResetear: number[] = [];
+
+  if ("courierRecolectorId" in body) {
+    const valor = (body as { courierRecolectorId: unknown }).courierRecolectorId;
+
+    if (valor === null) {
+      courierRecolectorIdNuevo = null;
+    } else if (typeof valor === "number" && Number.isInteger(valor)) {
+      // Validar courier existe + activo
+      const courierConsolidador = await prisma.courier.findFirst({
+        where: { id: valor, activo: true },
+      });
+      if (!courierConsolidador) {
+        return NextResponse.json(
+          { error: "Courier recolector no encontrado o inactivo" },
+          { status: 404 }
+        );
+      }
+      if (!courierConsolidador.puedeConsolidar) {
+        return NextResponse.json(
+          {
+            error: `El courier '${courierConsolidador.nombre}' no tiene capacidad de consolidación (puedeConsolidar=false)`,
+          },
+          { status: 400 }
+        );
+      }
+      if (!courierConsolidador.cpDepositoConsolidador) {
+        return NextResponse.json(
+          {
+            error: `El courier '${courierConsolidador.nombre}' no tiene cpDepositoConsolidador configurado, no puede ser asignado como recolector`,
+          },
+          { status: 400 }
+        );
+      }
+
+      // Validación de cobertura del CP del depósito por el consolidador (best-effort)
+      const skipsDeValidacion: string[] = [];
+      const consolidadorTieneCobertura = await prisma.sucursalCourierCp.findFirst({
+        where: { sucursal: { courierId: valor, activa: true, eliminada: false } },
+        select: { id: true },
+      });
+      if (consolidadorTieneCobertura) {
+        const cubreCpDeposito = await prisma.sucursalCourierCp.findFirst({
+          where: {
+            codigoPostal: previo.codigoPostal,
+            sucursal: { courierId: valor, activa: true, eliminada: false },
+          },
+          select: { id: true },
+        });
+        if (!cubreCpDeposito) {
+          return NextResponse.json(
+            {
+              error: `El courier '${courierConsolidador.nombre}' no cubre el CP del depósito (${previo.codigoPostal}). No puede ser asignado como recolector.`,
+            },
+            { status: 400 }
+          );
+        }
+      } else {
+        skipsDeValidacion.push(
+          `Cobertura del consolidador '${courierConsolidador.nombre}' no validada (sin filas en SucursalCourierCp; resolverá DEUDA 32 post-MVP).`
+        );
+      }
+
+      courierRecolectorIdNuevo = valor;
+
+      // Cómputo de cascada (skip si es no-op: previo === nuevo)
+      const cambioReal = previo.courierRecolectorId !== valor;
+      if (cambioReal) {
+        const motivo: "consolidador_asignado" | "consolidador_cambiado" =
+          previo.courierRecolectorId === null ? "consolidador_asignado" : "consolidador_cambiado";
+
+        const configsDelDeposito = await prisma.depositoCourierConfig.findMany({
+          where: { depositoId },
+          include: { courier: { select: { id: true, nombre: true } } },
+        });
+
+        const eligiblesParaActivar: { courierId: number; courierNombre: string }[] = [];
+        const resetReport: { courierId: number; courierNombre: string }[] = [];
+        const preservadoReport: { courierId: number; courierNombre: string }[] = [];
+        const cpConsolidadorNuevo = courierConsolidador.cpDepositoConsolidador;
+
+        for (const cfg of configsDelDeposito) {
+          if (cfg.courierId === valor) continue; // el propio recolector se omite
+
+          // ¿El courier de la config cubre cpDepositoConsolidador del nuevo recolector?
+          const match = await prisma.sucursalCourierCp.findFirst({
+            where: {
+              codigoPostal: cpConsolidadorNuevo,
+              sucursal: { courierId: cfg.courierId, activa: true, eliminada: false },
+            },
+            select: { id: true },
+          });
+          const cubreCpConsolidador = !!match;
+
+          if (cubreCpConsolidador) {
+            eligiblesParaActivar.push({ courierId: cfg.courierId, courierNombre: cfg.courier.nombre });
+          }
+
+          // CASO 2b: si la config ya tenía recogeViaConsolidador=true...
+          if (motivo === "consolidador_cambiado" && cfg.recogeViaConsolidador) {
+            if (cubreCpConsolidador) {
+              // Mantener: el courier sigue cubriendo el nuevo CP consolidador.
+              preservadoReport.push({ courierId: cfg.courierId, courierNombre: cfg.courier.nombre });
+            } else {
+              // Resetear: ya no cubre, recogeViaConsolidador queda obsoleto.
+              idsConfigsAResetear.push(cfg.id);
+              resetReport.push({ courierId: cfg.courierId, courierNombre: cfg.courier.nombre });
+            }
+          }
+        }
+
+        cambiosCascada = {
+          motivo,
+          recogeViaConsolidadorReset: resetReport,
+          recogeViaConsolidadorPreservado: preservadoReport,
+          eligiblesParaActivar,
+          skipsDeValidacion,
+        };
+      }
+    } else {
+      return NextResponse.json(
+        { error: "courierRecolectorId debe ser null o un número entero" },
+        { status: 400 }
+      );
+    }
+
+    // CASO 1: set null + previo no era null → resetear configs con recogeViaConsolidador=true
+    if (courierRecolectorIdNuevo === null && previo.courierRecolectorId !== null) {
+      const configsConRecoge = await prisma.depositoCourierConfig.findMany({
+        where: { depositoId, recogeViaConsolidador: true },
+        include: { courier: { select: { id: true, nombre: true } } },
+      });
+      cambiosCascada = {
+        motivo: "consolidador_removido",
+        recogeViaConsolidadorReset: configsConRecoge.map((c) => ({
+          courierId: c.courierId,
+          courierNombre: c.courier.nombre,
+        })),
+        recogeViaConsolidadorPreservado: [],
+        eligiblesParaActivar: [],
+        skipsDeValidacion: [],
+      };
+      idsConfigsAResetear = configsConRecoge.map((c) => c.id);
+    }
+  }
+
   const actualizado = await prisma.$transaction(async (tx) => {
     if (nuevoEsPredeterminado && !previo.esPredeterminado) {
       await tx.deposito.updateMany({
@@ -64,6 +242,16 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
         data: { esPredeterminado: false },
       });
     }
+    // CAMBIO 6.D rectificación (2026-05-19): si hubo cascada de reset
+    // (CASO 1 o CASO 2b), aplicarla DENTRO de la misma transacción para
+    // que el cambio del consolidador y el reset de configs sean atómicos.
+    if (idsConfigsAResetear.length > 0) {
+      await tx.depositoCourierConfig.updateMany({
+        where: { id: { in: idsConfigsAResetear } },
+        data: { recogeViaConsolidador: false },
+      });
+    }
+
     return tx.deposito.update({
       where: { id: depositoId },
       data: {
@@ -83,6 +271,9 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
         pais: body.pais ? String(body.pais).trim() : "Argentina",
         horarios: String(body.horarios),
         observaciones: body.observaciones ? String(body.observaciones).trim() : null,
+        ...(courierRecolectorIdNuevo !== undefined
+          ? { courierRecolectorId: courierRecolectorIdNuevo }
+          : {}),
       },
     });
   });
@@ -138,7 +329,11 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     recovery = await procesarEnviosBloqueadosPorDeposito(previo.empresaId);
   }
 
-  return NextResponse.json(recovery ? { ...depositoConCoords, recovery } : depositoConCoords);
+  return NextResponse.json({
+    ...depositoConCoords,
+    ...(recovery ? { recovery } : {}),
+    ...(cambiosCascada ? { cambiosCascada } : {}),
+  });
 }
 
 // ==========================================

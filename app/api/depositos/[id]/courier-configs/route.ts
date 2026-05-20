@@ -1,16 +1,20 @@
 // =============================================================================
 // ENDPOINTS: GET (lista) + PUT (upsert) para DepositoCourierConfig
-// DEUDA 29 Sub-fase 6.D.2 — CRUD para configuración de modalidad operativa
-//                          por par (depósito × courier)
+// DEUDA 29 Sub-fase 6.D RECTIFICADA (2026-05-19) — Modelo simplificado.
+// =============================================================================
+//
+// Cambios respecto a 6.D.2 original (commit 452d2e0):
+// - Eliminado modoFirstMile (era atributo, ahora es deducido por el sistema)
+// - Eliminado courierRecolectorId (era atributo, ahora vive en Deposito)
+// - Agregados dropOffCliente y recogeViaConsolidador (los únicos campos que
+//   el cliente decide por par)
+// - Validaciones reducidas de 6 a 3
+// - Cleanup: import prisma desde @/lib/prisma (patrón canónico)
 // =============================================================================
 
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import prisma from "@/lib/prisma";
 import { verificarAccesoDeposito } from "@/lib/depositos/auth";
-
-const prisma = new PrismaClient();
-
-const MODOS_FIRST_MILE_VALIDOS = ["mismo_courier", "consolidador", "drop_off_cliente"];
 
 // =============================================================================
 // GET /api/depositos/[id]/courier-configs
@@ -28,11 +32,9 @@ export async function GET(
     return NextResponse.json({ error: "depositoId inválido" }, { status: 400 });
   }
 
-  // Auth + ownership + existencia del depósito.
   const acceso = await verificarAccesoDeposito(request, depositoId, false);
   if (!acceso.ok) return acceso.response;
 
-  // Query enriquecida: incluye datos del courier principal + del recolector.
   const configs = await prisma.depositoCourierConfig.findMany({
     where: { depositoId },
     include: {
@@ -46,14 +48,6 @@ export async function GET(
           cpDepositoConsolidador: true,
         },
       },
-      courierRecolector: {
-        select: {
-          id: true,
-          nombre: true,
-          puedeConsolidar: true,
-          cpDepositoConsolidador: true,
-        },
-      },
     },
     orderBy: { courierId: "asc" },
   });
@@ -63,6 +57,7 @@ export async function GET(
       id: acceso.deposito.id,
       nombre: acceso.deposito.nombre,
       codigoPostal: acceso.deposito.codigoPostal,
+      courierRecolectorId: acceso.deposito.courierRecolectorId,
     },
     configs,
   });
@@ -71,8 +66,17 @@ export async function GET(
 // =============================================================================
 // PUT /api/depositos/[id]/courier-configs
 // Upsert de una config para un par (depósito × courier).
-// Body: { courierId: number, modoFirstMile: string, courierRecolectorId?: number | null }
+// Body: { courierId: number, dropOffCliente?: boolean, recogeViaConsolidador?: boolean }
 // Roles permitidos: ROLES_ESCRITURA (admin_shipro + gerente_cliente).
+//
+// 3 VALIDACIONES DE NEGOCIO (rectificadas desde 6.D.2 original):
+//
+// V1. Courier existe y está activo.
+// V2. dropOffCliente y recogeViaConsolidador (cuando presentes) son boolean
+//     Y no pueden estar ambos en true (exclusión mutua).
+// V3. Si recogeViaConsolidador=true: el depósito debe tener Deposito.courierRecolectorId
+//     seteado Y el courierId del par no puede ser igual al courierRecolectorId
+//     (un courier no se recoge a sí mismo).
 // =============================================================================
 
 export async function PUT(
@@ -85,11 +89,9 @@ export async function PUT(
     return NextResponse.json({ error: "depositoId inválido" }, { status: 400 });
   }
 
-  // Auth + ownership + permiso de escritura.
   const acceso = await verificarAccesoDeposito(request, depositoId, true);
   if (!acceso.ok) return acceso.response;
 
-  // Parsear body.
   let body: unknown;
   try {
     body = await request.json();
@@ -101,13 +103,13 @@ export async function PUT(
     return NextResponse.json({ error: "Body debe ser un objeto JSON" }, { status: 400 });
   }
 
-  const { courierId, modoFirstMile, courierRecolectorId } = body as {
+  const { courierId, dropOffCliente, recogeViaConsolidador } = body as {
     courierId?: unknown;
-    modoFirstMile?: unknown;
-    courierRecolectorId?: unknown;
+    dropOffCliente?: unknown;
+    recogeViaConsolidador?: unknown;
   };
 
-  // Validación 1: courierId requerido y numérico.
+  // V1.a: courierId obligatorio y numérico
   if (typeof courierId !== "number" || !Number.isInteger(courierId)) {
     return NextResponse.json(
       { error: "courierId debe ser un número entero" },
@@ -115,17 +117,7 @@ export async function PUT(
     );
   }
 
-  // Validación 2: modoFirstMile válido.
-  if (typeof modoFirstMile !== "string" || !MODOS_FIRST_MILE_VALIDOS.includes(modoFirstMile)) {
-    return NextResponse.json(
-      {
-        error: `modoFirstMile debe ser uno de: ${MODOS_FIRST_MILE_VALIDOS.join(", ")}`,
-      },
-      { status: 400 }
-    );
-  }
-
-  // Validación 3: el courier existe y está activo.
+  // V1.b: courier existe y activo
   const courier = await prisma.courier.findFirst({
     where: { id: courierId, activo: true },
   });
@@ -136,89 +128,76 @@ export async function PUT(
     );
   }
 
-  // Validación 4: coherencia consolidador <-> courierRecolectorId.
-  let recolectorIdNormalizado: number | null = null;
+  // Normalizar flags (default false, validar boolean si presentes)
+  let dropOffNormalizado = false;
+  let recogeNormalizado = false;
 
-  if (modoFirstMile === "consolidador") {
-    // Si modo es consolidador, courierRecolectorId es obligatorio y numérico.
-    if (typeof courierRecolectorId !== "number" || !Number.isInteger(courierRecolectorId)) {
+  if (dropOffCliente !== undefined) {
+    if (typeof dropOffCliente !== "boolean") {
+      return NextResponse.json(
+        { error: "dropOffCliente debe ser boolean" },
+        { status: 400 }
+      );
+    }
+    dropOffNormalizado = dropOffCliente;
+  }
+
+  if (recogeViaConsolidador !== undefined) {
+    if (typeof recogeViaConsolidador !== "boolean") {
+      return NextResponse.json(
+        { error: "recogeViaConsolidador debe ser boolean" },
+        { status: 400 }
+      );
+    }
+    recogeNormalizado = recogeViaConsolidador;
+  }
+
+  // V2: exclusión mutua
+  if (dropOffNormalizado && recogeNormalizado) {
+    return NextResponse.json(
+      {
+        error:
+          "dropOffCliente y recogeViaConsolidador no pueden ser ambos true (un courier no puede recolectar vía consolidador y recibir drop-off al mismo tiempo)",
+      },
+      { status: 400 }
+    );
+  }
+
+  // V3: si recogeViaConsolidador=true, validar setup del depósito
+  if (recogeNormalizado) {
+    if (acceso.deposito.courierRecolectorId === null) {
       return NextResponse.json(
         {
           error:
-            "Con modoFirstMile='consolidador' es obligatorio enviar courierRecolectorId (numérico)",
+            "Este depósito no tiene un courier recolector asignado. Configurar Deposito.courierRecolectorId primero antes de marcar recogeViaConsolidador=true",
         },
         { status: 400 }
       );
     }
-    recolectorIdNormalizado = courierRecolectorId;
-
-    // Validación 5: el recolector existe y tiene puedeConsolidar=true.
-    const recolector = await prisma.courier.findFirst({
-      where: { id: recolectorIdNormalizado, activo: true },
-    });
-    if (!recolector) {
-      return NextResponse.json(
-        { error: "courierRecolectorId no encontrado o inactivo" },
-        { status: 404 }
-      );
-    }
-    if (!recolector.puedeConsolidar) {
+    if (acceso.deposito.courierRecolectorId === courierId) {
       return NextResponse.json(
         {
-          error: `El courier '${recolector.nombre}' no puede ser recolector (puedeConsolidar=false)`,
-        },
-        { status: 400 }
-      );
-    }
-
-    // Validación 6: "1 solo recolector activo por depósito".
-    // Buscar si ya existe OTRA config (no la actual del par depositoId+courierId) con
-    // modoFirstMile='consolidador' en el mismo depósito.
-    const otroConsolidador = await prisma.depositoCourierConfig.findFirst({
-      where: {
-        depositoId,
-        modoFirstMile: "consolidador",
-        NOT: { courierId },
-      },
-      include: { courier: { select: { nombre: true } } },
-    });
-    if (otroConsolidador) {
-      return NextResponse.json(
-        {
-          error: `Ya existe otra config con consolidador en este depósito (courier: ${otroConsolidador.courier.nombre}). Solo se permite 1 recolector activo por depósito.`,
-        },
-        { status: 409 }
-      );
-    }
-  } else {
-    // Si modo NO es consolidador, courierRecolectorId debe ser null o no estar presente.
-    if (
-      courierRecolectorId !== undefined &&
-      courierRecolectorId !== null
-    ) {
-      return NextResponse.json(
-        {
-          error: `Con modoFirstMile='${modoFirstMile}', courierRecolectorId debe ser null o omitirse`,
+          error: `El courier '${courier.nombre}' es el courier recolector del depósito. No puede recolectar vía consolidador (sería recolectarse a sí mismo)`,
         },
         { status: 400 }
       );
     }
   }
 
-  // Upsert: crea o actualiza según el constraint único (depositoId, courierId).
+  // Upsert
   const config = await prisma.depositoCourierConfig.upsert({
     where: {
       depositoId_courierId: { depositoId, courierId },
     },
     update: {
-      modoFirstMile,
-      courierRecolectorId: recolectorIdNormalizado,
+      dropOffCliente: dropOffNormalizado,
+      recogeViaConsolidador: recogeNormalizado,
     },
     create: {
       depositoId,
       courierId,
-      modoFirstMile,
-      courierRecolectorId: recolectorIdNormalizado,
+      dropOffCliente: dropOffNormalizado,
+      recogeViaConsolidador: recogeNormalizado,
     },
     include: {
       courier: {
@@ -227,14 +206,6 @@ export async function PUT(
           nombre: true,
           activo: true,
           tieneSucursales: true,
-          puedeConsolidar: true,
-          cpDepositoConsolidador: true,
-        },
-      },
-      courierRecolector: {
-        select: {
-          id: true,
-          nombre: true,
           puedeConsolidar: true,
           cpDepositoConsolidador: true,
         },

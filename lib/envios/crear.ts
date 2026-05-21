@@ -3,6 +3,8 @@ import { enviarMailCreacion } from "@/lib/mailer";
 import { obtenerCourier } from "@/lib/couriers/normalizar";
 import { despacharCourier } from "@/lib/envios/dispatch";
 import { cotizar } from "@/lib/cotizador";
+import { validarOperatividadPar } from "@/lib/depositos/operatividad";
+import type { DepositoCourierConfig } from "@prisma/client";
 
 export interface CrearEnvioInput {
   empresaId: number;
@@ -272,6 +274,52 @@ export async function crearEnvio(input: CrearEnvioInput) {
   });
 
   // ==============================================================
+  // VALIDACIÓN DE OPERATIVIDAD DEL PAR (DEUDA 29 Sub-fase 6.D.5)
+  // ==============================================================
+  // Lookup de DepositoCourierConfig + validación pre-despacho. Si el par
+  // no es operativo, branch según permitirBloqueoPorDeposito:
+  //   - true (e-commerce): crear envío en BLOQUEADO_OPERATIVIDAD sin
+  //     despachar ni debitar saldo (paridad con BLOQUEADO_DEPOSITO).
+  //   - false (dashboard): throw OperatividadInvalida con motivos.
+  // Skip si bloqueadoPorDeposito (no hay depósito para validar) o
+  // falloPorPeaje (dirección destino inválida, RETENIDO tiene prioridad).
+  // TODO 6.D.6+ (DEUDA 34): destrabe automático al configurar el par.
+  const depositoCourierConfig: DepositoCourierConfig | null = deposito
+    ? await prisma.depositoCourierConfig.findUnique({
+        where: {
+          depositoId_courierId: {
+            depositoId: deposito.id,
+            courierId: courierReal.id,
+          },
+        },
+      })
+    : null;
+
+  let bloqueadoPorOperatividad = false;
+  let motivosOperatividad: string[] = [];
+  let detalleOperatividad: string[] = [];
+
+  if (deposito && credencialMain && !bloqueadoPorDeposito && !falloPorPeaje) {
+    const operatividad = await validarOperatividadPar({
+      prisma,
+      deposito,
+      courier: courierReal,
+    });
+    if (!operatividad.operativo) {
+      if (permitirBloqueoPorDeposito) {
+        bloqueadoPorOperatividad = true;
+        estadoInicialEnvio = "BLOQUEADO_OPERATIVIDAD";
+        motivosOperatividad = operatividad.motivos;
+        detalleOperatividad = operatividad.detalle;
+      } else {
+        throw new Error(
+          `OperatividadInvalida: el par (depósito=${deposito.nombre}, courier=${courierReal.nombre}) no es operativo. Motivos: ${operatividad.motivos.join(", ")}. Detalle: ${operatividad.detalle.join("; ")}.`
+        );
+      }
+    }
+  }
+
+  // ==============================================================
   // VALIDACIÓN DE SALDO POR tipoCuenta (DEUDA 16)
   // Reusamos `empresaConData` cargada arriba para resolución del depósito;
   // tiene los campos saldoActivo/limiteDescubierto/modalidadPago necesarios.
@@ -298,13 +346,13 @@ export async function crearEnvio(input: CrearEnvioInput) {
   // aplican, el envío arranca como BLOQUEADO_DEPOSITO; cuando se configure
   // depósito, la función procesarEnviosBloqueadosPorDeposito() valida saldo
   // y transiciona a BLOQUEADO_SALDO si no alcanza.
-  if (bloqueadoPorSaldo && !bloqueadoPorDeposito) {
+  if (bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorOperatividad) {
     estadoInicialEnvio = "BLOQUEADO_SALDO";
   }
 
   // DESPACHO AL COURIER (solo si NO falló el peaje, NO está bloqueado por saldo
   // ni por depósito, y hay credencial + depósito disponibles).
-  if (!falloPorPeaje && !bloqueadoPorSaldo && !bloqueadoPorDeposito && credencialMain && credencialMain.activo && deposito) {
+  if (!falloPorPeaje && !bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorOperatividad && credencialMain && credencialMain.activo && deposito) {
     const dispatchResult = await despacharCourier({
       credencial: credencialMain,
       courierNombreCanonico: courierReal.nombre,
@@ -316,6 +364,11 @@ export async function crearEnvio(input: CrearEnvioInput) {
       // DEUDA 29 Sub-fase 2.D.despachar: depositoId para que dispatch.ts resuelva
       // la sucursal de imposición preferida del cliente (DepositoSucursalPreferida).
       depositoId: deposito.id,
+      // DEUDA 29 Sub-fase 6.D.5: pasar deposito y config pre-cargados para que
+      // dispatch.ts use el modelo nuevo (recogeViaConsolidador + courierRecolectorId)
+      // y evite lookups internos duplicados.
+      deposito,
+      config: depositoCourierConfig,
       destinatarioNombre,
       calle: calle || "",
       altura: altura || "",
@@ -463,7 +516,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
     // Si BLOQUEADO_SALDO, BLOQUEADO_DEPOSITO o BLOQUEADO_PARCIAL: NO crear
     // MovimientoFinanciero ni actualizar saldo. El débito se aplica recién
     // cuando se desbloquee.
-    if (!bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorTramoFallido) {
+    if (!bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorOperatividad && !bloqueadoPorTramoFallido) {
       await tx.movimientoFinanciero.create({
         data: {
           empresaId,
@@ -486,6 +539,8 @@ export async function crearEnvio(input: CrearEnvioInput) {
       await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_PARCIAL", observacion: `Bloqueado por falla en despacho del courier: ${errorTramo}. Tramos persistidos: ${dispatchTramos.length}. El operador debe resolver la falla manualmente.`, envioId: envioCreado.id } });
     } else if (bloqueadoPorDeposito) {
       await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_DEPOSITO", observacion: `Bloqueado: la empresa no tiene depósito predeterminado configurado. Se desbloqueará automáticamente cuando se configure uno en /configuracion/depositos.`, envioId: envioCreado.id } });
+    } else if (bloqueadoPorOperatividad) {
+      await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_OPERATIVIDAD", observacion: `Par (depósito × courier) no operativo. Motivos: ${motivosOperatividad.join(", ")}. Detalle: ${detalleOperatividad.join("; ")}. Configurá el par en /configuracion/depositos.`, envioId: envioCreado.id } });
     } else if (bloqueadoPorSaldo) {
       const saldoDisponible = (empresaData?.saldoActivo || 0) + (tipoCuentaEfectivo === "POSTPAGO" ? (empresaData?.limiteDescubierto || 0) : 0);
       await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_SALDO", observacion: `Bloqueado por saldo insuficiente. Costo $${montoDebito.toFixed(2)}, disponible $${saldoDisponible.toFixed(2)} (${tipoCuentaEfectivo}). Se desbloqueará al recargar saldo.`, envioId: envioCreado.id } });
@@ -501,7 +556,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
   // Mails: NO mandar si está bloqueado por saldo, depósito o partial failure
   // (el destinatario no debe recibir notificación hasta que el envío se destrabe
   // y tenga tracking real).
-  if (email && !bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorTramoFallido) {
+  if (email && !bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorOperatividad && !bloqueadoPorTramoFallido) {
     if (falloPorPeaje) {
       const { enviarMailRetenido } = await import("@/lib/mailer");
       await enviarMailRetenido(email, trackingOficial, destinatarioNombre, `${process.env.APP_URL || "http://localhost:3000"}/corregir/${trackingOficial}`, empresaNombreParaMail);
@@ -516,6 +571,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
     bloqueadoPorSaldo,
     bloqueadoPorDeposito,
     bloqueadoPorTramoFallido,
+    bloqueadoPorOperatividad,
     estado: estadoInicialEnvio
   };
 }

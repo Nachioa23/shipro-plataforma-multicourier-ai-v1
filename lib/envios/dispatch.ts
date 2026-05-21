@@ -1,7 +1,7 @@
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
-import type { CredencialCourier } from "@prisma/client";
+import type { CredencialCourier, Deposito, DepositoCourierConfig } from "@prisma/client";
 import prisma from "@/lib/prisma";
 
 export interface DispatchInput {
@@ -57,6 +57,13 @@ export interface DispatchInput {
    * (creds.id_sucursal_origen → params.origen → hardcoded).
    */
   depositoId?: number;
+  // === DEUDA 29 Sub-fase 6.D.5 (2026-05-20) ===
+  // Modelo NUEVO de modalidad de despacho. Si vienen pre-cargados, dispatch
+  // los usa con prioridad sobre credencial.modoFirstMile/courierRecolectorId
+  // (legacy). Si NO vienen pero sí depositoId, dispatch hace lookup interno.
+  // Si no viene ninguno (caso inversa o caller no migrado), fallback legacy.
+  deposito?: Deposito;
+  config?: DepositoCourierConfig | null;
 }
 
 export interface TramoSnapshot {
@@ -113,6 +120,30 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
 
   if (!credencial.activo) {
     return { tracking: null, etiquetaUrl: null, tramos: [], error: "Credencial inactiva" };
+  }
+
+  // === DEUDA 29 Sub-fase 6.D.5: resolución de depósito y config del par ===
+  // Prioridad a objetos pre-cargados por el caller. Si solo viene depositoId,
+  // dispatch hace lookup interno (backward compat). Si no viene nada (caso
+  // inversa o caller legacy), ambos quedan null y se usa el fallback legacy
+  // de credencial.modoFirstMile más abajo (decisión de tramos).
+  let depositoResuelto: Deposito | null = input.deposito ?? null;
+  let configResuelta: DepositoCourierConfig | null = input.config ?? null;
+
+  if (!depositoResuelto && input.depositoId) {
+    depositoResuelto = await prisma.deposito.findUnique({
+      where: { id: input.depositoId },
+    });
+  }
+  if (!configResuelta && depositoResuelto) {
+    configResuelta = await prisma.depositoCourierConfig.findUnique({
+      where: {
+        depositoId_courierId: {
+          depositoId: depositoResuelto.id,
+          courierId: courierIdMain,
+        },
+      },
+    });
   }
 
   // DEUDA 29 Sub-fase 2.E: lookup de Empresa para construir el remitente real
@@ -231,27 +262,49 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
   // Tramo 1: recolector (Mocis u otro). Tramo 2: Last-Mile.
   // Vinculación Mocis-Andreani al final (best-effort).
   // ============================================================
-  if (credencial.modoFirstMile === "consolidador") {
-    if (!credencial.courierRecolectorId) {
+  // === DEUDA 29 Sub-fase 6.D.5: decisión de consolidador con modelo nuevo ===
+  // El modelo nuevo (DepositoCourierConfig.recogeViaConsolidador +
+  // Deposito.courierRecolectorId) tiene prioridad. El fallback legacy
+  // (credencial.modoFirstMile/courierRecolectorId) se usa SOLO cuando no
+  // hay depósito resuelto — caso inversa o caller no migrado.
+  const useLegacy = depositoResuelto === null;
+
+  let esConsolidadorEfectivo: boolean;
+  let recolectorIdEfectivo: number | null;
+
+  if (useLegacy) {
+    console.warn(
+      "[dispatch] Caller sin depósito resuelto: usando credencial.modoFirstMile legacy (DEUDA 29 6.D.5/6.D.6)."
+    );
+    esConsolidadorEfectivo = credencial.modoFirstMile === "consolidador";
+    recolectorIdEfectivo = credencial.courierRecolectorId;
+  } else {
+    esConsolidadorEfectivo =
+      configResuelta?.recogeViaConsolidador === true &&
+      depositoResuelto?.courierRecolectorId != null;
+    recolectorIdEfectivo = depositoResuelto?.courierRecolectorId ?? null;
+  }
+
+  if (esConsolidadorEfectivo) {
+    if (!recolectorIdEfectivo) {
       return {
         tracking: null,
         etiquetaUrl: null,
         tramos: [],
-        error: "modoFirstMile=consolidador pero courierRecolectorId es null"
+        error: "recogeViaConsolidador=true pero no hay courier recolector resuelto"
       };
     }
 
     // Lookup del courier recolector. Lectura, preserva pureza dispatch.ts ("no escribe BD").
     const courierRecolector = await prisma.courier.findUnique({
-      where: { id: credencial.courierRecolectorId },
+      where: { id: recolectorIdEfectivo },
     });
-
     if (!courierRecolector) {
       return {
         tracking: null,
         etiquetaUrl: null,
         tramos: [],
-        error: `Courier recolector id=${credencial.courierRecolectorId} no encontrado`
+        error: `Courier recolector id=${recolectorIdEfectivo} no encontrado`
       };
     }
 

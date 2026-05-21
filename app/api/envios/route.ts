@@ -150,6 +150,15 @@ export async function POST(request: Request) {
       });
     }
 
+    if (result.bloqueadoPorOperatividad) {
+      return NextResponse.json({
+        ...result,
+        status: "BLOQUEADO_OPERATIVIDAD",
+        bloqueadoPorOperatividad: true,
+        warning: "Envío creado pero bloqueado: el par (depósito × courier) no es operativo. El cliente debe configurar el par en Shipro para destrabarlo."
+      });
+    }
+
     if (result.bloqueadoPorSaldo) {
       return NextResponse.json({
         ...result,

@@ -54,6 +54,14 @@ export async function POST(request: Request) {
       // DEUDA 29 Sub-fase 1.C.3: TransportesTab manda modoFirstMile + courierRecolectorId
       // directamente. Mantenemos el whitelist defensivo y el soporte legacy de `recolector`
       // string por compatibilidad con clientes viejos (defense in depth).
+      //
+      // === DEUDA 29 Sub-fase 6.D.5 (2026-05-20) ===
+      // ATENCIÓN: los campos modoFirstMile y courierRecolectorId que este endpoint
+      // sigue escribiendo a CredencialCourier ya NO los lee dispatch.ts. El modelo
+      // nuevo (DepositoCourierConfig.recogeViaConsolidador + Deposito.courierRecolectorId)
+      // tiene prioridad y se resuelve a nivel par (depósito × courier) desde 6.D.5.
+      // Este endpoint queda como legacy compat hasta 6.D.6, donde el TransportesTab se
+      // migra a /configuracion/depositos y estos 2 campos se eliminan de CredencialCourier.
       const VALORES_FIRST_MILE = ['mismo_courier', 'consolidador', 'drop_off_cliente'];
       const modoFirstMileInput = courier.modoFirstMile ?? courier.recolector;
       const modoFirstMile = VALORES_FIRST_MILE.includes(modoFirstMileInput)

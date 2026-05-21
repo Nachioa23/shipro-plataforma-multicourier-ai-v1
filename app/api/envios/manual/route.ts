@@ -90,6 +90,12 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+    if (error?.message?.startsWith('OperatividadInvalida')) {
+      return NextResponse.json(
+        { error: error.message, code: 'OPERATIVIDAD_INVALIDA' },
+        { status: 400 }
+      );
+    }
     console.error("Error en POST /api/envios/manual:", error);
     return NextResponse.json({ error: "Error interno al crear el envío o debitar el saldo." }, { status: 500 });
   }

@@ -51,30 +51,11 @@ export async function POST(request: Request) {
       const credencialesJson = courier.usaPropias ? JSON.stringify(courier.credenciales) : null;
       const serviciosActivos = JSON.stringify(courier.servicios || []);
 
-      // DEUDA 29 Sub-fase 1.C.3: TransportesTab manda modoFirstMile + courierRecolectorId
-      // directamente. Mantenemos el whitelist defensivo y el soporte legacy de `recolector`
-      // string por compatibilidad con clientes viejos (defense in depth).
-      //
-      // === DEUDA 29 Sub-fase 6.D.5 (2026-05-20) ===
-      // ATENCIÓN: los campos modoFirstMile y courierRecolectorId que este endpoint
-      // sigue escribiendo a CredencialCourier ya NO los lee dispatch.ts. El modelo
-      // nuevo (DepositoCourierConfig.recogeViaConsolidador + Deposito.courierRecolectorId)
-      // tiene prioridad y se resuelve a nivel par (depósito × courier) desde 6.D.5.
-      // Este endpoint queda como legacy compat hasta 6.D.6, donde el TransportesTab se
-      // migra a /configuracion/depositos y estos 2 campos se eliminan de CredencialCourier.
-      const VALORES_FIRST_MILE = ['mismo_courier', 'consolidador', 'drop_off_cliente'];
-      const modoFirstMileInput = courier.modoFirstMile ?? courier.recolector;
-      const modoFirstMile = VALORES_FIRST_MILE.includes(modoFirstMileInput)
-        ? modoFirstMileInput
-        : 'mismo_courier';
-
-      // courierRecolectorId solo aplica cuando modoFirstMile === "consolidador".
-      // Si no es consolidador → forzar null para preservar consistencia.
-      // Si es consolidador pero no llega ID válido → null (frontend ya validó pre-submit;
-      // este fallback evita crashear si llega un body malformado).
-      const courierRecolectorId = modoFirstMile === 'consolidador'
-        ? (typeof courier.courierRecolectorId === 'number' ? courier.courierRecolectorId : null)
-        : null;
+      // DEUDA 29 Sub-fase 6.D.6: la modalidad de First-Mile (modoFirstMile +
+      // courierRecolectorId) fue eliminada de CredencialCourier. Se resuelve
+      // ahora a nivel par (depósito x courier) vía DepositoCourierConfig y
+      // Deposito.courierRecolectorId. Este endpoint ya no escribe esos campos;
+      // si el body los trae (TransportesTab legacy), se ignoran silenciosamente.
 
       // tipoCuenta: solo se incluye en update/create si el rol lo permite.
       // Valor "" (default empresa) → null en BD.
@@ -96,8 +77,6 @@ export async function POST(request: Request) {
           serviciosActivos: serviciosActivos,
           ajusteTarifaPorcentaje: parseFloat(courier.markupClientePorcentaje) || 0,
           markupFijo: parseFloat(courier.markupClienteFijo) || 0,
-          modoFirstMile: modoFirstMile,
-          courierRecolectorId: courierRecolectorId,
           requiereSeguro: courier.seguroActivado || false,
           ...tipoCuentaPatch,
         },
@@ -110,8 +89,6 @@ export async function POST(request: Request) {
           serviciosActivos: serviciosActivos,
           ajusteTarifaPorcentaje: parseFloat(courier.markupClientePorcentaje) || 0,
           markupFijo: parseFloat(courier.markupClienteFijo) || 0,
-          modoFirstMile: modoFirstMile,
-          courierRecolectorId: courierRecolectorId,
           requiereSeguro: courier.seguroActivado || false,
           ...tipoCuentaPatch,
         }

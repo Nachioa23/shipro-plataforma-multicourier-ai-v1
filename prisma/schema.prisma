@@ -204,15 +204,11 @@ model CredencialCourier {
   // Si no alcanza: envío queda en estado BLOQUEADO_SALDO sin tracking real.
   tipoCuenta String?
 
-  // --- DEUDA 29: First-Mile reemplaza el string libre `courierRecolector` legacy ---
-  // Valores válidos:
-  // - "mismo_courier": el courier configurado retira directo del depósito.
-  // - "consolidador": un courier externo (ej. Mocis) recoge y entrega al
-  //   courier de Last-Mile. Requiere courierRecolectorId no nulo.
-  // - "drop_off_cliente": el cliente lleva el paquete a una sucursal del
-  //   courier de Last-Mile. NO requiere courierRecolectorId.
-  modoFirstMile       String @default("mismo_courier")
-  courierRecolectorId Int?
+  // --- DEUDA 29 Sub-fase 6.D.6: campos legacy modoFirstMile y
+  // courierRecolectorId eliminados. La modalidad de First-Mile se
+  // resuelve ahora a nivel par (deposito x courier) via
+  // DepositoCourierConfig.recogeViaConsolidador / dropOffCliente +
+  // Deposito.courierRecolectorId. Ver decision #49.
 
   ofreceDomicilio Boolean @default(true)
   ofreceSucursal  Boolean @default(true)

@@ -126,9 +126,9 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
   }
 
   // TODO DEUDA 29 Sub-fase 4: pre-filtro real con capacidades del Courier
-  // (puedeEntregarDomicilio, puedeEntregarSucursal, modoFirstMile + recolector, etc.).
-  // El filtro previo por tipoAlcance/provinciasCobertura era inerte (todas vacías) y
-  // los campos fueron eliminados del schema en commit 1.A.
+  // (puedeEntregarDomicilio, puedeEntregarSucursal, y la modalidad de First-Mile
+  // resuelta a nivel par via DepositoCourierConfig.recogeViaConsolidador +
+  // Deposito.courierRecolectorId).
   const couriersAptos = couriersConfigurados;
 
   let opcionesDomicilio: OpcionTarifa[] = [];

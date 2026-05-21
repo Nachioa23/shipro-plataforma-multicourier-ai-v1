@@ -93,16 +93,19 @@ export interface DispatchResult {
 
 /**
  * Despacha un envío a través de la cadena de couriers (1 o 2 tramos según
- * tipoOrigen + credencial.modoFirstMile) y retorna los snapshots de los tramos
- * efectivamente despachados. NO toca BD: el caller persiste los TramoEnvio
- * dentro de su propia transacción para preservar atomicidad.
+ * tipoOrigen + la modalidad del par depósito x courier) y retorna los
+ * snapshots de los tramos efectivamente despachados. NO toca BD: el caller
+ * persiste los TramoEnvio dentro de su propia transacción para preservar
+ * atomicidad.
  *
  * Tres casos según el doc de arquitectura sección 7.1:
  * - Caso A — tipoOrigen="drop_off_cliente": 1 tramo (entrega) en Last-Mile.
- * - Caso B — modoFirstMile="mismo_courier" (default): 1 tramo (ciclo_completo).
- * - Caso C — modoFirstMile="consolidador": 2 tramos (recolección por
- *   recolector + entrega por Last-Mile). Mocis-Andreani agrega vinculación
- *   `set_tracking_code` al final (best-effort).
+ * - Caso B — sin consolidación (default): 1 tramo (ciclo_completo). El
+ *   courier configurado retira directo del depósito.
+ * - Caso C — DepositoCourierConfig.recogeViaConsolidador=true con
+ *   Deposito.courierRecolectorId asignado: 2 tramos (recolección por el
+ *   courier recolector + entrega por Last-Mile). Mocis-Andreani agrega
+ *   vinculación `set_tracking_code` al final (best-effort).
  *
  * Manejo de fallas: cualquier error devuelve tracking=null y un subset de
  * tramos. El caller debe marcar Envio.estadoActual="BLOQUEADO_PARCIAL" cuando
@@ -262,28 +265,17 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
   // Tramo 1: recolector (Mocis u otro). Tramo 2: Last-Mile.
   // Vinculación Mocis-Andreani al final (best-effort).
   // ============================================================
-  // === DEUDA 29 Sub-fase 6.D.5: decisión de consolidador con modelo nuevo ===
-  // El modelo nuevo (DepositoCourierConfig.recogeViaConsolidador +
-  // Deposito.courierRecolectorId) tiene prioridad. El fallback legacy
-  // (credencial.modoFirstMile/courierRecolectorId) se usa SOLO cuando no
-  // hay depósito resuelto — caso inversa o caller no migrado.
-  const useLegacy = depositoResuelto === null;
-
-  let esConsolidadorEfectivo: boolean;
-  let recolectorIdEfectivo: number | null;
-
-  if (useLegacy) {
-    console.warn(
-      "[dispatch] Caller sin depósito resuelto: usando credencial.modoFirstMile legacy (DEUDA 29 6.D.5/6.D.6)."
-    );
-    esConsolidadorEfectivo = credencial.modoFirstMile === "consolidador";
-    recolectorIdEfectivo = credencial.courierRecolectorId;
-  } else {
-    esConsolidadorEfectivo =
-      configResuelta?.recogeViaConsolidador === true &&
-      depositoResuelto?.courierRecolectorId != null;
-    recolectorIdEfectivo = depositoResuelto?.courierRecolectorId ?? null;
-  }
+  // === DEUDA 29 Sub-fase 6.D.6: decisión de consolidador (modelo único) ===
+  // La modalidad de First-Mile se resuelve a nivel par (depósito x courier):
+  // hay consolidación si DepositoCourierConfig.recogeViaConsolidador === true
+  // y el depósito tiene un courier recolector asignado. Sin depósito resuelto
+  // (caso inversa o caller sin depositoId), no hay consolidación: caso B.
+  // El fallback legacy (credencial.modoFirstMile) fue eliminado en 6.D.6.
+  const esConsolidadorEfectivo: boolean =
+    configResuelta?.recogeViaConsolidador === true &&
+    depositoResuelto?.courierRecolectorId != null;
+  const recolectorIdEfectivo: number | null =
+    depositoResuelto?.courierRecolectorId ?? null;
 
   if (esConsolidadorEfectivo) {
     if (!recolectorIdEfectivo) {

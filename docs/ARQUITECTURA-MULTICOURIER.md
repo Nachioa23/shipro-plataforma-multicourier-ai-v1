@@ -664,7 +664,7 @@ depositosDondeRecolecta Deposito[] @relation("DepositoRecolector")
 
 ## 7. LOGICA DE NEGOCIO
 
-**[ACTUALIZACION - 2026-05-19]:** El pseudo-codigo de esta seccion lee `credencialCourier.modoFirstMile` y `credencialCourier.courierRecolectorId`. Esos campos quedan deprecados (ver decision #49 y secciones 6.11/6.12). El refactor del pseudo-codigo para leer desde `DepositoCourierConfig.dropOffCliente` + `DepositoCourierConfig.recogeViaConsolidador` + `Deposito.courierRecolectorId` se hace en Sub-fase 6.D.5 (rectificada). Hasta entonces, considerar este pseudo-codigo como descripcion del flujo logico de First-Mile y NO como contrato literal de campos de BD.
+**[ACTUALIZACION - 2026-05-21]:** El pseudo-codigo de esta seccion menciona `credencialCourier.modoFirstMile` y `credencialCourier.courierRecolectorId`. Esos campos fueron ELIMINADOS de CredencialCourier en Sub-fase 6.D.6. La modalidad de First-Mile se resuelve ahora a nivel par (deposito x courier) via `DepositoCourierConfig.recogeViaConsolidador` + `DepositoCourierConfig.dropOffCliente` + `Deposito.courierRecolectorId` (ver decision #49 y secciones 6.11/6.12). El refactor del codigo real (dispatch.ts + crear.ts) se completo en Sub-fase 6.D.5 (commit ad68902). El pseudo-codigo de esta Seccion 7 NO fue reescrito y debe leerse como descripcion del flujo logico de First-Mile, NO como contrato literal de campos de BD.
 
 ### 7.1 Generacion de tramos al crear un envio
 

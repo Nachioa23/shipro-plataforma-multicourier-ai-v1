@@ -40,6 +40,18 @@ export default function DepositoForm({ isOpen, onClose, onSaved, empresaId, depo
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // === DEUDA 29 Sub-fase 6.D.7: courier recolector (consolidador) ===
+  // courierRecolectorId: seleccion actual. courierRecolectorOriginal:
+  // valor al abrir el form, para detectar si el usuario lo cambio.
+  // consolidadoresDisponibles: couriers con puedeConsolidar=true.
+  // mostrarModalCascada + cascadaPreview: estado del modal de
+  // confirmacion que muestra el preview del dry-run.
+  const [courierRecolectorId, setCourierRecolectorId] = useState<number | null>(null);
+  const [courierRecolectorOriginal, setCourierRecolectorOriginal] = useState<number | null>(null);
+  const [consolidadoresDisponibles, setConsolidadoresDisponibles] = useState<any[]>([]);
+  const [mostrarModalCascada, setMostrarModalCascada] = useState(false);
+  const [cascadaPreview, setCascadaPreview] = useState<any | null>(null);
+
   // Escenario 3 (DEUDA 4 política "el usuario manda"): si el usuario edita
   // manualmente localidad o provincia, ese campo NO se autocompleta más al
   // cambiar el CP. Si lo borra, el flag se resetea.
@@ -97,6 +109,31 @@ export default function DepositoForm({ isOpen, onClose, onSaved, empresaId, depo
       setHorarios(parsearHorarios(depositoExistente.horarios));
       setEsPredeterminado(!!depositoExistente.esPredeterminado);
       setActivo(depositoExistente.activo !== false);
+
+      // === DEUDA 29 Sub-fase 6.D.7: cargar courier recolector + consolidadores ===
+      // Trae el courierRecolectorId actual del deposito y la lista de couriers
+      // con capacidad de consolidacion (puedeConsolidar=true) para el selector.
+      // Si el fetch falla, el selector queda vacio pero el form sigue operativo.
+      (async () => {
+        try {
+          const resCfg = await fetch(`/api/depositos/${depositoExistente.id}/courier-configs`);
+          if (!resCfg.ok) throw new Error("courier-configs no disponible");
+          const dataCfg = await resCfg.json();
+          const recolectorActual = dataCfg.deposito?.courierRecolectorId ?? null;
+          setCourierRecolectorId(recolectorActual);
+          setCourierRecolectorOriginal(recolectorActual);
+          setConsolidadoresDisponibles(
+            (dataCfg.configs || []).filter(
+              (c: any) => c.courier?.puedeConsolidar && c.courier?.activo
+            )
+          );
+        } catch {
+          // Falla silenciosa: el selector mostrara "no hay consolidadores".
+          setCourierRecolectorId(null);
+          setCourierRecolectorOriginal(null);
+          setConsolidadoresDisponibles([]);
+        }
+      })();
     } else {
       // Reset para crear nuevo
       setNombre('');
@@ -115,6 +152,16 @@ export default function DepositoForm({ isOpen, onClose, onSaved, empresaId, depo
       // Si es el primer depósito, forzar predeterminado=true en UI también (el backend igual lo hace)
       setEsPredeterminado(totalDepositos === 0);
       setActivo(true);
+
+      // === DEUDA 29 Sub-fase 6.D.7: reset del estado de consolidador ===
+      // En modo creacion el selector no se muestra; igual reseteamos el
+      // estado para que una instancia reusada del form no arrastre datos
+      // de una edicion previa.
+      setCourierRecolectorId(null);
+      setCourierRecolectorOriginal(null);
+      setConsolidadoresDisponibles([]);
+      setMostrarModalCascada(false);
+      setCascadaPreview(null);
     }
     setError(null);
     // Flags al abrir el modal:
@@ -176,19 +223,63 @@ export default function DepositoForm({ isOpen, onClose, onSaved, empresaId, depo
       activo,
     };
 
+    // === DEUDA 29 Sub-fase 6.D.7: courier recolector al body ===
+    // Solo en edicion. En creacion el selector no existe (queda null).
+    if (esEdicion) body.courierRecolectorId = courierRecolectorId;
+
     if (!esEdicion) body.empresaId = empresaId;
 
-    try {
-      const url = esEdicion ? `/api/depositos/${depositoExistente.id}` : '/api/depositos';
+    // === DEUDA 29 Sub-fase 6.D.7: ejecutarPut reusable ===
+    // Hace el fetch PUT/POST. Con esDryRun=true agrega ?dryRun=true:
+    // el backend computa la cascada del consolidador sin escribir.
+    // Devuelve { ok, data } para que el llamador decida que hacer.
+    const ejecutarPut = async (esDryRun: boolean): Promise<{ ok: boolean; data: any }> => {
+      const base = esEdicion ? `/api/depositos/${depositoExistente.id}` : '/api/depositos';
+      const url = esDryRun ? `${base}?dryRun=true` : base;
       const method = esEdicion ? 'PUT' : 'POST';
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
+      const data = await res.json().catch(() => ({}));
+      return { ok: res.ok, data };
+    };
+
+    try {
+      // === DEUDA 29 Sub-fase 6.D.7: flujo de guardado con dry-run ===
+      // Si el consolidador cambio (solo posible en edicion), primero
+      // se hace un dry-run. Si la cascada tiene contenido real, se abre
+      // el modal de confirmacion y guardar() termina aca: el PUT real
+      // lo dispara el boton "Confirmar" del modal (confirmarCascada).
+      // Si no cambio, o la cascada esta vacia, se hace el PUT directo.
+      const consolidadorCambio = esEdicion && courierRecolectorId !== courierRecolectorOriginal;
+
+      if (consolidadorCambio) {
+        const previo = await ejecutarPut(true);
+        if (!previo.ok) {
+          setError(previo.data?.error || 'Error al previsualizar el cambio de consolidador');
+          setGuardando(false);
+          return;
+        }
+        const cascada = previo.data?.cambiosCascada;
+        const tieneContenido =
+          !!cascada &&
+          ((cascada.recogeViaConsolidadorReset?.length ?? 0) > 0 ||
+            (cascada.recogeViaConsolidadorPreservado?.length ?? 0) > 0 ||
+            (cascada.eligiblesParaActivar?.length ?? 0) > 0 ||
+            (cascada.skipsDeValidacion?.length ?? 0) > 0);
+        if (tieneContenido) {
+          setCascadaPreview(cascada);
+          setMostrarModalCascada(true);
+          setGuardando(false);
+          return;
+        }
+      }
+
+      const res = await ejecutarPut(false);
       if (!res.ok) {
-        const data = await res.json();
-        setError(data.error || 'Error al guardar');
+        setError(res.data?.error || 'Error al guardar');
         setGuardando(false);
         return;
       }
@@ -196,6 +287,59 @@ export default function DepositoForm({ isOpen, onClose, onSaved, empresaId, depo
       onClose();
     } catch {
       setError('Error de conexión');
+    } finally {
+      setGuardando(false);
+    }
+  };
+
+  // === DEUDA 29 Sub-fase 6.D.7: confirmarCascada ===
+  // Dispara el PUT real cuando el usuario confirma el modal de cascada.
+  // Reconstruye el body (mismos 16 campos + courierRecolectorId): es una
+  // funcion hermana de guardar(), no comparte su closure. En exito cierra
+  // el modal y el form; en error muestra el mensaje y cierra el modal
+  // para que el usuario pueda reintentar.
+  const confirmarCascada = async () => {
+    if (!esEdicion) return;
+    setGuardando(true);
+    setError(null);
+    const body: any = {
+      nombre: nombre.trim(),
+      contactoNombre: contactoNombre.trim(),
+      contactoTelefono: contactoTelefono.trim(),
+      contactoEmail: contactoEmail.trim() || null,
+      direccionCalle: direccionCalle.trim(),
+      direccionAltura: direccionAltura.trim(),
+      direccionPiso: direccionPiso.trim() || null,
+      direccionDpto: direccionDpto.trim() || null,
+      codigoPostal: codigoPostal.trim(),
+      localidad: localidad.trim(),
+      provincia: provincia.trim(),
+      pais: 'Argentina',
+      horarios: JSON.stringify(horarios),
+      observaciones: observaciones.trim() || null,
+      esPredeterminado,
+      activo,
+      courierRecolectorId,
+    };
+    try {
+      const res = await fetch(`/api/depositos/${depositoExistente.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data?.error || 'Error al guardar el cambio de consolidador');
+        setMostrarModalCascada(false);
+        setGuardando(false);
+        return;
+      }
+      setMostrarModalCascada(false);
+      onSaved();
+      onClose();
+    } catch {
+      setError('Error de conexión');
+      setMostrarModalCascada(false);
     } finally {
       setGuardando(false);
     }
@@ -349,6 +493,39 @@ export default function DepositoForm({ isOpen, onClose, onSaved, empresaId, depo
               </label>
             </section>
           )}
+
+          {/* === DEUDA 29 Sub-fase 6.D.7: selector de courier recolector ===
+              Solo en modo edicion (un deposito sin guardar no puede tener
+              consolidador). El cliente elige el recolector entre los couriers
+              que Shipro habilito con puedeConsolidar=true. */}
+          {depositoExistente && (
+            <section className="bg-indigo-50 border border-indigo-200 rounded-xl p-5 space-y-3">
+              <h3 className="text-sm font-bold text-indigo-900">Courier recolector (consolidador)</h3>
+              {consolidadoresDisponibles.length > 0 ? (
+                <>
+                  <select
+                    value={courierRecolectorId ?? ""}
+                    onChange={(e) => setCourierRecolectorId(e.target.value ? parseInt(e.target.value) : null)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  >
+                    <option value="">Sin consolidador</option>
+                    {consolidadoresDisponibles.map((c: any) => (
+                      <option key={c.courier.id} value={c.courier.id}>
+                        {c.courier.nombre}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-indigo-700">
+                    El courier recolector pasa a buscar los paquetes a este deposito y los entrega al courier de last-mile.
+                  </p>
+                </>
+              ) : (
+                <p className="text-[11px] text-indigo-700">
+                  No hay couriers con capacidad de consolidacion habilitados para este deposito.
+                </p>
+              )}
+            </section>
+          )}
         </div>
 
         <div className="p-5 border-t border-gray-200 bg-white flex justify-end gap-3 shrink-0">
@@ -361,6 +538,105 @@ export default function DepositoForm({ isOpen, onClose, onSaved, empresaId, depo
           </button>
         </div>
       </div>
+
+      {/* === DEUDA 29 Sub-fase 6.D.7: modal de confirmacion de cascada ===
+          Se muestra cuando el usuario cambia el consolidador y el dry-run
+          devolvio una cascada con contenido. z-[60] para quedar sobre el
+          form (z-50). Solo informa + confirma; no activa nada. */}
+      {mostrarModalCascada && cascadaPreview && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 sm:p-6">
+          <div
+            className="absolute inset-0 bg-gray-900/60 backdrop-blur-sm"
+            onClick={() => { if (!guardando) setMostrarModalCascada(false); }}
+          />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="bg-[#233b6b] px-6 py-4 shrink-0">
+              <h2 className="text-base font-black text-white">Confirmar cambio de consolidador</h2>
+              <p className="text-xs text-blue-100 font-medium mt-0.5">
+                Revisa los efectos antes de aplicar el cambio.
+              </p>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              <div>
+                <h3 className="text-[11px] font-black text-emerald-700 uppercase tracking-wider mb-1.5">
+                  Couriers habilitados para activar recoleccion via consolidador
+                </h3>
+                {(cascadaPreview.eligiblesParaActivar?.length ?? 0) > 0 ? (
+                  <ul className="text-sm text-gray-700 list-disc list-inside space-y-0.5">
+                    {cascadaPreview.eligiblesParaActivar.map((c: any) => (
+                      <li key={c.courierId}>{c.courierNombre}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-sm text-gray-400 italic">(ninguno)</p>
+                )}
+              </div>
+
+              <div>
+                <h3 className="text-[11px] font-black text-amber-700 uppercase tracking-wider mb-1.5">
+                  Configuraciones que se resetean
+                </h3>
+                {(cascadaPreview.recogeViaConsolidadorReset?.length ?? 0) > 0 ? (
+                  <ul className="text-sm text-gray-700 list-disc list-inside space-y-0.5">
+                    {cascadaPreview.recogeViaConsolidadorReset.map((c: any) => (
+                      <li key={c.courierId}>{c.courierNombre}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-sm text-gray-400 italic">(ninguna)</p>
+                )}
+              </div>
+
+              <div>
+                <h3 className="text-[11px] font-black text-blue-700 uppercase tracking-wider mb-1.5">
+                  Configuraciones preservadas
+                </h3>
+                {(cascadaPreview.recogeViaConsolidadorPreservado?.length ?? 0) > 0 ? (
+                  <ul className="text-sm text-gray-700 list-disc list-inside space-y-0.5">
+                    {cascadaPreview.recogeViaConsolidadorPreservado.map((c: any) => (
+                      <li key={c.courierId}>{c.courierNombre}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-sm text-gray-400 italic">(ninguna)</p>
+                )}
+              </div>
+
+              {(cascadaPreview.skipsDeValidacion?.length ?? 0) > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                  <h3 className="text-[11px] font-black text-amber-800 uppercase tracking-wider mb-1.5">
+                    Avisos
+                  </h3>
+                  <ul className="text-xs text-amber-700 list-disc list-inside space-y-0.5">
+                    {cascadaPreview.skipsDeValidacion.map((s: string, i: number) => (
+                      <li key={i}>{s}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+
+            <div className="p-5 border-t border-gray-200 bg-white flex justify-end gap-3 shrink-0">
+              <button
+                onClick={() => setMostrarModalCascada(false)}
+                disabled={guardando}
+                className="px-5 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-xl transition-colors text-sm disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmarCascada}
+                disabled={guardando}
+                className="flex items-center gap-2 px-6 py-2.5 bg-[#233b6b] hover:bg-blue-900 text-white font-bold rounded-xl transition-colors shadow-sm text-sm disabled:opacity-50"
+              >
+                {guardando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                Confirmar cambio
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

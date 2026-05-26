@@ -40,6 +40,12 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   const errorValidacion = validarDepositoInput(body);
   if (errorValidacion) return NextResponse.json({ error: errorValidacion }, { status: 400 });
 
+  // === DEUDA 29 Sub-fase 6.D.7: flag dry-run ===
+  // Si ?dryRun=true, el handler computa la cascada del consolidador
+  // pero NO escribe en BD: devuelve el preview para el modal de
+  // confirmacion del frontend. El body es el mismo que el del PUT real.
+  const esDryRun = new URL(request.url).searchParams.get("dryRun") === "true";
+
   const previo = acceso.deposito;
   const nuevoEsPredeterminado = body.esPredeterminado === true;
   const nuevoActivo = body.activo !== false;
@@ -233,6 +239,18 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
       };
       idsConfigsAResetear = configsConRecoge.map((c) => c.id);
     }
+  }
+
+  // === DEUDA 29 Sub-fase 6.D.7: modo dry-run ===
+  // Si ?dryRun=true, la cascada ya fue computada arriba (cambiosCascada)
+  // y NO se escribe nada en BD. Devuelve el preview para que el modal de
+  // confirmacion del frontend lo muestre antes de aplicar el cambio real.
+  // El PUT real (sin el flag) ejecuta la transaccion normalmente.
+  if (esDryRun) {
+    return NextResponse.json({
+      dryRun: true,
+      cambiosCascada: cambiosCascada ?? null,
+    });
   }
 
   const actualizado = await prisma.$transaction(async (tx) => {

@@ -3,6 +3,7 @@ import prisma from "@/lib/prisma";
 import { validarDepositoInput, validarPuedeEliminarOInactivar, validarHayOtroPredeterminado } from "@/lib/depositos/validar";
 import { verificarAccesoDeposito } from "@/lib/depositos/auth";
 import { procesarEnviosBloqueadosPorDeposito } from "@/lib/envios/procesar-bloqueados-deposito";
+import { procesarEnviosBloqueadosPorOperatividad } from "@/lib/envios/procesar-bloqueados-operatividad";
 import { geocodificarDireccion } from "@/lib/geo/geocodificar-direccion";
 
 // ==========================================
@@ -347,9 +348,27 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     recovery = await procesarEnviosBloqueadosPorDeposito(previo.empresaId);
   }
 
+  // === DEUDA 34: destrabe automatico post-cambio de courierRecolectorId ===
+  // Cambiar el courier recolector puede resolver el motivo
+  // consolidador_inconsistente en varios pares del deposito a la vez.
+  // Por eso se llama SIN courierId: barre todos los pares del deposito.
+  // Solo dispara si el courierRecolectorId efectivamente cambio.
+  let recoveryOperatividad;
+  if (
+    courierRecolectorIdNuevo !== undefined &&
+    courierRecolectorIdNuevo !== previo.courierRecolectorId
+  ) {
+    try {
+      recoveryOperatividad = await procesarEnviosBloqueadosPorOperatividad(depositoId);
+    } catch (recErr) {
+      console.error("[depositos PUT] procesarEnviosBloqueadosPorOperatividad fallo:", recErr);
+    }
+  }
+
   return NextResponse.json({
     ...depositoConCoords,
     ...(recovery ? { recovery } : {}),
+    ...(recoveryOperatividad ? { recoveryOperatividad } : {}),
     ...(cambiosCascada ? { cambiosCascada } : {}),
   });
 }

@@ -15,6 +15,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { verificarAccesoDeposito } from "@/lib/depositos/auth";
+import { procesarEnviosBloqueadosPorOperatividad } from "@/lib/envios/procesar-bloqueados-operatividad";
 
 // =============================================================================
 // GET /api/depositos/[id]/courier-configs
@@ -213,5 +214,19 @@ export async function PUT(
     },
   });
 
-  return NextResponse.json({ config });
+  // === DEUDA 34: destrabe automatico post-configuracion del par ===
+  // Configurar el par (deposito x courier) puede volverlo operativo.
+  // Reprocesa los envios de ESTE par que estaban en BLOQUEADO_OPERATIVIDAD.
+  // Falla contenida: si el reproceso lanza, no se rompe el guardado del par.
+  let recovery;
+  try {
+    recovery = await procesarEnviosBloqueadosPorOperatividad(depositoId, courierId);
+  } catch (recErr) {
+    console.error("[courier-configs PUT] procesarEnviosBloqueadosPorOperatividad fallo:", recErr);
+  }
+
+  return NextResponse.json({
+    config,
+    ...(recovery ? { recovery } : {}),
+  });
 }

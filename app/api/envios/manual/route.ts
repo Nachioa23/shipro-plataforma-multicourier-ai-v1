@@ -33,6 +33,16 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "empresaId inválido" }, { status: 400 });
     }
 
+    // === DEUDA 35: validacion de tipoOrigen ===
+    // Si el body manda tipoOrigen, tiene que ser uno de los 2 valores validos.
+    // Si no manda nada, se respeta el default de crearEnvio ("recoleccion_courier").
+    if (body.tipoOrigen !== undefined && body.tipoOrigen !== "recoleccion_courier" && body.tipoOrigen !== "drop_off_cliente") {
+      return NextResponse.json(
+        { error: "tipoOrigen invalido. Valores aceptados: 'recoleccion_courier' o 'drop_off_cliente'" },
+        { status: 400 }
+      );
+    }
+
     const result = await crearEnvio({
       empresaId,
       depositoId: body.depositoId,
@@ -53,7 +63,8 @@ export async function POST(request: Request) {
       costoEnvio: body.costoEnvio,
       costoProveedor: body.costoProveedor,
       provinciaDestino: body.provinciaDestino,
-      numeroOrden: body.numeroOrden
+      numeroOrden: body.numeroOrden,
+      tipoOrigen: body.tipoOrigen
     });
 
     if (result.bloqueadoPorSaldo) {

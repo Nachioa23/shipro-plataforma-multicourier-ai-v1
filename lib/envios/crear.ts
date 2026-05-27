@@ -473,6 +473,10 @@ export async function crearEnvio(input: CrearEnvioInput) {
         pesoReal: parseFloat(String(pesoReal)) || 1.0,
         estadoActual: estadoInicialEnvio,
         modalidad: modalidad || "Estándar",
+        // === DEUDA 35: persistir tipoOrigen del input ===
+        // Sin esto el schema default ("recoleccion_courier") siempre se aplicaba,
+        // aunque dispatch ramificara bien por el valor del input.
+        tipoOrigen: tipoOrigen ?? "recoleccion_courier",
         empresa: { connect: { id: empresaId } },
         courier: { connect: { id: courierIdReal } },
         // Si bloqueadoPorDeposito: origen y deposito quedan en null hasta que

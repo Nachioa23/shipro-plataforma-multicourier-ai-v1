@@ -8,6 +8,7 @@ import {
   AlertTriangle, X, Loader2, Globe, Building,
   Power, GitMerge, Calendar, Info, CheckCircle2
 } from 'lucide-react';
+import CourierDrawer, { CourierEditable } from "@/components/admin-couriers/CourierDrawer";
 
 export default function AdminCouriersMaestro() {
   const { data: session } = useSession();
@@ -23,8 +24,12 @@ export default function AdminCouriersMaestro() {
   const esSuperAdmin = rolActual === 'admin_shipro';
 
   // ================= ESTADOS: FLOTA (ABM) =================
-  const [couriers, setCouriers] = useState<any[]>([]);
-  const [courierEditando, setCourierEditando] = useState<any>(null);
+  // DEUDA 32+37: couriers ahora tiene tipo (los servicios vienen incluidos en
+  // el GET /api/admin/couriers). integrables son los couriers con adapter pero
+  // sin fila en BD — los usa el asistente de alta (Fase I).
+  const [couriers, setCouriers] = useState<CourierEditable[]>([]);
+  const [integrables, setIntegrables] = useState<string[]>([]);
+  const [courierEditando, setCourierEditando] = useState<CourierEditable | null>(null);
 
   // ================= ESTADOS: REGLAS (MOTOR) =================
   const [reglas, setReglas] = useState<any[]>([]);
@@ -44,9 +49,13 @@ export default function AdminCouriersMaestro() {
   const cargarTodo = async () => {
     setCargando(true);
     try {
-      // 1. Cargar Couriers
+      // 1. Cargar Couriers (shape: { couriers, integrables }).
       const resCouriers = await fetch("/api/admin/couriers");
-      if (resCouriers.ok) setCouriers(await resCouriers.json());
+      if (resCouriers.ok) {
+        const data = await resCouriers.json();
+        setCouriers(data.couriers || []);
+        setIntegrables(data.integrables || []);
+      }
 
       // 2. Cargar Reglas Maestras
       const resReglas = await fetch('/api/admin/reglas');
@@ -80,27 +89,6 @@ export default function AdminCouriersMaestro() {
       });
     } catch (e) {
       cargarTodo(); // Revertir si falla
-    }
-  };
-
-  const guardarCambiosCourier = async () => {
-    setGuardando(true);
-    try {
-      const res = await fetch("/api/admin/couriers", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(courierEditando)
-      });
-      if (res.ok) {
-        const actualizado = await res.json();
-        setCouriers(couriers.map(c => c.id === actualizado.id ? actualizado : c));
-        setCourierEditando(null);
-        mostrarMensaje("Courier guardado correctamente", "ok");
-      }
-    } catch (error) {
-      mostrarMensaje("Error al guardar courier", "error");
-    } finally {
-      setGuardando(false);
     }
   };
 
@@ -446,49 +434,18 @@ export default function AdminCouriersMaestro() {
         </div>
       </div>
 
-      {/* ================= MODAL DE EDICIÓN ABM (DRAWER DERECHO) ================= */}
+      {/* DEUDA 32+37 (Fase H): drawer extraido a components/admin-couriers/CourierDrawer.tsx */}
       {courierEditando && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-300">
-          <div className="bg-white w-full max-w-md h-full shadow-2xl flex flex-col animate-in slide-in-from-right duration-300">
-             <div className="p-6 bg-[#233b6b] text-white flex justify-between items-center">
-                <div className="flex items-center gap-3">
-                   <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center"><Truck className="w-6 h-6" /></div>
-                   <div><h3 className="text-lg font-black">{courierEditando.nombre}</h3><p className="text-xs text-blue-200">Maestro de Contacto</p></div>
-                </div>
-                <button onClick={() => setCourierEditando(null)} className="p-2 hover:bg-white/10 rounded-lg transition-colors"><X className="w-6 h-6" /></button>
-             </div>
-
-             <div className="flex-1 overflow-y-auto p-6 space-y-6">
-                <div className="space-y-4">
-                   <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2"><Mail className="w-3 h-3"/> Canal de Mesa de Ayuda</h4>
-                   <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-gray-500 uppercase">Email de Soporte Técnico</label>
-                      <input type="email" value={courierEditando.emailSoporte || ''} onChange={e => setCourierEditando({...courierEditando, emailSoporte: e.target.value})} className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm font-bold text-gray-800 outline-none focus:border-blue-500" placeholder="ej: tickets@courier.com" />
-                   </div>
-                   <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-gray-500 uppercase">WhatsApp / Teléfono Operativo</label>
-                      <input type="text" value={courierEditando.telefonoSoporte || ''} onChange={e => setCourierEditando({...courierEditando, telefonoSoporte: e.target.value})} className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm font-bold text-gray-800 outline-none focus:border-blue-500" placeholder="ej: +5491122334455" />
-                   </div>
-                </div>
-
-                <div className="space-y-4 pt-6 border-t border-gray-100">
-                   <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2"><Building className="w-3 h-3"/> Canal Comercial</h4>
-                   <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-gray-500 uppercase">Nombre del Ejecutivo de Cta.</label>
-                      <input type="text" value={courierEditando.contactoComercial || ''} onChange={e => setCourierEditando({...courierEditando, contactoComercial: e.target.value})} className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm font-bold text-gray-800 outline-none focus:border-blue-500" />
-                   </div>
-                </div>
-             </div>
-
-             <div className="p-6 border-t border-gray-100 bg-gray-50 flex gap-3">
-                <button onClick={() => setCourierEditando(null)} className="flex-1 px-4 py-3 bg-white border border-gray-300 rounded-xl text-xs font-black text-gray-500 hover:bg-gray-100 transition-all">Cancelar</button>
-                <button onClick={guardarCambiosCourier} disabled={guardando} className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 text-white rounded-xl text-xs font-black hover:bg-blue-700 shadow-md transition-all disabled:opacity-50">
-                  {guardando ? <Loader2 className="w-4 h-4 animate-spin" /> : null} Guardar Maestro
-                </button>
-             </div>
-          </div>
-        </div>
+        <CourierDrawer
+          courier={courierEditando}
+          onClose={() => setCourierEditando(null)}
+          onSaved={(actualizado) => {
+            setCouriers(couriers.map((c) => (c.id === actualizado.id ? actualizado : c)));
+            mostrarMensaje("Courier guardado correctamente", "ok");
+          }}
+        />
       )}
+
 
     </div>
   );

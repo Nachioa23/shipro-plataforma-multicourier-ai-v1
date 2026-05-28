@@ -150,6 +150,15 @@ model Courier {
   // Se usa cuando este courier es elegido como recolector por un cliente —
   // los couriers de última milla cotizan desde este CP en vez del CP del
   // depósito del cliente. NULL para couriers no consolidadores.
+  // DEUDA 32+37: direccion estructurada del deposito consolidador.
+  // Reemplaza progresivamente a cpDepositoConsolidador (se mantiene por
+  // compatibilidad hasta migrar los consumidores). Autocompletada con
+  // Google Maps (mismo metodo que Deposito). NULL para no consolidadores.
+  cpDepositoConsolidadorCalle      String?
+  cpDepositoConsolidadorNumero     String?
+  cpDepositoConsolidadorCp         String?
+  cpDepositoConsolidadorLocalidad  String?
+  cpDepositoConsolidadorProvincia  String?
   puedeEntregarDomicilio Boolean @default(true)
   puedeEntregarSucursal  Boolean @default(false)
   aceptaDropOff          Boolean @default(false)
@@ -181,6 +190,41 @@ model Courier {
   // DEUDA 29 Sub-fase 6.D (rectificación, 2026-05-19): inversa de Deposito.courierRecolectorId.
   // Identifica todos los depósitos donde este courier es el consolidador recolector.
   depositosDondeRecolecta Deposito[] @relation("DepositoRecolector")
+
+  // DEUDA 32+37: servicios comerciales que este courier ofrece al cliente final.
+  servicios ServicioCourier[]
+}
+
+// ==========================================
+// DEUDA 32+37: ServicioCourier
+// Servicios comerciales que un courier ofrece al cliente final.
+// El admin los activa/desactiva desde admin-couriers. Solo se pueden
+// activar los que el adapter del courier declara soportar
+// (capacidadTecnicaMapeada no-null). Ver docs/DISENO-DEUDA-32-37.md.
+// ==========================================
+model ServicioCourier {
+  id                      Int      @id @default(autoincrement())
+  courierId               Int
+  courier                 Courier  @relation(fields: [courierId], references: [id], onDelete: Cascade)
+
+  // Identificador estable del servicio (no se traduce). Ej: "entrega_domicilio_estandar".
+  codigoServicio          String
+  // Agrupador para la UI: "entrega" | "logistica_inversa".
+  grupo                   String
+  // Orden de aparicion en la UI.
+  ordenVisual             Int      @default(0)
+
+  // Switch del admin: el servicio esta ofrecido al cliente final o no.
+  activo                  Boolean  @default(false)
+  // Mapeo a la capacidad tecnica del adapter. Ej: "andreani_dispatch_domicilio_estandar".
+  // NULL = el adapter no soporta este servicio (switch bloqueado en UI).
+  capacidadTecnicaMapeada String?
+
+  fechaCreacion           DateTime @default(now())
+  fechaActualizacion      DateTime @updatedAt
+
+  @@unique([courierId, codigoServicio])
+  @@index([courierId, activo])
 }
 
 // ==========================================

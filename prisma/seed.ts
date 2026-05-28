@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import csv from 'csv-parser';
 import bcrypt from 'bcryptjs';
+import { capacidadTecnica } from '../lib/couriers/serviciosSoportados';
 
 const prisma = new PrismaClient();
 
@@ -30,7 +31,7 @@ async function main() {
   const couriersExistentes = await prisma.courier.count();
   if (couriersExistentes === 0) {
     await prisma.courier.createMany({
-      data: [{ nombre: 'Andreani' }, { nombre: "Moci's" }, { nombre: 'Moova' }, { nombre: 'Javit' }]
+      data: [{ nombre: 'Andreani' }, { nombre: "Moci's" }]
     });
   }
 
@@ -44,9 +45,65 @@ async function main() {
   for (const c of couriersConCpConsolidador) {
     await prisma.courier.upsert({
       where: { nombre: c.nombre },
-      update: { cpDepositoConsolidador: c.cpDepositoConsolidador },
-      create: { nombre: c.nombre, cpDepositoConsolidador: c.cpDepositoConsolidador },
+      update: {
+        cpDepositoConsolidador: c.cpDepositoConsolidador,
+        cpDepositoConsolidadorCp: c.cpDepositoConsolidador,
+      },
+      create: {
+        nombre: c.nombre,
+        cpDepositoConsolidador: c.cpDepositoConsolidador,
+        cpDepositoConsolidadorCp: c.cpDepositoConsolidador,
+      },
     });
+  }
+
+  // DEUDA 32+37: seed de servicios comerciales por courier.
+  // El estado activo es la intencion comercial del director. La capacidad
+  // tecnica se lee del registry (serviciosSoportados). REGLA: si la capacidad
+  // es null (el adapter no lo soporta), se fuerza activo=false — un servicio
+  // no soportado nunca puede quedar activo. Ver docs/DISENO-DEUDA-32-37.md.
+  const serviciosPorCourier: Record<string, { codigo: string; grupo: string; orden: number; activo: boolean }[]> = {
+    "Andreani": [
+      { codigo: "entrega_domicilio_estandar", grupo: "entrega", orden: 1, activo: true },
+      { codigo: "entrega_domicilio_express", grupo: "entrega", orden: 2, activo: false },
+      { codigo: "entrega_sucursal", grupo: "entrega", orden: 3, activo: true },
+      { codigo: "entrega_punto_retiro", grupo: "entrega", orden: 4, activo: false },
+      { codigo: "entrega_elocker", grupo: "entrega", orden: 5, activo: false },
+      { codigo: "inversa_cambio", grupo: "logistica_inversa", orden: 6, activo: true },
+      { codigo: "inversa_devolucion_retiro_domicilio", grupo: "logistica_inversa", orden: 7, activo: true },
+      { codigo: "inversa_devolucion_dropoff_sucursal", grupo: "logistica_inversa", orden: 8, activo: true },
+    ],
+    "Moci's": [
+      { codigo: "entrega_domicilio_estandar", grupo: "entrega", orden: 1, activo: true },
+      { codigo: "entrega_domicilio_express", grupo: "entrega", orden: 2, activo: false },
+      { codigo: "entrega_sucursal", grupo: "entrega", orden: 3, activo: false },
+      { codigo: "entrega_punto_retiro", grupo: "entrega", orden: 4, activo: false },
+      { codigo: "entrega_elocker", grupo: "entrega", orden: 5, activo: false },
+      { codigo: "inversa_cambio", grupo: "logistica_inversa", orden: 6, activo: true },
+      { codigo: "inversa_devolucion_retiro_domicilio", grupo: "logistica_inversa", orden: 7, activo: true },
+      { codigo: "inversa_devolucion_dropoff_sucursal", grupo: "logistica_inversa", orden: 8, activo: false },
+    ],
+  };
+  for (const [nombreCourier, servicios] of Object.entries(serviciosPorCourier)) {
+    const courier = await prisma.courier.findUnique({ where: { nombre: nombreCourier } });
+    if (!courier) continue;
+    for (const s of servicios) {
+      // REGLA: capacidad null => activo forzado a false.
+      const capacidad = capacidadTecnica(nombreCourier, s.codigo);
+      const activoEfectivo = capacidad !== null && s.activo;
+      await prisma.servicioCourier.upsert({
+        where: { courierId_codigoServicio: { courierId: courier.id, codigoServicio: s.codigo } },
+        update: { grupo: s.grupo, ordenVisual: s.orden, activo: activoEfectivo, capacidadTecnicaMapeada: capacidad },
+        create: {
+          courierId: courier.id,
+          codigoServicio: s.codigo,
+          grupo: s.grupo,
+          ordenVisual: s.orden,
+          activo: activoEfectivo,
+          capacidadTecnicaMapeada: capacidad,
+        },
+      });
+    }
   }
 
   console.log('✅ Empresa, Usuario Admin y Couriers listos.');

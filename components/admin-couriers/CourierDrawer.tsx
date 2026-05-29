@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { X, Loader2, Lock } from "lucide-react";
+import { X, Loader2, Lock, RefreshCw, CheckCircle2, AlertCircle, Info } from "lucide-react";
 import AutocompleteAddress, { type AddressData } from "@/components/forms/AutocompleteAddress";
 import { labelServicio } from "@/lib/couriers/serviciosSoportados";
 
@@ -58,6 +58,19 @@ export default function CourierDrawer({ courier, onClose, onSaved }: Props) {
   const [editado, setEditado] = useState<CourierEditable | null>(null);
   const [guardando, setGuardando] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Estado del boton de sincronizacion (Section 4).
+  const [sincronizando, setSincronizando] = useState(false);
+  const [resultadoSync, setResultadoSync] = useState<{
+    ok: boolean;
+    aplica: boolean;
+    procesadas?: number;
+    exitosas?: number;
+    errores?: number;
+    softDeleted?: number;
+    motivo?: string;
+    duracionMs?: number;
+  } | null>(null);
 
   // Sincronizar el estado local cuando el padre cambia el courier seleccionado.
   useEffect(() => {
@@ -381,7 +394,117 @@ export default function CourierDrawer({ courier, onClose, onSaved }: Props) {
             );
           })()}
 
-          {/* La seccion 4 (Sincronizacion) se agrega en H.5. */}
+          {/* ----- Section 4: Sincronizacion ----- */}
+          {(() => {
+            // Inferimos si la seccion "aplica" desde la data del courier.
+            // Criterio: tiene sucursales Y el servicio entrega_sucursal tiene
+            // capacidad tecnica (no null). Si no, el sync no tiene sentido
+            // y mostramos el mensaje educativo. La fuente de verdad real
+            // (FUENTES_SUCURSALES) vive server-side; el backend confirma al
+            // hacer click si llegara a haber discrepancia.
+            const servicioSucursal = editado.servicios.find(
+              (s) => s.codigoServicio === "entrega_sucursal"
+            );
+            const aplicaSync =
+              editado.tieneSucursales &&
+              servicioSucursal?.capacidadTecnicaMapeada != null;
+
+            const handleSync = async () => {
+              setSincronizando(true);
+              setResultadoSync(null);
+              try {
+                const res = await fetch(
+                  `/api/admin/couriers/${editado.id}/sincronizar`,
+                  { method: "POST" }
+                );
+                const data = await res.json();
+                setResultadoSync(data);
+              } catch (e: any) {
+                setResultadoSync({
+                  ok: false,
+                  aplica: true,
+                  motivo: e?.message || "Error de red al sincronizar",
+                });
+              } finally {
+                setSincronizando(false);
+              }
+            };
+
+            return (
+              <section className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 space-y-4">
+                <div className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+                  Sincronizacion de cobertura
+                </div>
+
+                {aplicaSync ? (
+                  <div className="space-y-3">
+                    <p className="text-xs text-gray-600">
+                      Sincroniza la red de sucursales y sus codigos postales
+                      atendidos desde la API publica del courier. El cron
+                      mensual lo hace automaticamente; usa este boton para
+                      forzar una actualizacion manual.
+                    </p>
+                    <button
+                      onClick={handleSync}
+                      disabled={sincronizando}
+                      className="flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-[#233b6b] hover:bg-[#1a2d52] text-white rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      {sincronizando ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <RefreshCw className="w-4 h-4" />
+                      )}
+                      {sincronizando ? "Sincronizando..." : "Sincronizar ahora"}
+                    </button>
+
+                    {resultadoSync && (
+                      <div
+                        className={`mt-3 p-3 rounded-lg text-xs flex items-start gap-2 ${
+                          resultadoSync.ok
+                            ? "bg-green-50 border border-green-200 text-green-800"
+                            : "bg-red-50 border border-red-200 text-red-800"
+                        }`}
+                      >
+                        {resultadoSync.ok ? (
+                          <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                        ) : (
+                          <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                        )}
+                        <div>
+                          <div className="font-semibold">
+                            {resultadoSync.motivo}
+                          </div>
+                          {resultadoSync.aplica && resultadoSync.ok && (
+                            <div className="mt-1 text-[11px] opacity-90">
+                              {resultadoSync.exitosas} sucursales OK
+                              {resultadoSync.errores !== undefined && resultadoSync.errores > 0 && (
+                                <> · {resultadoSync.errores} con error</>
+                              )}
+                              {resultadoSync.softDeleted !== undefined && resultadoSync.softDeleted > 0 && (
+                                <> · {resultadoSync.softDeleted} marcadas como eliminadas</>
+                              )}
+                              {resultadoSync.duracionMs !== undefined && (
+                                <> · {(resultadoSync.duracionMs / 1000).toFixed(1)}s</>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-start gap-2">
+                    <Info className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
+                    <div className="text-xs text-blue-900">
+                      Este courier verifica la cobertura en tiempo real al
+                      cotizar. No requiere sincronizacion previa de sucursales
+                      ni codigos postales.
+                    </div>
+                  </div>
+                )}
+              </section>
+            );
+          })()}
         </div>
 
         {/* ============ FOOTER (sticky) ============ */}

@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { X, Loader2 } from "lucide-react";
+import { X, Loader2, Lock } from "lucide-react";
 import AutocompleteAddress, { type AddressData } from "@/components/forms/AutocompleteAddress";
+import { labelServicio } from "@/lib/couriers/serviciosSoportados";
 
 // =============================================================================
 // DEUDA 32+37 (Fase H): Drawer de edicion de un courier (espacio Shipro).
@@ -290,7 +291,97 @@ export default function CourierDrawer({ courier, onClose, onSaved }: Props) {
             )}
           </section>
 
-          {/* Las secciones 3 y 4 se agregan en H.4, H.5. */}
+          {/* ----- Section 3: Servicios ----- */}
+          {(() => {
+            // Servicios agrupados por "entrega" y "logistica_inversa" (ya
+            // vienen ordenados por ordenVisual desde el GET).
+            const entregas = editado.servicios.filter((s) => s.grupo === "entrega");
+            const inversas = editado.servicios.filter((s) => s.grupo === "logistica_inversa");
+
+            // Toggle de un servicio: actualiza el array completo manteniendo
+            // el orden. Si la capacidad es null, no hace nada (defensa en
+            // profundidad — el input ya esta disabled).
+            const toggleServicio = (codigo: string, nuevoActivo: boolean) => {
+              setEditado((prev) => {
+                if (!prev) return prev;
+                const servicios = prev.servicios.map((s) =>
+                  s.codigoServicio === codigo
+                    ? { ...s, activo: s.capacidadTecnicaMapeada !== null && nuevoActivo }
+                    : s
+                );
+                return { ...prev, servicios };
+              });
+            };
+
+            // Render de un servicio individual con sus 3 estados visuales.
+            const renderServicio = (s: typeof editado.servicios[number]) => {
+              const bloqueado = s.capacidadTecnicaMapeada === null;
+              return (
+                <div
+                  key={s.codigoServicio}
+                  className={`flex items-center justify-between py-2.5 ${bloqueado ? "opacity-60" : ""}`}
+                >
+                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                    {bloqueado && (
+                      <Lock
+                        className="w-3.5 h-3.5 text-gray-400 flex-shrink-0"
+                        aria-label="Servicio no soportado por este courier"
+                      />
+                    )}
+                    <span className={`text-sm ${bloqueado ? "text-gray-500" : "text-gray-800"}`}>
+                      {labelServicio(s.codigoServicio)}
+                    </span>
+                  </div>
+                  <label
+                    className={`relative inline-flex items-center ${bloqueado ? "cursor-not-allowed" : "cursor-pointer"}`}
+                    title={bloqueado ? "Este courier no soporta este servicio tecnicamente. Se requiere desarrollar la integracion." : undefined}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={s.activo}
+                      disabled={bloqueado}
+                      onChange={(e) => toggleServicio(s.codigoServicio, e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-500"></div>
+                  </label>
+                </div>
+              );
+            };
+
+            return (
+              <section className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 space-y-4">
+                <div className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+                  Servicios
+                </div>
+                <p className="text-xs text-gray-600">
+                  Servicios comerciales que ofrece este courier. Los servicios
+                  con candado no se pueden activar — el adapter no los soporta
+                  tecnicamente todavia.
+                </p>
+
+                <div className="space-y-1">
+                  <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                    Entregas
+                  </h4>
+                  <div className="divide-y divide-gray-100">
+                    {entregas.map(renderServicio)}
+                  </div>
+                </div>
+
+                <div className="space-y-1 pt-2">
+                  <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                    Logistica inversa
+                  </h4>
+                  <div className="divide-y divide-gray-100">
+                    {inversas.map(renderServicio)}
+                  </div>
+                </div>
+              </section>
+            );
+          })()}
+
+          {/* La seccion 4 (Sincronizacion) se agrega en H.5. */}
         </div>
 
         {/* ============ FOOTER (sticky) ============ */}

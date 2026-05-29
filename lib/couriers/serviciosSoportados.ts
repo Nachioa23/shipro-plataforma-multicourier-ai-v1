@@ -41,6 +41,25 @@ export const CODIGOS_SERVICIO = [
 
 export type CodigoServicio = (typeof CODIGOS_SERVICIO)[number];
 
+// Labels en espanol para mostrar en UI. Conviven con los codigos (fuente unica
+// de verdad). Cuando se agrega un servicio nuevo, se actualizan ambos juntos.
+export const LABELS_SERVICIO: Record<CodigoServicio, string> = {
+  entrega_domicilio_estandar: "Entrega a domicilio (Estandar)",
+  entrega_domicilio_express: "Entrega a domicilio (Express)",
+  entrega_sucursal: "Entrega en sucursal",
+  entrega_punto_retiro: "Entrega en punto de retiro",
+  entrega_elocker: "Entrega en e-locker",
+  inversa_cambio: "Cambio",
+  inversa_devolucion_retiro_domicilio: "Devolucion con retiro a domicilio",
+  inversa_devolucion_dropoff_sucursal: "Devolucion con drop-off en sucursal",
+};
+
+// Helper: devuelve el label de un codigo, o el codigo crudo si no esta mapeado
+// (defensa para codigos viejos/desconocidos sin romper la UI).
+export function labelServicio(codigo: string): string {
+  return LABELS_SERVICIO[codigo as CodigoServicio] ?? codigo;
+}
+
 // Mapeo por courier: codigoServicio -> capacidad tecnica (tipoEntrega) | null.
 // null = el adapter no soporta ese servicio (candado en UI).
 // La clave es el nombre canonico del courier (igual que CourierFactory).

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { capacidadTecnica, CODIGOS_SERVICIO } from "@/lib/couriers/serviciosSoportados";
+import { capacidadTecnica, CODIGOS_SERVICIO, displayCourier } from "@/lib/couriers/serviciosSoportados";
 import { couriersSoportados, courierTieneSoporte } from "@/lib/couriers/CourierFactory";
 
 // =============================================================================
@@ -41,11 +41,14 @@ export async function GET(request: Request) {
   });
 
   // Couriers integrables: tienen adapter (couriersSoportados) pero NO fila en BD.
-  // Es lo que el asistente de alta ofrece para crear.
+  // Es lo que el asistente de alta ofrece para crear. Devolvemos canonico (lo que
+  // espera el POST) + display (para mostrar en UI).
   const nombresEnBd = new Set(
     couriers.map((c) => c.nombre.toLowerCase().replace(/['\s]/g, ""))
   );
-  const integrables = couriersSoportados().filter((n) => !nombresEnBd.has(n));
+  const integrables = couriersSoportados()
+    .filter((n) => !nombresEnBd.has(n))
+    .map((canonico) => ({ canonico, display: displayCourier(canonico) }));
 
   return NextResponse.json({ couriers, integrables });
 }

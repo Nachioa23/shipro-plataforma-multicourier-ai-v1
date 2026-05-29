@@ -9,6 +9,7 @@ import {
   Power, GitMerge, Calendar, Info, CheckCircle2
 } from 'lucide-react';
 import CourierDrawer, { CourierEditable } from "@/components/admin-couriers/CourierDrawer";
+import IntegrarCourierDrawer from "@/components/admin-couriers/IntegrarCourierDrawer";
 
 export default function AdminCouriersMaestro() {
   const { data: session } = useSession();
@@ -28,8 +29,12 @@ export default function AdminCouriersMaestro() {
   // el GET /api/admin/couriers). integrables son los couriers con adapter pero
   // sin fila en BD — los usa el asistente de alta (Fase I).
   const [couriers, setCouriers] = useState<CourierEditable[]>([]);
-  const [integrables, setIntegrables] = useState<string[]>([]);
+  // DEUDA 32+37 (Fase I): cada integrable es { canonico, display }. El canonico
+  // se manda al POST; el display se muestra al admin en el asistente de alta.
+  const [integrables, setIntegrables] = useState<{ canonico: string; display: string }[]>([]);
   const [courierEditando, setCourierEditando] = useState<CourierEditable | null>(null);
+  // DEUDA 32+37 (Fase I): apertura del asistente de alta de courier.
+  const [mostrarIntegrar, setMostrarIntegrar] = useState(false);
 
   // ================= ESTADOS: REGLAS (MOTOR) =================
   const [reglas, setReglas] = useState<any[]>([]);
@@ -223,7 +228,12 @@ export default function AdminCouriersMaestro() {
                         <h3 className="text-lg font-black text-gray-800">Operadores Logísticos Habilitados</h3>
                         <p className="text-xs text-gray-500 font-medium">Activá integraciones para que estén disponibles en las cuentas de tus clientes.</p>
                     </div>
-                    <button className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white text-xs font-black rounded-lg hover:bg-slate-800 transition-all opacity-50 cursor-not-allowed" title="Próximamente">
+                    <button
+                      onClick={() => setMostrarIntegrar(true)}
+                      disabled={integrables.length === 0}
+                      title={integrables.length === 0 ? "No hay couriers integrables. Todos los adapters disponibles ya estan en uso." : "Integrar un nuevo courier"}
+                      className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white text-xs font-black rounded-lg hover:bg-slate-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
                         <Plus className="w-4 h-4" /> Integrar Nuevo Courier
                     </button>
                   </div>
@@ -445,6 +455,17 @@ export default function AdminCouriersMaestro() {
           }}
         />
       )}
+
+      {/* DEUDA 32+37 (Fase I): asistente de alta de courier. */}
+      <IntegrarCourierDrawer
+        isOpen={mostrarIntegrar}
+        integrables={integrables}
+        onClose={() => setMostrarIntegrar(false)}
+        onSaved={(creado) => {
+          cargarTodo();
+          mostrarMensaje(`${creado.nombre} integrado correctamente`, "ok");
+        }}
+      />
 
 
     </div>

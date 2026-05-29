@@ -27,6 +27,23 @@
 
 import { normalizarParaComparacion } from "./normalizar";
 
+// Nombres de display por courier (lo que ve el admin en la UI). Las keys son
+// los nombres canonicos normalizados (mismas que SERVICIOS_SOPORTADOS). Cuando
+// se integre un courier nuevo: agregar aca su display + adapter + servicios.
+export const NOMBRES_DISPLAY: Record<string, string> = {
+  andreani: "Andreani",
+  mocis: "Moci's",
+};
+
+// Helper: devuelve el nombre de display de un courier, con fallback a la
+// version capitalizada del canonico si no esta mapeado (defensa).
+export function displayCourier(nombreCanonico: string): string {
+  return (
+    NOMBRES_DISPLAY[nombreCanonico] ??
+    nombreCanonico.charAt(0).toUpperCase() + nombreCanonico.slice(1)
+  );
+}
+
 // Codigos de los 8 servicios comerciales (identificadores estables).
 export const CODIGOS_SERVICIO = [
   "entrega_domicilio_estandar",

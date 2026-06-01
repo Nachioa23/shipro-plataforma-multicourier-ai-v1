@@ -8,6 +8,12 @@ export async function POST(request: Request) {
     const ctx = resolverContext(request, body.filtroEmpresa);
     if (ctx instanceof NextResponse) return ctx;
 
+    // DEUDA 32+37 (Fase J): origen del registro de cobertura vacia. El proxy
+    // inyecta x-auth-mode con "session" (dashboard) o "apiKey" (e-commerce).
+    // Default "dashboard" defensivo si por algun motivo el header falta.
+    const authMode = request.headers.get("x-auth-mode");
+    const origen = authMode === "apiKey" ? "api" : "dashboard";
+
     const result = await cotizar({
       empresaId: ctx.empresaId,
       cpOrigen: body.cpOrigen,
@@ -15,6 +21,7 @@ export async function POST(request: Request) {
       provinciaDestino: body.provinciaDestino,
       paquetes: body.paquetes,
       valorCarrito: body.valorCarrito,
+      origen,
     });
 
     return NextResponse.json(result);

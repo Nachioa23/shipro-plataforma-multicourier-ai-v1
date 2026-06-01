@@ -43,6 +43,8 @@ model Empresa {
 
   createdAt   DateTime     @default(now())
   reglasRuteo ReglaRuteo[]
+  // DEUDA 32+37 (Fase J): registro de cotizaciones que devolvieron cero couriers.
+  registrosCoberturaVacia RegistroCoberturaVacia[]
 }
 
 // ==========================================
@@ -943,4 +945,32 @@ model SucursalCourierCp {
   @@unique([sucursalCourierId, codigoPostal])
   @@index([sucursalCourierId])
   @@index([codigoPostal])
+}
+
+// =============================================================================
+// DEUDA 32+37 (Fase J): Registro de cotizaciones con cobertura vacia.
+// =============================================================================
+// Cada fila representa una cotizacion (POST /api/cotizar) donde la respuesta
+// fue cero couriers (ni domicilio ni sucursal). Sirve para auditar la red
+// logistica: que CPs nos piden y no podemos cotizar, con que frecuencia, para
+// que empresas. Input para decisiones de integracion futura (ej: integrar OCA
+// si vemos muchos CPs no cubiertos).
+//
+// El insert lo hace el cotizador (lib/cotizador.ts) cuando detecta vacio total.
+// La consulta es para auditoria interna; no hay UI hoy (deuda futura).
+// =============================================================================
+model RegistroCoberturaVacia {
+  id          Int      @id @default(autoincrement())
+  fecha       DateTime @default(now())
+  cpDestino   String
+  pesoKg      Float
+  largoCm     Float?
+  anchoCm     Float?
+  altoCm      Float?
+  origen      String?  // contexto: "dashboard" / "api" / etc.
+  empresaId   Int?
+  empresa     Empresa? @relation(fields: [empresaId], references: [id])
+
+  @@index([fecha])
+  @@index([cpDestino])
 }

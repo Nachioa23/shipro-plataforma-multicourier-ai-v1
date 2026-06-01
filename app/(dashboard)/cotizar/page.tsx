@@ -4,7 +4,7 @@ import { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { ArrowLeft, MapPin, CheckCircle2, Truck, Clock, Loader2, Store, Building2 } from 'lucide-react';
+import { ArrowLeft, MapPin, CheckCircle2, Truck, Clock, Loader2, Store, Building2, AlertTriangle } from 'lucide-react';
 
 function CotizadorContenido() {
   const brandColor = '#233b6b';
@@ -21,6 +21,9 @@ function CotizadorContenido() {
   const [tarifasDomicilio, setTarifasDomicilio] = useState<any[]>([]);
   const [tarifasSucursal, setTarifasSucursal] = useState<any[]>([]);
   const [cotizando, setCotizando] = useState(false);
+  // DEUDA 32+37 (Fase J): true cuando ningun courier pudo cotizar.
+  // Se lee de data.coberturaVacia del POST /api/cotizar.
+  const [coberturaVacia, setCoberturaVacia] = useState(false);
 
   const [sucursales, setSucursales] = useState<any[]>([]);
   const [cargandoSucursales, setCargandoSucursales] = useState(false);
@@ -100,6 +103,8 @@ function CotizadorContenido() {
           const data = await res.json();
           setTarifasDomicilio(data.domicilio || []);
           setTarifasSucursal(data.sucursal || []);
+          // Fase J: bandera de cobertura vacia (ningun courier presto servicio).
+          setCoberturaVacia(data.coberturaVacia === true);
 
           if (data.domicilio && data.domicilio.length > 0) setSelectedOption(data.domicilio[0].id);
         }
@@ -276,6 +281,23 @@ function CotizadorContenido() {
                 </div>
               </div>
 
+              {/* DEUDA 32+37 (Fase J): banner de cobertura vacia. Solo cuando
+                  termino el fetch y ningun courier pudo cotizar. Reemplaza
+                  visualmente las tabs en este caso. */}
+              {!cotizando && coberturaVacia && (
+                <div className="mt-8 bg-amber-50 border border-amber-200 rounded-2xl p-5 flex items-start gap-3">
+                  <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                  <div className="text-sm text-amber-900 space-y-1">
+                    <p className="font-semibold">Sin cobertura para este destino</p>
+                    <p className="text-xs">
+                      Ningun courier presta servicio para este codigo postal.
+                      Revisa que este escrito correctamente o proba con otro
+                      destino.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               <div className="flex gap-4 border-b border-gray-200 pb-px mt-8 overflow-x-auto whitespace-nowrap">
                 <button
                   onClick={() => { setTabActivo('domicilio'); if(tarifasDomicilio.length > 0) setSelectedOption(tarifasDomicilio[0].id); }}
@@ -297,7 +319,7 @@ function CotizadorContenido() {
                     <Loader2 className="w-10 h-10 animate-spin mb-4 text-[#233b6b]" />
                     <p className="font-bold text-sm">Consultando tarifas en tiempo real...</p>
                   </div>
-                ) : listaActiva.length === 0 ? (
+                ) : listaActiva.length === 0 && !coberturaVacia ? (
                   <div className="py-12 flex flex-col items-center justify-center text-gray-400 bg-white rounded-xl border border-gray-200 shadow-sm">
                     <p className="font-bold text-sm">No hay servicios de {tabActivo} disponibles para este destino.</p>
                   </div>

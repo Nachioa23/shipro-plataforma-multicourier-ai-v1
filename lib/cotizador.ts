@@ -16,6 +16,10 @@ export interface CotizarInput {
   provinciaDestino?: string;
   paquetes: Paquete[];
   valorCarrito?: number;
+  // DEUDA 32+37 (Fase J): contexto de la llamada para el registro de
+  // cobertura vacia. Valores tipicos: "dashboard" / "api" / "checkout".
+  // Si no se provee, queda null en el registro.
+  origen?: string;
 }
 
 export interface OpcionTarifa {
@@ -35,6 +39,9 @@ export interface CotizarResult {
   cambio: any[];
   devolucion: any[];
   metadata?: { reglaEjecutada: string };
+  // DEUDA 32+37 (Fase J): true cuando ni un courier pudo cotizar
+  // (vacio total). La UI usa este flag para mostrar el banner.
+  coberturaVacia?: boolean;
 }
 
 // =================================================================
@@ -252,11 +259,37 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
     }
   }
 
+  // DEUDA 32+37 (Fase J): deteccion de cobertura vacia (ningun courier pudo
+  // cotizar) + registro en BD para auditoria de la red logistica. El insert
+  // es best-effort (fire-and-forget): si la BD falla, NO rompemos la
+  // cotizacion. Principio operativo: que la venta no se pierda nunca.
+  const coberturaVacia = finalDomicilio.length === 0 && finalSucursal.length === 0;
+
+  if (coberturaVacia) {
+    const primero = input.paquetes[0];
+    prisma.registroCoberturaVacia
+      .create({
+        data: {
+          cpDestino: input.cpDestino,
+          pesoKg: pesoTotal,
+          largoCm: primero?.largoCm ?? null,
+          anchoCm: primero?.anchoCm ?? null,
+          altoCm: primero?.altoCm ?? null,
+          origen: input.origen ?? null,
+          empresaId: input.empresaId,
+        },
+      })
+      .catch((err) => {
+        console.warn("[cotizador] No se pudo registrar cobertura vacia:", err);
+      });
+  }
+
   return {
     domicilio: finalDomicilio,
     sucursal: finalSucursal,
     cambio: [],
     devolucion: [],
-    metadata: { reglaEjecutada: reglaAplicada?.nombre || "Motor Base" }
+    metadata: { reglaEjecutada: reglaAplicada?.nombre || "Motor Base" },
+    coberturaVacia,
   };
 }

@@ -1,6 +1,7 @@
 import prisma from "@/lib/prisma";
 import { despacharCourier } from "@/lib/envios/dispatch";
 import { enviarMailCreacion } from "@/lib/mailer";
+import { getAppUrl } from "@/lib/utils/app-url";
 
 const MAX_INLINE = 10;
 
@@ -245,16 +246,20 @@ export async function procesarEnviosBloqueados(empresaId: number): Promise<Proce
       saldoSimulado = nuevoSaldo;
 
       if (envio.destino.email) {
-        try {
-          enviarMailCreacion(
-            envio.destino.email,
-            trackingReal,
-            envio.destino.nombre || "Cliente",
-            envio.courier.nombre,
-            `${process.env.APP_URL || "http://localhost:3000"}/seguimiento/${trackingReal}`
-          );
-        } catch (mailErr) {
-          console.warn(`[procesarEnviosBloqueados] Fallo al mandar mail para ${trackingReal}:`, mailErr);
+        // DEUDA 14: skip mail si APP_URL no esta configurada (warn loggeado en helper).
+        const baseUrl = getAppUrl();
+        if (baseUrl) {
+          try {
+            enviarMailCreacion(
+              envio.destino.email,
+              trackingReal,
+              envio.destino.nombre || "Cliente",
+              envio.courier.nombre,
+              `${baseUrl}/s/${trackingReal}`
+            );
+          } catch (mailErr) {
+            console.warn(`[procesarEnviosBloqueados] Fallo al mandar mail para ${trackingReal}:`, mailErr);
+          }
         }
       }
 

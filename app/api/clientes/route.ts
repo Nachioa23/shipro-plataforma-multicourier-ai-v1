@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma"; 
 // IMPORTAMOS LA NUEVA FUNCIÓN DEL MAILER
-import { enviarMailBienvenida } from "@/lib/mailer"; 
+import { enviarMailBienvenida } from "@/lib/mailer";
+import { getAppUrl } from "@/lib/utils/app-url";
 
 export async function GET() {
   try {
@@ -45,12 +46,15 @@ export async function POST(request: Request) {
     });
 
     // ¡DISPARAMOS EL NUEVO EMAIL DE ONBOARDING AUTOMÁTICO!
+    // DEUDA 14: si APP_URL no esta configurada, skip el mail con warn.
+    // La empresa ya esta creada — no rompemos el onboarding por config faltante.
     try {
-      const urlLogin = `${process.env.APP_URL || "http://localhost:3000"}/login`;
-      
-      // Llamamos al Mail 5 que creamos, pasándole los datos exactos:
-      await enviarMailBienvenida(email, razonSocial, passwordTemporal, urlLogin);
-      console.log(`[Shipro] Mail de bienvenida enviado a ${email}`);
+      const baseUrl = getAppUrl();
+      if (baseUrl) {
+        const urlLogin = `${baseUrl}/login`;
+        await enviarMailBienvenida(email, razonSocial, passwordTemporal, urlLogin);
+        console.log(`[Shipro] Mail de bienvenida enviado a ${email}`);
+      }
     } catch (e) {
       console.warn("El correo de bienvenida no se pudo enviar, pero la empresa se creó.", e);
     }
@@ -89,12 +93,15 @@ export async function PUT(request: Request) {
       });
 
       // ¡DISPARAMOS EL EMAIL AUTOMÁTICO PARA USUARIOS NUEVOS!
+      // DEUDA 14: si APP_URL no esta configurada, skip el mail con warn.
+      // El usuario ya esta creado — no rompemos el alta por config faltante.
       try {
-        const urlLogin = `${process.env.APP_URL || "http://localhost:3000"}/login`;
-        
-        // Usamos la misma función de bienvenida, pero ahora saluda al usuario particular
-        await enviarMailBienvenida(email, nombre, passwordTemporal, urlLogin);
-        console.log(`[Shipro] Mail de nuevo acceso enviado a ${email}`);
+        const baseUrl = getAppUrl();
+        if (baseUrl) {
+          const urlLogin = `${baseUrl}/login`;
+          await enviarMailBienvenida(email, nombre, passwordTemporal, urlLogin);
+          console.log(`[Shipro] Mail de nuevo acceso enviado a ${email}`);
+        }
       } catch (e) {
         console.warn("El correo de nuevo usuario no se pudo enviar.", e);
       }

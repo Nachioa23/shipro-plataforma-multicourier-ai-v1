@@ -4,11 +4,14 @@ import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { enviarMailColecta, enviarMailEntregadoNPS } from "@/lib/mailer";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
+import { getAppUrlOrThrow } from "@/lib/utils/app-url";
 
 export async function GET(request: Request) {
   try {
     const LOTE_MAXIMO = 200; // Capacidad escalada para +100k envíos/mes
-    const baseUrl = process.env.APP_URL || "http://localhost:3000";
+    // DEUDA 14: fail-fast si APP_URL no esta configurada (mejor que mandar
+    // mails con links a localhost desde produccion).
+    const baseUrl = getAppUrlOrThrow();
 
     // OBTENER LOS ENVÍOS "MÁS VIEJOS" QUE NO ESTÁN ENTREGADOS
     // Ordenamos por 'fechaActualizacion' ascendente, para que siempre procese los más atrasados primero.

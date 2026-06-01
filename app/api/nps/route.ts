@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { getAppUrlOrThrow } from "@/lib/utils/app-url";
 
 export async function GET(request: Request) {
   try {
@@ -68,7 +69,8 @@ export async function GET(request: Request) {
     }
 
     // 5. Redirigimos al cliente a la página pública de seguimiento para que complete las otras 5 preguntas
-    const baseUrl = process.env.APP_URL || "http://localhost:3000";
+    // DEUDA 14: fail-fast (mejor que redirect a localhost).
+    const baseUrl = getAppUrlOrThrow();
     return NextResponse.redirect(`${baseUrl}/s/${tracking}?nps=success&score=${score}`);
 
   } catch (error) {

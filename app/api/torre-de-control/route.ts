@@ -1,3 +1,33 @@
+// =============================================================================
+// /api/torre-de-control — Endpoint analitico de Calidad Postal
+// =============================================================================
+// ESTADO: backend listo, vista UI pendiente (DEUDA 8 reformulada, 2026-06-02).
+//
+// IMPORTANTE: este endpoint computa SOLO la metrica de Calidad Postal
+// (1 de las 11 metricas planeadas para Torre de Control). Ver DEUDA 39
+// en DEUDAS.md para el sistema integral.
+//
+// Computa metricas estrategicas para decisiones de producto/operacion:
+//   - Tasa de precision postal (% direcciones correctas por comprador)
+//   - Tiempo promedio de resolucion de envios retenidos
+//   - Atribucion de correcciones (comprador vs operador del cliente)
+//   - Top 5 provincias con mas errores postales
+//
+// CONTEXTO ESTRATEGICO: Shipro es plataforma de datos. La generacion de
+// informacion valiosa del cliente y la operacion logistica es parte del
+// core del producto. Endpoints como este NO se borran aunque no tengan
+// UI activa — son backend listo para vistas futuras de analitica.
+//
+// Decisiones del director (2026-06-02):
+//   - El endpoint queda vivo.
+//   - Construir vista UI cuando se priorice (DEUDA 8 reformulada).
+//
+// Consumidores: ningun fetch al endpoint hoy. La pagina dashboard
+// /torre-de-control fetchea /api/envios + /api/metricas + /api/clientes,
+// NO este endpoint. Cuando se construya la vista de Calidad Postal,
+// fetchara este endpoint.
+// =============================================================================
+
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { resolverContext } from "@/lib/auth-context";

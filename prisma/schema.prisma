@@ -14,7 +14,7 @@ model Empresa {
   id     Int     @id @default(autoincrement())
   nombre String
   cuit   String  @unique
-  activo Boolean @default(true) // <--- ¡ESTE ES EL CAMPO VITAL QUE FALTABA!
+  activo Boolean @default(true)
 
   apiKey         String?   @unique
   apiKeyActiva   Boolean   @default(true)

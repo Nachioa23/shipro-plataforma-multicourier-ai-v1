@@ -2,6 +2,7 @@ import prisma from "@/lib/prisma";
 import { despacharCourier } from "@/lib/envios/dispatch";
 import { enviarMailCreacion } from "@/lib/mailer";
 import { validarOperatividadPar } from "@/lib/depositos/operatividad";
+import { getAppUrl } from "@/lib/utils/app-url";
 
 // =============================================================================
 // DEUDA 34: Destrabe automatico de envios en BLOQUEADO_OPERATIVIDAD
@@ -319,16 +320,20 @@ export async function procesarEnviosBloqueadosPorOperatividad(
       saldoSimulado = nuevoSaldo;
 
       if (envio.destino.email) {
-        try {
-          enviarMailCreacion(
-            envio.destino.email,
-            trackingReal,
-            envio.destino.nombre || "Cliente",
-            envio.courier.nombre,
-            `${process.env.APP_URL || "http://localhost:3000"}/seguimiento/${trackingReal}`
-          );
-        } catch (mailErr) {
-          console.warn(`[procesarEnviosBloqueadosPorOperatividad] Fallo al mandar mail para ${trackingReal}:`, mailErr);
+        // DEUDA 14: skip mail si APP_URL no esta configurada (warn loggeado en helper).
+        const baseUrl = getAppUrl();
+        if (baseUrl) {
+          try {
+            enviarMailCreacion(
+              envio.destino.email,
+              trackingReal,
+              envio.destino.nombre || "Cliente",
+              envio.courier.nombre,
+              `${baseUrl}/s/${trackingReal}`
+            );
+          } catch (mailErr) {
+            console.warn(`[procesarEnviosBloqueadosPorOperatividad] Fallo al mandar mail para ${trackingReal}:`, mailErr);
+          }
         }
       }
 

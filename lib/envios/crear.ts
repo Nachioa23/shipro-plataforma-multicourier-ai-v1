@@ -4,6 +4,7 @@ import { obtenerCourier } from "@/lib/couriers/normalizar";
 import { despacharCourier } from "@/lib/envios/dispatch";
 import { cotizar } from "@/lib/cotizador";
 import { validarOperatividadPar } from "@/lib/depositos/operatividad";
+import { getAppUrl } from "@/lib/utils/app-url";
 import type { DepositoCourierConfig } from "@prisma/client";
 
 export interface CrearEnvioInput {
@@ -571,11 +572,18 @@ export async function crearEnvio(input: CrearEnvioInput) {
   // (el destinatario no debe recibir notificación hasta que el envío se destrabe
   // y tenga tracking real).
   if (email && !bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorOperatividad && !bloqueadoPorTramoFallido) {
-    if (falloPorPeaje) {
-      const { enviarMailRetenido } = await import("@/lib/mailer");
-      await enviarMailRetenido(email, trackingOficial, destinatarioNombre, `${process.env.APP_URL || "http://localhost:3000"}/corregir/${trackingOficial}`, empresaNombreParaMail);
-    } else {
-      enviarMailCreacion(email, trackingOficial, destinatarioNombre, courierReal.nombre, `${process.env.APP_URL || "http://localhost:3000"}/seguimiento/${trackingOficial}`);
+    // DEUDA 14: si APP_URL no esta configurada, NO mandamos mail con link
+    // a localhost. El envio se creo en BD — no rompemos el flujo por mail.
+    // Principio operativo: que la venta no se pierda.
+    const baseUrl = getAppUrl();
+    if (baseUrl) {
+      if (falloPorPeaje) {
+        const { enviarMailRetenido } = await import("@/lib/mailer");
+        await enviarMailRetenido(email, trackingOficial, destinatarioNombre, `${baseUrl}/corregir/${trackingOficial}`, empresaNombreParaMail);
+      } else {
+        // QW#5 (2026-06-02): path /s/ es el canonico, /seguimiento es redirect deprecado.
+        enviarMailCreacion(email, trackingOficial, destinatarioNombre, courierReal.nombre, `${baseUrl}/s/${trackingOficial}`);
+      }
     }
   }
 

@@ -46,6 +46,7 @@
 // =============================================================================
 
 import { Courier, Deposito, PrismaClient } from "@prisma/client";
+import type { CourierConServicios } from "@/lib/couriers/serviciosSoportados";
 import {
   asignarSucursalParaDeposito,
   ResultadoAutoAsignacion,
@@ -71,7 +72,9 @@ export type ResultadoOperatividad =
 export async function validarOperatividadPar(params: {
   prisma: PrismaClient;
   deposito: Deposito;
-  courier: Courier;
+  // Fase K (DEUDA 32+37): el courier debe traer servicios cargados (al menos
+  // entrega_sucursal) para que el helper tieneSucursales pueda derivar.
+  courier: Courier & CourierConServicios;
 }): Promise<ResultadoOperatividad> {
   const { prisma, deposito, courier } = params;
 

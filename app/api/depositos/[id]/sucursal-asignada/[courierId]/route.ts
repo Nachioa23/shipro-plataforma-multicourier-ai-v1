@@ -55,8 +55,16 @@ export async function GET(
   const acceso = await verificarAccesoDeposito(request, depositoId, false);
   if (!acceso.ok) return acceso.response;
 
+  // Fase K (DEUDA 32+37): include servicios.entrega_sucursal para que el helper
+  // tieneSucursales pueda derivar abajo en asignarSucursalParaDeposito.
   const courier = await prisma.courier.findFirst({
     where: { id: courierId, activo: true },
+    include: {
+      servicios: {
+        where: { codigoServicio: "entrega_sucursal" },
+        select: { codigoServicio: true, capacidadTecnicaMapeada: true },
+      },
+    },
   });
   if (!courier) {
     return NextResponse.json(

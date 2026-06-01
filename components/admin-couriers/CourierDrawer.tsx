@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { X, Loader2, Lock, RefreshCw, CheckCircle2, AlertCircle, Info } from "lucide-react";
 import AutocompleteAddress, { type AddressData } from "@/components/forms/AutocompleteAddress";
-import { labelServicio } from "@/lib/couriers/serviciosSoportados";
+import { labelServicio, tieneSucursales } from "@/lib/couriers/serviciosSoportados";
 
 // =============================================================================
 // DEUDA 32+37 (Fase H): Drawer de edicion de un courier (espacio Shipro).
@@ -42,7 +42,8 @@ export interface CourierEditable {
   cpDepositoConsolidadorCp: string | null;
   cpDepositoConsolidadorLocalidad: string | null;
   cpDepositoConsolidadorProvincia: string | null;
-  tieneSucursales: boolean;
+  // Fase K (DEUDA 32+37): tieneSucursales se eliminó del modelo Courier.
+  // Ahora se deriva del array servicios via el helper tieneSucursales(courier).
   servicios: ServicioCourier[];
 }
 
@@ -402,12 +403,10 @@ export default function CourierDrawer({ courier, onClose, onSaved }: Props) {
             // y mostramos el mensaje educativo. La fuente de verdad real
             // (FUENTES_SUCURSALES) vive server-side; el backend confirma al
             // hacer click si llegara a haber discrepancia.
-            const servicioSucursal = editado.servicios.find(
-              (s) => s.codigoServicio === "entrega_sucursal"
-            );
-            const aplicaSync =
-              editado.tieneSucursales &&
-              servicioSucursal?.capacidadTecnicaMapeada != null;
+            // Fase K (DEUDA 32+37): aplicaSync ahora deriva 100% del helper.
+            // Antes se chequeaba editado.tieneSucursales && servicioSucursal?.capacidad
+            // — pero esos 2 chequeos eran lo mismo. El helper centraliza.
+            const aplicaSync = tieneSucursales(editado);
 
             const handleSync = async () => {
               setSincronizando(true);

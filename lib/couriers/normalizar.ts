@@ -1,5 +1,6 @@
 import prisma from "@/lib/prisma";
 import type { Courier, CredencialCourier } from "@prisma/client";
+import type { CourierConServicios } from "./serviciosSoportados";
 
 /**
  * Lowercase + strip de apóstrofes y espacios. Útil para keys de switch
@@ -20,10 +21,21 @@ export function normalizarParaComparacion(nombre: string): string {
  * Tolera: case insensitive, apóstrofes, espacios, abreviaciones
  * ("moci" matchea "Moci's").
  */
-export async function obtenerCourier(nombreInput: string): Promise<Courier | null> {
+export async function obtenerCourier(
+  nombreInput: string
+): Promise<(Courier & CourierConServicios) | null> {
   if (!nombreInput) return null;
   const normalizado = normalizarParaComparacion(nombreInput);
-  const couriers = await prisma.courier.findMany();
+  // Fase K (DEUDA 32+37): include servicios.entrega_sucursal para que callers
+  // como crear.ts puedan derivar tieneSucursales via el helper sin re-query.
+  const couriers = await prisma.courier.findMany({
+    include: {
+      servicios: {
+        where: { codigoServicio: "entrega_sucursal" },
+        select: { codigoServicio: true, capacidadTecnicaMapeada: true },
+      },
+    },
+  });
   return couriers.find(c => {
     const cNorm = normalizarParaComparacion(c.nombre);
     return cNorm === normalizado || cNorm.startsWith(normalizado) || normalizado.startsWith(cNorm);

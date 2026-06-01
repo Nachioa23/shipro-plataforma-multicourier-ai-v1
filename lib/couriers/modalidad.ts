@@ -33,6 +33,7 @@
 // =============================================================================
 
 import { Courier } from "@prisma/client";
+import { tieneSucursales, type CourierConServicios } from "@/lib/couriers/serviciosSoportados";
 
 export type ModalidadAsignacionSucursal =
   | "por_cp_origen"
@@ -40,8 +41,11 @@ export type ModalidadAsignacionSucursal =
   | "libre_cercania"
   | "sin_sucursales";
 
-export function getModalidadAsignacion(courier: Courier): ModalidadAsignacionSucursal {
-  if (courier.tieneSucursales) {
+// Fase K (DEUDA 32+37): tieneSucursales se deriva del servicio entrega_sucursal
+// via el helper del registry. El courier debe traer el array servicios cargado
+// con (al menos) la fila de entrega_sucursal — los callers deben usar include.
+export function getModalidadAsignacion(courier: Courier & CourierConServicios): ModalidadAsignacionSucursal {
+  if (tieneSucursales(courier)) {
     return "por_cp_origen";
   }
   if (courier.puedeConsolidar && courier.cpDepositoConsolidador) {

@@ -53,6 +53,14 @@ export async function GET(
   // como motivo de bloqueo, no como 404)
   const courier = await prisma.courier.findUnique({
     where: { id: courierId },
+    // Fase K (DEUDA 32+37): include servicios.entrega_sucursal para
+    // que validarOperatividadPar pueda derivar tieneSucursales.
+    include: {
+      servicios: {
+        where: { codigoServicio: "entrega_sucursal" },
+        select: { codigoServicio: true, capacidadTecnicaMapeada: true },
+      },
+    },
   });
   if (!courier) {
     return NextResponse.json(

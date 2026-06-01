@@ -70,7 +70,19 @@ export async function procesarEnviosBloqueadosPorOperatividad(
 
   const todosBloqueados = await prisma.envio.findMany({
     where: filtro,
-    include: { courier: true, finanzas: true, destino: true },
+    // Fase K (DEUDA 32+37): nest courier.include para traer servicios.
+    include: {
+      courier: {
+        include: {
+          servicios: {
+            where: { codigoServicio: "entrega_sucursal" },
+            select: { codigoServicio: true, capacidadTecnicaMapeada: true },
+          },
+        },
+      },
+      finanzas: true,
+      destino: true,
+    },
     orderBy: { id: "asc" },
   });
 

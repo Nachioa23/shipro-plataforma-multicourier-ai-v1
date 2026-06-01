@@ -119,3 +119,29 @@ export function capacidadTecnica(
 export function soportaServicio(courierNombre: string, codigoServicio: string): boolean {
   return capacidadTecnica(courierNombre, codigoServicio) !== null;
 }
+
+// =============================================================================
+// DEUDA 32+37 (Fase K): tieneSucursales derivado del servicio entrega_sucursal.
+// =============================================================================
+// Reemplaza el flag tieneSucursales del modelo Courier — eliminado en esta
+// fase. Deriva la verdad TECNICA: si el courier puede manejar sucursales
+// segun el adapter (capacidadTecnicaMapeada !== null en entrega_sucursal).
+//
+// NO depende del estado comercial (activo/inactivo) — el admin puede tener
+// el servicio comercialmente apagado pero la capacidad tecnica sigue existiendo.
+// Quien necesite "comercialmente activo" lo combina con el .activo del servicio.
+//
+// Tipo minimo: cualquier objeto que tenga el array de servicios cargado.
+// =============================================================================
+
+export interface CourierConServicios {
+  servicios: Array<{
+    codigoServicio: string;
+    capacidadTecnicaMapeada: string | null;
+  }>;
+}
+
+export function tieneSucursales(courier: CourierConServicios): boolean {
+  const sucursal = courier.servicios.find((s) => s.codigoServicio === "entrega_sucursal");
+  return sucursal?.capacidadTecnicaMapeada != null;
+}

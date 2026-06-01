@@ -55,6 +55,7 @@
 import { Courier, SucursalCourier, PrismaClient } from "@prisma/client";
 import { calcularDistanciaKm } from "@/lib/geo/haversine";
 import { getModalidadAsignacion } from "@/lib/couriers/modalidad";
+import type { CourierConServicios } from "@/lib/couriers/serviciosSoportados";
 import { formatSucursal, SucursalFormateada } from "./format";
 
 export type ResultadoAutoAsignacion =
@@ -66,7 +67,7 @@ export type ResultadoAutoAsignacion =
 
 export async function asignarSucursalParaDeposito(params: {
   prisma: PrismaClient;
-  courier: Courier;
+  courier: Courier & CourierConServicios;
   cpOrigenEfectivo: string;
   latitudOrigen: number | null;
   longitudOrigen: number | null;

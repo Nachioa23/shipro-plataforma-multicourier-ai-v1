@@ -97,7 +97,17 @@ export async function crearEnvio(input: CrearEnvioInput) {
   let courierReal = await obtenerCourier(nombreCourier);
 
   if (!courierReal) {
-    courierReal = await prisma.courier.create({ data: { nombre: nombreCourier, activo: true } });
+    // Fase K (DEUDA 32+37): el create necesita include servicios para mantener
+    // el shape Courier & CourierConServicios que obtenerCourier devuelve.
+    courierReal = await prisma.courier.create({
+      data: { nombre: nombreCourier, activo: true },
+      include: {
+        servicios: {
+          where: { codigoServicio: "entrega_sucursal" },
+          select: { codigoServicio: true, capacidadTecnicaMapeada: true },
+        },
+      },
+    });
   }
   const courierIdReal = courierReal.id;
 

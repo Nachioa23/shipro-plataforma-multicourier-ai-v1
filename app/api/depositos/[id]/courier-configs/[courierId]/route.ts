@@ -47,7 +47,6 @@ export async function GET(
           id: true,
           nombre: true,
           activo: true,
-          tieneSucursales: true,
           puedeConsolidar: true,
           cpDepositoConsolidador: true,
         },

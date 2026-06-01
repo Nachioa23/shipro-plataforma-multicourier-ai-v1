@@ -164,7 +164,6 @@ model Courier {
   puedeEntregarDomicilio Boolean @default(true)
   puedeEntregarSucursal  Boolean @default(false)
   aceptaDropOff          Boolean @default(false)
-  tieneSucursales        Boolean @default(false)
 
   // --- DEUDA 29: Capacidades de logística inversa (granulares) ---
   aceptaInversaCambioMercaderia Boolean @default(false)

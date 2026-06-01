@@ -1,6 +1,7 @@
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
+import { tieneSucursales } from "@/lib/couriers/serviciosSoportados";
 import type { CredencialCourier, Deposito, DepositoCourierConfig } from "@prisma/client";
 import prisma from "@/lib/prisma";
 
@@ -170,17 +171,26 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
   // para este (depósito, courier) si está configurada en BD. La preferencia
   // tiene prioridad sobre creds.id_sucursal_origen. Skipear cuando:
   //   - no viene depositoId (caller legacy / logística inversa)
-  //   - el courier no maneja sucursales (Mocis: tieneSucursales=false)
+  //   - el courier no maneja sucursales (Mocis: no tiene capacidad tecnica
+  //     en entrega_sucursal — Fase K)
   //   - la sucursal preferida fue soft-deleteada (coherente con 2.A: no
   //     limpiar la tabla puente, el runtime tolera y cae al fallback)
   let sucursalOrigenIdExterno: string | undefined;
   if (input.depositoId) {
+    // Fase K (DEUDA 32+37): tieneSucursales se deriva del servicio
+    // entrega_sucursal (capacidad tecnica !== null), no del campo legacy
+    // que se elimino en esta fase.
     const courier = await prisma.courier.findUnique({
       where: { id: input.courierIdMain },
-      select: { tieneSucursales: true },
+      include: {
+        servicios: {
+          where: { codigoServicio: "entrega_sucursal" },
+          select: { codigoServicio: true, capacidadTecnicaMapeada: true },
+        },
+      },
     });
 
-    if (courier?.tieneSucursales) {
+    if (courier && tieneSucursales(courier)) {
       const pref = await prisma.depositoSucursalPreferida.findUnique({
         where: {
           depositoId_courierId: {

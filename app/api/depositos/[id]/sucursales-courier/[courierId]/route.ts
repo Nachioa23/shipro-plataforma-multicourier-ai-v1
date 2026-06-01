@@ -124,7 +124,6 @@ export async function GET(
     courier: {
       id: courier.id,
       nombre: courier.nombre,
-      tieneSucursales: courier.tieneSucursales,
     },
     sucursalesCercanas: sucursalesCercanas.map(s => formatSucursal(s, s.distanciaKm)),
     sucursalesPorCP: matchesPorCP.map(m => formatSucursal(m.sucursal)),

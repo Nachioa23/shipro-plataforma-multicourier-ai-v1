@@ -4,6 +4,7 @@ import path from 'path';
 import csv from 'csv-parser';
 import bcrypt from 'bcryptjs';
 import { capacidadTecnica } from '../lib/couriers/serviciosSoportados';
+import { normalizarProvincia } from '../lib/constants/normalizar-provincia';
 
 const prisma = new PrismaClient();
 
@@ -143,6 +144,20 @@ async function main() {
     const codigoPostal = row.cod_postal_4?.toString().trim();
 
     if (!nombreProvincia || !nombreLocalidad || !codigoPostal) continue;
+
+    // DEUDA 26 (2026-06-03): rechazar filas con provincia no canonica.
+    // normalizarProvincia() retorna null si el nombre no esta en PROVINCIAS_AR
+    // (lista de las 24 provincias argentinas reales). Esto filtra basura
+    // generada por filas del CSV mal parseadas (comas decimales sin escapar
+    // en nombres rurales tipo "RUTA 8 KILOMETRO 19,500 AL 22").
+    // Mantenemos nombreProvincia raw (mayusculas, sin acentos) en el upsert
+    // para preservar consistencia con la BD ya cargada.
+    if (!normalizarProvincia(nombreProvincia)) {
+      console.warn(
+        `[seed] Provincia rechazada: "${nombreProvincia}" en CP ${codigoPostal}, localidad "${nombreLocalidad}". Fila saltada por DEUDA 26.`
+      );
+      continue;
+    }
 
     // A. Provincia
     const provincia = await prisma.provincia.upsert({

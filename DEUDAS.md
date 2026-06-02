@@ -454,9 +454,25 @@ Implementar como helper `lib/permisos.ts` con `puedeEditarCampo(rol, campo): boo
 
 **Relación con DEUDA 19:** suspensión + cambio de estado de cuenta es evento de auditoría obligatorio.
 
-## DEUDA 26 — Limpieza de tabla Provincia y Localidad (Importante — pre-producción)
+## DEUDA 26 — Limpieza de tabla Provincia y Localidad (RESUELTA 2026-06-03 — 3 fases)
 
-**Status:** Identificada el 2026-05-03 durante DEUDA 4 (módulo Depósitos), tras verificar el endpoint `/api/geografia/buscar`. PENDIENTE — sesión dedicada estimada 1-2 horas.
+**Status:** Identificada el 2026-05-03 durante DEUDA 4 (módulo Depósitos), tras verificar el endpoint `/api/geografia/buscar`. RESUELTA el 2026-06-03 en BLOQUE 2 quick wins.
+
+**Resolución (2026-06-03 BLOQUE 2):** Cerrada completa en 3 fases. La premisa original era falsa — no era problema de mayúsculas/acentos sino CSV parsing roto + realidad postal argentina con CPs cross-provincia legítimos. Investigación de director y consultor durante la sesión derivó en 3 ejes complementarios:
+
+**Fase C — Limpieza de basura del parse del CSV (BD).** Migration formal `20260602154255_deuda_26_limpieza_provincias_basura` eliminó 20 provincias basura (IDs 4-19, 23, 32, 37, 39) + 28 localidades dependientes via Cascade FK. Las provincias basura eran fragmentos de nombres rurales mal parseados ("RUTA 8 KILOMETRO 19,500 AL 22" caía como localidad "RUTA 8 KILOMETRO 19" + provincia "500 AL 22" por coma decimal sin escapar). Estado post-migration: Provincia 44→24, Localidad 19,201→19,173, CodigoPostal 2,183 (intacto).
+
+**Fase D — Defensa en seed.ts.** Agregado guard con `normalizarProvincia()` antes del upsert en `prisma/seed.ts:148`. Si el seed se vuelve a correr (otro entorno, dev fresh install), las filas con provincia no canónica son rechazadas con `console.warn` y skipeadas (no se persisten). El seed completa el resto de las filas válidas sin interrumpirse.
+
+**Fase F — Endpoint inteligente "provincia dominante".** Modificado `/api/geografia/buscar/route.ts` para que cuando un CP tenga localidades en múltiples provincias (92 casos legítimos en Argentina — zonas limítrofes tipo Delta del Paraná, Bariloche/Isla Victoria, NEA Litoral, NOA, Cuyo, Patagonia), devuelva la provincia con MÁS localidades y filtre la respuesta solo a las localidades de esa provincia. Esto evita que el dropdown del comprador muestre localidades inconsistentes con la provincia retornada.
+
+**Test E2E verificado en runtime (2026-06-03):** CP 8400 (Bariloche) → "Río Negro" + 19 localidades correctas (sin "ISLA VICTORIA" ni "PUERTO ANCHORENA" que eran las 2 de Neuquén). CP 2000 (Rosario) → "Santa Fe" + 6 localidades correctas (sin "VILLA ANGELICA" de Entre Ríos). CP 1614 (Villa de Mayo) → "Buenos Aires" + ["VILLA DE MAYO"] (caso no cross-provincia, comportamiento inalterado). tsc=0 en cada fase.
+
+**Trade-off aceptado:** las localidades de la provincia minoritaria de cada CP cross-provincia (ej: "ISLA VICTORIA" para CP 8400) ya NO aparecen en el dropdown del comprador. <0.01% de los casos. Si un comprador legítimo necesita enviar a una localidad minoritaria, corrige manualmente la provincia desde el form.
+
+**Deuda residual identificada:** ~10-15 CPs rurales argentinos (rutas/kilómetros/apeaderos ferroviarios) fueron perdidos durante el parse del CSV. Registrados como DEUDA 40, no urgentes — son zonas sin localidad humana real y la gran mayoría de compradores no envían a esas direcciones.
+
+**Decisión del director (2026-06-03):** Datos postales reales son críticos para que el courier entregue perfecto. Si el CP no existe, Shipro no da respuesta. La gran mayoría debe estar prolija para usabilidad correcta. Cierre completo sí, recuperar CPs rurales no es prioritario.
 
 **Estado actual:**
 - Tabla `Provincia` tiene **44 entradas**: 24 reales en MAYÚSCULAS sin acentos (`BUENOS AIRES`, `CIUDAD AUTONOMA DE BUENOS AIRES`, `CORDOBA`, `NEUQUEN`, etc.) + **20 basura** del parseo del CSV (`100 AL 21`, `300 (APEADERO FCGB)`, `400-LADO ESTE)`, `5`, `500`, etc.).
@@ -662,4 +678,24 @@ Ver `docs/ARQUITECTURA-MULTICOURIER.md` para detalle.
 - Diseno UI integral de Torre de Control.
 - Diseno UI del Panel de Control del cliente (vista desprendida con scope reducido).
 - Priorizacion metrica por metrica segun dependencias de datos (ej: Desvio de Peso requiere carga de liquidaciones, que aun no se hace).
+
+
+## DEUDA 40 — CPs rurales perdidos por parse del CSV (ABIERTA 2026-06-03, NO URGENTE)
+
+**Status:** ABIERTA 2026-06-03 como deuda residual identificada durante el cierre de DEUDA 26. No urgente.
+
+**Contexto:** Durante la limpieza de DEUDA 26 (Fase C), las 20 provincias basura eliminadas correspondían a filas del CSV `prisma/data/codigos.csv` con comas decimales sin escapar en nombres de localidades rurales argentinas. Patrón típico: `RUTA 8 KILOMETRO 19,500 AL 22` (notación argentina donde la coma es separador decimal/de miles, no de campo CSV). El parser `csv-parser` interpretó la coma decimal como separador de campo y partió mal esas ~20 filas. Resultado: ~10-15 CPs rurales argentinos (rutas, kilómetros, apeaderos ferroviarios tipo "005 (APEADERO FCGSM)") no están en la BD.
+
+**Decisión del director (2026-06-03):** NO prioritario. Razones:
+- Los CPs afectados son zonas rurales sin localidad humana real (kilómetros de rutas, apeaderos ferroviarios abandonados, etc.).
+- La gran mayoría de compradores no envían a esas zonas (foco operativo: ciudades y suburbios).
+- Si un cliente reporta un CP rural específico faltante en el futuro, se retoma puntualmente.
+
+**Próximos pasos (si se retoma):**
+- Identificar las ~20 filas problemáticas del CSV (grep por patrones tipo `,\d+,\d+ AL` o `,\d+ \(`).
+- Editar manualmente: cambiar coma decimal por punto, o agregar quotes para preservar la coma como literal del nombre de localidad.
+- Re-correr `prisma db seed`. El guard de Fase D rechaza solo provincias no canónicas — las filas reparadas pasarán bien.
+- Verificar con grep que las localidades rurales aparecen en BD con su provincia correcta.
+
+**Alternativa más robusta (si se quiere fix permanente):** cambiar `csv-parser` a un parser RFC 4180 compliant que maneje quoting con `csv-stringify` complementario, y re-exportar el CSV original con quoting consistente.
 

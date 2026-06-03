@@ -652,7 +652,29 @@ Ver `docs/ARQUITECTURA-MULTICOURIER.md` para detalle.
 - **Moova y Javit en BD (data sucia)** — RESUELTA 2026-05-07 por la migracion `20260507152517_deuda_29_arquitectura_multicourier` (ETAPA 1 de limpieza). Se eliminaron las filas de Courier (Moova=id3, Javit=id4) + sus referencias en CredencialCourier (via DELETE WHERE nombreCourier IN ('Moova', 'Javit')). Estado actual verificado 2026-06-02: tabla Courier solo contiene Andreani (id=1) y Moci's (id=2). La entrada quedo sin marcar como RESUELTA hasta hoy.
 - **URLs de couriers hardcoded en adapters** (corregido 2026-06-02): ambos adapters tienen URL hardcoded — `MocisAdapter.ts` linea 4 (`https://mocis.akeron.net/api/v1`) y `AndreaniAdapter.ts` linea 24 (`https://apis.andreani.com`). La premisa original "Andreani usa env var" era falsa: la variable `ANDREANI_URL` existe en `.env.local` pero el codigo NO la consume (env var huerfana). DECISION DEL DIRECTOR (2026-06-02): postergar el refactor hasta tener 5-7 couriers integrados. Disenar el patron de URLs courier con solo 2 casos es prematuro — couriers reales pueden requerir multiples URLs (sandbox vs live), URLs por endpoint (cotizar vs tracking), o variaciones segun ambiente. Hacer la abstraccion ahora con muestra de 2 produce un patron que probablemente habria que rehacer al integrar OCA, Correo Argentino, DPD, etc. Mientras tanto: hardcoded es aceptable, las URLs de couriers no cambian frecuentemente. Cuando llegue el momento de integrar el 5to courier, revisitar y definir patron real.
 
-## DEUDA 39 — Torre de Control: sistema integral de metricas estrategicas (ABIERTA 2026-06-02)
+## DEUDA 39 — Torre de Control: sistema integral de metricas estrategicas (DISEÑO COMPLETO 2026-06-04 — implementacion pendiente)
+
+**Status:** Abierta 2026-06-02. Diseno profesional completo el 2026-06-04 documentado en `docs/TORRE-DE-CONTROL.md`. Implementacion pendiente, sesion dedicada por metrica.
+
+**Documento maestro:** `docs/TORRE-DE-CONTROL.md` (1971 lineas). Contiene:
+- 16 metricas en 5 bloques tematicos con 9 campos de documentacion cada una (Categoria, Definicion operativa, Por que importa, Diferencial competitivo, Fuente de datos, Formula de calculo, Cortes de analisis, Experiencia UI/UX, Verificacion tecnica pendiente).
+- Bloque 1 (5 metricas): Resolver Nomenclador, Auditar Checkouts, Eficiencia del Auditor de Checkout, Carga de Soporte, Velocidad de Resolucion de Tickets.
+- Bloque 2 (3 metricas): Tiempos Colecta, Efectividad en Primera Visita, Promesa de Entrega Calibrada (fusion del Mapa SLA con Discrepancia Promesa).
+- Bloque 3 (3 metricas): Fuga por Ruteo, Desvio de Peso, Modalidades de Eleccion.
+- Bloque 4 (4 metricas): Riesgo Courier, Salud de Couriers, Cobertura Postal Activa, Salud Financiera.
+- Bloque 5 (1 metrica): NPS Transaccional enriquecido.
+- Apendices: glosario tecnico, roadmap de implementacion en 5 fases, principios de implementacion.
+
+**Decisiones de producto declaradas por el director durante el diseno:**
+1. Las metricas que tu propuesta original sugeria son la base, pero la plataforma puede sostener mas metricas con la data que ya capta. Por eso se sumaron 5 nuevas: Eficiencia del Auditor de Checkout, Velocidad de Resolucion de Tickets, Salud de Couriers, Cobertura Postal Activa, Salud Financiera.
+2. La promesa al comprador en el checkout debe estar validada por la realidad observada de la cadena del cliente, no por el SLA nominal publicado por el courier. Esto convirtio el Mapa SLA en un motor de promesa calibrada (metrica 2.3).
+3. La auditoria de checkouts debe tener sensibilidad configurable y logica de tres niveles (validacion dura, correccion silenciosa, solicitud al comprador) para no fastidiar compradores con correcciones innecesarias. Registrado como DEUDA 41.
+4. La estacionalidad operativa (Hot Sale, Cyber Monday, Navidad) agrega 1-2 dias al despacho y al transito. Registrado como DEUDA 42.
+
+**Proximos pasos para implementacion:**
+- Primera metrica a atacar: 1.1 Resolver Nomenclador (simplicidad + valor inmediato).
+- Cada metrica requiere su propia sesion. Estimado 2-4h por metrica segun complejidad.
+- Antes de cada implementacion, atender la seccion "Verificacion tecnica pendiente" del documento maestro: cada metrica tiene 5-8 preguntas dirigidas a Claude Code para confirmar estado del backend antes de codear.
 
 **Status:** ABIERTA 2026-06-02. Backend parcial (metrica de Calidad Postal en `/api/torre-de-control/route.ts` — ver DEUDA 8). Pendiente: 10 metricas restantes + UI integral.
 
@@ -703,3 +725,49 @@ Ver `docs/ARQUITECTURA-MULTICOURIER.md` para detalle.
 
 **Alternativa más robusta (si se quiere fix permanente):** cambiar `csv-parser` a un parser RFC 4180 compliant que maneje quoting con `csv-stringify` complementario, y re-exportar el CSV original con quoting consistente.
 
+
+## DEUDA 41 — Verificacion jerarquica de direcciones en e-commerce con sensibilidad configurable (ABIERTA 2026-06-04, prioridad media-alta)
+
+**Status:** ABIERTA 2026-06-04. Identificada durante el diseno de la Torre de Control (DEUDA 39). Relacionada a la metrica 1.2 Auditar Checkouts. Prioridad media-alta.
+
+**Contexto:** La auditoria de Google Maps debe operar con logica jerarquica de tres niveles para evitar mandar mails de correccion al comprador cuando la Plataforma puede resolver la inconsistencia internamente:
+
+- **Nivel 1 — Validacion dura (siempre):** verifica que la triada (calle + localidad + provincia) existe en la realidad segun Google Maps geocoding.
+- **Nivel 2 — Correccion automatica silenciosa:** si Google Maps devuelve la direccion normalizada con una correccion menor (acentos, abreviaturas, typos detectables), Shipro toma la version corregida y emite la etiqueta directo. El comprador no se entera.
+- **Nivel 3 — Solicitud de correccion al comprador:** solo si los niveles 1 y 2 no resuelven, se dispara el mail al comprador con formulario web validado por Google Maps.
+
+Adicionalmente, la sensibilidad de la auditoria debe ser configurable por cliente con tres perfiles: laxo, estandar, estricto.
+
+**Decision del director (2026-06-04):** sin la logica jerarquica + sensibilidad configurable, e-commerces que no validan direcciones en su propio checkout terminarian forzando friccion al comprador en porcentajes muy altos.
+
+**Trabajo pendiente:**
+- Auditar `lib/geo/geocodificar-direccion.ts` y `lib/envios/crear.ts` para entender que niveles existen hoy.
+- Implementar nivel 2 (correccion silenciosa) si no existe.
+- Disenar y agregar configuracion de sensibilidad por cliente (probablemente nuevo campo en `Empresa` o tabla aparte).
+- Aplicar la sensibilidad en el motor de decision del auditor.
+- Loguear claramente en `AuditoriaCheckout` que nivel fue aplicado para cada etiqueta (para metrica 1.2 en Torre de Control).
+
+**Prioridad:** Media-alta. Es prerequisito de la metrica 1.2 funcionando con UX correcta. Hasta que esto este implementado, la metrica 1.2 se puede activar pero medira solo el comportamiento actual (probablemente solo nivel 1 + nivel 3).
+
+## DEUDA 42 — Modelo de estacionalidad operativa para eventos comerciales (ABIERTA 2026-06-04, prioridad alta)
+
+**Status:** ABIERTA 2026-06-04. Identificada durante el diseno de la Torre de Control (DEUDA 39). Relacionada a metricas 2.1 Tiempos Colecta y 2.3 Promesa de Entrega Calibrada. Prioridad alta para clientes con fuerte estacionalidad comercial.
+
+**Contexto:** Eventos comerciales de alta demanda en Argentina (Hot Sale, Cyber Monday, Black Friday, Navidad, Dia del Padre/Madre, Dia del Nino, eventos propios de cada e-commerce) agregan entre 1 y 2 dias al despacho del cliente y entre 1 y 2 dias al transito del courier.
+
+Si la Torre de Control no contempla estacionalidad, ocurren dos problemas:
+1. La metrica 2.1 muestra degradacion operativa cuando en realidad es saturacion estacional esperable.
+2. La metrica 2.3 calibra mal la promesa al comprador: durante Hot Sale, la promesa basada en mediana de 90 dias sera optimista; despues del evento, sera pesimista por arrastre.
+
+**Decision del director (2026-06-04):** la promesa al comprador durante eventos es donde se gana o se pierde conversion y NPS. Sin modelado de estacionalidad, la metrica 2.3 pierde precision en los momentos comercialmente mas criticos del ano.
+
+**Trabajo pendiente:**
+- Modelar un calendario de eventos comerciales argentinos relevantes. Probable nuevo modelo `EventoComercial` con: nombre, fechaInicio, fechaFin, descripcion, magnitudImpactoEstimada.
+- Permitir al cliente editar el calendario (agregar eventos propios).
+- Aplicar correcciones de estacionalidad en el motor de promesa calibrada (metrica 2.3):
+  - Durante ventanas de evento, usar percentiles especificos del evento previo en lugar del rolling 90d general.
+  - Mostrar visualmente al cliente: "Promesa ajustada por Hot Sale en curso".
+- En la metrica 2.1 (Tiempos Colecta), distinguir visualmente periodos de evento para evitar lecturas falsas de degradacion.
+- Generar alertas pre-evento: "Hot Sale arranca en 14 dias. Tu promesa actual sera optimista en este periodo. Considera ajustar el nivel de seguridad a 'conservador' temporalmente."
+
+**Prioridad:** Alta. Mayoria de e-commerces argentinos tienen fuerte estacionalidad y la promesa al comprador durante eventos es decisiva en conversion.

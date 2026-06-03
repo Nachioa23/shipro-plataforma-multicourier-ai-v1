@@ -6,6 +6,7 @@ import Link from "next/link";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { ArrowLeft, FileText, Search, Download, Loader2, Package, Building2 } from 'lucide-react';
+import { NOMBRES_DISPLAY } from "@/lib/couriers/serviciosSoportados";
 
 export default function HistorialManifiestos() {
   const { data: session } = useSession();
@@ -17,7 +18,9 @@ export default function HistorialManifiestos() {
   const [fechaDesde, setFechaDesde] = useState("");
   const [fechaHasta, setFechaHasta] = useState("");
 
-  const couriersLista = ["Moova", "Andreani", "Correo Argentino", "Moci's", "Javit"];
+  // Menor 4 (2026-06-04): single source of truth desde NOMBRES_DISPLAY.
+  // Ver lib/couriers/serviciosSoportados.ts.
+  const couriersLista = Object.values(NOMBRES_DISPLAY);
 
   const fetchManifiestos = async () => {
     if (!session?.user?.empresaId) return;

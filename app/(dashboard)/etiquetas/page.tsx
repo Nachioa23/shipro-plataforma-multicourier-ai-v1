@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { Search, Printer, CheckSquare, Square, FileText, AlertTriangle, X, Loader2, Calendar, ChevronLeft, ChevronRight, Ban, Truck, Building2, Clock, CheckCircle2 } from 'lucide-react';
 import AccionesEnvio from '@/components/AccionesEnvio';
+import { NOMBRES_DISPLAY } from "@/lib/couriers/serviciosSoportados";
 
 export default function CentroEtiquetas() {
   const { data: session } = useSession();
@@ -30,7 +31,10 @@ export default function CentroEtiquetas() {
   const [listaClientes, setListaClientes] = useState<any[]>([]);
   const [filtroEmpresaId, setFiltroEmpresaId] = useState<string>("TODAS");
 
-  const couriersLista = ["Moova", "Andreani", "Correo Argentino", "Moci's", "Javit"];
+  // Menor 4 (2026-06-04): single source of truth desde NOMBRES_DISPLAY
+  // (lib/couriers/serviciosSoportados.ts). Cuando se integre un courier nuevo,
+  // el dropdown lo refleja automaticamente sin tocar este archivo.
+  const couriersLista = Object.values(NOMBRES_DISPLAY);
 
   const [seleccionadas, setSeleccionadas] = useState<number[]>([]);
   const [alertaEtiqueta, setAlertaEtiqueta] = useState<{ id: number; motivo: 'impresa' | 'courier' | 'cancelada' } | null>(null);

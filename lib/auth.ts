@@ -25,8 +25,12 @@ export const authOptions: NextAuthOptions = {
         if (!passwordMatch) return null;
 
         // Usuarios shipro (empresaId=null) no pertenecen a ninguna empresa: no aplicar el check de empresa activa.
+        // Menor 7 (2026-06-03): usamos codigo enumerable en lugar de mensaje literal.
+        // NextAuth v4 con signIn redirect:false propaga el message del Error a res.error.
+        // El frontend (app/login/page.tsx) mapea los codigos a mensajes user-facing.
+        // Mantener los codigos como SCREAMING_SNAKE_CASE para futuros casos.
         if (user.empresa && !user.empresa.activo) {
-          throw new Error("Empresa deshabilitada. Contactá a soporte.");
+          throw new Error("EMPRESA_INACTIVA");
         }
 
         return {

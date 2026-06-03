@@ -6,6 +6,7 @@ import Link from "next/link";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { Package, Search, Filter, Printer, FileText, CheckSquare, Square, Building2, AlertCircle, Loader2, ChevronLeft, ChevronRight, Truck } from 'lucide-react';
+import { NOMBRES_DISPLAY } from "@/lib/couriers/serviciosSoportados";
 
 export default function Colectas() {
   const brandColor = '#233b6b';
@@ -35,7 +36,9 @@ export default function Colectas() {
   const [fechaDesde, setFechaDesde] = useState("");
   const [fechaHasta, setFechaHasta] = useState("");
 
-  const couriersLista = ["Moova", "Andreani", "Correo Argentino", "Moci's", "Javit"];
+  // Menor 4 (2026-06-04): single source of truth desde NOMBRES_DISPLAY.
+  // Ver lib/couriers/serviciosSoportados.ts.
+  const couriersLista = Object.values(NOMBRES_DISPLAY);
 
   const [seleccionadas, setSeleccionadas] = useState<number[]>([]);
 

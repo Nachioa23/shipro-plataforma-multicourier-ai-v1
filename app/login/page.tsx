@@ -29,7 +29,15 @@ export default function Login() {
     });
 
     if (res?.error) {
-      setError("Email o contraseña incorrectos. Revisá tus datos.");
+      // Menor 7 (2026-06-03): NextAuth v4 con signIn redirect:false propaga
+      // el message del Error tirado en authorize() a res.error. Mapeamos
+      // codigos enumerables (lib/auth.ts) a mensajes user-facing.
+      // Fallback: cualquier error desconocido cae al mensaje generico (incluye
+      // password mismatch, usuario no encontrado, y cualquier otra falla).
+      const ERROR_MESSAGES: Record<string, string> = {
+        EMPRESA_INACTIVA: "Tu empresa esta deshabilitada. Contactanos a soporte.",
+      };
+      setError(ERROR_MESSAGES[res.error] ?? "Email o contraseña incorrectos. Revisá tus datos.");
       setLoading(false);
     } else {
       router.push("/");

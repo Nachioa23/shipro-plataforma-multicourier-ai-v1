@@ -45,7 +45,7 @@ Este bloque captura decisiones de principio que guian futuras decisiones de scop
 
 **How to apply:** caché en memoria (Redis o LRU server-side) con clave `(empresaId, cpOrigen, cpDestino, peso, modalidad)` y TTL 5-10 min. Después de pasar a producción — no es bloqueante para deploy.
 
-## DEUDA 3 — `crear.ts:251` self-fetch a `/api/cotizar` rompe con dual auth
+## DEUDA 3 — `crear.ts:251` self-fetch a `/api/cotizar` rompe con dual auth (RESUELTA 2026-06-03 — zombi)
 
 Con el proxy actual, el self-fetch HTTP a `/api/cotizar` desde dentro de `crearEnvio` no manda ni cookie de NextAuth ni Bearer shipro_live_, entonces el proxy lo rechaza con 401. La métrica `fugaFinanciera` queda en 0 pero el envío se crea bien (está en try/catch aislado).
 
@@ -156,9 +156,13 @@ Mientras se decide, la lógica está protegida por el mismo `resolverContext()` 
 
 **Deuda relacionada:** DEUDA 1 (REQUIERE_SOPORTE) — el flujo de reintento debería integrarse: si el cliente Modelo B reintenta con credenciales nuevas y funciona, no se le cobra otro `operacionFee` (o se le cobra solo si excede N reintentos en el período).
 
-## DEUDA 11 — Normalización inconsistente del campo `nombreCourier` (Importante — pre-producción)
+## DEUDA 11 — Normalización inconsistente del campo `nombreCourier` (RESUELTA 2026-06-03 — zombi, fix probable durante DEUDA 29)
 
 **Status:** Detectada el 2026-04-29 durante el debug del bug que generaba etiquetas SHP-XXXXXX en `crearEnvio`. Fix mínimo aplicado en `lib/envios/crear.ts` (usa ahora `courierReal.nombre` en el findUnique, en vez de `courierNombreLimpio`). El problema estructural persiste en 5+ archivos más; PENDIENTE refactor consistente.
+
+**Resolución (2026-06-03):** Verificada zombi durante auditoria del backlog. El patron viejo `courierNombreLimpio` (con `.toLowerCase()` aplicado antes del findUnique) ya NO existe en ningun archivo. Los 5 archivos originalmente clasificados como BUG ahora usan el helper centralizado `obtenerCredencialCourier()` (en `lib/couriers/normalizar.ts`) que internamente llama a `obtenerCourier()` para resolver variantes (case-insensitive, apostrofes, espacios), y luego usa el `nombre` canonico de BD para el findUnique. El bug de "Mocis" vs "Moci's" tambien esta absorbido por el helper `normalizarParaComparacion()`. El sexto caso (`configuracion/couriers` con `courier.id`) sigue como originalmente clasificado (⚠️ dependiente del frontend, no era BUG sino warning).
+
+**Hora probable del fix:** durante el refactor de DEUDA 29 (arquitectura multicourier, 2026-05-06 a 2026-05-21), cuando se introdujo `obtenerCourier()`. La entrada quedo stale en DEUDAS.md hasta hoy.
 
 **Detalle:** `Courier.nombre` y `CredencialCourier.nombreCourier` se almacenan en BD con capitalización exacta (`"Andreani"`, `"Moci's"`, `"Moova"`, `"Javit"`). Pero el código tiene **múltiples convenciones contradictorias** para hacer lookups vía `findUnique` con la unique `empresaId_nombreCourier`:
 
@@ -402,9 +406,9 @@ Así el cron se rompe ruidosamente en lugar de mandar mails rotos. Aplicar tambi
 
 **Why bloquea producción:** sin auditoría, cualquier error operacional o cambio malicioso queda sin trazabilidad. Cuando un cliente reporta "yo no autoricé este cambio", no hay forma de demostrar lo contrario.
 
-## DEUDA 20 — Endpoint manual para procesar bloqueados restantes (Menor — extensión de DEUDA 16)
+## DEUDA 20 — Endpoint manual para procesar bloqueados restantes (ABSORBIDA 2026-06-03 por DEUDA 38)
 
-**Status:** Identificada el 2026-04-30 durante implementación de DEUDA 16. PENDIENTE — extensión.
+**Status:** Identificada el 2026-04-30 durante implementación de DEUDA 16. ABSORBIDA el 2026-06-03 por DEUDA 38 (Reproceso desacoplado de envios bloqueados — background + cron + boton manual, registrada en `docs/ARQUITECTURA-MULTICOURIER.md` Sec 13 durante el cierre de DEUDA 32+37). El scope de DEUDA 38 es mas amplio y cubre completamente la funcionalidad pedida por DEUDA 20. Cierre definitivo cuando se implemente DEUDA 38. Mismo patron documental usado para DEUDA 12 y DEUDA 15 absorbidas por DEUDA 29.
 
 **Detalle:** `procesarEnviosBloqueados()` ([lib/envios/procesar-bloqueados.ts](lib/envios/procesar-bloqueados.ts)) procesa máximo 10 envíos FIFO inline tras una recarga. Si un cliente tiene 50 envíos BLOQUEADO_SALDO y recarga saldo suficiente para los 50, solo se destraban 10 — los 40 restantes quedan bloqueados hasta otra recarga.
 
@@ -638,13 +642,13 @@ Ver `docs/ARQUITECTURA-MULTICOURIER.md` para detalle.
 
 ## Otras deudas menores (no críticas, registradas para no perderlas)
 
-- **`obtenerCredencialesShipro` duplicado** en 4-5 archivos: `app/api/cotizar/route.ts`, `app/api/etiquetas/masiva/route.ts`, `app/api/cron/rastreo/route.ts`, `lib/envios/crear.ts`, posiblemente más. Centralizar en `lib/couriers/credenciales.ts`.
+- **`obtenerCredencialesShipro` duplicado** — RESUELTA 2026-04-28 aprox. La centralizacion ya esta hecha: existe el modulo `lib/couriers/credenciales/` (sub-directorio con `index.ts` barrel + `andreani.ts` + `mocis.ts` + `tipos.ts`). Los 8 consumidores (api/etiquetas/masiva, api/envios/{andreani-excepciones,sucursales,rastreo-manual,cancelar,inversa}, api/cron/rastreo, lib/cotizador, lib/envios/dispatch) importan del modulo central via `@/lib/couriers/credenciales`. Cero duplicacion. Verificado 2026-06-03 durante auditoria del backlog. La entrada quedo stale en DEUDAS.md hasta hoy.
 - **8 vulnerabilities** (`npm audit`) preexistentes desde el scaffold inicial de create-next-app. Revisar con `npm audit fix` después de SUB-PASOs.
 - **Provincias duplicadas** en seed: tras correr `prisma db seed` quedan 44 provincias en lugar de las 24 reales de Argentina. Causa probable: diferencias de mayúsculas/acentos al cargar `prisma/data/codigos.csv`. Limpiar al re-seedear.
-- **Dropdowns hardcoded** en `app/(dashboard)/etiquetas/page.tsx`, `app/(dashboard)/historial-manifiestos/page.tsx`, `app/(dashboard)/colectas/page.tsx`: listas de couriers `["Moova", "Andreani", "Correo Argentino", "Moci's", "Javit"]`. Tres de esos no están soportados por `CourierFactory` hoy. Reemplazar por fetch a la lista activa de couriers.
+- **Dropdowns hardcoded** — RESUELTA 2026-06-04. Los 3 archivos (`app/(dashboard)/etiquetas/page.tsx`, `app/(dashboard)/historial-manifiestos/page.tsx`, `app/(dashboard)/colectas/page.tsx`) ahora importan `NOMBRES_DISPLAY` desde `lib/couriers/serviciosSoportados.ts` (single source of truth introducida en DEUDA 32+37) y derivan el dropdown via `Object.values(NOMBRES_DISPLAY)`. Cuando se integre un courier nuevo, los 3 dropdowns se actualizan automaticamente sin tocar estos archivos. Decision del director: la plataforma escalara a 15+ couriers (incluyendo couriers "inventados" sin API real, con adapters que usan BD interna + reglas configuradas). Patron consistente con la disciplina del registry (NOMBRES_DISPLAY + CourierFactory + SERVICIOS_SOPORTADOS sincronizados). Test E2E verificado: los 3 dropdowns muestran solo Andreani + Moci's (no mas Moova/Correo Argentino/Javit fake).
 - **Comentario obsoleto** en `prisma/schema.prisma` línea 17: `<--- ¡ESTE ES EL CAMPO VITAL QUE FALTABA!`. Limpiar en una pasada de polish.
 - **Página `/seguimiento/[tracking]` deprecada** vs `/s/[tracking]` (la nueva). Solo la referencia el mail de creación en `lib/envios/crear.ts`. Migrar el link del mail a `/s/...` y borrar la deprecada.
-- **NextAuth `pages.signIn` flow**: si `authorize()` lanza Error con mensaje custom (ej: "Empresa deshabilitada"), NextAuth v4 devuelve genérico "CredentialsSignin" al frontend. Para mostrar el mensaje custom hay que mapearlo en `app/login/page.tsx`.
+- **NextAuth `pages.signIn` flow** — RESUELTA 2026-06-04. Backend (`lib/auth.ts:29`) ahora tira `throw new Error("EMPRESA_INACTIVA")` (codigo enumerable SCREAMING_SNAKE_CASE) en lugar del mensaje literal. Frontend (`app/login/page.tsx:31-41`) mapea los codigos a mensajes user-facing via `ERROR_MESSAGES: Record<string, string>` con fallback al mensaje generico ("Email o contraseña incorrectos. Revisá tus datos.") para passwords mismatch + usuario no encontrado (mismo mensaje preserva seguridad anti-enumeracion de cuentas). Estructura extensible: futuros casos `throw new Error("OTRO_CODIGO")` solo requieren agregar la key + mensaje en el ERROR_MESSAGES del login. Test E2E verificado: caso normal (credentials wrong) muestra el mensaje generico esperado.
 - **Moova y Javit en BD (data sucia)** — RESUELTA 2026-05-07 por la migracion `20260507152517_deuda_29_arquitectura_multicourier` (ETAPA 1 de limpieza). Se eliminaron las filas de Courier (Moova=id3, Javit=id4) + sus referencias en CredencialCourier (via DELETE WHERE nombreCourier IN ('Moova', 'Javit')). Estado actual verificado 2026-06-02: tabla Courier solo contiene Andreani (id=1) y Moci's (id=2). La entrada quedo sin marcar como RESUELTA hasta hoy.
 - **URLs de couriers hardcoded en adapters** (corregido 2026-06-02): ambos adapters tienen URL hardcoded — `MocisAdapter.ts` linea 4 (`https://mocis.akeron.net/api/v1`) y `AndreaniAdapter.ts` linea 24 (`https://apis.andreani.com`). La premisa original "Andreani usa env var" era falsa: la variable `ANDREANI_URL` existe en `.env.local` pero el codigo NO la consume (env var huerfana). DECISION DEL DIRECTOR (2026-06-02): postergar el refactor hasta tener 5-7 couriers integrados. Disenar el patron de URLs courier con solo 2 casos es prematuro — couriers reales pueden requerir multiples URLs (sandbox vs live), URLs por endpoint (cotizar vs tracking), o variaciones segun ambiente. Hacer la abstraccion ahora con muestra de 2 produce un patron que probablemente habria que rehacer al integrar OCA, Correo Argentino, DPD, etc. Mientras tanto: hardcoded es aceptable, las URLs de couriers no cambian frecuentemente. Cuando llegue el momento de integrar el 5to courier, revisitar y definir patron real.
 

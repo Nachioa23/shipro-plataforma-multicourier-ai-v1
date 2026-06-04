@@ -631,6 +631,8 @@ Las plataformas miden tiempo total de entrega, pero raramente aislan el componen
 
 ### Fuente de datos
 - Modelo `Envio` (schema linea 397): campos `fechaImpresion` y `fechaColecta`. Diferencia directa.
+
+**Nota de naming aclarada durante implementacion (2026-06-04):** el campo `fechaImpresion` se llena automaticamente cuando se crea el `Envio` en BD (via Prisma `@default(now())`), NO cuando se imprime fisicamente el PDF. Es decir, mide desde "etiqueta creada en Shipro" hasta "paquete recolectado por el courier". El nombre es engañoso pero el comportamiento es el correcto para la metrica. Renombrar el campo se evita por costo de regresion en otros 3 endpoints que ya lo consumen; registrado como deuda menor de naming.
 - Modelo `EventoTracking` (schema linea 475): puede dar granularidad sobre estados intermedios si el cliente loguea (por ej, "preparado", "en muelle", etc.) pero no es requisito.
 - Modelo `Deposito` (schema linea 56): para cortes por deposito de origen.
 - Modelo `Empresa` (schema linea 13): para cortes por cliente cuando se mira desde Shipro global.
@@ -649,7 +651,7 @@ La mediana es mas representativa que el promedio porque la distribucion suele te
 
 ### Cortes de analisis disponibles
 - **Por deposito de origen:** comparativa entre depositos del mismo cliente.
-- **Por dia de la semana de creacion de etiqueta:** revela patrones operativos (lunes lento por backlog, viernes anticipado).
+- **Por dia de la semana de creacion de etiqueta:** revela patrones operativos (lunes lento por backlog, viernes anticipado). Implementacion actual usa `getDay()` con timezone del runtime del servidor; si el server corre UTC y la operacion es Argentina (UTC-3), envios creados muy temprano o muy tarde pueden quedar asignados al dia anterior/siguiente. Es imprecision aceptable para 1ra version; correccion via `Intl.DateTimeFormat` con `timeZone: 'America/Argentina/Buenos_Aires'` queda como deuda menor.
 - **Por hora del dia de creacion:** etiquetas creadas tarde en el dia se despachan al dia siguiente, no en el mismo dia.
 - **Por courier que recolecta:** algunos couriers son mas previsibles en sus visitas (siempre 10am martes y jueves), otros mas erraticos.
 - **Por modalidad de entrega:** envios same-day vs. estandar deben tener tiempos de despacho radicalmente distintos.

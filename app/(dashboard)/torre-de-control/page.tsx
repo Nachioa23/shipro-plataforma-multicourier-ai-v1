@@ -43,6 +43,12 @@ export default function TorreDeControl() {
   const [nomencladorMetrica, setNomencladorMetrica] = useState<any>(null);
   const [cargandoNomenclador, setCargandoNomenclador] = useState(true);
 
+  // Torre de Control Metrica 2.1 "Tiempos Colecta" (DEUDA 39, 2026-06-04).
+  // Datos del endpoint /api/torre-de-control/tiempos-colecta. Mide tiempo
+  // entre creacion de etiqueta y recoleccion fisica por el courier.
+  const [tiemposColectaMetrica, setTiemposColectaMetrica] = useState<any>(null);
+  const [cargandoTiemposColecta, setCargandoTiemposColecta] = useState(true);
+
   useEffect(() => {
     if (!filtroEmpresaId) return;
     const baseParams = { filtroEmpresa: filtroEmpresaId, page: "1", limit: "1" };
@@ -113,8 +119,32 @@ export default function TorreDeControl() {
       });
   }, [esEquipoShipro]);
 
+  // Torre de Control Metrica 2.1: fetch del endpoint dedicado.
+  // Sin dependencia de filtroEmpresaId en esta version (la metrica es
+  // global a la plataforma Shipro). Cuando se construya el Panel de Control
+  // con vista por empresa, se agregara el parametro empresaId.
+  useEffect(() => {
+    if (!esEquipoShipro) return;
+    setCargandoTiemposColecta(true);
+    fetch("/api/torre-de-control/tiempos-colecta")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setTiemposColectaMetrica(data);
+        setCargandoTiemposColecta(false);
+      })
+      .catch(err => {
+        console.error("[Torre de Control] error fetching tiempos-colecta:", err);
+        setCargandoTiemposColecta(false);
+      });
+  }, [esEquipoShipro]);
+
   const totalEnvios = metricas?.totalEnvios || 1;
-  const tiempoColectaDias = metricas?.tiempoColectaPromedioDias ?? null;
+  // Torre de Control Metrica 2.1 (2026-06-04): cambio de fuente.
+  // Antes: metricas?.tiempoColectaPromedioDias (campo aspiracional, nunca
+  // poblado por el endpoint generico /api/metricas).
+  // Ahora: tiemposColectaMetrica?.estadisticosGlobales?.p50 (en horas) del
+  // endpoint dedicado /api/torre-de-control/tiempos-colecta.
+  const tiempoColectaHoras = tiemposColectaMetrica?.estadisticosGlobales?.p50 ?? null;
   // Torre de Control Metrica 1.1 (2026-06-04): cambio de fuente.
   // Antes: metricas?.estadosSinMapear ?? 0 (endpoint generico /api/metricas).
   // Ahora: nomencladorMetrica?.cantidadNoMapeados ?? 0 (endpoint dedicado
@@ -311,6 +341,180 @@ export default function TorreDeControl() {
                                 <td className="p-3 text-right text-gray-700">{d.totalEstadosCrudos}</td>
                                 <td className={`p-3 text-right font-bold ${d.estadosNoMapeados > 0 ? 'text-red-600' : 'text-gray-400'}`}>{d.estadosNoMapeados}</td>
                                 <td className="p-3 text-right text-gray-900">{d.porcentajeCobertura.toFixed(1)}%</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            ) : metricaAnalisis === "Tiempos Colecta" ? (
+              <div className="p-8 space-y-6">
+                {cargandoTiemposColecta ? (
+                  <div className="flex items-center gap-2 text-gray-500">
+                    <Loader2 className="w-5 h-5 animate-spin" /> Cargando metrica...
+                  </div>
+                ) : !tiemposColectaMetrica || tiemposColectaMetrica.cantidadEnviosValidos === 0 ? (
+                  <div className="text-gray-500">
+                    Sin envios con fecha de colecta en la ventana de {tiemposColectaMetrica?.ventanaDias || 30} dias.
+                    {tiemposColectaMetrica?.cantidadEnviosSinFechaColecta > 0 && (
+                      <p className="text-xs text-gray-400 mt-2">
+                        Hay {tiemposColectaMetrica.cantidadEnviosSinFechaColecta} envios sin fecha de colecta poblada todavia.
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    {/* RESUMEN GLOBAL — 3 tiles */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="bg-white border border-gray-200 rounded-xl p-5">
+                        <p className="text-xs text-gray-500 mb-1">Mediana (P50)</p>
+                        <p className="text-2xl font-black text-gray-900">
+                          {tiemposColectaMetrica.estadisticosGlobales.p50 < 48
+                            ? `${Math.round(tiemposColectaMetrica.estadisticosGlobales.p50)}h`
+                            : `${(tiemposColectaMetrica.estadisticosGlobales.p50 / 24).toFixed(1)} dias`}
+                        </p>
+                        <p className="text-[10px] text-gray-400 mt-1">Caso tipico</p>
+                      </div>
+                      <div className="bg-white border border-gray-200 rounded-xl p-5">
+                        <p className="text-xs text-gray-500 mb-1">Promedio</p>
+                        <p className="text-2xl font-black text-gray-900">
+                          {tiemposColectaMetrica.estadisticosGlobales.promedio < 48
+                            ? `${Math.round(tiemposColectaMetrica.estadisticosGlobales.promedio)}h`
+                            : `${(tiemposColectaMetrica.estadisticosGlobales.promedio / 24).toFixed(1)} dias`}
+                        </p>
+                        <p className="text-[10px] text-gray-400 mt-1">Media aritmetica</p>
+                      </div>
+                      <div className="bg-white border border-gray-200 rounded-xl p-5">
+                        <p className="text-xs text-gray-500 mb-1">P95 (peor caso razonable)</p>
+                        <p className="text-2xl font-black text-gray-900">
+                          {tiemposColectaMetrica.estadisticosGlobales.p95 < 48
+                            ? `${Math.round(tiemposColectaMetrica.estadisticosGlobales.p95)}h`
+                            : `${(tiemposColectaMetrica.estadisticosGlobales.p95 / 24).toFixed(1)} dias`}
+                        </p>
+                        <p className="text-[10px] text-gray-400 mt-1">95% de envios despachados por debajo</p>
+                      </div>
+                    </div>
+
+                    {/* CALIDAD DE DATOS */}
+                    <div className="bg-white border border-gray-200 rounded-xl p-4 flex items-center justify-between">
+                      <div className="text-xs text-gray-500">
+                        <span className="font-bold text-gray-900">{tiemposColectaMetrica.cantidadEnviosValidos}</span> envios validos
+                        {" "}de <span className="font-bold text-gray-900">{tiemposColectaMetrica.cantidadEnviosTotal}</span> en ventana de {tiemposColectaMetrica.ventanaDias} dias.
+                      </div>
+                      {tiemposColectaMetrica.cantidadEnviosSinFechaColecta > 0 && (
+                        <div className="text-xs text-orange-600 font-bold">
+                          {tiemposColectaMetrica.cantidadEnviosSinFechaColecta} sin fecha de colecta
+                        </div>
+                      )}
+                    </div>
+
+                    {/* POR DEPOSITO */}
+                    {tiemposColectaMetrica.porDeposito?.length > 0 && (
+                      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+                        <div className="p-4 border-b border-gray-100">
+                          <h3 className="font-bold text-gray-900 flex items-center gap-2"><Warehouse className="w-4 h-4" /> Por deposito</h3>
+                        </div>
+                        <table className="w-full text-sm">
+                          <thead className="bg-gray-50 text-gray-500 text-xs">
+                            <tr>
+                              <th className="text-left p-3 font-semibold">Deposito</th>
+                              <th className="text-right p-3 font-semibold">Mediana</th>
+                              <th className="text-right p-3 font-semibold">Promedio</th>
+                              <th className="text-right p-3 font-semibold">P95</th>
+                              <th className="text-right p-3 font-semibold">Envios</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {tiemposColectaMetrica.porDeposito.map((d: any) => (
+                              <tr key={d.depositoId} className="border-t border-gray-100">
+                                <td className="p-3 font-semibold text-gray-900">{d.depositoNombre}</td>
+                                <td className="p-3 text-right text-gray-700">
+                                  {d.medianaHoras < 48 ? `${Math.round(d.medianaHoras)}h` : `${(d.medianaHoras / 24).toFixed(1)} dias`}
+                                </td>
+                                <td className="p-3 text-right text-gray-700">
+                                  {d.promedioHoras < 48 ? `${Math.round(d.promedioHoras)}h` : `${(d.promedioHoras / 24).toFixed(1)} dias`}
+                                </td>
+                                <td className="p-3 text-right text-gray-700">
+                                  {d.p95Horas < 48 ? `${Math.round(d.p95Horas)}h` : `${(d.p95Horas / 24).toFixed(1)} dias`}
+                                </td>
+                                <td className="p-3 text-right font-bold text-gray-900">{d.cantidad}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {/* POR COURIER */}
+                    {tiemposColectaMetrica.porCourier?.length > 0 && (
+                      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+                        <div className="p-4 border-b border-gray-100">
+                          <h3 className="font-bold text-gray-900 flex items-center gap-2"><Truck className="w-4 h-4" /> Por courier que recolecta</h3>
+                        </div>
+                        <table className="w-full text-sm">
+                          <thead className="bg-gray-50 text-gray-500 text-xs">
+                            <tr>
+                              <th className="text-left p-3 font-semibold">Courier</th>
+                              <th className="text-right p-3 font-semibold">Mediana</th>
+                              <th className="text-right p-3 font-semibold">Promedio</th>
+                              <th className="text-right p-3 font-semibold">P95</th>
+                              <th className="text-right p-3 font-semibold">Envios</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {tiemposColectaMetrica.porCourier.map((c: any) => (
+                              <tr key={c.courierId} className="border-t border-gray-100">
+                                <td className="p-3 font-semibold text-gray-900">{c.courierNombre}</td>
+                                <td className="p-3 text-right text-gray-700">
+                                  {c.medianaHoras < 48 ? `${Math.round(c.medianaHoras)}h` : `${(c.medianaHoras / 24).toFixed(1)} dias`}
+                                </td>
+                                <td className="p-3 text-right text-gray-700">
+                                  {c.promedioHoras < 48 ? `${Math.round(c.promedioHoras)}h` : `${(c.promedioHoras / 24).toFixed(1)} dias`}
+                                </td>
+                                <td className="p-3 text-right text-gray-700">
+                                  {c.p95Horas < 48 ? `${Math.round(c.p95Horas)}h` : `${(c.p95Horas / 24).toFixed(1)} dias`}
+                                </td>
+                                <td className="p-3 text-right font-bold text-gray-900">{c.cantidad}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {/* POR DIA DE LA SEMANA */}
+                    {tiemposColectaMetrica.porDiaSemana?.length > 0 && (
+                      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+                        <div className="p-4 border-b border-gray-100">
+                          <h3 className="font-bold text-gray-900 flex items-center gap-2"><Calendar className="w-4 h-4" /> Por dia de la semana (de creacion de etiqueta)</h3>
+                        </div>
+                        <table className="w-full text-sm">
+                          <thead className="bg-gray-50 text-gray-500 text-xs">
+                            <tr>
+                              <th className="text-left p-3 font-semibold">Dia</th>
+                              <th className="text-right p-3 font-semibold">Mediana</th>
+                              <th className="text-right p-3 font-semibold">Promedio</th>
+                              <th className="text-right p-3 font-semibold">P95</th>
+                              <th className="text-right p-3 font-semibold">Envios</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {tiemposColectaMetrica.porDiaSemana.map((d: any) => (
+                              <tr key={d.diaSemana} className="border-t border-gray-100">
+                                <td className="p-3 font-semibold text-gray-900">{d.diaSemanaNombre}</td>
+                                <td className="p-3 text-right text-gray-700">
+                                  {d.medianaHoras < 48 ? `${Math.round(d.medianaHoras)}h` : `${(d.medianaHoras / 24).toFixed(1)} dias`}
+                                </td>
+                                <td className="p-3 text-right text-gray-700">
+                                  {d.promedioHoras < 48 ? `${Math.round(d.promedioHoras)}h` : `${(d.promedioHoras / 24).toFixed(1)} dias`}
+                                </td>
+                                <td className="p-3 text-right text-gray-700">
+                                  {d.p95Horas < 48 ? `${Math.round(d.p95Horas)}h` : `${(d.p95Horas / 24).toFixed(1)} dias`}
+                                </td>
+                                <td className="p-3 text-right font-bold text-gray-900">{d.cantidad}</td>
                               </tr>
                             ))}
                           </tbody>
@@ -1254,8 +1458,32 @@ export default function TorreDeControl() {
             </div>
             <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm flex flex-col h-full">
               <p className="text-xs font-bold text-gray-500 uppercase mb-2 flex items-center gap-1.5"><TrendingDown className="text-blue-500" /> 7. Tiempos Colecta</p>
-              <h3 className="text-3xl font-black mb-1">{tiempoColectaDias !== null ? tiempoColectaDias : '...'} <span className="text-lg font-bold text-gray-400">días</span></h3>
-              <button onClick={() => abrirAnalisis("Demora de Colecta en Origen")} className="w-full py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold mt-auto hover:bg-blue-50">Desglosar</button>
+              {cargandoTiemposColecta ? (
+                <h3 className="text-3xl font-black mb-1 text-gray-300"><Loader2 className="w-6 h-6 animate-spin inline" /></h3>
+              ) : tiempoColectaHoras === null ? (
+                <>
+                  <h3 className="text-3xl font-black mb-1 text-gray-400">--</h3>
+                  <p className="text-[10px] text-gray-400 mb-1">Sin envios con fecha de colecta en la ventana</p>
+                </>
+              ) : (
+                <>
+                  <h3 className="text-3xl font-black mb-1">
+                    {tiempoColectaHoras < 48
+                      ? `${Math.round(tiempoColectaHoras)}`
+                      : (tiempoColectaHoras / 24).toFixed(1)}
+                    <span className="text-lg font-bold text-gray-400"> {tiempoColectaHoras < 48 ? "h" : "dias"}</span>
+                  </h3>
+                  {tiemposColectaMetrica && (
+                    <p className="text-[10px] text-gray-400 mb-1">
+                      P95: {tiemposColectaMetrica.estadisticosGlobales?.p95 < 48
+                        ? `${Math.round(tiemposColectaMetrica.estadisticosGlobales.p95)}h`
+                        : `${(tiemposColectaMetrica.estadisticosGlobales.p95 / 24).toFixed(1)} dias`}
+                      {" "}· {tiemposColectaMetrica.cantidadEnviosValidos} envios
+                    </p>
+                  )}
+                </>
+              )}
+              <button onClick={() => abrirAnalisis("Tiempos Colecta")} className="w-full py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold mt-auto hover:bg-blue-50">Desglosar</button>
             </div>
           </div>
         </div>

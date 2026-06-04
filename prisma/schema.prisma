@@ -475,6 +475,11 @@ model Envio {
 model EventoTracking {
   id          Int      @id @default(autoincrement())
   estado      String
+  // estadoCrudoOriginal: estado raw del courier ANTES del mapeo via Nomenclador.
+  // Nullable porque eventos previos a esta migracion (Torre de Control Metrica 1.1,
+  // 2026-06-04) no lo tienen. Eventos nuevos lo deben poblar siempre via cron rastreo.
+  // Fuente para metrica "Resolver Nomenclador" — calcular frecuencia ponderada.
+  estadoCrudoOriginal String?
   observacion String?
   fecha       DateTime @default(now())
 

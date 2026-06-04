@@ -78,8 +78,17 @@ export async function GET(request: Request) {
             }
 
             await prisma.envio.update({ where: { id: envio.id }, data: datosAActualizar });
+            // Torre de Control Metrica 1.1 (2026-06-04): poblar estadoCrudoOriginal
+            // con el estado raw del courier antes del mapeo via Nomenclador. Permite
+            // calcular frecuencia ponderada de aparicion de cada estado crudo. El
+            // campo observacion se preserva para backward-compat de parsers historicos.
             await prisma.eventoTracking.create({
-              data: { estado: estadoShiproLimpio, observacion: `El courier reportó: ${nuevoEstadoCrudo}`, envioId: envio.id }
+              data: {
+                estado: estadoShiproLimpio,
+                estadoCrudoOriginal: nuevoEstadoCrudo,
+                observacion: `El courier reportó: ${nuevoEstadoCrudo}`,
+                envioId: envio.id
+              }
             });
             
             const emailCliente = envio.destino?.email;

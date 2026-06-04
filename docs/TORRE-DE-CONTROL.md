@@ -136,6 +136,8 @@ porcentaje_cobertura_real = ((total - sin_mapeo) / total) × 100
 
 La formula ponderada refleja impacto real: un estado crudo sin mapear que aparece 5.000 veces al mes pesa mas que diez estados sin mapear que aparecen dos veces cada uno. La primera formula sirve como diagnostico complementario.
 
+**Semantica operativa de la frecuencia (decidido 2026-06-04 durante implementacion):** la frecuencia cuenta envios impactados por un estado sin mapear, no polls del courier. Es decir, si el cron de rastreo polleo 50 veces el mismo "EnReparto" para el mismo envio, cuenta 1 (transicion del envio al estado), no 50. Razon: el impacto operativo (comunicacion rota al comprador) ocurre una vez por envio que toca el estado, no por cada poll. Esta semantica esta implementada en el cron `/api/cron/rastreo` linea 70 (state-change detection) y no requiere ajuste.
+
 ### Cortes de analisis disponibles
 - **Por courier:** Andreani vs. Mocis vs. cada nuevo integrado a futuro. Permite identificar si la deuda esta concentrada en un solo proveedor.
 - **Por antiguedad del estado crudo:** estados nuevos (primera aparicion en ultimas N semanas) vs. historicos. Los nuevos son senal de cambios en el lado del courier que requieren atencion inmediata.
@@ -1965,6 +1967,8 @@ Cuando se implementen las metricas, mantener:
 **Pruebas E2E del flujo end-to-end.** Cada metrica debe tener al menos un test que valide: query devuelve numero -> endpoint expone numero -> UI lo muestra correctamente -> CTA lleva a accion accionable.
 
 **Documentacion en el codigo.** Cada endpoint de Torre de Control debe tener header comment referenciando a este documento maestro como fuente unica de verdad.
+
+**Supuesto operativo: mapeo de estados como disciplina de onboarding.** Durante el onboarding de cada courier nuevo, mapear todos sus estados crudos a Estados Shipro canonicos es parte del procedimiento operativo de Shipro. Las metricas de la Torre de Control asumen este supuesto. Si un estado crudo aparece sin mapear (ej: por un estado nuevo que el courier agrego despues del onboarding), el cron de rastreo publica el raw string del courier en `Envio.estadoActual` y la metrica 1.1 lo detecta inmediatamente. Esta es feature, no bug: fuerza la accion correctiva. Las metricas downstream (especialmente 2.2 Efectividad en Primera Visita) no requieren consideraciones especiales para envios con estados sin mapear, porque la disciplina de mapeo durante onboarding garantiza que los estados canonicos esten poblados antes de que las metricas se utilicen en operacion real.
 
 ---
 

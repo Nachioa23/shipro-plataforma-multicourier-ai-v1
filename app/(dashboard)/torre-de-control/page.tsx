@@ -17,8 +17,13 @@ export default function TorreDeControl() {
   const [metricas, setMetricas] = useState<any>(null);
   const [cargandoDatos, setCargandoDatos] = useState(true);
 
-  const rolUsuario = session?.user?.rol?.toLowerCase() || '';
-  const esEquipoShipro = rolUsuario.includes('admin') || rolUsuario.includes('shipro');
+  // Torre de Control Metrica 1.1 (2026-06-04): endurecido el chequeo de rol Shipro.
+  // Antes: includes('admin') || includes('shipro') — permitia false positives en roles
+  // futuros tipo admin_cliente o admin_finanzas. Ahora: solo los dos roles canonicos
+  // de equipo Shipro pasan. Alineado con resolverContext del server-side y con la
+  // politica declarada: clientes NO entran a Torre de Control (tienen Panel de Control).
+  const rolUsuario = session?.user?.rol || '';
+  const esEquipoShipro = rolUsuario.startsWith('admin_shipro') || rolUsuario.startsWith('operador_shipro');
   const [listaClientes, setListaClientes] = useState<any[]>([]);
   const [filtroEmpresaId, setFiltroEmpresaId] = useState<string>("TODAS");
 
@@ -31,6 +36,12 @@ export default function TorreDeControl() {
   // Cards independientes: cada métrica tiene valor diagnóstico por separado.
   const [bloqueadosSaldoCount, setBloqueadosSaldoCount] = useState(0);
   const [bloqueadosDepositoCount, setBloqueadosDepositoCount] = useState(0);
+
+  // Torre de Control Metrica 1.1 "Resolver Nomenclador" (DEUDA 39, 2026-06-04).
+  // Datos del endpoint /api/torre-de-control/resolver-nomenclador. Sin scope
+  // por empresa: el nomenclador es global a la plataforma.
+  const [nomencladorMetrica, setNomencladorMetrica] = useState<any>(null);
+  const [cargandoNomenclador, setCargandoNomenclador] = useState(true);
 
   useEffect(() => {
     if (!filtroEmpresaId) return;
@@ -83,9 +94,32 @@ export default function TorreDeControl() {
     fetchMetricas();
   }, [filtroEmpresaId, filtroRuteoDesde, filtroRuteoHasta]);
 
-  const totalEnvios = metricas?.totalEnvios || 1; 
+  // Torre de Control Metrica 1.1: fetch del endpoint dedicado.
+  // Sin dependencia de filtroEmpresaId porque el nomenclador es global.
+  // El guard esEquipoShipro garantiza que solo Shipro haga la llamada
+  // (igual el endpoint server-side rechaza no-Shipro con 403).
+  useEffect(() => {
+    if (!esEquipoShipro) return;
+    setCargandoNomenclador(true);
+    fetch("/api/torre-de-control/resolver-nomenclador")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setNomencladorMetrica(data);
+        setCargandoNomenclador(false);
+      })
+      .catch(err => {
+        console.error("[Torre de Control] error fetching resolver-nomenclador:", err);
+        setCargandoNomenclador(false);
+      });
+  }, [esEquipoShipro]);
+
+  const totalEnvios = metricas?.totalEnvios || 1;
   const tiempoColectaDias = metricas?.tiempoColectaPromedioDias ?? null;
-  const estadosHuerfanos = metricas?.estadosSinMapear ?? 0;
+  // Torre de Control Metrica 1.1 (2026-06-04): cambio de fuente.
+  // Antes: metricas?.estadosSinMapear ?? 0 (endpoint generico /api/metricas).
+  // Ahora: nomencladorMetrica?.cantidadNoMapeados ?? 0 (endpoint dedicado
+  // /api/torre-de-control/resolver-nomenclador, ver useEffect arriba).
+  const estadosHuerfanos = nomencladorMetrica?.cantidadNoMapeados ?? 0;
   const tasaSoporte = metricas?.tasaSoporte ?? 0;
   
   const nps = metricas?.nps || { global: 0, promotores: 0, pasivos: 0, detractores: 0, porCourier: {}, friccionEntrega: [], ultimosComentarios: [] };
@@ -177,7 +211,116 @@ export default function TorreDeControl() {
               <button onClick={() => {setMetricaAnalisis(null); setZonaSlaSeleccionada(null);}} className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"><X className="w-6 h-6" /></button>
             </div>
             
-            {metricaAnalisis === "Auditoría de Direcciones (Peaje)" ? (
+            {metricaAnalisis === "Resolucion de Nomenclador" ? (
+              <div className="p-8 space-y-6">
+                {cargandoNomenclador ? (
+                  <div className="flex items-center gap-2 text-gray-500">
+                    <Loader2 className="w-5 h-5 animate-spin" /> Cargando metrica...
+                  </div>
+                ) : !nomencladorMetrica ? (
+                  <div className="text-gray-500">No se pudo cargar la metrica. Reintenta en unos segundos.</div>
+                ) : (
+                  <>
+                    {/* RESUMEN AGREGADO */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="bg-white border border-gray-200 rounded-xl p-5">
+                        <p className="text-xs text-gray-500 mb-1">Cobertura simple</p>
+                        <p className="text-2xl font-black text-gray-900">
+                          {nomencladorMetrica.porcentajeCoberturaSimple?.toFixed(1)}%
+                        </p>
+                        <p className="text-[10px] text-gray-400 mt-1">
+                          {nomencladorMetrica.totalEstadosCrudos - nomencladorMetrica.cantidadNoMapeados} de {nomencladorMetrica.totalEstadosCrudos} estados mapeados
+                        </p>
+                      </div>
+                      <div className="bg-white border border-gray-200 rounded-xl p-5">
+                        <p className="text-xs text-gray-500 mb-1">Cobertura ponderada (ult. {nomencladorMetrica.ventanaDias} dias)</p>
+                        {nomencladorMetrica.eventosConDato && nomencladorMetrica.porcentajeCoberturaPonderada !== null ? (
+                          <>
+                            <p className="text-2xl font-black text-gray-900">
+                              {nomencladorMetrica.porcentajeCoberturaPonderada.toFixed(1)}%
+                            </p>
+                            <p className="text-[10px] text-gray-400 mt-1">
+                              {nomencladorMetrica.totalEventos - nomencladorMetrica.eventosSinMapeo} de {nomencladorMetrica.totalEventos} eventos cubiertos
+                            </p>
+                          </>
+                        ) : (
+                          <>
+                            <p className="text-sm text-gray-400 mt-2">Aun sin datos suficientes.</p>
+                            <p className="text-[10px] text-gray-400 mt-1">El campo se llenara con eventos nuevos del cron rastreo.</p>
+                          </>
+                        )}
+                      </div>
+                      <div className="bg-white border border-gray-200 rounded-xl p-5">
+                        <p className="text-xs text-gray-500 mb-1">Estados sin mapear</p>
+                        <p className="text-2xl font-black text-red-600">
+                          {nomencladorMetrica.cantidadNoMapeados}
+                        </p>
+                        <p className="text-[10px] text-gray-400 mt-1">
+                          Total catalogo: {nomencladorMetrica.totalEstadosCrudos}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* TOP ESTADOS SIN MAPEAR */}
+                    {nomencladorMetrica.topEstadosSinMapear?.length > 0 && (
+                      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+                        <div className="p-4 border-b border-gray-100 flex items-center justify-between">
+                          <h3 className="font-bold text-gray-900 flex items-center gap-2"><ListChecks className="w-4 h-4" /> Top estados sin mapear</h3>
+                          <Link href="/nomenclador" className="text-xs font-black text-blue-600">Ir a mapear &rarr;</Link>
+                        </div>
+                        <table className="w-full text-sm">
+                          <thead className="bg-gray-50 text-gray-500 text-xs">
+                            <tr>
+                              <th className="text-left p-3 font-semibold">Estado crudo</th>
+                              <th className="text-left p-3 font-semibold">Courier</th>
+                              <th className="text-right p-3 font-semibold">Frecuencia (ult. {nomencladorMetrica.ventanaDias}d)</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {nomencladorMetrica.topEstadosSinMapear.map((item: any, idx: number) => (
+                              <tr key={`${item.courierId}-${item.estadoCrudo}-${idx}`} className="border-t border-gray-100">
+                                <td className="p-3 font-mono text-xs text-gray-700">{item.estadoCrudo}</td>
+                                <td className="p-3 text-gray-700">{item.courierNombre}</td>
+                                <td className="p-3 text-right font-bold text-gray-900">{item.frecuenciaEnVentana}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {/* DESGLOSE POR COURIER */}
+                    {nomencladorMetrica.desglosePorCourier?.length > 0 && (
+                      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+                        <div className="p-4 border-b border-gray-100">
+                          <h3 className="font-bold text-gray-900 flex items-center gap-2"><SearchCode className="w-4 h-4" /> Cobertura por courier</h3>
+                        </div>
+                        <table className="w-full text-sm">
+                          <thead className="bg-gray-50 text-gray-500 text-xs">
+                            <tr>
+                              <th className="text-left p-3 font-semibold">Courier</th>
+                              <th className="text-right p-3 font-semibold">Total estados</th>
+                              <th className="text-right p-3 font-semibold">Sin mapear</th>
+                              <th className="text-right p-3 font-semibold">Cobertura</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {nomencladorMetrica.desglosePorCourier.map((d: any) => (
+                              <tr key={d.courierId} className="border-t border-gray-100">
+                                <td className="p-3 font-semibold text-gray-900">{d.courierNombre}</td>
+                                <td className="p-3 text-right text-gray-700">{d.totalEstadosCrudos}</td>
+                                <td className={`p-3 text-right font-bold ${d.estadosNoMapeados > 0 ? 'text-red-600' : 'text-gray-400'}`}>{d.estadosNoMapeados}</td>
+                                <td className="p-3 text-right text-gray-900">{d.porcentajeCobertura.toFixed(1)}%</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            ) : metricaAnalisis === "Auditoría de Direcciones (Peaje)" ? (
               <div className="flex-1 flex flex-col bg-gray-50 overflow-y-auto">
                 <div className="bg-white border-b border-gray-200 p-4 flex flex-wrap gap-3 items-center shrink-0 shadow-sm z-10">
                   {esEquipoShipro && (
@@ -1050,8 +1193,32 @@ export default function TorreDeControl() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className={`bg-white border rounded-xl p-5 shadow-sm relative overflow-hidden flex flex-col h-full ${estadosHuerfanos > 0 ? 'border-red-300' : 'border-gray-200'}`}>
               <h4 className="font-bold text-gray-800 text-sm flex items-center gap-2 mb-1"><ArrowRightLeft className={estadosHuerfanos > 0 ? 'text-red-500' : 'text-gray-400'} /> 1. Resolver Nomenclador</h4>
-              <p className="text-xs text-gray-500 mb-4">{estadosHuerfanos === 0 ? "Todos los códigos API mapeados." : <span className="font-bold text-red-600">{estadosHuerfanos} códigos sin mapear.</span>}</p>
-              {estadosHuerfanos > 0 && <Link href="/nomenclador" className="text-xs font-black text-red-600 mt-auto">Ir a Mapear</Link>}
+              {cargandoNomenclador ? (
+                <p className="text-xs text-gray-400 mb-4 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Cargando metrica...</p>
+              ) : (
+                <>
+                  <p className="text-xs text-gray-500 mb-1">
+                    {estadosHuerfanos === 0
+                      ? "Todos los codigos API mapeados."
+                      : <span className="font-bold text-red-600">{estadosHuerfanos} codigos sin mapear.</span>}
+                  </p>
+                  {nomencladorMetrica && (
+                    <p className="text-[10px] text-gray-400 mb-3">
+                      Cobertura simple: {nomencladorMetrica.porcentajeCoberturaSimple?.toFixed(1)}%
+                      {nomencladorMetrica.eventosConDato && nomencladorMetrica.porcentajeCoberturaPonderada !== null && (
+                        <> · Ponderada: {nomencladorMetrica.porcentajeCoberturaPonderada.toFixed(1)}%</>
+                      )}
+                      {!nomencladorMetrica.eventosConDato && (
+                        <> · Ponderada: aun sin datos</>
+                      )}
+                    </p>
+                  )}
+                </>
+              )}
+              <div className="mt-auto flex items-center gap-3">
+                <button onClick={() => abrirAnalisis("Resolucion de Nomenclador")} className="text-xs font-black text-blue-600">Analizar</button>
+                {estadosHuerfanos > 0 && <Link href="/nomenclador" className="text-xs font-black text-red-600">Mapear ahora</Link>}
+              </div>
             </div>
             <div className={`bg-white border rounded-xl p-5 shadow-sm relative flex flex-col h-full ${auditoriaStats.totalRetenidos > 0 ? 'border-orange-300' : 'border-gray-200'}`}>
               <h4 className="font-bold text-gray-800 text-sm flex items-center gap-2 mb-1"><MapPinned className={auditoriaStats.totalRetenidos > 0 ? 'text-orange-500' : 'text-gray-400'} /> 2. Auditar Checkouts</h4>

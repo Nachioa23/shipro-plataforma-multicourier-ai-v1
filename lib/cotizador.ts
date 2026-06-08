@@ -2,6 +2,7 @@ import prisma from "@/lib/prisma";
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
+import { calcularPromesaCalibrada } from "@/lib/utils/promesa-calibrada";
 import type { Paquete } from "@/lib/couriers/CourierInterface";
 
 export interface CotizarInput {
@@ -141,10 +142,17 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
   let opcionesDomicilio: OpcionTarifa[] = [];
   let opcionesSucursal: OpcionTarifa[] = [];
 
-  // Búsqueda de métricas SLA reales pre-calculadas
-  const metricasDb = await prisma.metricaSLA.findMany({
-    where: { provinciaDestino: provinciaDestino || "" }
-  });
+  // Torre de Control Metrica 2.3 (DEUDA 39, 2026-06-05): la consulta a
+  // MetricaSLA se hace adentro de calcularPromesaCalibrada() como nivel 3
+  // de fallback. El cotizador ya no la consulta directamente aqui.
+  // (El cron metricas-sla sigue corriendo y poblando MetricaSLA. Se usa
+  // como triple fallback dentro del helper.)
+
+  // depositoId del predeterminado activo, si existe. Se usa para nivel 1
+  // de calibracion (deposito + courier + provincia). Decision A.2: usamos
+  // siempre el predeterminado, sin importar si el caller paso cpOrigen
+  // explicito. Funciona para 99% de los flujos (e-commerce usa predeterminado).
+  const depositoIdParaCalibracion: number | null = empresa?.depositos?.[0]?.id ?? null;
 
   for (const config of couriersAptos) {
     try {
@@ -167,15 +175,22 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
         return { precioProveedor: costoSecoCourier, precioFinal: config.tarifaIncluyeIva ? costoConMarkup : costoConMarkup * 1.21 };
       };
 
-      // ASIGNACIÓN DE SLA
-      let slaHorasFinal = config.slaPromedioHs || (nombreNormalizado === 'mocis' ? 24 : 72);
-      let esSlaReal = false;
-
-      const metricaEncontrada = metricasDb.find(m => m.courierId === config.id);
-      if (metricaEncontrada && metricaEncontrada.muestraEnvios >= 10) {
-        slaHorasFinal = metricaEncontrada.slaPromedioHs;
-        esSlaReal = true;
-      }
+      // Torre de Control Metrica 2.3 (DEUDA 39, 2026-06-05): asignacion de
+      // SLA via cuadruple fallback del helper compartido.
+      // - Nivel 1: P75 por (deposito, courier, provincia) si muestra >= 10
+      // - Nivel 2: P75 por (courier, provincia) si muestra >= 10
+      // - Nivel 3: promedio MetricaSLA por (courier, provincia) si existe
+      // - Nivel 4: hardcoded por courier (Mocis 24h, resto 72h)
+      // Decision B.2: etiqueta UX binaria mantenida. esSlaReal = true si la
+      // calibracion es real (nivel 1 o 2), false si es promedio o hardcoded.
+      const promesaResult = await calcularPromesaCalibrada(
+        config.id,
+        depositoIdParaCalibracion,
+        provinciaDestino,
+        config.nombreCourier
+      );
+      const slaHorasFinal = promesaResult.slaHoras;
+      const esSlaReal = promesaResult.esCalibracionReal;
 
       const textoUXLlegada = await calcularFechaEstimada(slaHorasFinal);
 

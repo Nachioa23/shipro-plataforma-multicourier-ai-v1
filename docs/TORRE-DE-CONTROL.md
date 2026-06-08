@@ -805,6 +805,15 @@ Antes de implementar, consultar a Claude Code:
 
 ## 2.3 Promesa de Entrega Calibrada
 
+**Estado: implementada el 2026-06-08 (commit pendiente).**
+**Granularidad v1:** (deposito x courier x provincia). La dimension modalidad esta omitida porque Envio.modalidad no se persiste correctamente (DEUDA 47). Sera agregada cuando se resuelva.
+**Componentes:**
+- Helper compartido `lib/utils/promesa-calibrada.ts` con cuadruple fallback (deposito+courier+prov → courier+prov → MetricaSLA → hardcoded).
+- Endpoint analitico `/api/torre-de-control/promesa-calibrada` (lee on-the-fly, expone P50/P75/P90 globales + por combinacion + cumplimiento historico).
+- Cotizador modificado para usar P75 calibrado en cotizaciones en tiempo real.
+- Creacion de envio persiste `diasPrometidosCheckout` para medir cumplimiento historico estable.
+- Dashboard con tarjeta + modal expandido (4 tiles + cumplimiento + tabla por combinacion).
+
 ### Categoria
 Motor de promesa logistica · Calibracion continua de plazos al comprador
 

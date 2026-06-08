@@ -49,6 +49,13 @@ export default function TorreDeControl() {
   const [tiemposColectaMetrica, setTiemposColectaMetrica] = useState<any>(null);
   const [cargandoTiemposColecta, setCargandoTiemposColecta] = useState(true);
 
+  // Torre de Control Metrica 2.3 "Promesa Calibrada" (DEUDA 39, 2026-06-08).
+  // Datos del endpoint /api/torre-de-control/promesa-calibrada. Mide promesa
+  // de entrega calibrada (P75) por combinacion (deposito, courier, provincia)
+  // y tasa de cumplimiento historico.
+  const [promesaCalibradaMetrica, setPromesaCalibradaMetrica] = useState<any>(null);
+  const [cargandoPromesaCalibrada, setCargandoPromesaCalibrada] = useState(true);
+
   useEffect(() => {
     if (!filtroEmpresaId) return;
     const baseParams = { filtroEmpresa: filtroEmpresaId, page: "1", limit: "1" };
@@ -138,6 +145,24 @@ export default function TorreDeControl() {
       });
   }, [esEquipoShipro]);
 
+  // Torre de Control Metrica 2.3: fetch del endpoint de promesa calibrada.
+  // Ventana 90 dias hardcoded en v1 (P: hardcoded). Cuando se implemente
+  // selector temporal en UI, se agrega parametro a la query.
+  useEffect(() => {
+    if (!esEquipoShipro) return;
+    setCargandoPromesaCalibrada(true);
+    fetch("/api/torre-de-control/promesa-calibrada")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setPromesaCalibradaMetrica(data);
+        setCargandoPromesaCalibrada(false);
+      })
+      .catch(err => {
+        console.error("[Torre de Control] error fetching promesa-calibrada:", err);
+        setCargandoPromesaCalibrada(false);
+      });
+  }, [esEquipoShipro]);
+
   const totalEnvios = metricas?.totalEnvios || 1;
   // Torre de Control Metrica 2.1 (2026-06-04): cambio de fuente.
   // Antes: metricas?.tiempoColectaPromedioDias (campo aspiracional, nunca
@@ -145,6 +170,12 @@ export default function TorreDeControl() {
   // Ahora: tiemposColectaMetrica?.estadisticosGlobales?.p50 (en horas) del
   // endpoint dedicado /api/torre-de-control/tiempos-colecta.
   const tiempoColectaHoras = tiemposColectaMetrica?.estadisticosGlobales?.p50 ?? null;
+
+  // Torre de Control Metrica 2.3 (DEUDA 39, 2026-06-08).
+  // Promesa media de la plataforma (P75 calibrado, en dias) + tasa de cumplimiento.
+  const promesaCalibradaDias = promesaCalibradaMetrica?.estadisticosGlobales?.p75Dias ?? null;
+  const tasaCumplimientoGlobal = promesaCalibradaMetrica?.tasaCumplimientoGlobal ?? null;
+  const cantidadEnviosCalibrados = promesaCalibradaMetrica?.cantidadEnviosValidos ?? 0;
   // Torre de Control Metrica 1.1 (2026-06-04): cambio de fuente.
   // Antes: metricas?.estadosSinMapear ?? 0 (endpoint generico /api/metricas).
   // Ahora: nomencladorMetrica?.cantidadNoMapeados ?? 0 (endpoint dedicado
@@ -519,6 +550,160 @@ export default function TorreDeControl() {
                             ))}
                           </tbody>
                         </table>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            ) : metricaAnalisis === "Promesa Calibrada" ? (
+              <div className="p-8 space-y-6">
+                {cargandoPromesaCalibrada ? (
+                  <div className="flex items-center gap-2 text-gray-500">
+                    <Loader2 className="w-5 h-5 animate-spin" /> Cargando metrica...
+                  </div>
+                ) : !promesaCalibradaMetrica || promesaCalibradaMetrica.cantidadEnviosValidos === 0 ? (
+                  <div className="text-gray-500">
+                    Sin envios entregados en la ventana de {promesaCalibradaMetrica?.ventanaDias || 90} dias.
+                    {promesaCalibradaMetrica?.cantidadEnviosSinDatos > 0 && (
+                      <p className="text-xs text-gray-400 mt-2">
+                        Hay {promesaCalibradaMetrica.cantidadEnviosSinDatos} envios sin datos completos en la ventana.
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    {/* RESUMEN GLOBAL — Estadisticos + cumplimiento */}
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                      <div className="bg-white border border-gray-200 rounded-xl p-5">
+                        <p className="text-xs text-gray-500 mb-1">Mediana (P50)</p>
+                        <p className="text-2xl font-black text-gray-900">
+                          {promesaCalibradaMetrica.estadisticosGlobales.p50Dias} dias
+                        </p>
+                        <p className="text-[10px] text-gray-400 mt-1">
+                          {promesaCalibradaMetrica.estadisticosGlobales.p50Horas}h · caso tipico
+                        </p>
+                      </div>
+                      <div className="bg-white border border-gray-200 rounded-xl p-5">
+                        <p className="text-xs text-gray-500 mb-1">Promesa Calibrada (P75)</p>
+                        <p className="text-2xl font-black text-gray-900">
+                          {promesaCalibradaMetrica.estadisticosGlobales.p75Dias ?? "--"} dias
+                        </p>
+                        <p className="text-[10px] text-gray-400 mt-1">
+                          {promesaCalibradaMetrica.estadisticosGlobales.p75Horas !== null
+                            ? `${promesaCalibradaMetrica.estadisticosGlobales.p75Horas}h · lo que prometemos`
+                            : "lo que prometemos hoy"}
+                        </p>
+                      </div>
+                      <div className="bg-white border border-gray-200 rounded-xl p-5">
+                        <p className="text-xs text-gray-500 mb-1">Promedio</p>
+                        <p className="text-2xl font-black text-gray-900">
+                          {promesaCalibradaMetrica.estadisticosGlobales.promedioDias} dias
+                        </p>
+                        <p className="text-[10px] text-gray-400 mt-1">
+                          {promesaCalibradaMetrica.estadisticosGlobales.promedioHoras}h
+                        </p>
+                      </div>
+                      <div className="bg-white border border-gray-200 rounded-xl p-5">
+                        <p className="text-xs text-gray-500 mb-1">P95 (peor caso)</p>
+                        <p className="text-2xl font-black text-gray-900">
+                          {promesaCalibradaMetrica.estadisticosGlobales.p95Dias} dias
+                        </p>
+                        <p className="text-[10px] text-gray-400 mt-1">
+                          {promesaCalibradaMetrica.estadisticosGlobales.p95Horas}h · 95% por debajo
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* CUMPLIMIENTO HISTORICO */}
+                    <div className="bg-white border border-gray-200 rounded-xl p-5">
+                      <h3 className="font-bold text-gray-900 flex items-center gap-2 mb-3">
+                        <CheckCircle2 className="w-4 h-4 text-green-600" />
+                        Cumplimiento Historico
+                      </h3>
+                      {promesaCalibradaMetrica.tasaCumplimientoGlobal !== null ? (
+                        <div className="flex items-center gap-6">
+                          <div>
+                            <p className="text-3xl font-black text-gray-900">
+                              {(promesaCalibradaMetrica.tasaCumplimientoGlobal * 100).toFixed(1)}%
+                            </p>
+                            <p className="text-xs text-gray-500">de envios cumplidos en la promesa</p>
+                          </div>
+                          <div className="text-xs text-gray-500 border-l border-gray-200 pl-6">
+                            <p>{promesaCalibradaMetrica.cantidadEnviosConPromesa} envios evaluados</p>
+                            <p className="text-gray-400">(de {promesaCalibradaMetrica.cantidadEnviosValidos} entregados)</p>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-gray-500">
+                          <p className="text-sm">Sin datos de cumplimiento aun.</p>
+                          <p className="text-xs text-gray-400 mt-1">
+                            Esta metrica se calcula sobre envios entregados que tenian promesa registrada al crearse. La promesa empezo a registrarse el 2026-06-08; los datos se acumulan a partir de envios nuevos.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* CALIDAD DE DATOS */}
+                    <div className="bg-white border border-gray-200 rounded-xl p-4 flex items-center justify-between">
+                      <div className="text-xs text-gray-500">
+                        <span className="font-bold text-gray-900">{promesaCalibradaMetrica.cantidadEnviosValidos}</span> envios entregados validos
+                        {" "}de <span className="font-bold text-gray-900">{promesaCalibradaMetrica.cantidadEnviosTotal}</span> en ventana de {promesaCalibradaMetrica.ventanaDias} dias.
+                      </div>
+                      <div className="text-xs text-gray-400">
+                        Umbral muestra confiable: {promesaCalibradaMetrica.umbralMuestraMinima} envios
+                      </div>
+                    </div>
+
+                    {/* TABLA POR COMBINACION */}
+                    {promesaCalibradaMetrica.combinaciones?.length > 0 && (
+                      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+                        <div className="p-4 border-b border-gray-100">
+                          <h3 className="font-bold text-gray-900 flex items-center gap-2">
+                            <Truck className="w-4 h-4" /> Por ruta (Deposito x Courier x Provincia)
+                          </h3>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead className="bg-gray-50 text-gray-500 text-xs">
+                              <tr>
+                                <th className="text-left p-3 font-semibold">Deposito</th>
+                                <th className="text-left p-3 font-semibold">Courier</th>
+                                <th className="text-left p-3 font-semibold">Provincia</th>
+                                <th className="text-right p-3 font-semibold">P75 (Promesa)</th>
+                                <th className="text-right p-3 font-semibold">P50</th>
+                                <th className="text-right p-3 font-semibold">P90</th>
+                                <th className="text-right p-3 font-semibold">Envios</th>
+                                <th className="text-right p-3 font-semibold">Cumplim.</th>
+                                <th className="text-center p-3 font-semibold">Confiable</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {promesaCalibradaMetrica.combinaciones.map((c: any, idx: number) => (
+                                <tr key={`${c.depositoId}-${c.courierId}-${c.provinciaDestino}-${idx}`} className="border-t border-gray-100">
+                                  <td className="p-3 font-semibold text-gray-900">{c.depositoNombre}</td>
+                                  <td className="p-3 text-gray-700">{c.courierNombre}</td>
+                                  <td className="p-3 text-gray-700 capitalize">{c.provinciaDestino}</td>
+                                  <td className="p-3 text-right font-bold text-gray-900">{c.p75Dias} d</td>
+                                  <td className="p-3 text-right text-gray-700">{c.p50Dias} d</td>
+                                  <td className="p-3 text-right text-gray-700">{c.p90Dias} d</td>
+                                  <td className="p-3 text-right font-bold text-gray-900">{c.cantidad}</td>
+                                  <td className="p-3 text-right text-gray-700">
+                                    {c.tasaCumplimiento !== null
+                                      ? `${(c.tasaCumplimiento * 100).toFixed(0)}%`
+                                      : <span className="text-gray-400">--</span>
+                                    }
+                                  </td>
+                                  <td className="p-3 text-center">
+                                    {c.muestraConfiable
+                                      ? <span className="text-green-600 text-xs font-bold">SI</span>
+                                      : <span className="text-orange-500 text-xs font-bold">NO</span>
+                                    }
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
                       </div>
                     )}
                   </>
@@ -1484,6 +1669,32 @@ export default function TorreDeControl() {
                 </>
               )}
               <button onClick={() => abrirAnalisis("Tiempos Colecta")} className="w-full py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold mt-auto hover:bg-blue-50">Desglosar</button>
+            </div>
+
+            <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm flex flex-col h-full">
+              <p className="text-xs font-bold text-gray-500 uppercase mb-2 flex items-center gap-1.5"><Clock className="text-blue-500" /> 8. Promesa Calibrada</p>
+              {cargandoPromesaCalibrada ? (
+                <h3 className="text-3xl font-black mb-1 text-gray-300"><Loader2 className="w-6 h-6 animate-spin inline" /></h3>
+              ) : promesaCalibradaDias === null || cantidadEnviosCalibrados === 0 ? (
+                <>
+                  <h3 className="text-3xl font-black mb-1 text-gray-400">--</h3>
+                  <p className="text-[10px] text-gray-400 mb-1">Sin envios entregados en la ventana</p>
+                </>
+              ) : (
+                <>
+                  <h3 className="text-3xl font-black mb-1">
+                    {promesaCalibradaDias}
+                    <span className="text-lg font-bold text-gray-400"> dias</span>
+                  </h3>
+                  <p className="text-[10px] text-gray-400 mb-1">
+                    {tasaCumplimientoGlobal !== null
+                      ? `Cumplimiento: ${(tasaCumplimientoGlobal * 100).toFixed(0)}%`
+                      : "Sin datos de cumplimiento aun"}
+                    {" "}· {cantidadEnviosCalibrados} envios
+                  </p>
+                </>
+              )}
+              <button onClick={() => abrirAnalisis("Promesa Calibrada")} className="w-full py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold mt-auto hover:bg-blue-50">Desglosar</button>
             </div>
           </div>
         </div>

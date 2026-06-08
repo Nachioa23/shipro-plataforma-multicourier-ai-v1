@@ -3,6 +3,7 @@ import { enviarMailCreacion } from "@/lib/mailer";
 import { obtenerCourier } from "@/lib/couriers/normalizar";
 import { despacharCourier } from "@/lib/envios/dispatch";
 import { cotizar } from "@/lib/cotizador";
+import { calcularPromesaCalibrada } from "@/lib/utils/promesa-calibrada";
 import { validarOperatividadPar } from "@/lib/depositos/operatividad";
 import { getAppUrl } from "@/lib/utils/app-url";
 import type { DepositoCourierConfig } from "@prisma/client";
@@ -475,9 +476,24 @@ export async function crearEnvio(input: CrearEnvioInput) {
 
     const nuevoSaldo = (empresaData?.saldoActivo || 0) - montoDebito;
 
+    // Torre de Control Metrica 2.3 (DEUDA 39, 2026-06-05):
+    // Calcular promesa calibrada al crear envio para medir cumplimiento
+    // historico estable. Es la mejor estimacion de Shipro de lo que habria
+    // prometido al comprador en este momento (P75 calibrado actual).
+    // Una vez persistido, el cumplimiento futuro se mide contra este valor
+    // fijo, no contra el calibrado vigente al momento de la entrega.
+    const promesaCalibrada = await calcularPromesaCalibrada(
+      courierIdReal,
+      deposito?.id ?? null,
+      provinciaDestino,
+      courierReal.nombre
+    );
+    const diasPrometidosCalculados = Math.ceil(promesaCalibrada.slaHoras / 24);
+
     const envioCreado = await tx.envio.create({
       data: {
         trackingNumber: trackingOficial,
+        diasPrometidosCheckout: diasPrometidosCalculados,
         // TODO DEUDA 29 Sub-fase 3: tracking del first-mile ahora vive en TramoEnvio.trackingExterno.
         numeroOrden: numeroOrden || null,
         etiquetaUrl: urlEtiquetaFinal,

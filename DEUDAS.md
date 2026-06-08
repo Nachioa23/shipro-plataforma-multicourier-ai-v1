@@ -652,7 +652,7 @@ Ver `docs/ARQUITECTURA-MULTICOURIER.md` para detalle.
 - **Moova y Javit en BD (data sucia)** — RESUELTA 2026-05-07 por la migracion `20260507152517_deuda_29_arquitectura_multicourier` (ETAPA 1 de limpieza). Se eliminaron las filas de Courier (Moova=id3, Javit=id4) + sus referencias en CredencialCourier (via DELETE WHERE nombreCourier IN ('Moova', 'Javit')). Estado actual verificado 2026-06-02: tabla Courier solo contiene Andreani (id=1) y Moci's (id=2). La entrada quedo sin marcar como RESUELTA hasta hoy.
 - **URLs de couriers hardcoded en adapters** (corregido 2026-06-02): ambos adapters tienen URL hardcoded — `MocisAdapter.ts` linea 4 (`https://mocis.akeron.net/api/v1`) y `AndreaniAdapter.ts` linea 24 (`https://apis.andreani.com`). La premisa original "Andreani usa env var" era falsa: la variable `ANDREANI_URL` existe en `.env.local` pero el codigo NO la consume (env var huerfana). DECISION DEL DIRECTOR (2026-06-02): postergar el refactor hasta tener 5-7 couriers integrados. Disenar el patron de URLs courier con solo 2 casos es prematuro — couriers reales pueden requerir multiples URLs (sandbox vs live), URLs por endpoint (cotizar vs tracking), o variaciones segun ambiente. Hacer la abstraccion ahora con muestra de 2 produce un patron que probablemente habria que rehacer al integrar OCA, Correo Argentino, DPD, etc. Mientras tanto: hardcoded es aceptable, las URLs de couriers no cambian frecuentemente. Cuando llegue el momento de integrar el 5to courier, revisitar y definir patron real.
 
-## DEUDA 39 — Torre de Control: sistema integral de metricas estrategicas (DISEÑO COMPLETO 2026-06-04 — implementacion en progreso: Metricas 1.1 y 2.1 cerradas el 2026-06-04)
+## DEUDA 39 — Torre de Control: sistema integral de metricas estrategicas (DISEÑO COMPLETO 2026-06-04 — implementacion en progreso: Metricas 1.1, 2.1, 2.3 cerradas. 13 metricas restantes.)
 
 **Status:** Abierta 2026-06-02. Diseno profesional completo el 2026-06-04 documentado en `docs/TORRE-DE-CONTROL.md`. Implementacion pendiente, sesion dedicada por metrica.
 
@@ -771,3 +771,97 @@ Si la Torre de Control no contempla estacionalidad, ocurren dos problemas:
 - Generar alertas pre-evento: "Hot Sale arranca en 14 dias. Tu promesa actual sera optimista en este periodo. Considera ajustar el nivel de seguridad a 'conservador' temporalmente."
 
 **Prioridad:** Alta. Mayoria de e-commerces argentinos tienen fuerte estacionalidad y la promesa al comprador durante eventos es decisiva en conversion.
+
+## DEUDA 43 — Sistema de SLA nominal del courier por zona (descubierta en Metrica 2.3, 2026-06-08)
+UI admin_Shipro durante onboarding para cargar SLAs nominales por (courierId, zonaNombre). El modelo SlaCourier existe pero esta vacio. Necesario para la comparacion calibrada vs nominal del documento maestro (futura version de Metrica 2.3).
+
+**Contexto:** Cada courier publica su SLA por zona ("Interior 1": 4 dias, "Patagonia 2": 7 dias, etc.). Shipro hoy no captura ni compara contra estos valores.
+
+**Componentes:**
+- UI nueva en /admin-couriers para CRUD de SlaCourier (textarea o tabla editable).
+- Validaciones (UNIQUE por par courier x zona, dias > 0).
+- Posiblemente: precarga manual con valores de Andreani y Mocis basicos.
+
+**Bloquea:** comparacion calibrada vs nominal en la metrica 2.3 (vision futura).
+**Requiere:** DEUDA 44 resuelta (captura de zona desde liquidacion).
+
+---
+
+## DEUDA 44 — Captura de zona del courier desde liquidacion (descubierta en Metrica 2.3, 2026-06-08)
+Hoy Envio.depositoId + Direccion.provincia son la mejor granularidad de destino. El courier conoce la zona oficial donde clasifico el envio (ej: "Interior 1", "Patagonia 2"), pero ese dato no llega a Shipro.
+
+**Solucion propuesta:**
+- Nuevo campo Envio.zonaCourier (String?, nullable).
+- Modificacion del ingestor de LiquidacionMensual para capturar la columna "zona" del Excel del courier.
+- Mapeo por trackingNumber: cada fila de liquidacion → su envio correspondiente.
+
+**Bloquea:** comparacion calibrada vs nominal (DEUDA 45). Granularidad sub-provincial de zonas operativas reales (DEUDA 46).
+**Requiere:** revisar formato de liquidacion de Andreani y Mocis para confirmar disponibilidad del dato.
+
+---
+
+## DEUDA 45 — Comparacion calibrada vs nominal en dashboard (descubierta en Metrica 2.3, 2026-06-08)
+Seccion en el modal de Metrica 2.3 que muestre side-by-side: "Andreani dice 4 dias al Interior 1, en realidad tarda 6.2 dias (P75)". Util para conversaciones de gestion con couriers (renegociar SLAs, identificar incumplimientos sistematicos).
+
+**Bloquea:** nada (es agregado).
+**Requiere:** DEUDA 43 + DEUDA 44 resueltas (necesitamos SLA nominal poblado + zona capturada).
+
+---
+
+## DEUDA 46 — Granularidad sub-provincial: zonas operativas reales (descubierta en Metrica 2.3, 2026-06-08)
+La granularidad por provincia es insuficiente. Capital de Cordoba tiene SLA distinto al Interior de Cordoba. CABA y Conurbano Bonaerense son AMBA (mismo SLA), pero el Interior de Buenos Aires es otra cosa.
+
+**Zonas operativas conocidas (informacion del director, 2026-06-08):**
+- CABA: CPs 1000-1499
+- AMBA Conurbano: CPs 1600-1900 (forma AMBA junto con CABA)
+- Interior de Buenos Aires: resto de CPs de la provincia
+- Resto de provincias: granularidad TBD por courier
+
+**Solucion propuesta:**
+- Modelo nuevo ZonaLogistica (nombre, descripcion, criterio_match).
+- Match por rangos de CP para Buenos Aires.
+- Mapeo provincia → zona unica para el resto.
+- Refactorizar metrica 2.3 para agrupar por zona en lugar de provincia.
+
+**Bloquea:** comparacion certera contra SLA nominal del courier.
+**Requiere:** decision de producto sobre que zonas se modelan.
+
+---
+
+## DEUDA 47 — Fix persistencia de modalidad en Envio.modalidad (descubierta en Metrica 2.3, 2026-06-08)
+Hoy `lib/envios/crear.ts:478` persiste modalidad: "Estandar" (default) para todos los envios. El cotizador devuelve modalidad rica ("Entrega a Domicilio (Estandar)", "Retiro en Sucursal", "Locker"), pero esa string no se persiste.
+
+**Impacto actual:** la metrica 2.3 NO puede cortar por modalidad. Documentado en `app/api/torre-de-control/promesa-calibrada/route.ts` como granularidad v1.
+
+**Solucion:**
+- Modificar `lib/envios/crear.ts` para extraer modalidad de la opcion elegida (o recibirla como input explicito).
+- Persistir el string canonico en `Envio.modalidad`.
+- Cuando se resuelva: agregar dimension modalidad al endpoint y dashboard de metrica 2.3.
+
+---
+
+## DEUDA 48 — Decision arquitectonica: origen del CP en cotizacion (descubierta en Metrica 2.3, 2026-06-08)
+Hoy `/api/cotizar` recibe `cpOrigen?` opcional. Si el e-commerce lo manda, se usa. Si no, fallback al CP del deposito predeterminado (lib/cotizador.ts:117-125).
+
+**Pregunta arquitectonica:** ¿el e-commerce deberia enviar el CP de origen o la Plataforma deberia siempre usar el deposito predeterminado del cliente?
+
+**Implicancias:**
+- Multi-deposito por empresa: ¿quien decide cual usar?
+- Coherencia: cliente con 3 depositos puede tener confusion sobre cual cotizar.
+- Integraciones existentes: probablemente algunos clientes ya mandan cpOrigen explicito.
+
+**Sesion dedicada de producto.** No es bloqueante para metrica 2.3 v1.
+
+---
+
+## DEUDA 49 — Normalizacion de provincias en BD (descubierta en Metrica 2.3, 2026-06-08)
+`Direccion.provincia` es string libre. Conviven en BD: "Buenos Aires" y "Provincia de Buenos Aires" como entidades distintas, cuando geograficamente son la misma provincia.
+
+**Impacto actual:** metricas que agrupan por provincia fragmentan muestras. Metrica 2.3 normaliza en codigo (lowercase + trim) pero NO unifica variantes nominales.
+
+**Solucion propuesta:**
+- Refactor a 24 jurisdicciones argentinas (23 provincias + CABA) como enum o tabla referencia.
+- Migration de Direccion.provincia con mapeo de variantes existentes.
+- Validacion en formularios de carga.
+
+**Conecta con DEUDA 46** (granularidad sub-provincial).

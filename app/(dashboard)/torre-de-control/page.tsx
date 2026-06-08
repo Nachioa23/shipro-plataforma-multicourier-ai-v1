@@ -56,6 +56,12 @@ export default function TorreDeControl() {
   const [promesaCalibradaMetrica, setPromesaCalibradaMetrica] = useState<any>(null);
   const [cargandoPromesaCalibrada, setCargandoPromesaCalibrada] = useState(true);
 
+  // Torre de Control Metrica 3.3 "Modalidades" (DEUDA 39 + DEUDA 47, 2026-06-09).
+  // Datos del endpoint /api/torre-de-control/modalidades. Mide la distribucion
+  // de modalidades canonicas elegidas por compradores en checkout.
+  const [modalidadesMetrica, setModalidadesMetrica] = useState<any>(null);
+  const [cargandoModalidades, setCargandoModalidades] = useState(true);
+
   useEffect(() => {
     if (!filtroEmpresaId) return;
     const baseParams = { filtroEmpresa: filtroEmpresaId, page: "1", limit: "1" };
@@ -163,6 +169,23 @@ export default function TorreDeControl() {
       });
   }, [esEquipoShipro]);
 
+  // Torre de Control Metrica 3.3: fetch del endpoint de modalidades.
+  // Ventana 90 dias hardcoded en v1.
+  useEffect(() => {
+    if (!esEquipoShipro) return;
+    setCargandoModalidades(true);
+    fetch("/api/torre-de-control/modalidades")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setModalidadesMetrica(data);
+        setCargandoModalidades(false);
+      })
+      .catch(err => {
+        console.error("[Torre de Control] error fetching modalidades:", err);
+        setCargandoModalidades(false);
+      });
+  }, [esEquipoShipro]);
+
   const totalEnvios = metricas?.totalEnvios || 1;
   // Torre de Control Metrica 2.1 (2026-06-04): cambio de fuente.
   // Antes: metricas?.tiempoColectaPromedioDias (campo aspiracional, nunca
@@ -176,6 +199,16 @@ export default function TorreDeControl() {
   const promesaCalibradaDias = promesaCalibradaMetrica?.estadisticosGlobales?.p75Dias ?? null;
   const tasaCumplimientoGlobal = promesaCalibradaMetrica?.tasaCumplimientoGlobal ?? null;
   const cantidadEnviosCalibrados = promesaCalibradaMetrica?.cantidadEnviosValidos ?? 0;
+
+  // Torre de Control Metrica 3.3 (DEUDA 39 + DEUDA 47, 2026-06-09).
+  // Top 3 modalidades por cantidad + split forward/reverse.
+  const distribucionModalidades = modalidadesMetrica?.distribucionGlobal ?? [];
+  const top3Modalidades = distribucionModalidades.slice(0, 3);
+  const splitForwardReverse = modalidadesMetrica?.splitForwardReverse ?? {
+    forward: { cantidad: 0, porcentaje: 0 },
+    reverse: { cantidad: 0, porcentaje: 0 },
+  };
+  const cantidadEnviosModalidades = modalidadesMetrica?.cantidadEnviosTotal ?? 0;
   // Torre de Control Metrica 1.1 (2026-06-04): cambio de fuente.
   // Antes: metricas?.estadosSinMapear ?? 0 (endpoint generico /api/metricas).
   // Ahora: nomencladorMetrica?.cantidadNoMapeados ?? 0 (endpoint dedicado
@@ -271,7 +304,9 @@ export default function TorreDeControl() {
               </div>
               <button onClick={() => {setMetricaAnalisis(null); setZonaSlaSeleccionada(null);}} className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"><X className="w-6 h-6" /></button>
             </div>
-            
+
+            {/* Wrapper para scroll vertical compartido entre todas las branches del modal. */}
+            <div className="flex-1 overflow-y-auto">
             {metricaAnalisis === "Resolucion de Nomenclador" ? (
               <div className="p-8 space-y-6">
                 {cargandoNomenclador ? (
@@ -1187,94 +1222,176 @@ export default function TorreDeControl() {
               </div>
 
             ) : metricaAnalisis === "Adopción de Modalidades" ? (
-              <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden">
-                <div className="bg-white border-b border-gray-200 p-4 flex flex-wrap gap-3 items-center shrink-0 shadow-sm z-10">
-                  {esEquipoShipro && (
-                    <div className="flex items-center gap-2 border border-blue-200 rounded-lg px-3 py-1.5 bg-blue-50/50">
-                      <Building2 className="w-4 h-4 text-blue-500" />
-                      <select value={filtroEmpresaId} onChange={(e) => setFiltroEmpresaId(e.target.value)} className="bg-transparent text-xs font-bold text-blue-800 outline-none cursor-pointer max-w-[180px] truncate">
-                        <option value="TODAS">Todo el Ecosistema</option>
-                        {listaClientes.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-                      </select>
-                    </div>
-                  )}
-                  <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-1.5 bg-gray-50">
-                    <Calendar className="w-4 h-4 text-gray-400" />
-                    <input type="date" value={filtroRuteoDesde} onChange={e => setFiltroRuteoDesde(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"/>
-                    <span className="text-gray-400 text-xs font-bold">a</span>
-                    <input type="date" value={filtroRuteoHasta} onChange={e => setFiltroRuteoHasta(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"/>
+              <div className="p-8 space-y-6">
+                {cargandoModalidades ? (
+                  <div className="flex items-center gap-2 text-gray-500">
+                    <Loader2 className="w-5 h-5 animate-spin" /> Cargando metrica...
                   </div>
-                </div>
-
-                <div className="flex-1 overflow-y-auto p-6 lg:p-8">
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 max-w-7xl mx-auto">
-                    
-                    <div className="lg:col-span-5 space-y-6">
-                      <div className="bg-white p-6 rounded-2xl shadow-sm border border-blue-100 relative overflow-hidden">
-                        <div className="absolute top-0 right-0 w-32 h-32 bg-blue-50 rounded-bl-full -z-10 opacity-50"></div>
-                        <h4 className="text-xs font-black text-blue-600 uppercase tracking-widest mb-1">Volumen Analizado</h4>
-                        <p className="text-5xl font-black text-gray-800 mb-2 tracking-tighter">{(totalEnvios || 0).toLocaleString()}</p>
-                        <p className="text-xs font-medium text-gray-500 leading-relaxed">Paquetes distribuidos según el servicio elegido en el checkout.</p>
+                ) : !modalidadesMetrica || modalidadesMetrica.cantidadEnviosTotal === 0 ? (
+                  <div className="text-gray-500">
+                    Sin envios en la ventana de {modalidadesMetrica?.ventanaDias || 90} dias.
+                  </div>
+                ) : (
+                  <>
+                    {/* RESUMEN */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="bg-white border border-gray-200 rounded-xl p-5">
+                        <p className="text-xs text-gray-500 mb-1">Volumen Analizado</p>
+                        <p className="text-2xl font-black text-gray-900">
+                          {modalidadesMetrica.cantidadEnviosTotal}
+                        </p>
+                        <p className="text-[10px] text-gray-400 mt-1">envios en {modalidadesMetrica.ventanaDias} dias</p>
                       </div>
-
-                      <div className="bg-blue-50 p-6 rounded-2xl border border-blue-100 shadow-sm">
-                        <h4 className="text-xs font-black text-blue-800 uppercase tracking-widest mb-3 flex items-center gap-2">
-                          <Lightbulb className="w-4 h-4" /> Insight de Conversión
-                        </h4>
-                        <p className="text-lg font-bold text-gray-800 mb-3 leading-tight">Diversificar eleva las ventas.</p>
-                        <p className="text-xs text-blue-700 font-medium leading-relaxed mb-3">Tener habilitado <strong>"Retiro en Sucursal"</strong> reduce la tasa de abandono de carrito en un 15% para clientes que no están en su domicilio durante el día.</p>
-                        <p className="text-xs text-blue-700 font-medium leading-relaxed">El <strong>"Same-Day"</strong> aumenta la recompra (LTV) en un 30% al generar gratificación instantánea.</p>
+                      <div className="bg-white border border-gray-200 rounded-xl p-5">
+                        <p className="text-xs text-gray-500 mb-1">Forward (Entregas)</p>
+                        <p className="text-2xl font-black text-emerald-600">
+                          {modalidadesMetrica.splitForwardReverse.forward.porcentaje}%
+                        </p>
+                        <p className="text-[10px] text-gray-400 mt-1">{modalidadesMetrica.splitForwardReverse.forward.cantidad} envios</p>
+                      </div>
+                      <div className="bg-white border border-gray-200 rounded-xl p-5">
+                        <p className="text-xs text-gray-500 mb-1">Reverse (Devoluciones + Cambios)</p>
+                        <p className="text-2xl font-black text-orange-500">
+                          {modalidadesMetrica.splitForwardReverse.reverse.porcentaje}%
+                        </p>
+                        <p className="text-[10px] text-gray-400 mt-1">{modalidadesMetrica.splitForwardReverse.reverse.cantidad} envios</p>
                       </div>
                     </div>
 
-                    <div className="lg:col-span-7 space-y-6">
-                      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
-                        <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center gap-2">
-                          <Store className="w-5 h-5 text-indigo-500"/> Distribución del Mix Logístico
-                        </h4>
-                        
-                        <div className="space-y-6">
-                          <div className="p-5 bg-gray-50 rounded-xl border border-gray-100">
-                            <div className="flex justify-between items-center mb-3">
-                              <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center"><Truck className="w-5 h-5 text-slate-600"/></div>
-                                <div><h5 className="font-bold text-gray-800 text-sm">Domicilio Estándar</h5><p className="text-[10px] text-gray-500 uppercase tracking-wider font-bold">Logística Tradicional</p></div>
-                              </div>
-                              <div className="text-right"><p className="text-2xl font-black text-slate-700">{pctEstandar}%</p></div>
-                            </div>
-                            <div className="w-full bg-gray-200 rounded-full h-2"><div className="bg-slate-600 h-2 rounded-full" style={{ width: `${pctEstandar}%` }}></div></div>
+                    {/* DISTRIBUCION POR CATEGORIA */}
+                    <div className="bg-white border border-gray-200 rounded-xl p-5">
+                      <h3 className="font-bold text-gray-900 mb-4 flex items-center gap-2">
+                        <Store className="w-4 h-4 text-[#233b6b]" /> Distribucion por Modalidad
+                      </h3>
+                      {modalidadesMetrica.distribucionGlobal.map((item: any) => (
+                        <div key={item.modalidad} className="mb-3">
+                          <div className="flex justify-between text-xs mb-1">
+                            <span className="font-semibold text-gray-700">{item.modalidad}</span>
+                            <span className="font-bold text-gray-900">{item.porcentaje}% · {item.cantidad}</span>
                           </div>
-
-                          <div className="p-5 bg-gray-50 rounded-xl border border-gray-100">
-                            <div className="flex justify-between items-center mb-3">
-                              <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-full bg-purple-100 flex items-center justify-center"><Activity className="w-5 h-5 text-purple-600"/></div>
-                                <div><h5 className="font-bold text-gray-800 text-sm">Same-Day / Flex</h5><p className="text-[10px] text-gray-500 uppercase tracking-wider font-bold">Gratificación Inmediata</p></div>
-                              </div>
-                              <div className="text-right"><p className="text-2xl font-black text-purple-700">{pctSameDay}%</p></div>
-                            </div>
-                            <div className="w-full bg-gray-200 rounded-full h-2"><div className="bg-purple-500 h-2 rounded-full" style={{ width: `${pctSameDay}%` }}></div></div>
-                          </div>
-
-                          <div className="p-5 bg-gray-50 rounded-xl border border-gray-100">
-                            <div className="flex justify-between items-center mb-3">
-                              <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center"><Store className="w-5 h-5 text-blue-600"/></div>
-                                <div><h5 className="font-bold text-gray-800 text-sm">Punto de Retiro (Sucursal)</h5><p className="text-[10px] text-gray-500 uppercase tracking-wider font-bold">Conveniencia Horaria</p></div>
-                              </div>
-                              <div className="text-right"><p className="text-2xl font-black text-blue-700">{pctSucursal}%</p></div>
-                            </div>
-                            <div className="w-full bg-gray-200 rounded-full h-2"><div className="bg-blue-500 h-2 rounded-full" style={{ width: `${pctSucursal}%` }}></div></div>
+                          <div className="w-full bg-gray-100 rounded-full h-2">
+                            <div className="bg-[#233b6b] h-2 rounded-full" style={{ width: `${item.porcentaje}%` }}></div>
                           </div>
                         </div>
-
-                      </div>
+                      ))}
                     </div>
 
-                  </div>
-                </div>
-              </div>
+                    {/* POR COURIER */}
+                    {modalidadesMetrica.porCourier?.length > 0 && (
+                      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+                        <div className="p-4 border-b border-gray-100">
+                          <h3 className="font-bold text-gray-900 flex items-center gap-2">
+                            <Truck className="w-4 h-4" /> Modalidades por Courier
+                          </h3>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead className="bg-gray-50 text-gray-500 text-xs">
+                              <tr>
+                                <th className="text-left p-3 font-semibold">Courier</th>
+                                <th className="text-right p-3 font-semibold">Envios</th>
+                                <th className="text-left p-3 font-semibold">Modalidad dominante</th>
+                                <th className="text-right p-3 font-semibold">%</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {modalidadesMetrica.porCourier.map((c: any) => {
+                                const dominante = c.distribucion[0];
+                                return (
+                                  <tr key={c.courierId} className="border-t border-gray-100">
+                                    <td className="p-3 font-semibold text-gray-900">{c.courierNombre}</td>
+                                    <td className="p-3 text-right">{c.cantidad}</td>
+                                    <td className="p-3 text-gray-700">{dominante?.modalidad || "--"}</td>
+                                    <td className="p-3 text-right font-bold">{dominante?.porcentaje || 0}%</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
 
+                    {/* POR PROVINCIA (TOP 10) */}
+                    {modalidadesMetrica.porProvincia?.length > 0 && (
+                      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+                        <div className="p-4 border-b border-gray-100">
+                          <h3 className="font-bold text-gray-900 flex items-center gap-2">
+                            <MapPin className="w-4 h-4" /> Modalidades por Provincia (Top 10)
+                          </h3>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead className="bg-gray-50 text-gray-500 text-xs">
+                              <tr>
+                                <th className="text-left p-3 font-semibold">Provincia</th>
+                                <th className="text-right p-3 font-semibold">Envios</th>
+                                <th className="text-left p-3 font-semibold">Modalidad dominante</th>
+                                <th className="text-right p-3 font-semibold">%</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {modalidadesMetrica.porProvincia.slice(0, 10).map((p: any, idx: number) => {
+                                const dominante = p.distribucion[0];
+                                return (
+                                  <tr key={`${p.provincia}-${idx}`} className="border-t border-gray-100">
+                                    <td className="p-3 font-semibold text-gray-900 capitalize">{p.provincia}</td>
+                                    <td className="p-3 text-right">{p.cantidad}</td>
+                                    <td className="p-3 text-gray-700">{dominante?.modalidad || "--"}</td>
+                                    <td className="p-3 text-right font-bold">{dominante?.porcentaje || 0}%</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* EVOLUCION MENSUAL — BARRAS STACKED */}
+                    {modalidadesMetrica.porMes?.length > 0 && (
+                      <div className="bg-white border border-gray-200 rounded-xl p-5">
+                        <h3 className="font-bold text-gray-900 mb-4 flex items-center gap-2">
+                          <Calendar className="w-4 h-4" /> Evolucion Mensual
+                        </h3>
+                        <div className="space-y-3">
+                          {modalidadesMetrica.porMes.map((m: any) => (
+                            <div key={m.mes}>
+                              <div className="flex justify-between text-xs mb-1">
+                                <span className="font-semibold text-gray-700">{m.mes}</span>
+                                <span className="text-gray-500">{m.cantidad} envios</span>
+                              </div>
+                              <div className="w-full flex rounded-full h-3 overflow-hidden bg-gray-100">
+                                {m.distribucion.map((item: any, idx: number) => {
+                                  const colors = ["bg-slate-700", "bg-purple-500", "bg-blue-500", "bg-emerald-500", "bg-orange-500", "bg-pink-500", "bg-amber-500", "bg-cyan-500"];
+                                  return (
+                                    <div
+                                      key={item.modalidad}
+                                      className={colors[idx % colors.length]}
+                                      style={{ width: `${item.porcentaje}%` }}
+                                      title={`${item.modalidad}: ${item.porcentaje}%`}
+                                    ></div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        <p className="text-[10px] text-gray-400 mt-3">
+                          Hover sobre cada segmento para ver detalle. Colores corresponden al orden de la distribucion mensual.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* CALIDAD DE DATOS */}
+                    {modalidadesMetrica.cantidadEnviosDesconocida > 0 && (
+                      <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 text-xs text-orange-800">
+                        <strong>{modalidadesMetrica.cantidadEnviosDesconocida}</strong> envios no pudieron clasificarse en el catalogo canonico (modalidad legacy o no reconocida). Excluidos de los porcentajes.
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
             ) : metricaAnalisis === "Concentración Courier" ? (
               <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden">
                 <div className="bg-white border-b border-gray-200 p-4 flex flex-wrap gap-3 items-center shrink-0 shadow-sm z-10">
@@ -1471,6 +1588,7 @@ export default function TorreDeControl() {
                 <p className="text-gray-500 max-w-md">La interfaz visual de <strong>"{metricaAnalisis}"</strong> está siendo construida.</p>
               </div>
             )}
+            </div>
           </div>
         </div>
       )}
@@ -1625,7 +1743,7 @@ export default function TorreDeControl() {
         {/* BLOQUE 2: KPIs */}
         <div>
            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><Activity className="w-5 h-5 text-blue-600" /> Rendimiento Core</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
             <div className={`bg-white p-5 rounded-xl border shadow-sm flex flex-col h-full ${fugaPeso > 20 ? 'border-red-300' : 'border-gray-200'}`}>
               <p className="text-xs font-bold text-gray-500 uppercase mb-2 flex items-center gap-1.5"><Box className="text-red-500" /> 4. Desvío de Peso</p>
               <h3 className="text-3xl font-black mb-1">{fugaPeso}%</h3>
@@ -1702,16 +1820,44 @@ export default function TorreDeControl() {
         {/* BLOQUE 3: ANÁLISIS VIVOS */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 flex flex-col h-full">
-            <h3 className="text-sm font-black text-gray-800 uppercase mb-6 flex items-center justify-between"><span><Store className="w-4 h-4 text-[#233b6b] inline mr-2" /> 8. Modalidades</span><button onClick={() => abrirAnalisis("Adopción de Modalidades")} className="p-1.5 bg-gray-50 hover:bg-blue-50 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
-            <div className="space-y-5 flex-1">
-              <div><div className="flex justify-between text-xs font-bold mb-1"><span>Estándar</span><span>{pctEstandar}%</span></div><div className="w-full bg-gray-100 rounded-full h-1.5"><div className="bg-slate-700 h-1.5 rounded-full" style={{ width: `${pctEstandar}%` }}></div></div></div>
-              <div><div className="flex justify-between text-xs font-bold mb-1"><span>Same-Day</span><span className="text-purple-600">{pctSameDay}%</span></div><div className="w-full bg-gray-100 rounded-full h-1.5"><div className="bg-purple-500 h-1.5 rounded-full" style={{ width: `${pctSameDay}%` }}></div></div></div>
-              <div><div className="flex justify-between text-xs font-bold mb-1"><span>Sucursal</span><span className="text-blue-600">{pctSucursal}%</span></div><div className="w-full bg-gray-100 rounded-full h-1.5"><div className="bg-blue-500 h-1.5 rounded-full" style={{ width: `${pctSucursal}%` }}></div></div></div>
-            </div>
+            <h3 className="text-sm font-black text-gray-800 uppercase mb-6 flex items-center justify-between"><span><Store className="w-4 h-4 text-[#233b6b] inline mr-2" /> 9. Modalidades</span><button onClick={() => abrirAnalisis("Adopción de Modalidades")} className="p-1.5 bg-gray-50 hover:bg-blue-50 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
+            {cargandoModalidades ? (
+              <div className="space-y-5 flex-1 animate-pulse">
+                <div className="h-4 bg-gray-100 rounded"></div>
+                <div className="h-4 bg-gray-100 rounded"></div>
+                <div className="h-4 bg-gray-100 rounded"></div>
+              </div>
+            ) : cantidadEnviosModalidades === 0 ? (
+              <div className="space-y-3 flex-1 text-xs text-gray-400">
+                <p>Sin envios en la ventana.</p>
+                <p className="text-[10px]">La metrica se calcula sobre envios creados en los ultimos 90 dias.</p>
+              </div>
+            ) : (
+              <div className="space-y-5 flex-1">
+                {top3Modalidades.map((item: any, idx: number) => {
+                  const colors = ["bg-slate-700", "bg-purple-500", "bg-blue-500"];
+                  const textColors = ["text-gray-700", "text-purple-600", "text-blue-600"];
+                  return (
+                    <div key={item.modalidad}>
+                      <div className="flex justify-between text-xs font-bold mb-1">
+                        <span className="truncate pr-2" title={item.modalidad}>{item.modalidad}</span>
+                        <span className={textColors[idx]}>{item.porcentaje}%</span>
+                      </div>
+                      <div className="w-full bg-gray-100 rounded-full h-1.5">
+                        <div className={`${colors[idx]} h-1.5 rounded-full`} style={{ width: `${item.porcentaje}%` }}></div>
+                      </div>
+                    </div>
+                  );
+                })}
+                <p className="text-[10px] text-gray-400 pt-2 border-t border-gray-100">
+                  Forward {splitForwardReverse.forward.porcentaje}% · Reverse {splitForwardReverse.reverse.porcentaje}% · {cantidadEnviosModalidades} envios
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 flex flex-col h-full">
-            <h3 className="text-sm font-black text-gray-800 uppercase mb-6 flex items-center justify-between"><span><PieChart className="w-4 h-4 text-[#233b6b] inline mr-2" /> 9. Riesgo Courier</span><button onClick={() => abrirAnalisis("Concentración Courier")} className="p-1.5 bg-gray-50 hover:bg-blue-50 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
+            <h3 className="text-sm font-black text-gray-800 uppercase mb-6 flex items-center justify-between"><span><PieChart className="w-4 h-4 text-[#233b6b] inline mr-2" /> 10. Riesgo Courier</span><button onClick={() => abrirAnalisis("Concentración Courier")} className="p-1.5 bg-gray-50 hover:bg-blue-50 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
             <div className="flex-1 flex flex-col justify-center space-y-4">
               {topCouriers.length === 0 ? <p className="text-xs text-gray-400 text-center font-bold">Sin datos para graficar</p> : topCouriers.map((c: any, i: number) => (
                 <div key={i} className="w-full flex items-center gap-2">
@@ -1723,7 +1869,7 @@ export default function TorreDeControl() {
           </div>
 
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 flex flex-col h-full">
-            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center justify-between"><span className="flex items-center gap-2"><Map className="w-4 h-4 text-[#233b6b]" /> 10. Mapa SLA (Real)</span><button onClick={() => abrirAnalisis("Mapa de Calor SLA")} className="p-1.5 bg-gray-50 hover:bg-blue-50 text-gray-500 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
+            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center justify-between"><span className="flex items-center gap-2"><Map className="w-4 h-4 text-[#233b6b]" /> 11. Mapa SLA (Real)</span><button onClick={() => abrirAnalisis("Mapa de Calor SLA")} className="p-1.5 bg-gray-50 hover:bg-blue-50 text-gray-500 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
             <div className="flex-1 grid grid-cols-3 sm:grid-cols-4 gap-2 text-[10px] font-bold text-center text-white items-center content-start">
               {slaStats.mapaZonas.length === 0 ? <p className="col-span-full text-gray-400 py-4 font-bold text-center">Sin datos de SLA finalizados</p> : slaStats.mapaZonas.slice(0, 12).map((z: any, i: number) => {
                 const color = z.indice <= 0.8 ? 'bg-green-500' : z.indice <= 1 ? 'bg-blue-500' : 'bg-red-500';
@@ -1738,10 +1884,13 @@ export default function TorreDeControl() {
           </div>
         </div>
 
-        {/* BLOQUE 4: NPS DINÁMICO (MATRIZ COMPLETA PARA SUPER ADMIN) */}
+        {/* BLOQUE 4: VOZ DEL COMPRADOR */}
         <div className="pb-10">
+           <h3 className="text-lg font-black text-gray-800 uppercase tracking-wider mb-3 mt-8 flex items-center gap-2">
+             <HeartHandshake className="w-5 h-5 text-indigo-500" /> Voz del Comprador
+           </h3>
            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2">
-             <HeartHandshake className="w-5 h-5 text-indigo-500" /> 11. Experiencia del Consumidor (NPS Analítico)
+             12. Experiencia del Consumidor (NPS Analítico)
            </h3>
            <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
              <div className="grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-gray-200">

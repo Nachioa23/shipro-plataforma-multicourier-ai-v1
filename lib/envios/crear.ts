@@ -4,6 +4,7 @@ import { obtenerCourier } from "@/lib/couriers/normalizar";
 import { despacharCourier } from "@/lib/envios/dispatch";
 import { cotizar } from "@/lib/cotizador";
 import { calcularPromesaCalibrada } from "@/lib/utils/promesa-calibrada";
+import { inferirModalidad } from "@/lib/utils/modalidades";
 import { validarOperatividadPar } from "@/lib/depositos/operatividad";
 import { getAppUrl } from "@/lib/utils/app-url";
 import type { DepositoCourierConfig } from "@prisma/client";
@@ -436,12 +437,16 @@ export async function crearEnvio(input: CrearEnvioInput) {
   let courierSugeridoStr: string | null = null;
   let servicioSugeridoStr: string | null = null;
 
+  // dataCotizacion declarado en function-scope: el bloque de inferencia de
+  // modalidad (Metrica 3.3 / DEUDA 47) tambien lo consume mas abajo, fuera
+  // del try-catch de fuga financiera.
+  let dataCotizacion: Awaited<ReturnType<typeof cotizar>> | null = null;
   try {
     // DEUDA 4 follow-up (cierre del "1050" hardcoded latente): usar CP real del
     // depósito de origen para el cálculo de fugaFinanciera. Si deposito es null
     // (flujo BLOQUEADO_DEPOSITO), pasamos undefined y el cotizador interno usa
     // su fallback al predeterminado de la empresa.
-    const dataCotizacion = await cotizar({
+    dataCotizacion = await cotizar({
       empresaId,
       cpOrigen: deposito?.codigoPostal,
       cpDestino: String(cpDestino),
@@ -469,6 +474,28 @@ export async function crearEnvio(input: CrearEnvioInput) {
       }
     }
   } catch (errorFuga) {}
+
+  // Torre de Control Metrica 3.3 + DEUDA 47 (2026-06-09):
+  // Inferir modalidad canonica usando el helper compartido. Estrategia
+  // β+δ defensa en capas:
+  // 1. Si el e-commerce mando body.modalidad y es normalizable → usar.
+  // 2. Si no, matchear contra opciones del cotizador (curr + precio).
+  // 3. Si no, fallback al primer match del courier.
+  // 4. Si nada matchea, "Entrega a Domicilio (Estandar)" default.
+  // El bloque va FUERA de la transaccion: no requiere tx ni queries
+  // adicionales, es logica pura sobre el resultado ya obtenido del
+  // cotizador (dataCotizacion).
+  const opcionesParaInferir = [
+    ...(dataCotizacion?.domicilio || []),
+    ...(dataCotizacion?.sucursal || []),
+  ];
+  const resultadoModalidad = inferirModalidad(
+    opcionesParaInferir,
+    nombreCourier,
+    costoEnvio,
+    modalidad
+  );
+  const modalidadCanonica = resultadoModalidad.modalidad;
 
   const resultadoTransaccion = await prisma.$transaction(async (tx) => {
     const empresaData = await tx.empresa.findUnique({ where: { id: empresaId } });
@@ -499,7 +526,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
         etiquetaUrl: urlEtiquetaFinal,
         pesoReal: parseFloat(String(pesoReal)) || 1.0,
         estadoActual: estadoInicialEnvio,
-        modalidad: modalidad || "Estándar",
+        modalidad: modalidadCanonica,
         // === DEUDA 35: persistir tipoOrigen del input ===
         // Sin esto el schema default ("recoleccion_courier") siempre se aplicaba,
         // aunque dispatch ramificara bien por el valor del input.

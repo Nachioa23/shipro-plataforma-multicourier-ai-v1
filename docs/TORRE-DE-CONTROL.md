@@ -1155,6 +1155,15 @@ Antes de implementar, consultar a Claude Code:
 
 ## 3.3 Modalidades de Eleccion (Habitos del Comprador)
 
+**Estado: implementada el 2026-06-09 (commit pendiente).**
+**Granularidad v1:** distribución global + por courier + por provincia destino + por mes. Split Forward vs Reverse explícito.
+**Componentes:**
+- Helper compartido `lib/utils/modalidades.ts` (catálogo canónico de 8 modalidades + normalizador + inferidor de modalidad β+δ).
+- Endpoint analítico `/api/torre-de-control/modalidades` (lee on-the-fly, expone distribución + cortes).
+- `lib/envios/crear.ts` modificado: ahora persiste modalidad canónica al crear envío (resuelve DEUDA 47).
+- Dashboard con tarjeta + modal expandido (3 tiles + distribución + tabla courier + tabla provincia + evolución mensual).
+- Fix de scroll común para todos los modales de Torre de Control (afectaba 4 métricas en cadena).
+
 ### Categoria
 Inteligencia de comportamiento · Preferencias del consumidor final
 

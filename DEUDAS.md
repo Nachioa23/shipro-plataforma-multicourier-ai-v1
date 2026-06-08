@@ -652,7 +652,7 @@ Ver `docs/ARQUITECTURA-MULTICOURIER.md` para detalle.
 - **Moova y Javit en BD (data sucia)** — RESUELTA 2026-05-07 por la migracion `20260507152517_deuda_29_arquitectura_multicourier` (ETAPA 1 de limpieza). Se eliminaron las filas de Courier (Moova=id3, Javit=id4) + sus referencias en CredencialCourier (via DELETE WHERE nombreCourier IN ('Moova', 'Javit')). Estado actual verificado 2026-06-02: tabla Courier solo contiene Andreani (id=1) y Moci's (id=2). La entrada quedo sin marcar como RESUELTA hasta hoy.
 - **URLs de couriers hardcoded en adapters** (corregido 2026-06-02): ambos adapters tienen URL hardcoded — `MocisAdapter.ts` linea 4 (`https://mocis.akeron.net/api/v1`) y `AndreaniAdapter.ts` linea 24 (`https://apis.andreani.com`). La premisa original "Andreani usa env var" era falsa: la variable `ANDREANI_URL` existe en `.env.local` pero el codigo NO la consume (env var huerfana). DECISION DEL DIRECTOR (2026-06-02): postergar el refactor hasta tener 5-7 couriers integrados. Disenar el patron de URLs courier con solo 2 casos es prematuro — couriers reales pueden requerir multiples URLs (sandbox vs live), URLs por endpoint (cotizar vs tracking), o variaciones segun ambiente. Hacer la abstraccion ahora con muestra de 2 produce un patron que probablemente habria que rehacer al integrar OCA, Correo Argentino, DPD, etc. Mientras tanto: hardcoded es aceptable, las URLs de couriers no cambian frecuentemente. Cuando llegue el momento de integrar el 5to courier, revisitar y definir patron real.
 
-## DEUDA 39 — Torre de Control: sistema integral de metricas estrategicas (DISEÑO COMPLETO 2026-06-04 — implementacion en progreso: Metricas 1.1, 2.1, 2.3 cerradas. 13 metricas restantes.)
+## DEUDA 39 — Torre de Control: sistema integral de metricas estrategicas (DISEÑO COMPLETO 2026-06-04 — implementacion en progreso: Metricas 1.1, 2.1, 2.3, 3.3 cerradas. 12 metricas restantes.)
 
 **Status:** Abierta 2026-06-02. Diseno profesional completo el 2026-06-04 documentado en `docs/TORRE-DE-CONTROL.md`. Implementacion pendiente, sesion dedicada por metrica.
 
@@ -828,7 +828,7 @@ La granularidad por provincia es insuficiente. Capital de Cordoba tiene SLA dist
 
 ---
 
-## DEUDA 47 — Fix persistencia de modalidad en Envio.modalidad (descubierta en Metrica 2.3, 2026-06-08)
+## DEUDA 47 — Fix persistencia de modalidad en Envio.modalidad (descubierta 2026-06-08, RESUELTA 2026-06-09 en commit de Metrica 3.3)
 Hoy `lib/envios/crear.ts:478` persiste modalidad: "Estandar" (default) para todos los envios. El cotizador devuelve modalidad rica ("Entrega a Domicilio (Estandar)", "Retiro en Sucursal", "Locker"), pero esa string no se persiste.
 
 **Impacto actual:** la metrica 2.3 NO puede cortar por modalidad. Documentado en `app/api/torre-de-control/promesa-calibrada/route.ts` como granularidad v1.

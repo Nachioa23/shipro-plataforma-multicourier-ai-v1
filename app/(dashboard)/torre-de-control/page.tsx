@@ -62,6 +62,12 @@ export default function TorreDeControl() {
   const [modalidadesMetrica, setModalidadesMetrica] = useState<any>(null);
   const [cargandoModalidades, setCargandoModalidades] = useState(true);
 
+  // Metrica 2.2 "Efectividad de Primera Visita" (DEUDA 39, 2026-06-09).
+  // Datos del endpoint /api/torre-de-control/efectividad-primera-visita.
+  // Scope global (sin filtro empresa, igual que las otras 4 metricas nuevas).
+  const [efectividadMetrica, setEfectividadMetrica] = useState<any>(null);
+  const [cargandoEfectividad, setCargandoEfectividad] = useState(true);
+
   useEffect(() => {
     if (!filtroEmpresaId) return;
     const baseParams = { filtroEmpresa: filtroEmpresaId, page: "1", limit: "1" };
@@ -186,6 +192,23 @@ export default function TorreDeControl() {
       });
   }, [esEquipoShipro]);
 
+  // Torre de Control Metrica 2.2: fetch del endpoint de efectividad de primera visita.
+  // Ventana 90 dias hardcoded en v1. Scope Shipro-only.
+  useEffect(() => {
+    if (!esEquipoShipro) return;
+    setCargandoEfectividad(true);
+    fetch("/api/torre-de-control/efectividad-primera-visita")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setEfectividadMetrica(data);
+        setCargandoEfectividad(false);
+      })
+      .catch(err => {
+        console.error("[Torre de Control] error fetching efectividad-primera-visita:", err);
+        setCargandoEfectividad(false);
+      });
+  }, [esEquipoShipro]);
+
   const totalEnvios = metricas?.totalEnvios || 1;
   // Torre de Control Metrica 2.1 (2026-06-04): cambio de fuente.
   // Antes: metricas?.tiempoColectaPromedioDias (campo aspiracional, nunca
@@ -269,11 +292,15 @@ export default function TorreDeControl() {
   const auditoriaStats = metricas?.auditoriaStats || { totalRetenidos: 0, porcentajeFallaOrigen: 0, tasaAutoGestion: 0, tasaSoporte: 0, tiempoMedioCorreccion: "-", topProblemas: [] };
   const ruteoStats = metricas?.ruteoStats || { fugaFinancieraTotal: 0, enviosOptimizados: 0, enviosIneficientes: 0, costoPromedioExtra: 0, topDesvios: [] };
   const aforoStats = metricas?.aforoStats || { fugaTotal: 0, porcentajeFugaPeso: 0, desvioPromedioKg: 0, costoPromedioDesvio: 0, distribucionError: { leve: 0, moderado: 0, grave: 0 }, topEstrictos: [] };
-  const efectividadStats = metricas?.efectividadStats || { tasaPrimeraVisita: 0, tasaEntregasForzadas: 0, tasaDevolucion: 0, costoInversaEstimado: 0, topMotivosFalla: [], mapaDevoluciones: [] };
+  // Metrica 2.2 (2026-06-09): efectividadStats legacy removido en Sub-step G.
+  // Card 5 + modal ahora consumen efectividadMetrica del endpoint nuevo
+  // /api/torre-de-control/efectividad-primera-visita (ver useEffect en lineas ~195-210).
   const soporteStats = metricas?.soporteStats || { tasaSoporte: 0, ticketsAbiertos: 0, tiempoMedioResolucion: "0h", distribucionEstados: { abiertos: 0, progreso: 0, resueltos: 0 }, topMotivos: [], creadorTicket: { clienteAutoServicio: 0, shiproRadar: 0 } };
 
   const fugaPeso = aforoStats.porcentajeFugaPeso;
-  const efectividadGlobal = efectividadStats.tasaPrimeraVisita;
+  // Card 5: fuente cambiada al endpoint nuevo de Metrica 2.2 (Sub-step E.2).
+  // Fallback a 0 si el endpoint no respondio aun (loading) o si universo es 0.
+  const efectividadGlobal = efectividadMetrica?.resumen?.porcentajePrimeraVisita ?? 0;
   const tasaSoporteGlobal = soporteStats.tasaSoporte;
   const formatPesos = (valor: number) => new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(valor);
 
@@ -1019,101 +1046,162 @@ export default function TorreDeControl() {
               </div>
 
             ) : metricaAnalisis === "Efectividad de Entregas en 1ra Visita" ? (
-              <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden">
-                <div className="bg-white border-b border-gray-200 p-4 flex flex-wrap gap-3 items-center shrink-0 shadow-sm z-10">
-                  {esEquipoShipro && (
-                    <div className="flex items-center gap-2 border border-blue-200 rounded-lg px-3 py-1.5 bg-blue-50/50">
-                      <Building2 className="w-4 h-4 text-blue-500" />
-                      <select value={filtroEmpresaId} onChange={(e) => setFiltroEmpresaId(e.target.value)} className="bg-transparent text-xs font-bold text-blue-800 outline-none cursor-pointer max-w-[180px] truncate">
-                        <option value="TODAS">Todo el Ecosistema</option>
-                        {listaClientes.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-                      </select>
-                    </div>
-                  )}
-                  <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-1.5 bg-gray-50">
-                    <Calendar className="w-4 h-4 text-gray-400" />
-                    <input type="date" value={filtroRuteoDesde} onChange={e => setFiltroRuteoDesde(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"/>
-                    <span className="text-gray-400 text-xs font-bold">a</span>
-                    <input type="date" value={filtroRuteoHasta} onChange={e => setFiltroRuteoHasta(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"/>
-                  </div>
-                </div>
+              // Metrica 2.2 (DEUDA 39, 2026-06-09): refactor a consumir endpoint
+              // /api/torre-de-control/efectividad-primera-visita. Layout consistente
+              // con las 4 metricas nuevas (p-8 space-y-6).
+              <div className="p-8 space-y-6">
+                {cargandoEfectividad ? (
+                  <div className="text-center py-12 text-gray-500">Cargando datos de efectividad...</div>
+                ) : !efectividadMetrica ? (
+                  <div className="text-center py-12 text-red-600">Error cargando datos. Reintentar.</div>
+                ) : (
+                  <>
+                    {/* GRID PRINCIPAL */}
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
 
-                <div className="flex-1 overflow-y-auto p-6 lg:p-8">
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 max-w-7xl mx-auto">
-                    <div className="lg:col-span-5 space-y-6">
-                      <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 relative overflow-hidden">
-                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Efectividad 1ra Visita</h4>
-                        <p className="text-6xl font-black text-gray-800 tracking-tighter">{efectividadStats.tasaPrimeraVisita}%</p>
-                        <p className="text-xs font-medium text-gray-500 mt-2">Envíos que llegaron a destino con una sola salida a distribución.</p>
-                      </div>
+                      {/* COLUMNA IZQUIERDA */}
+                      <div className="lg:col-span-5 space-y-6">
 
-                      <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-6">Funnel de Última Milla</h4>
-                        <div className="space-y-5">
-                          <div>
-                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-green-700 flex items-center gap-2"><Check className="w-4 h-4"/> 1ra Visita Exitosa</span><span className="text-green-700">{efectividadStats.tasaPrimeraVisita}%</span></div>
-                            <div className="w-full bg-gray-100 rounded-full h-3"><div className="bg-green-500 h-3 rounded-full transition-all duration-1000" style={{ width: `${efectividadStats.tasaPrimeraVisita}%` }}></div></div>
-                          </div>
-                          <div>
-                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-orange-600 flex items-center gap-2"><Clock className="w-4 h-4"/> Entregas Forzadas (2da+)</span><span className="text-orange-600">{efectividadStats.tasaEntregasForzadas}%</span></div>
-                            <div className="w-full bg-gray-100 rounded-full h-3"><div className="bg-orange-500 h-3 rounded-full transition-all duration-1000" style={{ width: `${efectividadStats.tasaEntregasForzadas}%` }}></div></div>
-                          </div>
-                          <div>
-                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-red-600 flex items-center gap-2"><Undo2 className="w-4 h-4"/> Logística Inversa (Devuelto)</span><span className="text-red-600">{efectividadStats.tasaDevolucion}%</span></div>
-                            <div className="w-full bg-gray-100 rounded-full h-3"><div className="bg-red-600 h-3 rounded-full transition-all duration-1000" style={{ width: `${efectividadStats.tasaDevolucion}%` }}></div></div>
-                          </div>
+                        {/* Hero tile */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Efectividad 1ra Visita</h4>
+                          <p className="text-6xl font-black text-gray-800 tracking-tighter">{efectividadMetrica.resumen.porcentajePrimeraVisita}%</p>
+                          <p className="text-xs text-gray-500 mt-2">Ventana: ultimos {efectividadMetrica.calidadDatos.ventanaDias} dias</p>
                         </div>
-                      </div>
-                    </div>
 
-                    <div className="lg:col-span-7 space-y-6">
-                      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
-                        <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center gap-2">
-                          <SearchCode className="w-5 h-5 text-orange-500"/> Top Motivos de Falla en Visita
-                        </h4>
-                        <div className="space-y-4">
-                          {efectividadStats.topMotivosFalla.map((falla: any, idx: number) => (
-                            <div key={`efec-${idx}`} className="p-4 bg-orange-50/50 border border-orange-100 rounded-xl flex justify-between items-center group hover:bg-orange-50 transition-colors">
-                              <div className="flex items-center gap-3">
-                                <div className="w-8 h-8 rounded-full bg-orange-100 text-orange-700 font-black flex items-center justify-center text-xs">#{idx + 1}</div>
-                                <span className="text-sm font-bold text-gray-800">{falla.motivo}</span>
-                              </div>
-                              <span className="text-lg font-black text-orange-600">{falla.porcentaje}%</span>
+                        {/* Stats compactos */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Composicion del Universo</h4>
+                          <div className="grid grid-cols-3 gap-3 text-center">
+                            <div className="border-r border-gray-200">
+                              <p className="text-2xl font-black text-gray-800">{efectividadMetrica.resumen.totalEntregados}</p>
+                              <p className="text-xs text-gray-500 uppercase">Entregados</p>
                             </div>
-                          ))}
+                            <div className="border-r border-gray-200">
+                              <p className="text-2xl font-black text-gray-800">{efectividadMetrica.resumen.totalDevueltos}</p>
+                              <p className="text-xs text-gray-500 uppercase">Devueltos</p>
+                            </div>
+                            <div>
+                              <p className="text-2xl font-black text-gray-800">{efectividadMetrica.resumen.totalUniverso}</p>
+                              <p className="text-xs text-gray-500 uppercase">Universo</p>
+                            </div>
+                          </div>
+                          <p className="text-xs text-gray-400 mt-3 text-center">De {efectividadMetrica.resumen.totalEnvios} envios totales en la ventana</p>
                         </div>
+
+                        {/* Funnel */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Funnel de Ultima Milla</h4>
+                          <div className="space-y-4">
+                            <div>
+                              <div className="flex justify-between text-sm font-bold mb-2">
+                                <span className="text-green-700 flex items-center gap-2"><Check className="w-4 h-4"/> 1ra Visita Exitosa</span>
+                                <span className="text-green-700">{efectividadMetrica.funnel.primeraVisitaExitosa.cantidad} ({efectividadMetrica.funnel.primeraVisitaExitosa.porcentaje}%)</span>
+                              </div>
+                              <div className="w-full bg-gray-100 rounded-full h-3"><div className="bg-green-500 h-3 rounded-full transition-all duration-1000" style={{ width: `${efectividadMetrica.funnel.primeraVisitaExitosa.porcentaje}%` }}></div></div>
+                            </div>
+                            <div>
+                              <div className="flex justify-between text-sm font-bold mb-2">
+                                <span className="text-orange-600 flex items-center gap-2"><Clock className="w-4 h-4"/> Visitas Forzadas (2+)</span>
+                                <span className="text-orange-600">{efectividadMetrica.funnel.visitasForzadas.cantidad} ({efectividadMetrica.funnel.visitasForzadas.porcentaje}%)</span>
+                              </div>
+                              <div className="w-full bg-gray-100 rounded-full h-3"><div className="bg-orange-500 h-3 rounded-full transition-all duration-1000" style={{ width: `${efectividadMetrica.funnel.visitasForzadas.porcentaje}%` }}></div></div>
+                            </div>
+                            <div>
+                              <div className="flex justify-between text-sm font-bold mb-2">
+                                <span className="text-red-600 flex items-center gap-2"><Undo2 className="w-4 h-4"/> Devoluciones al Remitente</span>
+                                <span className="text-red-600">{efectividadMetrica.funnel.devoluciones.cantidad} ({efectividadMetrica.funnel.devoluciones.porcentaje}%)</span>
+                              </div>
+                              <div className="w-full bg-gray-100 rounded-full h-3"><div className="bg-red-600 h-3 rounded-full transition-all duration-1000" style={{ width: `${efectividadMetrica.funnel.devoluciones.porcentaje}%` }}></div></div>
+                            </div>
+                          </div>
+                        </div>
+
                       </div>
 
-                      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 h-fit">
-                        <div className="flex justify-between items-start mb-6">
-                          <div>
-                            <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider flex items-center gap-2">
-                              <Undo2 className="w-5 h-5 text-red-500"/> Mapa de Logística Inversa
-                            </h4>
-                            <p className="text-xs text-gray-500 mt-1">Zonas con mayor cantidad de paquetes devueltos a origen.</p>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-[10px] font-bold text-red-400 uppercase">Costo Hundido Estimado</p>
-                            <p className="text-xl font-black text-red-600">{formatPesos(efectividadStats.costoInversaEstimado)}</p>
-                          </div>
-                        </div>
-                        <div className="space-y-4 mt-6">
-                          {efectividadStats.mapaDevoluciones.map((dev:any, idx:number) => (
-                            <div key={`map-${idx}`} className="flex items-center gap-4">
-                              <div className="w-32 text-xs font-bold text-gray-700 truncate"><MapPin className="w-3 h-3 inline mr-1 text-gray-400"/> {dev.provincia}</div>
-                              <div className="flex-1 bg-gray-100 rounded-full h-2 relative">
-                                <div className="bg-red-400 h-2 rounded-full absolute left-0 transition-all duration-1000" style={{ width: `${dev.porcentaje}%` }}></div>
-                              </div>
-                              <div className="w-16 text-right">
-                                <span className="text-xs font-black text-gray-800 block">{dev.devoluciones} pqts</span>
-                              </div>
+                      {/* COLUMNA DERECHA */}
+                      <div className="lg:col-span-7 space-y-6">
+
+                        {/* Top Motivos de Falla */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Top 5 Motivos de Falla</h4>
+                          {efectividadMetrica.topMotivosFalla.length === 0 ? (
+                            <p className="text-sm text-gray-400">Sin motivos registrados en la ventana.</p>
+                          ) : (
+                            <div className="space-y-2">
+                              {efectividadMetrica.topMotivosFalla.map((motivo: any, idx: number) => (
+                                <div key={idx} className="flex items-center gap-3">
+                                  <span className="text-xs font-black text-gray-400 w-6">{idx + 1}.</span>
+                                  <span className="text-sm text-gray-700 flex-1 truncate">{motivo.motivo}</span>
+                                  <span className="text-sm font-bold text-gray-800">{motivo.cantidad}</span>
+                                  <span className="text-xs text-gray-500 w-12 text-right">({motivo.porcentaje}%)</span>
+                                </div>
+                              ))}
                             </div>
-                          ))}
+                          )}
                         </div>
+
+                        {/* Por Courier */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Por Courier</h4>
+                          {efectividadMetrica.porCourier.length === 0 ? (
+                            <p className="text-sm text-gray-400">Sin datos por courier.</p>
+                          ) : (
+                            <div className="space-y-3">
+                              {efectividadMetrica.porCourier.map((c: any) => (
+                                <div key={c.courierId}>
+                                  <div className="flex justify-between text-sm mb-1">
+                                    <span className="font-bold text-gray-700">{c.nombre}</span>
+                                    <span className="text-gray-500">{c.universo} envios | <span className="text-green-700 font-bold">{c.porcentajePrimeraVisita}%</span></span>
+                                  </div>
+                                  <div className="w-full bg-gray-100 rounded-full h-2"><div className="bg-green-500 h-2 rounded-full" style={{ width: `${c.porcentajePrimeraVisita}%` }}></div></div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Por Mes */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Evolucion por Mes</h4>
+                          {efectividadMetrica.porMes.length === 0 ? (
+                            <p className="text-sm text-gray-400">Sin datos por mes.</p>
+                          ) : (
+                            <div className="space-y-2">
+                              {efectividadMetrica.porMes.map((m: any) => (
+                                <div key={m.mes} className="flex items-center gap-3">
+                                  <span className="text-xs font-bold text-gray-500 w-16">{m.mes}</span>
+                                  <div className="flex-1 bg-gray-100 rounded-full h-2"><div className="bg-blue-500 h-2 rounded-full" style={{ width: `${m.porcentajePrimeraVisita}%` }}></div></div>
+                                  <span className="text-xs font-bold text-gray-700 w-12 text-right">{m.porcentajePrimeraVisita}%</span>
+                                  <span className="text-xs text-gray-400 w-16 text-right">{m.universo} env.</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Top 10 Provincias */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Top 10 Provincias</h4>
+                          {efectividadMetrica.porProvincia.length === 0 ? (
+                            <p className="text-sm text-gray-400">Sin datos por provincia.</p>
+                          ) : (
+                            <div className="space-y-2">
+                              {efectividadMetrica.porProvincia.map((p: any) => (
+                                <div key={p.provincia} className="flex items-center gap-3">
+                                  <span className="text-xs font-bold text-gray-700 capitalize flex-1 truncate">{p.provincia}</span>
+                                  <span className="text-xs text-gray-500">{p.universo} env.</span>
+                                  <span className="text-xs font-bold text-green-700 w-12 text-right">{p.porcentajePrimeraVisita}%</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
                       </div>
                     </div>
-                  </div>
-                </div>
+                  </>
+                )}
               </div>
 
             ) : metricaAnalisis === "Tasa de Tickets de Mesa de Ayuda" ? (

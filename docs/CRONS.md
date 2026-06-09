@@ -14,6 +14,7 @@ Como la protección vive en el proxy, **no requiere ningún cambio adicional al 
 |---|---|---|---|
 | `GET /api/cron/rastreo` | Rastrea hasta 200 envíos activos por ronda. Por cada uno: consulta el courier real, mapea estado vía `Nomenclador`, actualiza `Envio` + crea `EventoTracking`, manda mails (colecta / NPS según transición), genera `TicketSoporte` automático si el envío lleva ≥36hs sin moverse. | Cada **30 minutos** en horario operativo (8-22hs ART). Lote 200 alcanza para volúmenes altos. | Variable según número de envíos activos y latencia de los couriers. Estimado < 60 segundos en operación normal. **No declara `maxDuration` interno** — si en el futuro se nota timeout en algún hosting, ajustar. |
 | `GET /api/cron/metricas-sla` | Lee envíos `ENTREGADO` de los últimos 90 días con fechas completas (colecta + entrega). Calcula promedio de horas en tránsito agrupando por `(courierId, provinciaDestino)`. Hace upsert en tabla `MetricaSLA`. | Una vez por día, **horario nocturno** (recomendado 02:00 ART). El comentario en código lo llama "Motor Nocturno de SLA". | < 5 segundos para volúmenes esperados. Idempotente (re-ejecución no rompe nada). |
+| `GET /api/cron/sincronizar-couriers` | Sincroniza catálogos de sucursales/servicios de couriers (Andreani, Mocis, futuros) contra sus APIs externas. Mantiene actualizada la red de puntos de retiro y servicios disponibles por courier. También accesible manualmente desde la UI admin en `/api/admin/couriers/[id]/sincronizar`. | Una vez por día, **horario low-traffic** (recomendado 03:00 ART). Catálogos no cambian frecuentemente — diario es suficiente. | < 30 segundos típico. Variable según cantidad de sucursales por courier (Andreani tiene ~500 sucursales activas). Idempotente (upsert por trackingExterno + cp). |
 
 ## 3. Configuración para deploy en Linode
 
@@ -206,3 +207,28 @@ content-type: application/json
 - **Rotación periódica** recomendada: cada 90 días o ante sospecha de leak. Procedimiento: generar nuevo secret → actualizar `.env` del servidor → reiniciar app → actualizar cron-job/crontab/Vercel env → verificar Test 3 con el nuevo bearer.
 - **Logs:** los crons no escriben logs estructurados hoy (solo el body de respuesta). Si los volúmenes crecen, considerar agregar un logger por cron — deuda futura, no bloqueante.
 - **Idempotencia:** `metricas-sla` es 100% idempotente (upsert). `rastreo` es **casi** idempotente — si se dispara dos veces consecutivas, la segunda no hace nada nuevo (los envíos ya se actualizaron), pero podría reenviar mails si el `EventoTracking` se duplicara (no debería pasar en condiciones normales). No correr crons manualmente en producción salvo para debugging.
+
+## 7. Flujo del Nomenclador (mapeo de estados crudos del courier)
+
+El **Nomenclador** es la tabla en BD (`prisma.nomenclador`) que traduce estados raw de couriers (Andreani, Mocis, futuros) al **catálogo canónico Shipro F1** definido en `lib/utils/estados.ts` (`ESTADOS_COURIER` con 11 entries).
+
+### Cómo se puebla
+
+1. **Auto-creación por el cron `rastreo`:** cuando el cron consulta el estado de un envío via `motorCourier.rastrear(tracking)` y recibe un `estadoCrudo` nuevo (no presente en la tabla), crea automáticamente una entry con `estadoShipro: null` en `Nomenclador`. El envío queda con el `estadoCrudo` raw mientras el mapeo no se complete.
+2. **Mapeo manual por admin Shipro:** desde la UI `/nomenclador` (admin only), el `usuario_Shipro` asigna progresivamente cada `estadoCrudo` a una key canónica del catálogo F1 (e.g., `EN_TRANSITO_A_DESTINO`, `VISITA_FALLIDA`, `INCIDENCIA`).
+3. **Observabilidad via Métrica 1.1:** la Torre de Control expone "Resolver Nomenclador" (card 1) que muestra % de cobertura simple + ponderada por frecuencia + top N estados sin mapear ordenados por impacto. Sirve de checklist priorizado para el admin.
+
+### Por qué no se completa anticipadamente
+
+- **El catálogo de estados crudos varía por courier y evoluciona.** Andreani y Mocis tienen subconjuntos distintos; futuros couriers traen los suyos.
+- **No requiere mapeo masivo upfront.** Cada estado crudo nuevo que aparece se mapea cuando se ve. El cron registra y la métrica reporta — no bloquea operación.
+- **Decisión arquitectónica (F5, 2026-06-09):** los adapters de courier (`AndreaniAdapter`, `MocisAdapter`) ahora retornan canónicas F1 directamente desde `traducirEstado()`. El Nomenclador queda como **mapeo de referencia y para casos legacy / imports externos** (e.g., importación de envíos desde Excel del cliente con strings de estado arbitrarios).
+
+### Validación que NO se hace hoy
+
+- El POST `/api/nomenclador` **no valida** que el `estadoShipro` asignado sea una key canónica F1. Acepta cualquier string. Es responsabilidad del admin elegir desde el dropdown del UI (que sí está conectado al catálogo F1 desde F4.1).
+- Si un admin futuro escribe el POST a mano con `estadoShipro: "lalala"`, queda persistido. Mitigación: el helper F1 `normalizarEstadoCourier` retorna `null` para strings desconocidos, y los consumidores caen al fallback. No es bloqueante operativamente.
+
+### Estado actual de la BD (al 2026-06-09)
+
+Producción todavía no operativa. En dev local, `Nomenclador` tiene ~1 entry de seed (`"Robo a mano armada" / SIN_ROB_01 / null`). Se irá poblando organicamente cuando los crons corran contra envíos reales con tracking activo en producción.

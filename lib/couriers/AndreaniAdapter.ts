@@ -325,16 +325,34 @@ export class AndreaniAdapter implements ICourierIntegrator {
   // ==============================================================
   // PILAR 4: TRADUCTOR DE ESTADOS
   // ==============================================================
-  traducirEstado(estadoCrudo: string): string { 
+  // F5.1 (2026-06-09): retorna directamente keys canonicas del catalogo F1
+  // (`lib/utils/estados.ts ESTADOS_COURIER`). Reemplaza strings legacy
+  // (IMPRESO, EN_TRANSITO, EN_REPARTO) por canonicas (ETIQUETA_CREADA,
+  // EN_TRANSITO_A_DESTINO, EN_DISTRIBUCION). "visita" se separa de
+  // INCIDENCIA para mapear a VISITA_FALLIDA (necesario para Metrica 2.2).
+  traducirEstado(estadoCrudo: string): string {
     const estadoMinuscula = estadoCrudo.toLowerCase().trim();
 
-    if (estadoMinuscula.includes("pendiente") || estadoMinuscula.includes("creada") || estadoMinuscula.includes("alta")) return "IMPRESO";
-    if (estadoMinuscula.includes("ingreso") || estadoMinuscula.includes("circuito operativo") || estadoMinuscula.includes("en viaje") || estadoMinuscula.includes("procesamiento")) return "EN_TRANSITO";
-    if (estadoMinuscula.includes("distribución") || estadoMinuscula.includes("distribucion")) return "EN_REPARTO";
-    if (estadoMinuscula.includes("entregado") || estadoMinuscula.includes("successful") || estadoMinuscula.includes("rendicion")) return "ENTREGADO";
-    if (estadoMinuscula.includes("visita") || estadoMinuscula.includes("rechazado") || estadoMinuscula.includes("siniestro") || estadoMinuscula.includes("devuelto") || estadoMinuscula.includes("no entregado")) return "INCIDENCIA";
+    // Estado courier inicial (Andreani registro la etiqueta).
+    if (estadoMinuscula.includes("pendiente") || estadoMinuscula.includes("creada") || estadoMinuscula.includes("alta")) return "ETIQUETA_CREADA";
 
-    return estadoCrudo.toUpperCase(); 
+    // Estados de movimiento.
+    if (estadoMinuscula.includes("ingreso") || estadoMinuscula.includes("circuito operativo") || estadoMinuscula.includes("en viaje") || estadoMinuscula.includes("procesamiento")) return "EN_TRANSITO_A_DESTINO";
+    if (estadoMinuscula.includes("distribución") || estadoMinuscula.includes("distribucion")) return "EN_DISTRIBUCION";
+
+    // Estado final exitoso.
+    if (estadoMinuscula.includes("entregado") || estadoMinuscula.includes("successful") || estadoMinuscula.includes("rendicion")) return "ENTREGADO";
+
+    // Visita fallida (separado de INCIDENCIA para Metrica 2.2).
+    if (estadoMinuscula.includes("visita")) return "VISITA_FALLIDA";
+
+    // Incidencias (paquete rechazado, siniestrado, devuelto, no entregado).
+    // El estadoCrudoOriginal se preserva en EventoTracking.observacion para
+    // discriminar el sub-tipo exacto si se necesita.
+    if (estadoMinuscula.includes("rechazado") || estadoMinuscula.includes("siniestro") || estadoMinuscula.includes("devuelto") || estadoMinuscula.includes("no entregado")) return "INCIDENCIA";
+
+    // Fallback: estado raw uppercase si no matchea nada conocido.
+    return estadoCrudo.toUpperCase();
   }
 
   // ==============================================================

@@ -87,6 +87,14 @@ export const ESTADOS_COURIER_REPETIBLES: EstadoCourierKey[] = [
   "INCIDENCIA",        // Bidireccional: puede aparecer y desaparecer
 ];
 
+// Cutoff temporal para el cron de rastreo: ningun envio se pollea despues
+// de este numero de dias desde la impresion. Despues del cutoff, solo se
+// actualiza manualmente desde la UI. Evita rastreo infinito de envios
+// abandonados (paquetes perdidos, devoluciones nunca cerradas, INCIDENCIA
+// sin resolver). Es la red de seguridad temporal complementaria al filtro
+// de estados terminales (ENTREGADO, CANCELADO, DEVUELTO).
+export const DIAS_MAXIMO_RASTREO = 45;
+
 // ====================================================
 // NORMALIZADOR DE STRINGS LEGACY → CATÁLOGO INTERNO
 // ====================================================

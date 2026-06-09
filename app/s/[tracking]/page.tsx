@@ -245,7 +245,14 @@ export default function TrackingPublico({ params }: { params: Promise<{ tracking
 
   const estadoLimpio = (envio.estadoActual || "").toUpperCase();
   const estaEntregado = estadoLimpio === "ENTREGADO";
-  const estaEnCamino = ["EN_TRANSITO", "RECOLECTADO", "EN_SUCURSAL", "EN_REPARTO", "DESPACHADO"].includes(estadoLimpio);
+  // F5.4 (2026-06-09): usa el catalogo canonico F1 en lugar de strings legacy.
+  // ESTADOS_COURIER_EN_CICLO incluye 7 estados (ETIQUETA_CREADA hasta VISITA_FALLIDA)
+  // excluyendo terminales (ENTREGADO, CANCELADO, DEVUELTO_AL_REMITENTE, INCIDENCIA).
+  // El check "esta en camino" excluye ETIQUETA_CREADA y VISITA_FALLIDA — solo los
+  // 5 estados de progresion: recolectado, transito, sucursal destino, sucursal entrega,
+  // distribucion.
+  const ESTADOS_EN_CAMINO_KEYS: string[] = ["PAQUETE_RECOLECTADO", "EN_TRANSITO_A_DESTINO", "EN_SUCURSAL_DE_DESTINO", "EN_SUCURSAL_DE_ENTREGA", "EN_DISTRIBUCION"];
+  const estaEnCamino = ESTADOS_EN_CAMINO_KEYS.includes(estadoLimpio);
   const esRetenido = estadoLimpio === "RETENIDO"; 
 
   const formatearFecha = (fechaStr: string) => {
@@ -263,7 +270,7 @@ export default function TrackingPublico({ params }: { params: Promise<{ tracking
   const fechaEntregado = eventoEntregado ? eventoEntregado.fecha : envio.fechaEntrega;
 
   const eventoEnCamino = [...eventos].reverse().find((e: any) => 
-    ["EN_TRANSITO", "RECOLECTADO", "EN_SUCURSAL", "EN_REPARTO", "DESPACHADO"].includes(e.estado.toUpperCase())
+    ESTADOS_EN_CAMINO_KEYS.includes(e.estado.toUpperCase())
   );
   const fechaEnCamino = eventoEnCamino ? eventoEnCamino.fecha : envio.fechaColecta;
 

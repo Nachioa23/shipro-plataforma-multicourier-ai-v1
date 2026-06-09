@@ -776,8 +776,12 @@ export default function BandejaPedidos() {
                           
                           <td className="px-6 py-4 text-center">
                             <span className={`inline-flex items-center gap-1.5 text-[10px] font-black uppercase px-3 py-1 rounded-full border ${
+                                // F5.5 (2026-06-09): usa canonicas F1. Mantiene compatibilidad
+                                // con strings legacy ('Entregado', 'Retenido' con casing distinto)
+                                // para envios viejos en BD que no se migran (helper normaliza
+                                // on-the-fly via DEUDA 50).
                                 ['ENTREGADO', 'Entregado'].includes(envio.estadoActual) ? 'bg-green-50 text-green-700 border-green-200' :
-                                ['EN_TRANSITO', 'RECOLECTADO', 'EN_SUCURSAL', 'EN_REPARTO', 'DESPACHADO'].includes(envio.estadoActual) ? 'bg-blue-50 text-blue-700 border-blue-200' :
+                                ['PAQUETE_RECOLECTADO', 'EN_TRANSITO_A_DESTINO', 'EN_SUCURSAL_DE_DESTINO', 'EN_SUCURSAL_DE_ENTREGA', 'EN_DISTRIBUCION', 'VISITA_FALLIDA'].includes(envio.estadoActual) ? 'bg-blue-50 text-blue-700 border-blue-200' :
                                 ['RETENIDO', 'Retenido'].includes(envio.estadoActual) ? 'bg-red-50 text-red-700 border-red-200 animate-pulse' :
                                 esBloqueadoSaldo ? 'bg-amber-50 text-amber-800 border-amber-300 animate-pulse' :
                                 esBloqueadoDeposito ? 'bg-indigo-50 text-indigo-800 border-indigo-300 animate-pulse' :

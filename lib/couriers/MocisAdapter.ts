@@ -465,12 +465,16 @@ export class MocisAdapter implements ICourierIntegrator {
     }
   }
 
-  traducirEstado(estadoCrudo: string): string { 
+  // F5.2 (2026-06-09): retorna directamente keys canonicas del catalogo F1
+  // (`lib/utils/estados.ts ESTADOS_COURIER`). Reemplaza strings legacy
+  // ("EN PREPARACIÓN" con tilde y espacio, "VISITA FALLIDA" con espacio)
+  // por canonicas (ETIQUETA_CREADA, VISITA_FALLIDA con underscore).
+  traducirEstado(estadoCrudo: string): string {
     const estado = estadoCrudo.toUpperCase();
-    if (estado === '-') return "EN PREPARACIÓN";
+    if (estado === '-') return "ETIQUETA_CREADA";
     if (estado === 'ENTREGADO') return "ENTREGADO";
-    if (estado === 'NO ENTREGADO') return "VISITA FALLIDA";
-    return estadoCrudo; 
+    if (estado === 'NO ENTREGADO') return "VISITA_FALLIDA";
+    return estadoCrudo;
   }
 
   async obtenerSucursales(cp: string): Promise<SucursalInfo[]> { return []; }

@@ -3,19 +3,18 @@
 import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { Search, Filter, ArrowRightLeft, ShieldAlert, ChevronDown, AlertCircle, Loader2, Check, Truck } from 'lucide-react';
+import { ESTADOS_COURIER } from "@/lib/utils/estados";
 
-const estadosShipro = [
-  { id: "S_CREADA", nombre: "1. Etiqueta creada", color: "bg-gray-100 text-gray-700 border-gray-200" },
-  { id: "S_COLECTADO", nombre: "2. Paquete recolectado", color: "bg-blue-100 text-blue-700 border-blue-200" },
-  { id: "S_TRANSITO", nombre: "3. En tránsito a destino", color: "bg-indigo-100 text-indigo-700 border-indigo-200" },
-  { id: "S_EN_SUCURSAL", nombre: "4. En sucursal destino", color: "bg-orange-100 text-orange-700 border-orange-200" },
-  { id: "S_SUC_ENTREGA", nombre: "4'. En sucursal de entrega", color: "bg-orange-50 text-orange-600 border-orange-200" },
-  { id: "S_DISTRIBUCION", nombre: "5. En distribución", color: "bg-purple-100 text-purple-700 border-purple-200" },
-  { id: "S_ENTREGADO", nombre: "6. Entregado", color: "bg-green-100 text-green-700 border-green-200" },
-  { id: "S_FALLIDA", nombre: "7. Visita fallida", color: "bg-yellow-100 text-yellow-700 border-yellow-200" },
-  { id: "S_SINIESTRO", nombre: "8. Paquete siniestrado", color: "bg-red-100 text-red-700 border-red-200" },
-  { id: "S_DEVUELTO", nombre: "9. Devuelto al remitente", color: "bg-slate-200 text-slate-800 border-slate-300" }
-];
+// F4.1 (2026-06-09): catalogo canonico de estados Shipro courier importado
+// de lib/utils/estados.ts. Reemplaza el array hardcoded con prefijo S_*.
+// Solo se muestran los 11 estados COURIER (no los 5 internos), porque el
+// Nomenclador mapea raws del courier al ciclo del paquete, no a estados
+// internos de la Plataforma.
+const estadosShipro = (Object.values(ESTADOS_COURIER) as Array<{ key: string; display: string }>).map((e, idx) => ({
+  id: e.key,
+  nombre: `${idx + 1}. ${e.display}`,
+  color: "bg-gray-100 text-gray-700 border-gray-200", // color generico, el admin no usa el color para nada critico
+}));
 
 export default function NomencladorEstados() {
   const { data: session } = useSession();

@@ -5,7 +5,7 @@ import { enviarMailColecta, enviarMailEntregadoNPS } from "@/lib/mailer";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
 import { getAppUrlOrThrow } from "@/lib/utils/app-url";
-import { ESTADOS_COURIER_REPETIBLES } from "@/lib/utils/estados";
+import { ESTADOS_COURIER_REPETIBLES, DIAS_MAXIMO_RASTREO } from "@/lib/utils/estados";
 
 export async function GET(request: Request) {
   try {
@@ -16,10 +16,19 @@ export async function GET(request: Request) {
 
     // OBTENER LOS ENVÍOS "MÁS VIEJOS" QUE NO ESTÁN ENTREGADOS
     // Ordenamos por 'fechaActualizacion' ascendente, para que siempre procese los más atrasados primero.
+    const cutoffDate = new Date(Date.now() - DIAS_MAXIMO_RASTREO * 24 * 60 * 60 * 1000);
     const enviosARastrear = await prisma.envio.findMany({
       where: {
-        estadoActual: { notIn: ["ENTREGADO", "INCIDENCIA", "CANCELADO", "DEVUELTO", "NO_ENTREGADO", "BLOQUEADO_SALDO", "BLOQUEADO_DEPOSITO"] },
-        trackingNumber: { not: "" }
+        // F3 (2026-06-09): solo terminales reales en el filtro de exclusion.
+        // INCIDENCIA y NO_ENTREGADO se sacaron porque son bidireccionales
+        // (paquete "perdido" puede aparecer y entregarse). DEVUELTO es
+        // sinonimo legacy de DEVUELTO_AL_REMITENTE, ambos terminales.
+        estadoActual: { notIn: ["ENTREGADO", "CANCELADO", "DEVUELTO", "DEVUELTO_AL_REMITENTE", "BLOQUEADO_SALDO", "BLOQUEADO_DEPOSITO", "BLOQUEADO_PARCIAL", "BLOQUEADO_OPERATIVIDAD"] },
+        trackingNumber: { not: "" },
+        // F3 (2026-06-09): cutoff temporal de 45 dias desde impresion.
+        // Despues de este cutoff, el envio sale del loop del cron y solo
+        // se actualiza manualmente desde la UI.
+        fechaImpresion: { gte: cutoffDate }
       },
       include: { 
         destino: true, courier: true, empresa: true,
@@ -89,7 +98,8 @@ export async function GET(request: Request) {
 
           if (estadoCambio) {
             datosAActualizar.estadoActual = estadoShiproLimpio;
-            if ((estadoShiproLimpio === "COLECTADO" || estadoShiproLimpio === "TRANSITO") && !envio.fechaColecta) {
+            // F5.3 (2026-06-09): canonicas F1 (los adapters ahora retornan PAQUETE_RECOLECTADO o EN_TRANSITO_A_DESTINO directamente).
+            if ((estadoShiproLimpio === "PAQUETE_RECOLECTADO" || estadoShiproLimpio === "EN_TRANSITO_A_DESTINO") && !envio.fechaColecta) {
                 datosAActualizar.fechaColecta = new Date();
             }
             if (estadoShiproLimpio === "ENTREGADO" && !envio.fechaEntrega) {
@@ -122,7 +132,8 @@ export async function GET(request: Request) {
 
             if (emailCliente) {
               const urlSeguimiento = `${baseUrl}/s/${envio.trackingNumber}`;
-              if (envio.estadoActual === "IMPRESO" && (estadoShiproLimpio === "COLECTADO" || estadoShiproLimpio === "TRANSITO")) {
+              // F5.3 (2026-06-09): canonicas F1. Trigger del mail Colecta cuando el envio sale de IMPRESO hacia el ciclo del courier.
+              if (envio.estadoActual === "IMPRESO" && (estadoShiproLimpio === "PAQUETE_RECOLECTADO" || estadoShiproLimpio === "EN_TRANSITO_A_DESTINO")) {
                 enviarMailColecta(emailCliente, envio.trackingNumber, nombreCliente, nombreCourierBaseDatos, urlSeguimiento);
               }
               if (estadoShiproLimpio === "ENTREGADO") {

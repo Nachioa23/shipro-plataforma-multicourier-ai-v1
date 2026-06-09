@@ -76,6 +76,17 @@ export const ESTADOS_COURIER_FINALES: EstadoCourierKey[] = [
   "INCIDENCIA",
 ];
 
+// Estados courier "repetibles": cada rastreo del cron crea un nuevo
+// EventoTracking aunque el estado sea igual al anterior. Permite contar
+// intentos de visita para Metrica 2.2 (Efectividad de Primera Visita).
+// Solo aplica a estados donde el courier puede emitir el mismo estado
+// varias veces durante el ciclo del paquete.
+export const ESTADOS_COURIER_REPETIBLES: EstadoCourierKey[] = [
+  "EN_DISTRIBUCION",   // Repetidas visitas al domicilio del comprador
+  "VISITA_FALLIDA",    // Mocis u otros couriers pueden marcar varias
+  "INCIDENCIA",        // Bidireccional: puede aparecer y desaparecer
+];
+
 // ====================================================
 // NORMALIZADOR DE STRINGS LEGACY → CATÁLOGO INTERNO
 // ====================================================

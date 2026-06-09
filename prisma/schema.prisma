@@ -429,6 +429,11 @@ model Envio {
   fechaImpresion DateTime  @default(now())
   fechaColecta   DateTime? // Cuándo el courier hizo la recolección física
   fechaEntrega   DateTime? // Cuándo llegó a manos del cliente
+  // F2 Bloque 1 (2026-06-09): timestamp del último rastreo del cron. Permite
+  // priorización "oldest first" en el cron de rastreo (5,800 rastreos diarios
+  // teóricos con 200 envíos cada 30 min, 8-22h ART). Si NULL, el envío nunca
+  // fue rastreado y se prioriza primero.
+  fechaUltimoRastreo DateTime?
 
   empresaId Int
   empresa   Empresa @relation(fields: [empresaId], references: [id])

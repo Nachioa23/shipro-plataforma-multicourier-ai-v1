@@ -5,6 +5,7 @@ import { enviarMailColecta, enviarMailEntregadoNPS } from "@/lib/mailer";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
 import { getAppUrlOrThrow } from "@/lib/utils/app-url";
+import { ESTADOS_COURIER_REPETIBLES } from "@/lib/utils/estados";
 
 export async function GET(request: Request) {
   try {
@@ -25,7 +26,13 @@ export async function GET(request: Request) {
         tickets: { where: { estado: "ABIERTO" } },
         eventos: { orderBy: { fecha: 'desc' }, take: 1 }
       },
-      orderBy: { id: 'asc' }, // Priorizamos los envíos más viejos que aún no se entregaron
+      orderBy: [
+        // F2 Bloque 2 (2026-06-09): "oldest first" por timestamp de último
+        // rastreo. Envios con NULL (nunca rastreados) van primero. Garantiza
+        // que ningún envío se quede sin rastreo en cada ventana.
+        { fechaUltimoRastreo: { sort: 'asc', nulls: 'first' } },
+        { id: 'asc' },
+      ],
       take: LOTE_MAXIMO
     });
 
@@ -67,21 +74,38 @@ export async function GET(request: Request) {
              estadoShiproLimpio = mapeo.estadoShipro.replace('S_', '');
           }
 
-          if (estadoShiproLimpio !== envio.estadoActual) {
-            let datosAActualizar: any = { estadoActual: estadoShiproLimpio };
-            
+          // F2 Bloque 2 (2026-06-09): pre-computar flags de cambio y repetibilidad.
+          // estadoCambio: el courier reporta un estado distinto al actual.
+          // esRepetible: el estado (aunque sea el mismo que el actual) genera
+          // EventoTracking nuevo porque cuenta como intento adicional (visitas
+          // repetidas, fluctuaciones de INCIDENCIA, etc).
+          const estadoCambio = estadoShiproLimpio !== envio.estadoActual;
+          const esRepetible = (ESTADOS_COURIER_REPETIBLES as readonly string[]).includes(estadoShiproLimpio);
+
+          // F2 Bloque 2: SIEMPRE actualizamos fechaUltimoRastreo (para el
+          // ordering "oldest first" del cron). Las demás actualizaciones de
+          // estado solo si efectivamente cambió.
+          let datosAActualizar: any = { fechaUltimoRastreo: new Date() };
+
+          if (estadoCambio) {
+            datosAActualizar.estadoActual = estadoShiproLimpio;
             if ((estadoShiproLimpio === "COLECTADO" || estadoShiproLimpio === "TRANSITO") && !envio.fechaColecta) {
                 datosAActualizar.fechaColecta = new Date();
             }
             if (estadoShiproLimpio === "ENTREGADO" && !envio.fechaEntrega) {
                 datosAActualizar.fechaEntrega = new Date();
             }
+          }
 
-            await prisma.envio.update({ where: { id: envio.id }, data: datosAActualizar });
-            // Torre de Control Metrica 1.1 (2026-06-04): poblar estadoCrudoOriginal
-            // con el estado raw del courier antes del mapeo via Nomenclador. Permite
-            // calcular frecuencia ponderada de aparicion de cada estado crudo. El
-            // campo observacion se preserva para backward-compat de parsers historicos.
+          await prisma.envio.update({ where: { id: envio.id }, data: datosAActualizar });
+
+          // F2 Bloque 2: crear EventoTracking si el estado cambió O si es un
+          // estado repetible. Esto permite a Metrica 2.2 contar intentos
+          // discretos de visita (cada llamada del cron que devuelve
+          // EN_DISTRIBUCION durante una semana = una visita).
+          // Torre de Control Metrica 1.1 (2026-06-04): poblar estadoCrudoOriginal
+          // con el estado raw del courier antes del mapeo via Nomenclador.
+          if (estadoCambio || esRepetible) {
             await prisma.eventoTracking.create({
               data: {
                 estado: estadoShiproLimpio,
@@ -90,7 +114,9 @@ export async function GET(request: Request) {
                 envioId: envio.id
               }
             });
-            
+          }
+
+          if (estadoCambio) {
             const emailCliente = envio.destino?.email;
             const nombreCliente = envio.destino?.nombre || "Cliente";
 

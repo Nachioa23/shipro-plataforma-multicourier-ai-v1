@@ -865,3 +865,31 @@ Hoy `/api/cotizar` recibe `cpOrigen?` opcional. Si el e-commerce lo manda, se us
 - Validacion en formularios de carga.
 
 **Conecta con DEUDA 46** (granularidad sub-provincial).
+
+---
+
+## DEUDA 50 — Refactor canonico del campo Envio.estadoActual: separacion en 2 planos (interno + courier) (registrada 2026-06-09, scope grande)
+
+**Contexto:** Hoy `Envio.estadoActual` es un single String field sin enum/type, sin canonical list, sin normalizer. ~25 strings distintos circulan en BD y codigo (Pendiente, PENDIENTE, BLOQUEADO_SALDO, IMPRESO, "Impreso / Listo", EN_TRANSITO, TRANSITO, INCIDENCIA, etc.). ~30 sitios escriben + ~20 sitios leen con comparaciones ad-hoc tipo `["ENTREGADO", "Entregado"].includes(...)`. El cluster `S_FALLIDA` / `S_SINIESTRO` (legacy del Nomenclador) sobrevive sin proposito claro.
+
+**Diagnostico arquitectonico:** El modelo real de negocio requiere 2 planos simultaneos:
+- **Plano interno (Plataforma):** 5 estados que controla Shipro y ve el cliente — PENDIENTE, RETENIDO, BLOQUEADO, IMPRESO, CANCELADO. Visible en Bandeja de Pedidos y Centro de Etiquetas.
+- **Plano courier:** 11 estados que ve el destinatario y refleja el ciclo real del paquete — ETIQUETA_CREADA, PAQUETE_RECOLECTADO, EN_TRANSITO_A_DESTINO, EN_SUCURSAL_DE_DESTINO, EN_SUCURSAL_DE_ENTREGA, EN_DISTRIBUCION, ENTREGADO, VISITA_FALLIDA, CANCELADO, DEVUELTO_AL_REMITENTE, INCIDENCIA.
+
+Los 2 planos avanzan acoplados pero NO son identicos (ejemplo: interno=CANCELADO puede coexistir con courier=EN_DISTRIBUCION si el courier no actualizo su lado).
+
+**Solucion provisoria (F1, commit actual):** helper `lib/utils/estados.ts` con catalogos canonicos + normalizadores `normalizarEstadoInterno()` / `normalizarEstadoCourier()` + heuristica `derivarPlanos()` que mapea Envio.estadoActual single field a tupla {interno, courier}. Cero migration. Cero refactor de los 50 sitios. Las metricas futuras (2.2 incluida) consumen el helper.
+
+**Trabajo necesario para resolver DEUDA 50 (sesion dedicada futura, estimado ~7-8 horas):**
+1. Migration de Prisma: agregar `Envio.estadoCourier String? @default(null)`, mantener `estadoActual` renombrado a `estadoInterno` (o mantener `estadoActual` y agregar nuevo).
+2. Backfill de los envios actuales: poblar `estadoCourier` desde `estadoActual` legacy usando `derivarPlanos()`.
+3. Refactor de ~30 sitios que escriben `estadoActual` para que escriban en el plano correcto.
+4. Refactor de ~20 sitios que leen `estadoActual` para que usen el campo correcto segun contexto (Centro de Etiquetas usa `estadoInterno`, Bandeja de Pedidos muestra `estadoInterno` + `estadoCourier`).
+5. Eliminar/migrar cluster `S_*` (S_FALLIDA, S_SINIESTRO) al catalogo canonico (probablemente colapsar a INCIDENCIA con observacion).
+6. Crear union types TypeScript `EstadoInternoKey | EstadoCourierKey` y aplicar en signatures de funciones criticas.
+7. Limpiar `importar/route.ts`: validar strings del Excel del cliente contra catalogo canonico (rechazar o normalizar).
+8. Testing manual sitio por sitio.
+
+**Prioridad:** Media-alta. Bloqueante para metricas con alta precision pero no bloqueante para produccion (helper normaliza on-the-fly). Plan: atacar despues que la Plataforma este en produccion y se hayan estabilizado las primeras integraciones con clientes.
+
+**Origen:** Investigacion F1.A del 2026-06-09 (sesion de Fundaciones de Tracking previa a Metrica 2.2). Diseño consensuado con el director: 5 estados internos + 11 estados courier, plano interno determina cuando courier es null (RETENIDO o BLOQUEADO).

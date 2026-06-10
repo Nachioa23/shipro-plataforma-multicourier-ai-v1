@@ -958,3 +958,58 @@ Los 2 planos avanzan acoplados pero NO son identicos (ejemplo: interno=CANCELADO
 - Reduccion de "envios fantasma" que no pueden imprimirse por datos incompletos.
 
 **Prioridad:** Baja. La funcionalidad del endpoint legacy sigue activa (envios retenidos siguen bloqueandose correctamente), solo se perdio la visibilidad visual en el dashboard. No bloquea operacion.
+
+---
+
+## DEUDA 55 — Documentar valor "MOTOR_PRECIO" en Empresa.ordenamientoDefault (registrada 2026-06-10, scope chico)
+
+**Origen:** Metrica 3.2 (Fuga por Ruteo Ineficiente), 2026-06-10. Durante la investigacion del PRE-STEP se descubrio que la BD demo tiene a "Cliente Demo" con `ordenamientoDefault = "MOTOR_PRECIO"`, pero el comentario del schema `prisma/schema.prisma` solo documenta los valores `PRECIO_ASC`, `SLA`, `HISTORICO`. El valor "MOTOR_PRECIO" no esta declarado en el contrato del campo.
+
+**Estado actual:** la BD acepta cualquier string en este campo (no hay enum constraint). La aplicacion presumiblemente maneja "MOTOR_PRECIO" en algun lado pero el campo no esta documentado consistentemente. Tambien existe duplicacion del concepto en `ServicioCourier.ordenamientoDefault` con el mismo default `PRECIO_ASC`.
+
+**Plan de resolucion:**
+1. Auditar todos los valores reales que existen en la BD de produccion (cuando este disponible) para `Empresa.ordenamientoDefault` y `ServicioCourier.ordenamientoDefault`.
+2. Decidir si "MOTOR_PRECIO" es un valor legacy a migrar a uno canonico (`PRECIO_ASC`?) o si es un valor valido a documentar.
+3. Actualizar el comentario en `prisma/schema.prisma` con la lista completa de valores aceptados.
+4. Opcional: convertir el campo a Prisma enum para forzar el contrato.
+5. Considerar si los dos campos `ordenamientoDefault` (en Empresa y en ServicioCourier) deben unificarse o si tienen semanticas distintas.
+
+**Casos de uso desbloqueados:**
+- Consistencia entre BD y documentacion.
+- Validacion de input al setear el campo desde la UI / API.
+- Predictibilidad de la logica de cotizacion (que ordena por que segun el valor).
+
+**Prioridad:** Baja. No bloquea operacion. Pero introduce ambiguedad operativa: si alguien lee el schema espera 3 valores, en la realidad puede encontrarse con otros.
+
+---
+
+## DEUDA 56 — Nivel 2 de Metrica 3.2: fuga vs red completa Shipro (registrada 2026-06-10, scope grande)
+
+**Origen:** Metrica 3.2 (Fuga por Ruteo Ineficiente), 2026-06-10. La version V1 implementa solo el NIVEL 1 de auditoria de ruteo: fuga DENTRO del mix de couriers activos para esa empresa cliente.
+
+**Estado actual:** el endpoint /api/torre-de-control/fuga-ruteo consume `FinanzasEnvio.fugaFinanciera` (precomputada al crear envio) que solo compara contra los couriers que el cliente tiene activados. Si Andreani es el mas barato dentro de los activos, pero existe OCA (no activado) que cotiza aun mas barato, la fuga no se detecta.
+
+**Por que es deuda:** el director Nacho (2026-06-10) explicito que la metrica debe responder dos preguntas:
+
+1. Cuanto plata pierde el cliente eligiendo mal dentro de sus opciones activas? (NIVEL 1 implementado)
+2. Cuanto plata pierde el cliente por NO tener todos los couriers integrados? (NIVEL 2 pendiente)
+
+Sin el NIVEL 2 el cliente Shipro no puede evaluar si su mix actual de couriers es optimo o si convendria activar otros couriers integrados.
+
+**Plan de resolucion:**
+
+1. Modificar la logica de creacion de envios (`lib/envios/crear.ts`) para que cuando se calcule `fugaFinanciera`, tambien se compute y persista un campo nuevo `fugaFinancieraVsRedCompleta` (cotizando contra TODOS los couriers integrados a Shipro, no solo los activados para esa empresa).
+2. Decidir como obtener cotizaciones de couriers no activados:
+   - Opcion A: usar credenciales Shipro genericas (Modelo A, ver DEUDA 29) para esos couriers.
+   - Opcion B: usar `HistoricoCotizaciones` para estimar (basado en cotizaciones previas de otros clientes para el mismo CP/peso).
+   - Opcion C: combinacion: API real si Shipro tiene credencial, fallback a historico.
+3. Extender el endpoint /api/torre-de-control/fuga-ruteo con un nuevo bloque `nivel2`.
+4. Extender el modal con un panel adicional "Ahorro Potencial Activando Mas Couriers".
+5. Agregar recomendacion concreta: "Activando OCA podrias ahorrar X% mas".
+
+**Casos de uso desbloqueados:**
+- El cliente puede evaluar costo-beneficio de activar nuevos couriers integrados.
+- Shipro puede recomendar onboarding de couriers especificos a cada empresa.
+- Hace visible el valor de la red integrada de Shipro (no solo "te integramos couriers", sino "te ahorras X plata si activas Y").
+
+**Prioridad:** Media-alta. Es feature comercialmente fuerte (justifica el valor de la red integrada Shipro). Estimado: 6-10 horas (logica de cotizacion paralela + persistencia + UI).

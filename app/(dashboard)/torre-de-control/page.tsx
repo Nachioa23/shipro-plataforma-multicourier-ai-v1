@@ -29,7 +29,6 @@ export default function TorreDeControl() {
 
   const [filtroRuteoDesde, setFiltroRuteoDesde] = useState("");
   const [filtroRuteoHasta, setFiltroRuteoHasta] = useState("");
-  const [filtroRuteoServicio, setFiltroRuteoServicio] = useState("TODOS");
   const [filtroRuteoCourier, setFiltroRuteoCourier] = useState("TODOS");
 
   // Contadores globales de envíos bloqueados (DEUDA 16 saldo + DEUDA 27 depósito). Modo Dios.
@@ -93,6 +92,12 @@ export default function TorreDeControl() {
   // Scope global. Universo: direcciones destino de envios en ventana 90 dias.
   const [auditoriaDireccionesMetrica, setAuditoriaDireccionesMetrica] = useState<any>(null);
   const [cargandoAuditoriaDirecciones, setCargandoAuditoriaDirecciones] = useState(true);
+
+  // Metrica 3.2 "Fuga por Ruteo Ineficiente" (DEUDA 39, 2026-06-10).
+  // Datos del endpoint /api/torre-de-control/fuga-ruteo.
+  // Scope global. Universo: envios con FinanzasEnvio.fugaFinanciera > 0 en ventana 90 dias.
+  const [fugaRuteoMetrica, setFugaRuteoMetrica] = useState<any>(null);
+  const [cargandoFugaRuteo, setCargandoFugaRuteo] = useState(true);
 
   useEffect(() => {
     if (!filtroEmpresaId) return;
@@ -304,6 +309,22 @@ export default function TorreDeControl() {
       });
   }, [esEquipoShipro]);
 
+  // Torre de Control Metrica 3.2: fetch del endpoint de fuga-ruteo.
+  useEffect(() => {
+    if (!esEquipoShipro) return;
+    setCargandoFugaRuteo(true);
+    fetch("/api/torre-de-control/fuga-ruteo")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setFugaRuteoMetrica(data);
+        setCargandoFugaRuteo(false);
+      })
+      .catch(err => {
+        console.error("[Torre de Control] error fetching fuga-ruteo:", err);
+        setCargandoFugaRuteo(false);
+      });
+  }, [esEquipoShipro]);
+
   const totalEnvios = metricas?.totalEnvios || 1;
   // Torre de Control Metrica 2.1 (2026-06-04): cambio de fuente.
   // Antes: metricas?.tiempoColectaPromedioDias (campo aspiracional, nunca
@@ -377,7 +398,8 @@ export default function TorreDeControl() {
   // Metrica 3.1 (2026-06-10): auditoriaStats legacy removido en Sub-step F.
   // Card 2 + modal ahora consumen auditoriaDireccionesMetrica del endpoint nuevo.
   // El concepto antiguo "envios retenidos por checkout" queda como DEUDA 54.
-  const ruteoStats = metricas?.ruteoStats || { fugaFinancieraTotal: 0, enviosOptimizados: 0, enviosIneficientes: 0, costoPromedioExtra: 0, topDesvios: [] };
+  // Metrica 3.2 (2026-06-10): ruteoStats legacy removido en Sub-step D.
+  // Card 3 + modal ahora consumen fugaRuteoMetrica del endpoint nuevo.
   const aforoStats = metricas?.aforoStats || { fugaTotal: 0, porcentajeFugaPeso: 0, desvioPromedioKg: 0, costoPromedioDesvio: 0, distribucionError: { leve: 0, moderado: 0, grave: 0 }, topEstrictos: [] };
   // Metrica 2.2 (2026-06-09): efectividadStats legacy removido en Sub-step G.
   // Card 5 + modal ahora consumen efectividadMetrica del endpoint nuevo
@@ -392,15 +414,8 @@ export default function TorreDeControl() {
   // tasaSoporteGlobal removido — Card 7 lee directamente de ticketsMesaAyudaMetrica.
   const formatPesos = (valor: number) => new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(valor);
 
-  let insightRuteoP = "Enrutamiento 100% optimizado.";
-  let insightRuteoS = "Tus envíos están utilizando las tarifas más eficientes disponibles. No se detectaron fugas de capital en el período y segmentación seleccionada.";
-  let colorRuteo = "green"; let IconoRuteo = CheckCircle2;
-  if (ruteoStats.fugaFinancieraTotal > 0 && ruteoStats.topDesvios.length > 0) {
-    const peorFuga = ruteoStats.topDesvios[0];
-    insightRuteoP = `Se están pagando ~${formatPesos(ruteoStats.costoPromedioExtra)} de más por paquete ineficiente.`;
-    insightRuteoS = `Recomendamos ajustar reglas: priorizar "${peorFuga.sugerido}" para la zona de ${peorFuga.destino}.`;
-    colorRuteo = "indigo"; IconoRuteo = Lightbulb;
-  }
+  // Metrica 3.2 (2026-06-10): helpers de insight de ruteo legacy removidos
+  // en Sub-step D. El modal nuevo genera su propio insight inline.
 
   return (
     <div className="flex flex-col h-full relative bg-gray-50 overflow-y-auto pb-20 font-sans">
@@ -1056,124 +1071,170 @@ export default function TorreDeControl() {
               </div>
 
             ) : metricaAnalisis === "Fuga por Ruteo Ineficiente" ? (
-              <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden">
-                <div className="bg-white border-b border-gray-200 p-4 flex flex-wrap gap-3 items-center shrink-0 shadow-sm z-10">
-                  {esEquipoShipro && (
-                    <div className="flex items-center gap-2 border border-blue-200 rounded-lg px-3 py-1.5 bg-blue-50/50">
-                      <Building2 className="w-4 h-4 text-blue-500" />
-                      <select value={filtroEmpresaId} onChange={(e) => setFiltroEmpresaId(e.target.value)} className="bg-transparent text-xs font-bold text-blue-800 outline-none cursor-pointer max-w-[180px] truncate">
-                        <option value="TODAS">Todo el Ecosistema</option>
-                        {listaClientes.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-                      </select>
-                    </div>
-                  )}
-                  <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-1.5 bg-gray-50">
-                    <Calendar className="w-4 h-4 text-gray-400" />
-                    <input type="date" value={filtroRuteoDesde} onChange={e => setFiltroRuteoDesde(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"/>
-                    <span className="text-gray-400 text-xs font-bold">a</span>
-                    <input type="date" value={filtroRuteoHasta} onChange={e => setFiltroRuteoHasta(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"/>
-                  </div>
-                  <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-1.5 bg-gray-50">
-                    <Box className="w-4 h-4 text-gray-400" />
-                    <select value={filtroRuteoServicio} onChange={e => setFiltroRuteoServicio(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer">
-                      <option value="TODOS">Todas las Modalidades</option>
-                      <option value="domicilio">Solo A Domicilio</option>
-                      <option value="sucursal">Solo A Sucursal</option>
-                    </select>
-                  </div>
-                  <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-1.5 bg-gray-50">
-                    <Truck className="w-4 h-4 text-gray-400" />
-                    <select value={filtroRuteoCourier} onChange={e => setFiltroRuteoCourier(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer">
-                      <option value="TODOS">Couriers Evaluados: Todos</option>
-                      {couriersLista.map(c => <option key={c} value={c}>{c}</option>)}
-                    </select>
-                  </div>
-                </div>
+              // Metrica 3.2 (DEUDA 39, 2026-06-10): refactor del modal a
+              // p-8 space-y-6. Consume /api/torre-de-control/fuga-ruteo.
+              // NIVEL 1: fuga dentro del mix activo del cliente.
+              // NIVEL 2 (DEUDA 56): fuga vs red completa de Shipro.
+              <div className="p-8 space-y-6">
+                {cargandoFugaRuteo ? (
+                  <div className="text-center py-12 text-gray-500">Cargando datos de ruteo...</div>
+                ) : !fugaRuteoMetrica ? (
+                  <div className="text-center py-12 text-red-600">Error cargando datos. Reintentar.</div>
+                ) : fugaRuteoMetrica.resumen.totalEnvios === 0 ? (
+                  <div className="text-center py-12 text-gray-500">No hay envios en la ventana de {fugaRuteoMetrica.calidadDatos.ventanaDias} dias.</div>
+                ) : (
+                  <>
+                    {/* GRID PRINCIPAL */}
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
 
-                <div className="flex-1 overflow-y-auto p-6 lg:p-8">
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 max-w-7xl mx-auto">
-                    <div className="lg:col-span-5 space-y-6">
-                      <div className="bg-white p-6 rounded-2xl shadow-sm border border-purple-100 relative overflow-hidden">
-                        <div className="absolute top-0 right-0 w-32 h-32 bg-purple-50 rounded-bl-full -z-10 opacity-50"></div>
-                        <h4 className="text-xs font-black text-purple-600 uppercase tracking-widest mb-1">Costo de Oportunidad Total</h4>
-                        <p className="text-5xl font-black text-gray-800 mb-2 tracking-tighter">{formatPesos(ruteoStats.fugaFinancieraTotal)}</p>
-                        <p className="text-xs font-medium text-gray-500 leading-relaxed">Dinero perdido por no utilizar la tarifa más económica habilitada en Shipro al momento del despacho.</p>
-                      </div>
+                      {/* COLUMNA IZQUIERDA */}
+                      <div className="lg:col-span-5 space-y-6">
 
-                      <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-6">Eficiencia de Enrutamiento</h4>
-                        <div className="space-y-5">
-                          <div>
-                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-green-700 flex items-center gap-2"><Check className="w-4 h-4"/> Envíos Optimizados (Ahorro)</span><span className="text-green-700">{ruteoStats.enviosOptimizados}%</span></div>
-                            <div className="w-full bg-gray-100 rounded-full h-4"><div className="bg-green-500 h-4 rounded-full transition-all duration-1000" style={{ width: `${ruteoStats.enviosOptimizados}%` }}></div></div>
-                          </div>
-                          <div>
-                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-red-600 flex items-center gap-2"><TrendingUp className="w-4 h-4"/> Envíos Ineficientes (Fuga)</span><span className="text-red-600">{ruteoStats.enviosIneficientes}%</span></div>
-                            <div className="w-full bg-gray-100 rounded-full h-4"><div className="bg-red-500 h-4 rounded-full transition-all duration-1000" style={{ width: `${ruteoStats.enviosIneficientes}%` }}></div></div>
-                          </div>
+                        {/* Hero tile */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Costo de Oportunidad (90 dias)</h4>
+                          <p className="text-5xl font-black text-purple-700 tracking-tighter">{formatPesos(fugaRuteoMetrica.resumen.fugaTotal)}</p>
+                          <p className="text-sm text-gray-600 mt-2">
+                            <span className="font-bold">{fugaRuteoMetrica.resumen.enviosConFuga}</span> de {fugaRuteoMetrica.resumen.totalEnvios} envios sub-optimizados
+                          </p>
+                          <p className={`text-sm font-bold mt-1 ${fugaRuteoMetrica.resumen.tasaIneficiencia > 50 ? 'text-red-600' : 'text-orange-600'}`}>
+                            Tasa de ineficiencia: {fugaRuteoMetrica.resumen.tasaIneficiencia}%
+                          </p>
+                          <p className="text-xs text-gray-400 mt-2">
+                            Ahorro proyectado anual: <span className="font-bold text-green-700">{formatPesos(fugaRuteoMetrica.resumen.ahorroProyectadoAnual)}</span>
+                          </p>
                         </div>
-                      </div>
 
-                      <div className={`bg-${colorRuteo}-50 p-6 rounded-2xl border border-${colorRuteo}-100 shadow-sm`}>
-                        <h4 className={`text-xs font-black text-${colorRuteo}-800 uppercase tracking-widest mb-3 flex items-center gap-2`}>
-                          <IconoRuteo className="w-4 h-4" /> Insight de Negocio
-                        </h4>
-                        <p className="text-lg font-bold text-gray-800 mb-3 leading-tight">{insightRuteoP}</p>
-                        <p className={`text-xs text-${colorRuteo}-700 font-medium leading-relaxed`}>{insightRuteoS}</p>
-                      </div>
-                    </div>
-
-                    <div className="lg:col-span-7">
-                      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 h-full flex flex-col">
-                        <div className="p-6 border-b border-gray-100">
-                          <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider flex items-center gap-2">
-                            <MapPinned className="w-5 h-5 text-purple-600"/> Alternativas Óptimas Ignoradas
-                          </h4>
-                          <p className="text-xs text-gray-500 mt-1 font-medium">Desglose de las zonas logísticas con mayor sobreprecio asumido.</p>
+                        {/* Metricas compactas */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Magnitud por Envio</h4>
+                          <div className="grid grid-cols-2 gap-3 text-center">
+                            <div className="border-r border-gray-200">
+                              <p className="text-xl font-black text-gray-800">{formatPesos(fugaRuteoMetrica.resumen.fugaPromedio)}</p>
+                              <p className="text-xs text-gray-500 uppercase">Fuga promedio</p>
+                            </div>
+                            <div>
+                              <p className="text-xl font-black text-gray-800">{formatPesos(fugaRuteoMetrica.resumen.fugaMax)}</p>
+                              <p className="text-xs text-gray-500 uppercase">Fuga maxima</p>
+                            </div>
+                          </div>
+                          <p className="text-xs text-gray-400 mt-3 text-center">
+                            Promedio: cada envio sub-optimizado le cuesta este monto extra.
+                          </p>
                         </div>
-                        
-                        <div className="p-6 flex-1 space-y-4 overflow-y-auto">
-                          {ruteoStats.topDesvios.length === 0 ? (
-                            <p className="text-sm font-bold text-gray-400 text-center py-10">No se detectaron fugas de capital en la segmentación actual.</p>
+
+                        {/* Aviso Nivel 2 */}
+                        <div className="bg-blue-50 border border-blue-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-blue-700 uppercase tracking-widest mb-2">Alcance Actual</h4>
+                          <p className="text-sm text-blue-900">
+                            Este analisis mide fuga <span className="font-bold">dentro del mix de couriers activos del cliente</span>.
+                          </p>
+                          <p className="text-xs text-blue-700 mt-2">
+                            Una version futura medira tambien fuga vs la red completa de couriers integrados a Shipro (incluso los no activados aun para esta empresa).
+                          </p>
+                        </div>
+
+                      </div>
+
+                      {/* COLUMNA DERECHA */}
+                      <div className="lg:col-span-7 space-y-6">
+
+                        {/* Top Desvios */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Top Desvios (Elegido vs Sugerido)</h4>
+                          {fugaRuteoMetrica.topDesvios.length === 0 ? (
+                            <p className="text-sm text-gray-400">Sin desvios registrados.</p>
                           ) : (
-                            ruteoStats.topDesvios.map((desvio: any, idx: number) => (
-                              <div key={`fuga-${idx}`} className="p-5 bg-white border border-gray-200 hover:border-purple-300 rounded-xl transition-all shadow-sm group">
-                                <div className="flex justify-between items-start mb-4">
-                                  <div className="flex items-center gap-3">
-                                    <div className="w-8 h-8 rounded-full bg-purple-100 text-purple-700 font-black flex items-center justify-center text-xs">#{idx + 1}</div>
-                                    <div>
-                                      <h5 className="font-bold text-gray-800 text-sm">{desvio.sugerido}</h5>
-                                      <p className="text-[10px] font-bold text-gray-400 flex items-center gap-1 uppercase tracking-wider mt-0.5"><MapPin className="w-3 h-3" /> Zona: {desvio.destino} • {desvio.enviosAfectados} envíos</p>
+                            <div className="space-y-3">
+                              {fugaRuteoMetrica.topDesvios.map((d: any, idx: number) => (
+                                <div key={idx} className="border-l-4 border-purple-300 pl-3 py-1">
+                                  <div className="flex justify-between items-start mb-1">
+                                    <div className="flex-1">
+                                      <p className="text-sm text-gray-700">
+                                        <span className="font-bold text-red-600">{d.courierElegido}</span> →
+                                        <span className="font-bold text-green-700"> {d.courierSugerido}</span>
+                                      </p>
+                                      <p className="text-xs text-gray-500">{d.servicioSugerido}</p>
+                                    </div>
+                                    <div className="text-right ml-3">
+                                      <p className="text-lg font-black text-purple-700">{formatPesos(d.fugaTotal)}</p>
+                                      <p className="text-xs text-gray-400">{d.cantidad} envio{d.cantidad !== 1 ? 's' : ''} | prom. {formatPesos(d.fugaPromedio)}</p>
                                     </div>
                                   </div>
-                                  <div className="text-right">
-                                    <p className="text-[10px] font-bold text-green-600 uppercase tracking-widest mb-0.5">Ahorro Potencial</p>
-                                    <p className="text-lg font-black text-green-700">+{formatPesos(desvio.totalPerdido)}</p>
-                                  </div>
                                 </div>
-                                <div className="bg-gray-50 rounded-lg p-3 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between border border-gray-100">
-                                  <div className="flex items-center gap-2">
-                                    <div className="w-1.5 h-8 bg-red-400 rounded-full"></div>
-                                    <div><p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">Se eligió</p><p className="text-xs font-bold text-gray-700">{desvio.elegidos}</p></div>
-                                  </div>
-                                  <div className="hidden sm:block text-gray-300"><ArrowRightLeft className="w-4 h-4" /></div>
-                                  <div className="flex items-center gap-2">
-                                    <div className="w-1.5 h-8 bg-green-500 rounded-full"></div>
-                                    <div><p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">Se Sugería</p><p className="text-xs font-bold text-gray-700">{desvio.sugerido}</p></div>
-                                  </div>
-                                  <div className="bg-white px-3 py-1.5 rounded-md shadow-sm border border-gray-200 text-center w-full sm:w-auto">
-                                    <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">Brecha p/Envío</p>
-                                    <p className="text-xs font-black text-purple-700">+{formatPesos(desvio.costoPromedioExtra)}</p>
-                                  </div>
-                                </div>
-                              </div>
-                            ))
+                              ))}
+                            </div>
                           )}
                         </div>
+
+                        {/* Por Empresa */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Por Empresa</h4>
+                          {fugaRuteoMetrica.porEmpresa.length === 0 ? (
+                            <p className="text-sm text-gray-400">Sin datos por empresa.</p>
+                          ) : (
+                            <div className="space-y-3">
+                              {fugaRuteoMetrica.porEmpresa.map((e: any) => (
+                                <div key={e.empresaId}>
+                                  <div className="flex justify-between text-sm mb-1">
+                                    <span className="font-bold text-gray-700">{e.nombre}</span>
+                                    <span className="text-gray-500">
+                                      {e.cantidadConFuga} envios | <span className="font-bold text-purple-700">{formatPesos(e.fugaTotal)}</span> | prom. {formatPesos(e.fugaPromedio)}
+                                    </span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Por Mes */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Evolucion Mensual</h4>
+                          {fugaRuteoMetrica.porMes.length === 0 ? (
+                            <p className="text-sm text-gray-400">Sin datos por mes.</p>
+                          ) : (
+                            <div className="space-y-2">
+                              {fugaRuteoMetrica.porMes.map((m: any) => (
+                                <div key={m.mes} className="flex items-center gap-3">
+                                  <span className="text-xs font-bold text-gray-500 w-16">{m.mes}</span>
+                                  <span className="text-xs text-gray-700 flex-1">{m.cantidadConFuga} envios con fuga</span>
+                                  <span className="text-xs text-purple-700 font-bold">{formatPesos(m.fugaTotal)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Top Envios Individuales */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Top 10 Envios con Mas Fuga</h4>
+                          {fugaRuteoMetrica.topEnvios.length === 0 ? (
+                            <p className="text-sm text-gray-400">Sin envios para mostrar.</p>
+                          ) : (
+                            <div className="space-y-2 max-h-96 overflow-y-auto">
+                              {fugaRuteoMetrica.topEnvios.slice(0, 10).map((e: any) => (
+                                <div key={e.envioId} className="border border-gray-200 rounded-lg p-3">
+                                  <div className="flex justify-between items-start mb-1">
+                                    <div className="flex-1">
+                                      <p className="text-xs font-bold text-gray-800">Envio #{e.envioId} — {e.empresaNombre}</p>
+                                      <p className="text-xs text-gray-500">
+                                        <span className="text-red-600">{e.courierElegido}</span> en vez de
+                                        <span className="text-green-700"> {e.courierSugerido} ({e.servicioSugerido})</span>
+                                      </p>
+                                    </div>
+                                    <p className="text-sm font-black text-purple-700 ml-3">{formatPesos(e.fuga)}</p>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
                       </div>
                     </div>
-                  </div>
-                </div>
+                  </>
+                )}
               </div>
 
             ) : metricaAnalisis === "Desvío Financiero por Peso Volumétrico" ? (
@@ -2390,9 +2451,9 @@ export default function TorreDeControl() {
               <p className="text-xs text-gray-500 mb-4 font-bold text-orange-600">{cargandoAuditoriaDirecciones ? 'Cargando…' : `${auditoriaDireccionesMetrica?.resumen?.tasaAuditoria ?? 0}% direcciones con problemas`}</p>
               <button onClick={() => abrirAnalisis("Auditoría de Direcciones")} className="text-xs font-black text-blue-600 text-left mt-auto">Analizar</button>
             </div>
-            <div className="bg-white border border-purple-200 rounded-xl p-5 shadow-sm relative flex flex-col h-full">
+            <div className={`bg-white border rounded-xl p-5 shadow-sm relative flex flex-col h-full ${(fugaRuteoMetrica?.resumen?.tasaIneficiencia ?? 0) > 50 ? 'border-purple-300' : 'border-purple-200'}`}>
               <h4 className="font-bold text-gray-800 text-sm flex items-center gap-2 mb-1"><Target className="text-purple-500" /> 3. Fuga por Ruteo</h4>
-              <p className="text-xs text-gray-500 mb-4 font-black text-purple-700">{formatPesos(ruteoStats.fugaFinancieraTotal)}</p>
+              <p className="text-xs text-gray-500 mb-4 font-black text-purple-700">{cargandoFugaRuteo ? 'Cargando…' : formatPesos(fugaRuteoMetrica?.resumen?.fugaTotal ?? 0)}</p>
               <button onClick={() => abrirAnalisis("Fuga por Ruteo Ineficiente")} className="text-xs font-black text-blue-600 text-left mt-auto">Analizar</button>
             </div>
           </div>

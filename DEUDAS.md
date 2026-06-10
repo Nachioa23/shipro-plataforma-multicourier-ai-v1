@@ -893,3 +893,24 @@ Los 2 planos avanzan acoplados pero NO son identicos (ejemplo: interno=CANCELADO
 **Prioridad:** Media-alta. Bloqueante para metricas con alta precision pero no bloqueante para produccion (helper normaliza on-the-fly). Plan: atacar despues que la Plataforma este en produccion y se hayan estabilizado las primeras integraciones con clientes.
 
 **Origen:** Investigacion F1.A del 2026-06-09 (sesion de Fundaciones de Tracking previa a Metrica 2.2). Diseño consensuado con el director: 5 estados internos + 11 estados courier, plano interno determina cuando courier es null (RETENIDO o BLOQUEADO).
+
+---
+
+## DEUDA 52 — Geocoding de Direccion (lat/lng) (registrada 2026-06-09, scope chico-medio)
+
+**Origen:** Metrica 2.5 (Anatomia de la Devolucion), 2026-06-09. El modelo `Direccion` no tiene campos `latitud` ni `longitud`, solo CP + provincia + localidad. Esto impide calcular distancia geodesica real para visualizar la magnitud del trayecto ida + vuelta de los paquetes devueltos.
+
+**Estado actual:** la Metrica 2.5 funciona con agrupacion por provincia y localidad. La spec del director (2026-06-09) confirma esta limitacion como aceptable en v1.
+
+**Plan de resolucion (dos opciones):**
+
+1. **Geocoding por API externa.** Agregar campos `latitud Float?` y `longitud Float?` a `Direccion`. Resolver coords on-the-fly cuando se crea una Direccion nueva via Google Maps Geocoding API, Mapbox Geocoder, o similar. Pros: precision alta. Contras: dependencia externa + costo por request + latencia + API key management. Estimado ~6-8h.
+
+2. **Tabla local de codigos postales argentinos.** Bajar de Correo Argentino o fuente publica un dataset CP -> lat/lng centroide. Crear tabla `CodigoPostalCentroide` y resolver Direccion.latitud/longitud por lookup al crear. Pros: cero dependencia externa + zero latencia post-seed + sin API costs. Contras: precision menor (centroide de CP, no calle exacta) + datos publicos pueden estar incompletos. Estimado ~4-6h + verificacion de calidad.
+
+**Casos de uso desbloqueados:**
+- Calculo de distancia geodesica ida + vuelta de cada devolucion (input para "costo de oportunidad" del stock inmovilizado ponderado por km).
+- Heatmap geografico de devoluciones en dashboard.
+- Comparacion de distancia promedio por courier (insight de eficiencia logistica).
+
+**Prioridad:** Media-baja. No bloquea metricas operativas. Esperar a tener feedback de produccion sobre si la agrupacion por provincia/localidad alcanza, antes de invertir en geocoding.

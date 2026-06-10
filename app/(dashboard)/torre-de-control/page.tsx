@@ -88,6 +88,12 @@ export default function TorreDeControl() {
   const [cargandoConcentracionCourier, setCargandoConcentracionCourier] = useState(true);
   const [empresaFiltroConcentracion, setEmpresaFiltroConcentracion] = useState<number | null>(null);
 
+  // Metrica 3.1 "Auditoria de Direcciones" (DEUDA 39, 2026-06-10).
+  // Datos del endpoint /api/torre-de-control/auditoria-direcciones.
+  // Scope global. Universo: direcciones destino de envios en ventana 90 dias.
+  const [auditoriaDireccionesMetrica, setAuditoriaDireccionesMetrica] = useState<any>(null);
+  const [cargandoAuditoriaDirecciones, setCargandoAuditoriaDirecciones] = useState(true);
+
   useEffect(() => {
     if (!filtroEmpresaId) return;
     const baseParams = { filtroEmpresa: filtroEmpresaId, page: "1", limit: "1" };
@@ -282,6 +288,22 @@ export default function TorreDeControl() {
       });
   }, [esEquipoShipro, empresaFiltroConcentracion]);
 
+  // Torre de Control Metrica 3.1: fetch del endpoint de auditoria-direcciones.
+  useEffect(() => {
+    if (!esEquipoShipro) return;
+    setCargandoAuditoriaDirecciones(true);
+    fetch("/api/torre-de-control/auditoria-direcciones")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setAuditoriaDireccionesMetrica(data);
+        setCargandoAuditoriaDirecciones(false);
+      })
+      .catch(err => {
+        console.error("[Torre de Control] error fetching auditoria-direcciones:", err);
+        setCargandoAuditoriaDirecciones(false);
+      });
+  }, [esEquipoShipro]);
+
   const totalEnvios = metricas?.totalEnvios || 1;
   // Torre de Control Metrica 2.1 (2026-06-04): cambio de fuente.
   // Antes: metricas?.tiempoColectaPromedioDias (campo aspiracional, nunca
@@ -352,7 +374,9 @@ export default function TorreDeControl() {
     if (titulo !== "Mapa de Calor SLA") setZonaSlaSeleccionada(null); 
   };
 
-  const auditoriaStats = metricas?.auditoriaStats || { totalRetenidos: 0, porcentajeFallaOrigen: 0, tasaAutoGestion: 0, tasaSoporte: 0, tiempoMedioCorreccion: "-", topProblemas: [] };
+  // Metrica 3.1 (2026-06-10): auditoriaStats legacy removido en Sub-step F.
+  // Card 2 + modal ahora consumen auditoriaDireccionesMetrica del endpoint nuevo.
+  // El concepto antiguo "envios retenidos por checkout" queda como DEUDA 54.
   const ruteoStats = metricas?.ruteoStats || { fugaFinancieraTotal: 0, enviosOptimizados: 0, enviosIneficientes: 0, costoPromedioExtra: 0, topDesvios: [] };
   const aforoStats = metricas?.aforoStats || { fugaTotal: 0, porcentajeFugaPeso: 0, desvioPromedioKg: 0, costoPromedioDesvio: 0, distribucionError: { leve: 0, moderado: 0, grave: 0 }, topEstrictos: [] };
   // Metrica 2.2 (2026-06-09): efectividadStats legacy removido en Sub-step G.
@@ -835,64 +859,200 @@ export default function TorreDeControl() {
                   </>
                 )}
               </div>
-            ) : metricaAnalisis === "Auditoría de Direcciones (Peaje)" ? (
-              <div className="flex-1 flex flex-col bg-gray-50 overflow-y-auto">
-                <div className="bg-white border-b border-gray-200 p-4 flex flex-wrap gap-3 items-center shrink-0 shadow-sm z-10">
-                  {esEquipoShipro && (
-                    <div className="flex items-center gap-2 border border-blue-200 rounded-lg px-3 py-1.5 bg-blue-50/50">
-                      <Building2 className="w-4 h-4 text-blue-500" />
-                      <select value={filtroEmpresaId} onChange={(e) => setFiltroEmpresaId(e.target.value)} className="bg-transparent text-xs font-bold text-blue-800 outline-none cursor-pointer max-w-[180px] truncate">
-                        <option value="TODAS">Todo el Ecosistema</option>
-                        {listaClientes.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-                      </select>
-                    </div>
-                  )}
-                  <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-1.5 bg-gray-50">
-                    <Calendar className="w-4 h-4 text-gray-400" />
-                    <input type="date" value={filtroRuteoDesde} onChange={e => setFiltroRuteoDesde(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"/>
-                    <span className="text-gray-400 text-xs font-bold">a</span>
-                    <input type="date" value={filtroRuteoHasta} onChange={e => setFiltroRuteoHasta(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"/>
-                  </div>
-                </div>
-                <div className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  <div className="lg:col-span-2 space-y-6">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-center text-center">
-                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Tasa de Falla en Origen</h4>
-                        <p className="text-4xl font-black text-red-600 mb-1">{auditoriaStats.porcentajeFallaOrigen}%</p>
-                        <p className="text-[10px] font-bold text-gray-500">De los envíos totales entraron retenidos.</p>
-                      </div>
-                      <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-center text-center">
-                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Tiempo de Resolución</h4>
-                        <p className="text-3xl font-black text-blue-600 mb-1 flex justify-center items-center gap-2"><Clock className="w-6 h-6" /> {auditoriaStats.tiempoMedioCorreccion}</p>
-                        <p className="text-[10px] font-bold text-gray-500">Desde que se retiene hasta que se libera.</p>
-                      </div>
-                    </div>
-                    <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                      <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center justify-between">Origen de la Resolución</h4>
-                      <div className="space-y-6">
-                        <div>
-                          <div className="flex justify-between text-sm font-bold mb-2"><span className="text-green-700 flex items-center gap-2"><ShieldCheck className="w-4 h-4"/> Auto-Gestión (Comprador)</span><span className="text-green-700">{auditoriaStats.tasaAutoGestion}%</span></div>
-                          <div className="w-full bg-gray-100 rounded-full h-3"><div className="bg-green-500 h-3 rounded-full transition-all duration-1000" style={{ width: `${auditoriaStats.tasaAutoGestion}%` }}></div></div>
+            ) : metricaAnalisis === "Auditoría de Direcciones" ? (
+              // Metrica 3.1 (DEUDA 39, 2026-06-10): refactor del modal a
+              // p-8 space-y-6. Consume /api/torre-de-control/auditoria-direcciones.
+              <div className="p-8 space-y-6">
+                {cargandoAuditoriaDirecciones ? (
+                  <div className="text-center py-12 text-gray-500">Cargando auditoria de direcciones...</div>
+                ) : !auditoriaDireccionesMetrica ? (
+                  <div className="text-center py-12 text-red-600">Error cargando datos. Reintentar.</div>
+                ) : auditoriaDireccionesMetrica.resumen.totalDirecciones === 0 ? (
+                  <div className="text-center py-12 text-gray-500">No hay direcciones en la ventana de {auditoriaDireccionesMetrica.calidadDatos.ventanaDias} dias.</div>
+                ) : (
+                  <>
+                    {(() => {
+                      const ETIQUETAS_PROBLEMAS: Record<string, string> = {
+                        CALLE_VACIA: "Calle sin datos",
+                        ALTURA_VACIA: "Altura sin datos",
+                        LOCALIDAD_VACIA: "Localidad sin datos",
+                        PROVINCIA_VACIA: "Provincia sin datos",
+                        CP_NO_NORMALIZADO: "CP no encontrado",
+                        INCONSISTENCIA_CP_PROVINCIA: "CP no coincide con provincia",
+                        INCONSISTENCIA_CP_LOCALIDAD: "CP no coincide con localidad",
+                        PROVINCIA_NO_NORMALIZABLE: "Provincia no reconocida",
+                      };
+                      const resumen = auditoriaDireccionesMetrica.resumen;
+                      return (
+                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+                          {/* COLUMNA IZQUIERDA */}
+                          <div className="lg:col-span-5 space-y-6">
+
+                            {/* Hero tile */}
+                            <div className="bg-white border border-gray-200 rounded-xl p-6">
+                              <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Tasa de Auditoria</h4>
+                              <p className={`text-6xl font-black tracking-tighter ${resumen.tasaAuditoria > 10 ? 'text-orange-600' : 'text-green-700'}`}>
+                                {resumen.tasaAuditoria}%
+                              </p>
+                              <p className="text-sm text-gray-600 mt-2">
+                                {resumen.totalConProblemas} direcciones con problemas sobre {resumen.totalDirecciones} totales
+                              </p>
+                              <p className="text-xs text-gray-400 mt-1">
+                                Score promedio: {resumen.scorePromedio}/100
+                              </p>
+                              <p className="text-xs text-gray-400 mt-1">
+                                Ventana: {auditoriaDireccionesMetrica.calidadDatos.ventanaDias} dias
+                              </p>
+                            </div>
+
+                            {/* Distribucion de categorias */}
+                            <div className="bg-white border border-gray-200 rounded-xl p-6">
+                              <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Distribucion por Calidad</h4>
+                              <div className="space-y-3">
+                                {[
+                                  { key: 'limpia', label: 'Limpia', color: 'bg-green-500', desc: '90-100 pts' },
+                                  { key: 'aceptable', label: 'Aceptable', color: 'bg-blue-500', desc: '70-89 pts' },
+                                  { key: 'problematica', label: 'Problematica', color: 'bg-orange-500', desc: '50-69 pts' },
+                                  { key: 'critica', label: 'Critica', color: 'bg-red-500', desc: '<50 pts' },
+                                ].map((cat) => {
+                                  const cantidad = resumen.distribucionCategorias[cat.key as keyof typeof resumen.distribucionCategorias];
+                                  const pct = resumen.totalDirecciones > 0
+                                    ? Math.round((cantidad / resumen.totalDirecciones) * 100)
+                                    : 0;
+                                  return (
+                                    <div key={cat.key}>
+                                      <div className="flex justify-between text-sm font-bold mb-1">
+                                        <span className="text-gray-700">{cat.label} <span className="text-xs text-gray-400">({cat.desc})</span></span>
+                                        <span className="text-gray-700">{cantidad} ({pct}%)</span>
+                                      </div>
+                                      <div className="w-full bg-gray-100 rounded-full h-2">
+                                        <div className={`${cat.color} h-2 rounded-full`} style={{ width: `${pct}%` }}></div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            {/* Top problemas */}
+                            <div className="bg-white border border-gray-200 rounded-xl p-6">
+                              <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Top Tipos de Problemas</h4>
+                              {resumen.topProblemas.length === 0 ? (
+                                <p className="text-sm text-gray-400">Sin problemas detectados.</p>
+                              ) : (
+                                <div className="space-y-2">
+                                  {resumen.topProblemas.map((p: any, idx: number) => (
+                                    <div key={idx} className="flex items-center gap-3">
+                                      <span className="text-xs font-black text-gray-400 w-6">{idx + 1}.</span>
+                                      <span className="text-sm text-gray-700 flex-1">{ETIQUETAS_PROBLEMAS[p.tipo] || p.tipo}</span>
+                                      <span className="text-sm font-bold text-gray-800">{p.cantidad}</span>
+                                      <span className="text-xs text-gray-500 w-12 text-right">({p.porcentaje}%)</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+
+                          </div>
+
+                          {/* COLUMNA DERECHA */}
+                          <div className="lg:col-span-7 space-y-6">
+
+                            {/* Top direcciones problematicas */}
+                            <div className="bg-white border border-gray-200 rounded-xl p-6">
+                              <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Top Direcciones Problematicas (max 20)</h4>
+                              {auditoriaDireccionesMetrica.topDireccionesProblematicas.length === 0 ? (
+                                <p className="text-sm text-gray-400">Sin direcciones problematicas en la ventana.</p>
+                              ) : (
+                                <div className="space-y-3 max-h-96 overflow-y-auto">
+                                  {auditoriaDireccionesMetrica.topDireccionesProblematicas.map((d: any) => {
+                                    const colorBorde =
+                                      d.categoria === 'critica' ? 'border-red-300' :
+                                      d.categoria === 'problematica' ? 'border-orange-300' :
+                                      d.categoria === 'aceptable' ? 'border-blue-200' : 'border-gray-200';
+                                    const colorScore =
+                                      d.categoria === 'critica' ? 'text-red-600' :
+                                      d.categoria === 'problematica' ? 'text-orange-600' :
+                                      d.categoria === 'aceptable' ? 'text-blue-600' : 'text-green-700';
+                                    return (
+                                      <div key={d.direccionId} className={`border ${colorBorde} rounded-lg p-3`}>
+                                        <div className="flex justify-between items-start mb-2">
+                                          <div className="flex-1">
+                                            <p className="text-sm font-bold text-gray-800">
+                                              {d.detalle.calle || '-'} {d.detalle.altura || ''}
+                                            </p>
+                                            <p className="text-xs text-gray-500">
+                                              CP {d.detalle.cp} | {d.detalle.localidad || 'sin localidad'} | {d.detalle.provincia || 'sin provincia'}
+                                            </p>
+                                          </div>
+                                          <div className="text-right ml-3">
+                                            <p className={`text-2xl font-black ${colorScore}`}>{d.score}</p>
+                                            <p className="text-xs text-gray-400 uppercase">{d.categoria}</p>
+                                          </div>
+                                        </div>
+                                        <div className="flex flex-wrap gap-1 mb-1">
+                                          {d.problemas.map((p: string, i: number) => (
+                                            <span key={i} className="text-xs bg-red-50 text-red-700 px-2 py-0.5 rounded-full">
+                                              {ETIQUETAS_PROBLEMAS[p] || p}
+                                            </span>
+                                          ))}
+                                        </div>
+                                        <p className="text-xs text-gray-400 mt-1">
+                                          {d.cantidadEnvios} envio{d.cantidadEnvios !== 1 ? 's' : ''} | Empresas: {d.empresasAfectadas.join(', ')}
+                                        </p>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Por empresa */}
+                            <div className="bg-white border border-gray-200 rounded-xl p-6">
+                              <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Por Empresa</h4>
+                              {auditoriaDireccionesMetrica.porEmpresa.length === 0 ? (
+                                <p className="text-sm text-gray-400">Sin datos por empresa.</p>
+                              ) : (
+                                <div className="space-y-3">
+                                  {auditoriaDireccionesMetrica.porEmpresa.map((e: any) => (
+                                    <div key={e.empresaId}>
+                                      <div className="flex justify-between text-sm mb-1">
+                                        <span className="font-bold text-gray-700">{e.nombre}</span>
+                                        <span className="text-gray-500">
+                                          {e.direccionesTotal} dirs | {e.direccionesConProblemas} con problemas | <span className="font-bold">Score: {e.scorePromedio}</span>
+                                        </span>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Por mes */}
+                            <div className="bg-white border border-gray-200 rounded-xl p-6">
+                              <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Evolucion Mensual</h4>
+                              {auditoriaDireccionesMetrica.porMes.length === 0 ? (
+                                <p className="text-sm text-gray-400">Sin datos por mes.</p>
+                              ) : (
+                                <div className="space-y-2">
+                                  {auditoriaDireccionesMetrica.porMes.map((m: any) => (
+                                    <div key={m.mes} className="flex items-center gap-3">
+                                      <span className="text-xs font-bold text-gray-500 w-16">{m.mes}</span>
+                                      <span className="text-xs text-gray-700 flex-1">{m.direccionesTotal} dirs, {m.direccionesConProblemas} con problemas</span>
+                                      <span className="text-xs text-orange-600 font-bold">{m.tasaAuditoria}%</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+
+                          </div>
                         </div>
-                        <div>
-                          <div className="flex justify-between text-sm font-bold mb-2"><span className="text-orange-700 flex items-center gap-2"><Headset className="w-4 h-4"/> Soporte (Operador Shipro)</span><span className="text-orange-700">{auditoriaStats.tasaSoporte}%</span></div>
-                          <div className="w-full bg-gray-100 rounded-full h-3"><div className="bg-orange-500 h-3 rounded-full transition-all duration-1000" style={{ width: `${auditoriaStats.tasaSoporte}%` }}></div></div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="space-y-6">
-                    <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 h-full">
-                      <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center gap-2"><SearchCode className="w-4 h-4 text-red-500"/> Top Motivos de Retención</h4>
-                      <div className="space-y-4">
-                        {auditoriaStats.topProblemas.length === 0 ? <p className="text-sm font-bold text-gray-400 text-center py-10">Sin datos operativos aún.</p> : auditoriaStats.topProblemas.map((prob:any, idx:number) => (
-                             <div key={idx} className="p-3 bg-red-50 border border-red-100 rounded-lg flex justify-between items-center"><span className="text-xs font-bold text-red-800">{prob.motivo}</span><span className="text-xs font-black text-red-600 bg-white px-2 py-1 rounded-md shadow-sm">{prob.cant}</span></div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                      );
+                    })()}
+                  </>
+                )}
               </div>
 
             ) : metricaAnalisis === "Fuga por Ruteo Ineficiente" ? (
@@ -2225,10 +2385,10 @@ export default function TorreDeControl() {
                 {estadosHuerfanos > 0 && <Link href="/nomenclador" className="text-xs font-black text-red-600">Mapear ahora</Link>}
               </div>
             </div>
-            <div className={`bg-white border rounded-xl p-5 shadow-sm relative flex flex-col h-full ${auditoriaStats.totalRetenidos > 0 ? 'border-orange-300' : 'border-gray-200'}`}>
-              <h4 className="font-bold text-gray-800 text-sm flex items-center gap-2 mb-1"><MapPinned className={auditoriaStats.totalRetenidos > 0 ? 'text-orange-500' : 'text-gray-400'} /> 2. Auditar Checkouts</h4>
-              <p className="text-xs text-gray-500 mb-4 font-bold text-orange-600">{auditoriaStats.totalRetenidos} envíos retenidos.</p>
-              <button onClick={() => abrirAnalisis("Auditoría de Direcciones (Peaje)")} className="text-xs font-black text-blue-600 text-left mt-auto">Analizar</button>
+            <div className={`bg-white border rounded-xl p-5 shadow-sm relative flex flex-col h-full ${(auditoriaDireccionesMetrica?.resumen?.tasaAuditoria ?? 0) > 10 ? 'border-orange-300' : 'border-gray-200'}`}>
+              <h4 className="font-bold text-gray-800 text-sm flex items-center gap-2 mb-1"><MapPinned className={(auditoriaDireccionesMetrica?.resumen?.tasaAuditoria ?? 0) > 10 ? 'text-orange-500' : 'text-gray-400'} /> 2. Auditoría Direcciones</h4>
+              <p className="text-xs text-gray-500 mb-4 font-bold text-orange-600">{cargandoAuditoriaDirecciones ? 'Cargando…' : `${auditoriaDireccionesMetrica?.resumen?.tasaAuditoria ?? 0}% direcciones con problemas`}</p>
+              <button onClick={() => abrirAnalisis("Auditoría de Direcciones")} className="text-xs font-black text-blue-600 text-left mt-auto">Analizar</button>
             </div>
             <div className="bg-white border border-purple-200 rounded-xl p-5 shadow-sm relative flex flex-col h-full">
               <h4 className="font-bold text-gray-800 text-sm flex items-center gap-2 mb-1"><Target className="text-purple-500" /> 3. Fuga por Ruteo</h4>

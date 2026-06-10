@@ -938,3 +938,23 @@ Los 2 planos avanzan acoplados pero NO son identicos (ejemplo: interno=CANCELADO
 - Auditoria correcta del flujo Auto-Gestion vs Asistido.
 
 **Prioridad:** Media-baja. La heuristica actual cubre el caso 100% para los tickets generados por el cron (motivo hardcodeado), y razonablemente bien para tickets creados manualmente. No bloquea metricas operativas.
+
+---
+
+## DEUDA 54 — Recuperar Card "Auditar Checkouts" (registrada 2026-06-10, scope chico)
+
+**Origen:** Metrica 3.1 (Auditoria de Direcciones), 2026-06-10. Durante el refactor del Card 2 de BLOQUE 3 (Analisis Vivos) para bindear con el endpoint nuevo de Metrica 3.1, se descubrio que el Card legacy mostraba un concepto distinto: "envios retenidos por checkout" (validacion pre-envio relacionada con DEUDA 4 de depositos fisicos).
+
+**Estado actual:** El Card 2 fue re-propositado para Metrica 3.1 (auditoria de calidad de direcciones). El concepto antiguo "auditoria de checkouts" queda sin representacion visual en el dashboard. Los datos legacy (`auditoriaStats.totalRetenidos`) siguen siendo computados por el endpoint /api/metricas pero no se muestran en ningun lugar visible.
+
+**Plan de resolucion (cuando se decida priorizarlo):**
+1. Crear un endpoint dedicado `/api/torre-de-control/auditoria-checkouts/route.ts` que reemplace la logica de `auditoriaStats.totalRetenidos`.
+2. Agregar un Card nuevo (probablemente Card 12 o donde quepa en el layout) con icono propio y enlace a un modal dedicado.
+3. Decidir si el modal sigue el patron p-8 space-y-6 establecido.
+
+**Casos de uso desbloqueados:**
+- Visibilidad operativa de envios bloqueados antes de la impresion (validacion checkout).
+- Cruce con DEUDA 4 (gestion de depositos fisicos del cliente).
+- Reduccion de "envios fantasma" que no pueden imprimirse por datos incompletos.
+
+**Prioridad:** Baja. La funcionalidad del endpoint legacy sigue activa (envios retenidos siguen bloqueandose correctamente), solo se perdio la visibilidad visual en el dashboard. No bloquea operacion.

@@ -914,3 +914,27 @@ Los 2 planos avanzan acoplados pero NO son identicos (ejemplo: interno=CANCELADO
 - Comparacion de distancia promedio por courier (insight de eficiencia logistica).
 
 **Prioridad:** Media-baja. No bloquea metricas operativas. Esperar a tener feedback de produccion sobre si la agrupacion por provincia/localidad alcanza, antes de invertir en geocoding.
+
+---
+
+## DEUDA 53 — Campo formal `origen` en TicketSoporte (registrada 2026-06-09, scope chico)
+
+**Origen:** Metrica 2.4 (Tasa de Tickets de Mesa de Ayuda), 2026-06-09. El modelo `TicketSoporte` no tiene un campo formal que distinga el origen del ticket entre "Radar Shipro" (auto-creado por el cron de rastreo cuando un envio lleva +36hs sin movimiento) y "Cliente" (creado manualmente por un usuario_Shipro a partir de un reclamo de la empresa cliente).
+
+**Estado actual:** la Metrica 2.4 infiere el origen mediante heuristica de substring en el campo `motivo` (`SUBSTRINGS_RADAR_SHIPRO = ["demora sin actualizacion", "auto-creado", "sin movimiento"]`). Si el motivo no matchea ninguna de estas substrings, el ticket se clasifica como Cliente.
+
+**Plan de resolucion:**
+1. Migration de Prisma: agregar `TicketSoporte.origen String @default("CLIENTE")` con valores posibles "RADAR_SHIPRO" | "CLIENTE" | "API" | "INTEGRACION".
+2. Backfill de tickets existentes: ejecutar la heuristica actual una sola vez al aplicar la migration, persistir el resultado en el campo nuevo.
+3. Actualizar `app/api/cron/rastreo/route.ts` linea ~150 (auto-creacion por inactividad >=36hs) para que persista `origen: "RADAR_SHIPRO"` explicitamente.
+4. Actualizar `app/api/tickets/route.ts` POST handler para que persista `origen: "CLIENTE"` por defecto.
+5. Reemplazar la heuristica `esRadarShipro()` en `app/api/torre-de-control/tickets-mesa-ayuda/route.ts` por un check directo `t.origen === "RADAR_SHIPRO"`.
+
+**Estimado de trabajo:** 2-3 horas (migration + backfill + 3 edits + verificacion).
+
+**Casos de uso desbloqueados:**
+- Reportes precisos de origen incluso cuando los motivos no contienen las substrings esperadas (por ejemplo: ticket Radar con motivo customizado).
+- Posibilidad futura de agregar canales: "API" (integracion con sistema del cliente), "INTEGRACION" (recibido via webhook de courier).
+- Auditoria correcta del flujo Auto-Gestion vs Asistido.
+
+**Prioridad:** Media-baja. La heuristica actual cubre el caso 100% para los tickets generados por el cron (motivo hardcodeado), y razonablemente bien para tickets creados manualmente. No bloquea metricas operativas.

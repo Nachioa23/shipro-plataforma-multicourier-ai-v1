@@ -80,6 +80,14 @@ export default function TorreDeControl() {
   const [ticketsMesaAyudaMetrica, setTicketsMesaAyudaMetrica] = useState<any>(null);
   const [cargandoTicketsMesaAyuda, setCargandoTicketsMesaAyuda] = useState(true);
 
+  // Metrica 2.6 "Concentracion Courier" (DEUDA 39, 2026-06-10).
+  // Datos del endpoint /api/torre-de-control/concentracion-courier.
+  // Scope global. Universo: envios en ventana 90 dias. Param opcional empresaId
+  // permite filtrar por empresa.
+  const [concentracionCourierMetrica, setConcentracionCourierMetrica] = useState<any>(null);
+  const [cargandoConcentracionCourier, setCargandoConcentracionCourier] = useState(true);
+  const [empresaFiltroConcentracion, setEmpresaFiltroConcentracion] = useState<number | null>(null);
+
   useEffect(() => {
     if (!filtroEmpresaId) return;
     const baseParams = { filtroEmpresa: filtroEmpresaId, page: "1", limit: "1" };
@@ -254,6 +262,26 @@ export default function TorreDeControl() {
       });
   }, [esEquipoShipro]);
 
+  // Torre de Control Metrica 2.6: fetch del endpoint de concentracion-courier.
+  // Re-fetch cuando cambia empresaFiltroConcentracion.
+  useEffect(() => {
+    if (!esEquipoShipro) return;
+    setCargandoConcentracionCourier(true);
+    const url = empresaFiltroConcentracion !== null
+      ? `/api/torre-de-control/concentracion-courier?empresaId=${empresaFiltroConcentracion}`
+      : "/api/torre-de-control/concentracion-courier";
+    fetch(url)
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setConcentracionCourierMetrica(data);
+        setCargandoConcentracionCourier(false);
+      })
+      .catch(err => {
+        console.error("[Torre de Control] error fetching concentracion-courier:", err);
+        setCargandoConcentracionCourier(false);
+      });
+  }, [esEquipoShipro, empresaFiltroConcentracion]);
+
   const totalEnvios = metricas?.totalEnvios || 1;
   // Torre de Control Metrica 2.1 (2026-06-04): cambio de fuente.
   // Antes: metricas?.tiempoColectaPromedioDias (campo aspiracional, nunca
@@ -301,16 +329,6 @@ export default function TorreDeControl() {
     pctSameDay = Math.round((countSameDay / totalEnvios) * 100);
     pctSucursal = Math.round((countSucursal / totalEnvios) * 100);
     pctEstandar = Math.round((countEstandar / totalEnvios) * 100);
-  }
-
-  let topCouriers: any[] = [];
-  if (metricas && metricas.couriers) {
-    const cList = metricas.couriers.map((item:any) => {
-      const nc = metricas.nombresCouriers?.find((x:any) => String(x.id) === String(item.courierId));
-      const nombre = nc ? nc.nombre : (item.courierId || 'Desconocido');
-      return { courier: nombre, cantidad: item._count?.courierId || 0 };
-    });
-    topCouriers = cList.sort((a:any, b:any) => b.cantidad - a.cantidad).slice(0, 3);
   }
 
   const coloresRiesgo = ['bg-yellow-400', 'bg-red-500', 'bg-purple-500'];
@@ -1801,107 +1819,179 @@ export default function TorreDeControl() {
                 )}
               </div>
             ) : metricaAnalisis === "Concentración Courier" ? (
-              <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden">
-                <div className="bg-white border-b border-gray-200 p-4 flex flex-wrap gap-3 items-center shrink-0 shadow-sm z-10">
-                  {esEquipoShipro && (
-                    <div className="flex items-center gap-2 border border-blue-200 rounded-lg px-3 py-1.5 bg-blue-50/50">
-                      <Building2 className="w-4 h-4 text-blue-500" />
-                      <select value={filtroEmpresaId} onChange={(e) => setFiltroEmpresaId(e.target.value)} className="bg-transparent text-xs font-bold text-blue-800 outline-none cursor-pointer max-w-[180px] truncate">
-                        <option value="TODAS">Todo el Ecosistema</option>
-                        {listaClientes.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-                      </select>
-                    </div>
-                  )}
-                  <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-1.5 bg-gray-50">
-                    <Calendar className="w-4 h-4 text-gray-400" />
-                    <input type="date" value={filtroRuteoDesde} onChange={e => setFiltroRuteoDesde(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"/>
-                    <span className="text-gray-400 text-xs font-bold">a</span>
-                    <input type="date" value={filtroRuteoHasta} onChange={e => setFiltroRuteoHasta(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"/>
-                  </div>
-                </div>
-
-                <div className="flex-1 overflow-y-auto p-6 lg:p-8">
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 max-w-7xl mx-auto">
-                    
-                    <div className="lg:col-span-5 space-y-6">
-                      {/* Cálculo de riesgo en vivo */}
-                      {(() => {
-                        const topShare = topCouriers.length > 0 ? Math.round((topCouriers[0].cantidad / totalEnvios) * 100) : 0; 
-                        const esRiesgoAlto = topShare >= 60;
-                        const colorRiesgo = esRiesgoAlto ? 'red' : 'green';
-                        const tituloRiesgo = esRiesgoAlto ? 'Alta Dependencia (SPOF)' : 'Ecosistema Sano';
-                        
-                        return (
-                          <>
-                            <div className={`bg-white p-6 rounded-2xl shadow-sm border border-${colorRiesgo}-100 relative overflow-hidden`}>
-                              <div className={`absolute top-0 right-0 w-32 h-32 bg-${colorRiesgo}-50 rounded-bl-full -z-10 opacity-50`}></div>
-                              <h4 className={`text-xs font-black text-${colorRiesgo}-600 uppercase tracking-widest mb-1`}>Nivel de Riesgo Operativo</h4>
-                              <p className="text-4xl font-black text-gray-800 mb-2 tracking-tighter">{tituloRiesgo}</p>
-                              <p className="text-xs font-medium text-gray-500 leading-relaxed">El proveedor principal concentra el <strong className={`text-${colorRiesgo}-600`}>{topShare}%</strong> del volumen.</p>
-                            </div>
-
-                            <div className={`bg-${colorRiesgo}-50 p-6 rounded-2xl border border-${colorRiesgo}-100 shadow-sm`}>
-                              <h4 className={`text-xs font-black text-${colorRiesgo}-800 uppercase tracking-widest mb-3 flex items-center gap-2`}>
-                                <AlertCircle className="w-4 h-4" /> Insight de Continuidad
-                              </h4>
-                              {esRiesgoAlto ? (
-                                <>
-                                  <p className="text-lg font-bold text-gray-800 mb-3 leading-tight">Peligro de cuello de botella.</p>
-                                  <p className={`text-xs text-${colorRiesgo}-700 font-medium leading-relaxed`}>Concentrar más del 60% de tus envíos en un solo operador te expone a un <strong>Punto Único de Fallo (SPOF)</strong>. Si este courier entra en paro sindical o colapsa, tu operación se detiene. Recomendamos balancear la carga usando las reglas de enrutamiento.</p>
-                                </>
-                              ) : (
-                                <>
-                                  <p className="text-lg font-bold text-gray-800 mb-3 leading-tight">Operación resiliente.</p>
-                                  <p className={`text-xs text-${colorRiesgo}-700 font-medium leading-relaxed`}>Tu volumen logístico está bien distribuido. Tenés planes de contingencia automáticos si un operador falla, asegurando la continuidad de las entregas.</p>
-                                </>
-                              )}
-                            </div>
-                          </>
-                        );
-                      })()}
+              // Metrica 2.6 (DEUDA 39, 2026-06-10): refactor del modal a
+              // p-8 space-y-6. Consume /api/torre-de-control/concentracion-courier.
+              // Toggle Global / Por Empresa (default Global).
+              <div className="p-8 space-y-6">
+                {cargandoConcentracionCourier ? (
+                  <div className="text-center py-12 text-gray-500">Cargando datos de concentracion...</div>
+                ) : !concentracionCourierMetrica ? (
+                  <div className="text-center py-12 text-red-600">Error cargando datos. Reintentar.</div>
+                ) : concentracionCourierMetrica.resumen.totalEnvios === 0 ? (
+                  <div className="text-center py-12 text-gray-500">No hay envios en la ventana de {concentracionCourierMetrica.calidadDatos.ventanaDias} dias.</div>
+                ) : (
+                  <>
+                    {/* TOGGLE GLOBAL / POR EMPRESA */}
+                    <div className="bg-white border border-gray-200 rounded-xl p-4 flex items-center gap-4 flex-wrap">
+                      <span className="text-xs font-black text-gray-400 uppercase tracking-widest">Vista:</span>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setEmpresaFiltroConcentracion(null)}
+                          className={`px-4 py-2 text-xs font-bold rounded-lg border transition ${empresaFiltroConcentracion === null ? 'bg-blue-600 text-white border-blue-600' : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-blue-50'}`}
+                        >Global Shipro</button>
+                        <button
+                          onClick={() => setEmpresaFiltroConcentracion(2)}
+                          className={`px-4 py-2 text-xs font-bold rounded-lg border transition ${empresaFiltroConcentracion !== null ? 'bg-purple-600 text-white border-purple-600' : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-purple-50'}`}
+                        >Por Empresa</button>
+                      </div>
+                      {empresaFiltroConcentracion !== null && (
+                        <div className="flex items-center gap-2 ml-2">
+                          <span className="text-xs text-gray-500">Empresa:</span>
+                          <select
+                            value={empresaFiltroConcentracion}
+                            onChange={(e) => setEmpresaFiltroConcentracion(parseInt(e.target.value, 10))}
+                            className="text-xs font-bold border border-gray-200 rounded-lg px-3 py-2 bg-white"
+                          >
+                            <option value="2">Cliente Demo</option>
+                          </select>
+                        </div>
+                      )}
+                      <p className="text-xs text-gray-400 ml-auto">
+                        Ventana: {concentracionCourierMetrica.calidadDatos.ventanaDias} dias
+                      </p>
                     </div>
 
-                    <div className="lg:col-span-7 space-y-6">
-                      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 h-full">
-                        <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center gap-2">
-                          <PieChart className="w-5 h-5 text-blue-500"/> Share of Wallet (Participación)
-                        </h4>
-                        
-                        <div className="space-y-4">
-                          {topCouriers.length === 0 ? (
-                            <p className="text-sm font-bold text-gray-400 text-center py-10">Sin datos operativos aún.</p>
+                    {/* GRID PRINCIPAL */}
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+                      {/* COLUMNA IZQUIERDA */}
+                      <div className="lg:col-span-5 space-y-6">
+
+                        {/* Hero tile */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-1">
+                            {concentracionCourierMetrica.resumen.vista === "global"
+                              ? "Concentracion Global de Shipro"
+                              : `Concentracion: ${concentracionCourierMetrica.resumen.empresaNombre}`}
+                          </h4>
+                          <p className={`text-6xl font-black tracking-tighter ${concentracionCourierMetrica.resumen.esRiesgoAlto ? 'text-red-600' : 'text-green-700'}`}>
+                            {concentracionCourierMetrica.resumen.topShare}%
+                          </p>
+                          <p className="text-sm font-bold mt-2">
+                            {concentracionCourierMetrica.resumen.esRiesgoAlto ? (
+                              <span className="text-red-600">Alta Dependencia (SPOF)</span>
+                            ) : (
+                              <span className="text-green-700">Ecosistema Diversificado</span>
+                            )}
+                          </p>
+                          <p className="text-xs text-gray-500 mt-2">
+                            Concentracion del courier lider sobre {concentracionCourierMetrica.resumen.totalEnvios} envios totales.
+                          </p>
+                          <p className="text-xs text-gray-400 mt-1">
+                            Umbral SPOF: {concentracionCourierMetrica.resumen.thresholdSPOF}%
+                          </p>
+                        </div>
+
+                        {/* HHI */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Indice HHI</h4>
+                          <p className="text-3xl font-black text-gray-800">{concentracionCourierMetrica.resumen.hhi}</p>
+                          <p className={`text-xs font-bold uppercase mt-1 ${concentracionCourierMetrica.resumen.nivelConcentracion === 'alto' ? 'text-red-600' : concentracionCourierMetrica.resumen.nivelConcentracion === 'moderado' ? 'text-orange-600' : 'text-green-700'}`}>
+                            Nivel {concentracionCourierMetrica.resumen.nivelConcentracion}
+                          </p>
+                          <p className="text-xs text-gray-400 mt-2">
+                            Herfindahl-Hirschman Index. Escala 0-10000.
+                            Bajo: &lt;1500. Moderado: 1500-2500. Alto: &gt;2500.
+                          </p>
+                        </div>
+
+                        {/* Insight */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Insight de Continuidad</h4>
+                          {concentracionCourierMetrica.resumen.esRiesgoAlto ? (
+                            <div className="space-y-2">
+                              <p className="text-sm text-gray-700">
+                                Hay un courier que concentra {concentracionCourierMetrica.resumen.topShare}% del volumen.
+                                Si ese courier tiene un problema operativo (caida de sistemas, paro, conflicto comercial),
+                                impacta directamente la mayor parte de los envios.
+                              </p>
+                              <p className="text-sm font-bold text-red-600">
+                                Recomendacion: diversificar mix incorporando un courier alternativo
+                                que pueda absorber al menos 20-30% del volumen.
+                              </p>
+                            </div>
                           ) : (
-                            topCouriers.map((c: any, idx: number) => {
-                              const nombre = c.courier || c[0];
-                              const share = Math.round((c.cantidad / totalEnvios) * 100);
-                              const isDominant = share >= 60;
-                              return (
-                                <div key={`spof-${idx}`} className="p-5 bg-gray-50 border border-gray-200 rounded-xl transition-all shadow-sm">
-                                  <div className="flex justify-between items-end mb-3">
-                                    <div>
-                                      <h5 className="font-black text-gray-800 text-sm flex items-center gap-2">
-                                        {nombre} 
-                                        {idx === 0 && <span className="px-2 py-0.5 bg-yellow-100 text-yellow-700 text-[9px] rounded-full uppercase tracking-widest">Líder</span>}
-                                      </h5>
-                                    </div>
-                                    <div className="text-right">
-                                      <p className={`text-2xl font-black ${isDominant ? 'text-red-600' : 'text-gray-700'}`}>{share}%</p>
-                                    </div>
-                                  </div>
-                                  <div className="w-full bg-gray-200 rounded-full h-3">
-                                    <div className={`${isDominant ? 'bg-red-500' : 'bg-slate-600'} h-3 rounded-full transition-all duration-1000`} style={{ width: `${share}%` }}></div>
+                            <p className="text-sm text-gray-700">
+                              El mix de couriers esta diversificado. No hay riesgo operativo significativo
+                              ante problemas de un proveedor individual.
+                            </p>
+                          )}
+                        </div>
+
+                      </div>
+
+                      {/* COLUMNA DERECHA */}
+                      <div className="lg:col-span-7 space-y-6">
+
+                        {/* Share of Wallet */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Share of Wallet (Participacion)</h4>
+                          <div className="space-y-4">
+                            {concentracionCourierMetrica.shareByCourier.map((c: any, idx: number) => (
+                              <div key={c.courierId}>
+                                <div className="flex justify-between text-sm mb-1">
+                                  <span className="font-bold text-gray-700 flex items-center gap-2">
+                                    {c.nombre}
+                                    {c.esLider && (
+                                      <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">Lider</span>
+                                    )}
+                                  </span>
+                                  <span className={`font-bold ${c.esLider && concentracionCourierMetrica.resumen.esRiesgoAlto ? 'text-red-600' : 'text-gray-700'}`}>
+                                    {c.cantidad} envios | {c.porcentaje}%
+                                  </span>
+                                </div>
+                                <div className="w-full bg-gray-100 rounded-full h-3">
+                                  <div
+                                    className={`h-3 rounded-full ${c.esLider && concentracionCourierMetrica.resumen.esRiesgoAlto ? 'bg-red-500' : c.esLider ? 'bg-blue-500' : 'bg-gray-400'}`}
+                                    style={{ width: `${c.porcentaje}%` }}
+                                  ></div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Evolucion por Mes */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Evolucion Mensual</h4>
+                          {concentracionCourierMetrica.porMes.length === 0 ? (
+                            <p className="text-sm text-gray-400">Sin datos por mes.</p>
+                          ) : (
+                            <div className="space-y-3">
+                              {concentracionCourierMetrica.porMes.map((m: any) => (
+                                <div key={m.mes}>
+                                  <p className="text-xs font-bold text-gray-500 mb-1">{m.mes}</p>
+                                  <div className="space-y-1">
+                                    {m.distribuciones.map((d: any) => (
+                                      <div key={d.courierId} className="flex items-center gap-3">
+                                        <span className="text-xs text-gray-600 w-20">{d.nombre}</span>
+                                        <div className="flex-1 bg-gray-100 rounded-full h-2">
+                                          <div className="bg-blue-400 h-2 rounded-full" style={{ width: `${d.porcentaje}%` }}></div>
+                                        </div>
+                                        <span className="text-xs text-gray-500 w-20 text-right">{d.cantidad} ({d.porcentaje}%)</span>
+                                      </div>
+                                    ))}
                                   </div>
                                 </div>
-                              );
-                            })
+                              ))}
+                            </div>
                           )}
                         </div>
 
                       </div>
                     </div>
-
-                  </div>
-                </div>
+                  </>
+                )}
               </div>
 
             ) : metricaAnalisis === "Mapa de Calor SLA" ? (
@@ -2277,10 +2367,14 @@ export default function TorreDeControl() {
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 flex flex-col h-full">
             <h3 className="text-sm font-black text-gray-800 uppercase mb-6 flex items-center justify-between"><span><PieChart className="w-4 h-4 text-[#233b6b] inline mr-2" /> 10. Riesgo Courier</span><button onClick={() => abrirAnalisis("Concentración Courier")} className="p-1.5 bg-gray-50 hover:bg-blue-50 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
             <div className="flex-1 flex flex-col justify-center space-y-4">
-              {topCouriers.length === 0 ? <p className="text-xs text-gray-400 text-center font-bold">Sin datos para graficar</p> : topCouriers.map((c: any, i: number) => (
+              {cargandoConcentracionCourier ? (
+                <p className="text-xs text-gray-400 text-center font-bold">Cargando...</p>
+              ) : ((concentracionCourierMetrica?.shareByCourier ?? []).length === 0) ? (
+                <p className="text-xs text-gray-400 text-center font-bold">Sin datos para graficar</p>
+              ) : (concentracionCourierMetrica?.shareByCourier ?? []).slice(0, 3).map((c: any, i: number) => (
                 <div key={i} className="w-full flex items-center gap-2">
-                  <div className="w-full bg-gray-100 rounded-full h-3"><div className={`${coloresRiesgo[i] || 'bg-gray-400'} h-3 rounded-full`} style={{ width: `${Math.round((c.cantidad / totalEnvios) * 100)}%` }}></div></div>
-                  <div className="flex flex-col text-right w-16"><span className="text-xs font-black text-gray-800">{Math.round((c.cantidad / totalEnvios) * 100)}%</span><span className="text-[9px] text-gray-400 uppercase truncate" title={c.courier}>{c.courier}</span></div>
+                  <div className="w-full bg-gray-100 rounded-full h-3"><div className={`${coloresRiesgo[i] || 'bg-gray-400'} h-3 rounded-full`} style={{ width: `${c.porcentaje}%` }}></div></div>
+                  <div className="flex flex-col text-right w-16"><span className="text-xs font-black text-gray-800">{c.porcentaje}%</span><span className="text-[9px] text-gray-400 uppercase truncate" title={c.nombre}>{c.nombre}</span></div>
                 </div>
               ))}
             </div>

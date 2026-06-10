@@ -68,6 +68,12 @@ export default function TorreDeControl() {
   const [efectividadMetrica, setEfectividadMetrica] = useState<any>(null);
   const [cargandoEfectividad, setCargandoEfectividad] = useState(true);
 
+  // Metrica 2.5 "Anatomia de la Devolucion" (DEUDA 39, 2026-06-09).
+  // Datos del endpoint /api/torre-de-control/anatomia-devolucion.
+  // Scope global. Universo: solo envios DEVUELTO_AL_REMITENTE.
+  const [anatomiaDevolucionMetrica, setAnatomiaDevolucionMetrica] = useState<any>(null);
+  const [cargandoAnatomiaDevolucion, setCargandoAnatomiaDevolucion] = useState(true);
+
   useEffect(() => {
     if (!filtroEmpresaId) return;
     const baseParams = { filtroEmpresa: filtroEmpresaId, page: "1", limit: "1" };
@@ -206,6 +212,23 @@ export default function TorreDeControl() {
       .catch(err => {
         console.error("[Torre de Control] error fetching efectividad-primera-visita:", err);
         setCargandoEfectividad(false);
+      });
+  }, [esEquipoShipro]);
+
+  // Torre de Control Metrica 2.5: fetch del endpoint de anatomia de la devolucion.
+  // Ventana 90 dias hardcoded en v1. Scope Shipro-only.
+  useEffect(() => {
+    if (!esEquipoShipro) return;
+    setCargandoAnatomiaDevolucion(true);
+    fetch("/api/torre-de-control/anatomia-devolucion")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setAnatomiaDevolucionMetrica(data);
+        setCargandoAnatomiaDevolucion(false);
+      })
+      .catch(err => {
+        console.error("[Torre de Control] error fetching anatomia-devolucion:", err);
+        setCargandoAnatomiaDevolucion(false);
       });
   }, [esEquipoShipro]);
 
@@ -1480,6 +1503,221 @@ export default function TorreDeControl() {
                   </>
                 )}
               </div>
+            ) : metricaAnalisis === "Anatomia de la Devolucion" ? (
+              // Metrica 2.5 (DEUDA 39, 2026-06-09): Anatomia detallada de envios
+              // DEVUELTO_AL_REMITENTE en ventana 90 dias. Layout consistente con
+              // las otras metricas nuevas (p-8 space-y-6).
+              <div className="p-8 space-y-6">
+                {cargandoAnatomiaDevolucion ? (
+                  <div className="text-center py-12 text-gray-500">Cargando datos de devoluciones...</div>
+                ) : !anatomiaDevolucionMetrica ? (
+                  <div className="text-center py-12 text-red-600">Error cargando datos. Reintentar.</div>
+                ) : anatomiaDevolucionMetrica.resumen.cantidadTotal === 0 ? (
+                  <div className="text-center py-12 text-gray-500">No hay devoluciones en la ventana de {anatomiaDevolucionMetrica.calidadDatos.ventanaDias} dias.</div>
+                ) : (
+                  <>
+                    {/* GRID PRINCIPAL */}
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+                      {/* COLUMNA IZQUIERDA */}
+                      <div className="lg:col-span-5 space-y-6">
+
+                        {/* Hero tile */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Devoluciones al Remitente</h4>
+                          <p className="text-6xl font-black text-gray-800 tracking-tighter">{anatomiaDevolucionMetrica.resumen.cantidadTotal}</p>
+                          <p className="text-sm text-red-600 font-bold mt-2">
+                            ${Math.round(anatomiaDevolucionMetrica.resumen.costoTotalFacturado).toLocaleString('es-AR')} facturados
+                          </p>
+                          <p className="text-xs text-gray-500 mt-1">Ventana: ultimos {anatomiaDevolucionMetrica.calidadDatos.ventanaDias} dias</p>
+                        </div>
+
+                        {/* Stats inmovilizacion */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Magnitud del Impacto</h4>
+                          <div className="grid grid-cols-2 gap-3 text-center">
+                            <div className="border-r border-gray-200">
+                              <p className="text-2xl font-black text-gray-800">
+                                {anatomiaDevolucionMetrica.resumen.diasInmovilizacionPromedio ?? '—'}
+                              </p>
+                              <p className="text-xs text-gray-500 uppercase">Dias promedio</p>
+                              <p className="text-xs text-gray-400 mt-1">{anatomiaDevolucionMetrica.resumen.diasInmovilizacionTotal} dias totales</p>
+                            </div>
+                            <div>
+                              <p className="text-2xl font-black text-gray-800">{anatomiaDevolucionMetrica.resumen.touchpointsPromedio}</p>
+                              <p className="text-xs text-gray-500 uppercase">Touchpoints prom.</p>
+                              <p className="text-xs text-gray-400 mt-1">{anatomiaDevolucionMetrica.resumen.touchpointsTotal} totales</p>
+                            </div>
+                          </div>
+                          <p className="text-xs text-gray-400 mt-3 text-center">Stock inmovilizado: tiempo desde impresion hasta devolucion. Touchpoints incluyen ida + vuelta.</p>
+                        </div>
+
+                        {/* Distribucion de visitas previas */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Visitas Previas a Devolucion</h4>
+                          <div className="space-y-2">
+                            {[
+                              { label: '0 visitas', value: anatomiaDevolucionMetrica.resumen.distribucionVisitas.cero, color: 'bg-gray-400' },
+                              { label: '1 visita', value: anatomiaDevolucionMetrica.resumen.distribucionVisitas.una, color: 'bg-blue-400' },
+                              { label: '2 visitas', value: anatomiaDevolucionMetrica.resumen.distribucionVisitas.dos, color: 'bg-orange-400' },
+                              { label: '3+ visitas', value: anatomiaDevolucionMetrica.resumen.distribucionVisitas.tresOmas, color: 'bg-red-500' },
+                            ].map((item, idx) => {
+                              const total = anatomiaDevolucionMetrica.resumen.cantidadTotal;
+                              const pct = total > 0 ? Math.round((item.value / total) * 100) : 0;
+                              return (
+                                <div key={idx} className="flex items-center gap-3">
+                                  <span className="text-xs font-bold text-gray-700 w-20">{item.label}</span>
+                                  <div className="flex-1 bg-gray-100 rounded-full h-2">
+                                    <div className={`${item.color} h-2 rounded-full`} style={{ width: `${pct}%` }}></div>
+                                  </div>
+                                  <span className="text-xs font-bold text-gray-700 w-8 text-right">{item.value}</span>
+                                  <span className="text-xs text-gray-400 w-10 text-right">({pct}%)</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {/* Distribucion de puntos de perdida */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Punto del Flujo donde se Perdio</h4>
+                          <div className="space-y-2">
+                            {[
+                              { key: 'EN_DISTRIBUCION', label: 'En distribucion', color: 'bg-blue-400' },
+                              { key: 'VISITA_FALLIDA', label: 'Visita fallida', color: 'bg-orange-400' },
+                              { key: 'INCIDENCIA', label: 'Incidencia', color: 'bg-red-500' },
+                              { key: 'otro', label: 'Otro (sin courier previo)', color: 'bg-gray-400' },
+                            ].map((item, idx) => {
+                              const value = anatomiaDevolucionMetrica.resumen.distribucionPuntosPerdida[item.key];
+                              const total = anatomiaDevolucionMetrica.resumen.cantidadTotal;
+                              const pct = total > 0 ? Math.round((value / total) * 100) : 0;
+                              return (
+                                <div key={idx} className="flex items-center gap-3">
+                                  <span className="text-xs font-bold text-gray-700 w-32 truncate">{item.label}</span>
+                                  <div className="flex-1 bg-gray-100 rounded-full h-2">
+                                    <div className={`${item.color} h-2 rounded-full`} style={{ width: `${pct}%` }}></div>
+                                  </div>
+                                  <span className="text-xs font-bold text-gray-700 w-8 text-right">{value}</span>
+                                  <span className="text-xs text-gray-400 w-10 text-right">({pct}%)</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                      </div>
+
+                      {/* COLUMNA DERECHA */}
+                      <div className="lg:col-span-7 space-y-6">
+
+                        {/* Top motivos */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Top 5 Motivos de Devolucion</h4>
+                          {anatomiaDevolucionMetrica.topMotivos.length === 0 ? (
+                            <p className="text-sm text-gray-400">Sin motivos registrados.</p>
+                          ) : (
+                            <div className="space-y-2">
+                              {anatomiaDevolucionMetrica.topMotivos.map((m: any, idx: number) => (
+                                <div key={idx} className="flex items-center gap-3">
+                                  <span className="text-xs font-black text-gray-400 w-6">{idx + 1}.</span>
+                                  <span className="text-sm text-gray-700 flex-1 truncate">{m.motivo}</span>
+                                  <span className="text-sm font-bold text-gray-800">{m.cantidad}</span>
+                                  <span className="text-xs text-gray-500 w-12 text-right">({m.porcentaje}%)</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Por Courier */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Por Courier</h4>
+                          <div className="space-y-3">
+                            {anatomiaDevolucionMetrica.porCourier.map((c: any) => (
+                              <div key={c.courierId}>
+                                <div className="flex justify-between text-sm mb-1">
+                                  <span className="font-bold text-gray-700">{c.nombre}</span>
+                                  <span className="text-gray-500">
+                                    {c.cantidad} devs | ${Math.round(c.costoTotal).toLocaleString('es-AR')} | {c.diasPromedio ?? '—'} dias prom.
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Por Modalidad */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Por Modalidad</h4>
+                          <div className="space-y-2">
+                            {anatomiaDevolucionMetrica.porModalidad.map((m: any, idx: number) => (
+                              <div key={idx} className="flex items-center gap-3">
+                                <span className="text-xs font-bold text-gray-700 flex-1 truncate">{m.modalidad}</span>
+                                <span className="text-xs text-gray-500">{m.cantidad} devs</span>
+                                <span className="text-xs text-red-600 font-bold">${Math.round(m.costoTotal).toLocaleString('es-AR')}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Por Mes */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Evolucion por Mes</h4>
+                          <div className="space-y-2">
+                            {anatomiaDevolucionMetrica.porMes.map((m: any) => (
+                              <div key={m.mes} className="flex items-center gap-3">
+                                <span className="text-xs font-bold text-gray-500 w-16">{m.mes}</span>
+                                <span className="text-xs text-gray-700 flex-1">{m.cantidad} devoluciones</span>
+                                <span className="text-xs text-red-600 font-bold">${Math.round(m.costoTotal).toLocaleString('es-AR')}</span>
+                                <span className="text-xs text-gray-400 w-16 text-right">{m.diasPromedio ?? '—'} dias prom.</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Por Provincia */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Top 10 Provincias</h4>
+                          {anatomiaDevolucionMetrica.porProvincia.length === 0 ? (
+                            <p className="text-sm text-gray-400">Sin datos por provincia.</p>
+                          ) : (
+                            <div className="space-y-2">
+                              {anatomiaDevolucionMetrica.porProvincia.map((p: any, idx: number) => (
+                                <div key={idx} className="flex items-center gap-3">
+                                  <span className="text-xs font-bold text-gray-700 capitalize flex-1 truncate">{p.provincia}</span>
+                                  <span className="text-xs text-gray-500">{p.cantidad} devs</span>
+                                  <span className="text-xs text-red-600 font-bold">${Math.round(p.costoTotal).toLocaleString('es-AR')}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Casos destacados */}
+                        <div className="bg-white border border-gray-200 rounded-xl p-6">
+                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Casos Destacados (top 5)</h4>
+                          {anatomiaDevolucionMetrica.detalles.length === 0 ? (
+                            <p className="text-sm text-gray-400">Sin casos para destacar.</p>
+                          ) : (
+                            <div className="space-y-3">
+                              {anatomiaDevolucionMetrica.detalles.slice(0, 5).map((d: any) => (
+                                <div key={d.envioId} className="border-l-2 border-red-300 pl-3">
+                                  <p className="text-xs font-bold text-gray-700">Envio #{d.envioId} — {d.courierNombre} — {d.modalidad}</p>
+                                  <p className="text-xs text-gray-500 truncate">{d.motivo || 'Sin motivo'}</p>
+                                  <p className="text-xs text-gray-400 mt-1">
+                                    ${d.precioFactura?.toLocaleString('es-AR') ?? 'N/D'} | {d.diasInmovilizacion ?? '—'} dias | {d.touchpoints} touchpoints | {d.provincia}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
             ) : metricaAnalisis === "Concentración Courier" ? (
               <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden">
                 <div className="bg-white border-b border-gray-200 p-4 flex flex-wrap gap-3 items-center shrink-0 shadow-sm z-10">
@@ -1831,7 +2069,7 @@ export default function TorreDeControl() {
         {/* BLOQUE 2: KPIs */}
         <div>
            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><Activity className="w-5 h-5 text-blue-600" /> Rendimiento Core</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
             <div className={`bg-white p-5 rounded-xl border shadow-sm flex flex-col h-full ${fugaPeso > 20 ? 'border-red-300' : 'border-gray-200'}`}>
               <p className="text-xs font-bold text-gray-500 uppercase mb-2 flex items-center gap-1.5"><Box className="text-red-500" /> 4. Desvío de Peso</p>
               <h3 className="text-3xl font-black mb-1">{fugaPeso}%</h3>
@@ -1842,13 +2080,23 @@ export default function TorreDeControl() {
               <h3 className="text-3xl font-black mb-1">{efectividadGlobal}%</h3>
               <button onClick={() => abrirAnalisis("Efectividad de Entregas en 1ra Visita")} className="w-full py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold mt-auto hover:bg-blue-50">Desglosar</button>
             </div>
+            <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm flex flex-col h-full">
+              <p className="text-xs font-bold text-gray-500 uppercase mb-2 flex items-center gap-1.5"><Undo2 className="text-red-500 w-4 h-4" /> 6. Anatomia Devolucion</p>
+              <h3 className="text-3xl font-black mb-1">{anatomiaDevolucionMetrica?.resumen?.cantidadTotal ?? 0}</h3>
+              <p className="text-xs text-gray-500 mb-2">
+                {anatomiaDevolucionMetrica?.resumen?.costoTotalFacturado != null
+                  ? `$${Math.round(anatomiaDevolucionMetrica.resumen.costoTotalFacturado).toLocaleString('es-AR')}`
+                  : '$0'} facturados
+              </p>
+              <button onClick={() => abrirAnalisis("Anatomia de la Devolucion")} className="w-full py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold mt-auto hover:bg-blue-50">Desglosar</button>
+            </div>
             <div className={`bg-white p-5 rounded-xl border shadow-sm flex flex-col h-full ${tasaSoporteGlobal > 5 ? 'border-red-300' : 'border-gray-200'}`}>
-              <p className="text-xs font-bold text-gray-500 uppercase mb-2 flex items-center gap-1.5"><Headset className="text-orange-500" /> 6. Carga de Soporte</p>
+              <p className="text-xs font-bold text-gray-500 uppercase mb-2 flex items-center gap-1.5"><Headset className="text-orange-500" /> 7. Carga de Soporte</p>
               <h3 className="text-3xl font-black mb-1">{tasaSoporteGlobal}%</h3>
               <button onClick={() => abrirAnalisis("Tasa de Tickets de Mesa de Ayuda")} className="w-full py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold mt-auto hover:bg-blue-50">Desglosar</button>
             </div>
             <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm flex flex-col h-full">
-              <p className="text-xs font-bold text-gray-500 uppercase mb-2 flex items-center gap-1.5"><TrendingDown className="text-blue-500" /> 7. Tiempos Colecta</p>
+              <p className="text-xs font-bold text-gray-500 uppercase mb-2 flex items-center gap-1.5"><TrendingDown className="text-blue-500" /> 8. Tiempos Colecta</p>
               {cargandoTiemposColecta ? (
                 <h3 className="text-3xl font-black mb-1 text-gray-300"><Loader2 className="w-6 h-6 animate-spin inline" /></h3>
               ) : tiempoColectaHoras === null ? (
@@ -1878,7 +2126,7 @@ export default function TorreDeControl() {
             </div>
 
             <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm flex flex-col h-full">
-              <p className="text-xs font-bold text-gray-500 uppercase mb-2 flex items-center gap-1.5"><Clock className="text-blue-500" /> 8. Promesa Calibrada</p>
+              <p className="text-xs font-bold text-gray-500 uppercase mb-2 flex items-center gap-1.5"><Clock className="text-blue-500" /> 9. Promesa Calibrada</p>
               {cargandoPromesaCalibrada ? (
                 <h3 className="text-3xl font-black mb-1 text-gray-300"><Loader2 className="w-6 h-6 animate-spin inline" /></h3>
               ) : promesaCalibradaDias === null || cantidadEnviosCalibrados === 0 ? (

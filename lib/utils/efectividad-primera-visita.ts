@@ -15,7 +15,8 @@
 // PRIMERA_VISITA_EXITOSA.
 // ============================================================================
 
-import type { EventoTracking } from "@prisma/client";
+import type { EventoTracking, Envio, FinanzasEnvio } from "@prisma/client";
+import { ESTADOS_COURIER, type EstadoCourierKey } from "./estados";
 
 // ====================================================
 // CLASIFICACIONES
@@ -176,5 +177,216 @@ export function resumirEfectividad(
     porcentajePrimeraVisita,
     porcentajeVisitasForzadas,
     porcentajeDevoluciones,
+  };
+}
+
+// ====================================================
+// METRICA 2.5 — ANATOMIA DE LA DEVOLUCION
+//
+// Analisis detallado de envios DEVUELTO_AL_REMITENTE: causa, costo,
+// tiempo de inmovilizacion, touchpoints, y punto del flujo donde se
+// origino la devolucion.
+//
+// Decisiones (director 2026-06-09):
+// - Universo: solo envios DEVUELTO_AL_REMITENTE en la ventana.
+// - Costo: precioFactura del envio (lo que Shipro le cobra a la empresa).
+// - Tiempo: dias desde fechaImpresion (inmovilizacion de stock) hasta
+//   evento DEVUELTO_AL_REMITENTE.
+// - Touchpoints: cantidad de EventoTracking con estado en ESTADOS_COURIER × 2.
+// - Punto de perdida: ultimo estado courier antes del evento DEVUELTO.
+// ====================================================
+
+// Set de keys courier para filtrar touchpoints (excluye estados internos
+// como PENDIENTE, RETENIDO, IMPRESO, BLOQUEADO_*).
+const KEYS_COURIER: Set<string> = new Set(Object.keys(ESTADOS_COURIER));
+
+/**
+ * Calcula dias desde fechaImpresion hasta el evento DEVUELTO_AL_REMITENTE.
+ * Retorna null si no hay evento DEVUELTO o si fechaImpresion no esta.
+ */
+export function calcularDiasInmovilizacion(
+  envio: { fechaImpresion: Date | null },
+  eventos: EventoTracking[]
+): number | null {
+  if (!envio.fechaImpresion) return null;
+
+  const eventoDevuelto = eventos.find(e => e.estado === "DEVUELTO_AL_REMITENTE");
+  if (!eventoDevuelto) return null;
+
+  const ms = new Date(eventoDevuelto.fecha).getTime() - new Date(envio.fechaImpresion).getTime();
+  return Math.round(ms / (1000 * 60 * 60 * 24));
+}
+
+/**
+ * Cuenta touchpoints del courier (eventos cuyo estado esta en el catalogo
+ * ESTADOS_COURIER F1). Multiplica × 2 para representar ida + vuelta del
+ * paquete por la red logistica.
+ *
+ * Estados internos (PENDIENTE, IMPRESO, RETENIDO, BLOQUEADO_*) NO cuentan
+ * porque son del lado Shipro, no del courier moviendo el paquete.
+ */
+export function contarTouchpoints(eventos: EventoTracking[]): number {
+  const touchpoints = eventos.filter(e => KEYS_COURIER.has(e.estado)).length;
+  return touchpoints * 2;
+}
+
+/**
+ * Identifica el ultimo estado courier antes del evento DEVUELTO_AL_REMITENTE.
+ * Sirve para clasificar el "punto del flujo" donde se origino la devolucion:
+ * - EN_DISTRIBUCION: el courier intento entregar y no pudo.
+ * - VISITA_FALLIDA: ultima visita fallida explicita.
+ * - INCIDENCIA: paquete siniestrado / extraviado.
+ * - Otro: caso atipico (ej: directamente DEVUELTO sin contexto).
+ */
+export function identificarPuntoPerdida(eventos: EventoTracking[]): string | null {
+  // Ordenar por fecha ascendente.
+  const ordenados = [...eventos].sort((a, b) => {
+    return new Date(a.fecha).getTime() - new Date(b.fecha).getTime();
+  });
+
+  // Encontrar el indice del evento DEVUELTO_AL_REMITENTE.
+  const idxDevuelto = ordenados.findIndex(e => e.estado === "DEVUELTO_AL_REMITENTE");
+  if (idxDevuelto === -1) return null;
+
+  // Buscar el ultimo estado courier ANTES del DEVUELTO.
+  for (let i = idxDevuelto - 1; i >= 0; i--) {
+    const evento = ordenados[i];
+    if (KEYS_COURIER.has(evento.estado) && evento.estado !== "DEVUELTO_AL_REMITENTE") {
+      return evento.estado;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Extrae el costo del envio devuelto desde FinanzasEnvio.
+ * Si no hay finanzas o precioFactura es NULL, retorna sin_dato.
+ */
+export function extraerCosto(envio: { finanzas?: FinanzasEnvio | null }): {
+  precioFactura: number | null;
+  fuente: "facturado" | "sin_dato";
+} {
+  if (!envio.finanzas || envio.finanzas.precioFactura == null) {
+    return { precioFactura: null, fuente: "sin_dato" };
+  }
+  return { precioFactura: envio.finanzas.precioFactura, fuente: "facturado" };
+}
+
+// ====================================================
+// SHAPE CONSOLIDADO POR ENVIO
+// ====================================================
+
+export interface AnatomiaDevolucion {
+  envioId: number;
+  motivo: string | null;                  // observacion del evento DEVUELTO
+  diasInmovilizacion: number | null;      // null si no hay timestamps
+  visitasPrevias: number;                 // cantidad de EN_DISTRIBUCION
+  touchpoints: number;                    // eventos courier × 2
+  precioFactura: number | null;           // costo en pesos, null si sin dato
+  puntoPerdida: string | null;            // ultimo estado antes de DEVUELTO
+}
+
+/**
+ * Construye el shape consolidado para un envio devuelto.
+ */
+export function extraerInfoDevolucion(
+  envio: { id: number; fechaImpresion: Date | null; finanzas?: FinanzasEnvio | null },
+  eventos: EventoTracking[]
+): AnatomiaDevolucion {
+  return {
+    envioId: envio.id,
+    motivo: obtenerMotivoUltimaFalla(eventos),
+    diasInmovilizacion: calcularDiasInmovilizacion(envio, eventos),
+    visitasPrevias: contarVisitas(eventos),
+    touchpoints: contarTouchpoints(eventos),
+    precioFactura: extraerCosto(envio).precioFactura,
+    puntoPerdida: identificarPuntoPerdida(eventos),
+  };
+}
+
+// ====================================================
+// AGREGADOR DE DEVOLUCIONES
+// ====================================================
+
+export interface ResumenDevoluciones {
+  cantidadTotal: number;
+  costoTotalFacturado: number;            // suma de precioFactura no-null
+  cantidadSinCosto: number;               // cuantos envios no tienen precio
+  diasInmovilizacionPromedio: number | null;
+  diasInmovilizacionTotal: number;        // suma para visualizar magnitud
+  touchpointsPromedio: number;
+  touchpointsTotal: number;
+  distribucionVisitas: {
+    cero: number;
+    una: number;
+    dos: number;
+    tresOmas: number;
+  };
+  distribucionPuntosPerdida: {
+    EN_DISTRIBUCION: number;
+    VISITA_FALLIDA: number;
+    INCIDENCIA: number;
+    otro: number;
+  };
+}
+
+/**
+ * Agrega anatomias de devoluciones en un resumen global.
+ */
+export function resumirDevoluciones(
+  anatomias: AnatomiaDevolucion[]
+): ResumenDevoluciones {
+  const total = anatomias.length;
+
+  let costoTotal = 0;
+  let sinCosto = 0;
+  let diasTotal = 0;
+  let diasCount = 0;
+  let touchpointsTotal = 0;
+
+  const distVisitas = { cero: 0, una: 0, dos: 0, tresOmas: 0 };
+  const distPuntos = { EN_DISTRIBUCION: 0, VISITA_FALLIDA: 0, INCIDENCIA: 0, otro: 0 };
+
+  for (const a of anatomias) {
+    // Costo.
+    if (a.precioFactura != null) {
+      costoTotal += a.precioFactura;
+    } else {
+      sinCosto++;
+    }
+
+    // Dias.
+    if (a.diasInmovilizacion != null) {
+      diasTotal += a.diasInmovilizacion;
+      diasCount++;
+    }
+
+    // Touchpoints.
+    touchpointsTotal += a.touchpoints;
+
+    // Distribucion visitas.
+    if (a.visitasPrevias === 0) distVisitas.cero++;
+    else if (a.visitasPrevias === 1) distVisitas.una++;
+    else if (a.visitasPrevias === 2) distVisitas.dos++;
+    else distVisitas.tresOmas++;
+
+    // Distribucion puntos de perdida.
+    if (a.puntoPerdida === "EN_DISTRIBUCION") distPuntos.EN_DISTRIBUCION++;
+    else if (a.puntoPerdida === "VISITA_FALLIDA") distPuntos.VISITA_FALLIDA++;
+    else if (a.puntoPerdida === "INCIDENCIA") distPuntos.INCIDENCIA++;
+    else distPuntos.otro++;
+  }
+
+  return {
+    cantidadTotal: total,
+    costoTotalFacturado: Math.round(costoTotal * 100) / 100,
+    cantidadSinCosto: sinCosto,
+    diasInmovilizacionPromedio: diasCount > 0 ? Math.round(diasTotal / diasCount) : null,
+    diasInmovilizacionTotal: diasTotal,
+    touchpointsPromedio: total > 0 ? Math.round(touchpointsTotal / total) : 0,
+    touchpointsTotal,
+    distribucionVisitas: distVisitas,
+    distribucionPuntosPerdida: distPuntos,
   };
 }

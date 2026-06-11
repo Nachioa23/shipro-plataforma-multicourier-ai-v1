@@ -27,22 +27,23 @@ model Empresa {
 
   ordenamientoDefault String @default("PRECIO_ASC") // PRECIO_ASC, SLA, HISTORICO
 
-  usuarios      Usuario[]
-  envios        Envio[]
-  manifiestos   Manifiesto[]
-  credenciales  CredencialCourier[]
-  encuestasNPS  EncuestaNPS[]
-  movimientos   MovimientoFinanciero[]
-  liquidaciones LiquidacionMensual[] // NUEVO: Agrupador de facturas a fin de mes
-  depositos     Deposito[] // DEUDA 4: depósitos físicos del cliente
+  usuarios            Usuario[]
+  envios              Envio[]
+  manifiestos         Manifiesto[]
+  credenciales        CredencialCourier[]
+  encuestasNPS        EncuestaNPS[]
+  encuestasNPSEmpresa EncuestaNPSEmpresa[]
+  movimientos         MovimientoFinanciero[]
+  liquidaciones       LiquidacionMensual[] // NUEVO: Agrupador de facturas a fin de mes
+  depositos           Deposito[] // DEUDA 4: depósitos físicos del cliente
 
   // DEUDA 29: si true, el cliente puede usar credenciales Shipro (Modelo A) al activar
   // couriers. Inmutabilidad direccional: gerente_cliente puede ir A→B (obtener
   // credenciales propias), pero NO B→A. Decidido por admin_shipro en onboarding.
   modeloAHabilitado Boolean @default(false)
 
-  createdAt   DateTime     @default(now())
-  reglasRuteo ReglaRuteo[]
+  createdAt               DateTime                 @default(now())
+  reglasRuteo             ReglaRuteo[]
   // DEUDA 32+37 (Fase J): registro de cotizaciones que devolvieron cero couriers.
   registrosCoberturaVacia RegistroCoberturaVacia[]
 }
@@ -129,6 +130,9 @@ model Usuario {
 
   empresaId Int?
   empresa   Empresa? @relation(fields: [empresaId], references: [id])
+
+  // Metrica 1.3 (DEUDA 39, 2026-06-11): historial de votos NPS del usuario.
+  encuestasNPSEmpresa EncuestaNPSEmpresa[]
 }
 
 model Courier {
@@ -145,9 +149,9 @@ model Courier {
   // --- DEUDA 29: Capacidades de cadena ---
   // Se usan en pre-filtro al cotizar y al validar combinaciones cliente↔courier.
   // Cada courier real declara qué puede hacer; la plataforma filtra candidatos.
-  puedeRecogerDomicilio  Boolean @default(true)
-  puedeConsolidar        Boolean @default(false)
-  cpDepositoConsolidador String?
+  puedeRecogerDomicilio           Boolean @default(true)
+  puedeConsolidar                 Boolean @default(false)
+  cpDepositoConsolidador          String?
   // DEUDA 29 Sub-fase 6.D.1: CP del depósito central del courier consolidador.
   // Se usa cuando este courier es elegido como recolector por un cliente —
   // los couriers de última milla cotizan desde este CP en vez del CP del
@@ -156,14 +160,14 @@ model Courier {
   // Reemplaza progresivamente a cpDepositoConsolidador (se mantiene por
   // compatibilidad hasta migrar los consumidores). Autocompletada con
   // Google Maps (mismo metodo que Deposito). NULL para no consolidadores.
-  cpDepositoConsolidadorCalle      String?
-  cpDepositoConsolidadorNumero     String?
-  cpDepositoConsolidadorCp         String?
-  cpDepositoConsolidadorLocalidad  String?
-  cpDepositoConsolidadorProvincia  String?
-  puedeEntregarDomicilio Boolean @default(true)
-  puedeEntregarSucursal  Boolean @default(false)
-  aceptaDropOff          Boolean @default(false)
+  cpDepositoConsolidadorCalle     String?
+  cpDepositoConsolidadorNumero    String?
+  cpDepositoConsolidadorCp        String?
+  cpDepositoConsolidadorLocalidad String?
+  cpDepositoConsolidadorProvincia String?
+  puedeEntregarDomicilio          Boolean @default(true)
+  puedeEntregarSucursal           Boolean @default(false)
+  aceptaDropOff                   Boolean @default(false)
 
   // --- DEUDA 29: Capacidades de logística inversa (granulares) ---
   aceptaInversaCambioMercaderia Boolean @default(false)
@@ -204,25 +208,25 @@ model Courier {
 // (capacidadTecnicaMapeada no-null). Ver docs/DISENO-DEUDA-32-37.md.
 // ==========================================
 model ServicioCourier {
-  id                      Int      @id @default(autoincrement())
-  courierId               Int
-  courier                 Courier  @relation(fields: [courierId], references: [id], onDelete: Cascade)
+  id        Int     @id @default(autoincrement())
+  courierId Int
+  courier   Courier @relation(fields: [courierId], references: [id], onDelete: Cascade)
 
   // Identificador estable del servicio (no se traduce). Ej: "entrega_domicilio_estandar".
-  codigoServicio          String
+  codigoServicio String
   // Agrupador para la UI: "entrega" | "logistica_inversa".
-  grupo                   String
+  grupo          String
   // Orden de aparicion en la UI.
-  ordenVisual             Int      @default(0)
+  ordenVisual    Int    @default(0)
 
   // Switch del admin: el servicio esta ofrecido al cliente final o no.
-  activo                  Boolean  @default(false)
+  activo                  Boolean @default(false)
   // Mapeo a la capacidad tecnica del adapter. Ej: "andreani_dispatch_domicilio_estandar".
   // NULL = el adapter no soporta este servicio (switch bloqueado en UI).
   capacidadTecnicaMapeada String?
 
-  fechaCreacion           DateTime @default(now())
-  fechaActualizacion      DateTime @updatedAt
+  fechaCreacion      DateTime @default(now())
+  fechaActualizacion DateTime @updatedAt
 
   @@unique([courierId, codigoServicio])
   @@index([courierId, activo])
@@ -426,9 +430,9 @@ model Envio {
   liquidacionId     Int?
   liquidacion       LiquidacionMensual? @relation(fields: [liquidacionId], references: [id])
 
-  fechaImpresion DateTime  @default(now())
-  fechaColecta   DateTime? // Cuándo el courier hizo la recolección física
-  fechaEntrega   DateTime? // Cuándo llegó a manos del cliente
+  fechaImpresion     DateTime  @default(now())
+  fechaColecta       DateTime? // Cuándo el courier hizo la recolección física
+  fechaEntrega       DateTime? // Cuándo llegó a manos del cliente
   // F2 Bloque 1 (2026-06-09): timestamp del último rastreo del cron. Permite
   // priorización "oldest first" en el cron de rastreo (5,800 rastreos diarios
   // teóricos con 200 envíos cada 30 min, 8-22h ART). Si NULL, el envío nunca
@@ -478,15 +482,15 @@ model Envio {
 // 4. TRAZABILIDAD (Historial de Estados)
 // ==========================================
 model EventoTracking {
-  id          Int      @id @default(autoincrement())
-  estado      String
+  id                  Int      @id @default(autoincrement())
+  estado              String
   // estadoCrudoOriginal: estado raw del courier ANTES del mapeo via Nomenclador.
   // Nullable porque eventos previos a esta migracion (Torre de Control Metrica 1.1,
   // 2026-06-04) no lo tienen. Eventos nuevos lo deben poblar siempre via cron rastreo.
   // Fuente para metrica "Resolver Nomenclador" — calcular frecuencia ponderada.
   estadoCrudoOriginal String?
-  observacion String?
-  fecha       DateTime @default(now())
+  observacion         String?
+  fecha               DateTime @default(now())
 
   envioId Int
   envio   Envio @relation(fields: [envioId], references: [id], onDelete: Cascade)
@@ -652,6 +656,54 @@ model EncuestaNPS {
   courier   Courier @relation(fields: [courierId], references: [id])
 
   fechaVoto DateTime @default(now())
+}
+
+// ==========================================
+// VOZ DE LA EMPRESA CLIENTE — Metrica 1.3 (DEUDA 39, 2026-06-11)
+// NPS Cliente Empresa: gerente/operador del e-commerce evalua
+// a Shipro como plataforma. Cadencia trimestral.
+// ==========================================
+model EncuestaNPSEmpresa {
+  id Int @id @default(autoincrement())
+
+  // Q1: NPS Principal (0-10) - "Recomendarias Shipro a otra empresa?"
+  // Nullable: el cron crea placeholder con tokenVoto pero score/categoria
+  // se completan cuando el usuario vota desde el form.
+  score     Int?
+  categoria String? // PROMOTOR (9-10), PASIVO (7-8), DETRACTOR (0-6)
+
+  // Q2: Satisfaccion general con la plataforma (escala 1-5)
+  satisfaccionPlataforma Int?
+
+  // Q3: Calidad del soporte humano (escala 1-5, NULL si no tuvo contacto)
+  calidadSoporte Int?
+
+  // Q4: Lo que mas le gusta (texto abierto opcional)
+  fortaleza String?
+
+  // Q5: Lo que mejoraria (texto abierto opcional)
+  sugerencia String?
+
+  // --- CONTEXTO TEMPORAL ---
+  periodo    String // "2026-Q2", "2026-Q3" (cadencia trimestral, decision director)
+  fechaEnvio DateTime // cuando se disparo el email
+  fechaVoto  DateTime @default(now())
+
+  // --- FKs ---
+  empresaId Int
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  usuarioId Int
+  usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  // Token unico generado al disparar el email. Sin expiracion (decision director 2026-06-11).
+  // Una vez usado, el endpoint /api/nps-empresa rechaza nuevos intentos (no permite re-voto).
+  tokenVoto String @unique
+
+  // Un usuario solo puede votar una vez por periodo trimestral.
+  @@unique([usuarioId, periodo])
+  @@index([empresaId, periodo])
+  @@index([periodo])
 }
 
 // ==========================================
@@ -969,16 +1021,16 @@ model SucursalCourierCp {
 // La consulta es para auditoria interna; no hay UI hoy (deuda futura).
 // =============================================================================
 model RegistroCoberturaVacia {
-  id          Int      @id @default(autoincrement())
-  fecha       DateTime @default(now())
-  cpDestino   String
-  pesoKg      Float
-  largoCm     Float?
-  anchoCm     Float?
-  altoCm      Float?
-  origen      String?  // contexto: "dashboard" / "api" / etc.
-  empresaId   Int?
-  empresa     Empresa? @relation(fields: [empresaId], references: [id])
+  id        Int      @id @default(autoincrement())
+  fecha     DateTime @default(now())
+  cpDestino String
+  pesoKg    Float
+  largoCm   Float?
+  anchoCm   Float?
+  altoCm    Float?
+  origen    String? // contexto: "dashboard" / "api" / etc.
+  empresaId Int?
+  empresa   Empresa? @relation(fields: [empresaId], references: [id])
 
   @@index([fecha])
   @@index([cpDestino])

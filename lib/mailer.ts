@@ -426,3 +426,89 @@ export async function enviarMailCierreTicket(emailDestino: string, tracking: str
     return false;
   }
 }
+
+// ==============================================================
+// MAIL 4: ENCUESTA NPS CLIENTE EMPRESA (Metrica 1.3, DEUDA 39, 2026-06-11)
+// Cadencia trimestral. Email a gerentes / operadores activos.
+// Token unico sin expiracion. Una sola respuesta por usuario por periodo.
+// ==============================================================
+export async function enviarMailEncuestaEmpresa(
+  emailDestino: string,
+  nombreGerente: string,
+  nombreEmpresa: string,
+  periodo: string,
+  tokenVoto: string,
+  baseUrl: string
+) {
+  try {
+    let botonesNPS = '';
+
+    // Grilla 0-10 color-coded.
+    for (let i = 0; i <= 10; i++) {
+      let colorBg = '#f3f4f6';
+      let colorText = '#4b5563';
+      let border = '#d1d5db';
+
+      if (i <= 6) { colorBg = '#fef2f2'; colorText = '#dc2626'; border = '#fca5a5'; }
+      else if (i <= 8) { colorBg = '#fefce8'; colorText = '#ca8a04'; border = '#fde047'; }
+      else { colorBg = '#f0fdf4'; colorText = '#16a34a'; border = '#86efac'; }
+
+      botonesNPS += `
+        <a href="${baseUrl}/encuesta-nps-empresa?token=${tokenVoto}&score=${i}"
+           style="display: inline-block; width: 32px; height: 32px; line-height: 32px; text-align: center; margin: 3px;
+                  background-color: ${colorBg}; color: ${colorText}; text-decoration: none; font-weight: bold;
+                  border-radius: 6px; font-size: 15px; border: 1px solid ${border}; transition: all 0.2s;">
+          ${i}
+        </a>
+      `;
+    }
+
+    const mailOptions = {
+      from: `"Shipro Equipo" <${process.env.SMTP_USER}>`,
+      to: emailDestino,
+      subject: `Tu opinion ${periodo}: como ves a Shipro?`,
+      html: `
+        <style>${fontImport}</style>
+        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eaeaea; border-radius: 12px; background-color: #ffffff;">
+
+          <div style="text-align: center; margin-bottom: 25px;">
+            <h1 style="color: #233b6b; font-size: 22px; margin-bottom: 8px;">Hola, ${nombreGerente}</h1>
+            <p style="color: #666; font-size: 14px; margin: 0;">${nombreEmpresa} - Encuesta ${periodo}</p>
+          </div>
+
+          <p style="font-size: 15px; line-height: 1.6;">
+            En Shipro queremos mejorar continuamente. Nos tomas 2 minutos para
+            decirnos como vamos este trimestre?
+          </p>
+
+          <div style="text-align: center; margin: 30px 0;">
+            <p style="font-size: 16px; font-weight: bold; color: #233b6b; margin-bottom: 15px;">
+              Que tan probable es que recomiendes Shipro a otra empresa?
+            </p>
+
+            <div style="display: flex; flex-wrap: wrap; justify-content: center; max-width: 450px; margin: 0 auto; gap: 2px;">
+              ${botonesNPS}
+            </div>
+
+            <div style="display: flex; justify-content: space-between; max-width: 420px; margin: 15px auto 0; font-size: 11px; font-weight: bold; text-transform: uppercase;">
+              <span style="color: #dc2626;">Nada probable</span>
+              <span style="color: #16a34a;">Muy probable</span>
+            </div>
+          </div>
+
+          <p style="font-size: 12px; color: #666; text-align: center; margin-top: 20px;">
+            Al hacer click en un numero seras redirigido a una breve encuesta de 4 preguntas adicionales.
+            Tu voto es importante para nosotros.
+          </p>
+
+          ${firmaShipro}
+        </div>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log("[Mailer] Mail 4 (NPS Empresa) enviado a:", emailDestino, "periodo:", periodo);
+  } catch (error) {
+    console.error("[Mailer] Error Mail 4 (NPS Empresa):", error);
+  }
+}

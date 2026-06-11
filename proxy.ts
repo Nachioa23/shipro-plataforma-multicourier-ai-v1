@@ -6,6 +6,7 @@ const PUBLIC_API_PREFIXES = ["/api/auth/"];
 const PUBLIC_API_EXACT = [
   "/api/nps",
   "/api/nps/comentario",
+  "/api/nps-empresa",
   "/api/envios/rastreo-manual",
   "/api/envios/corregir",
   "/api/geografia/buscar",

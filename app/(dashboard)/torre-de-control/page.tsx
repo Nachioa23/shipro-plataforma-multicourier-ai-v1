@@ -108,6 +108,12 @@ export default function TorreDeControl() {
   const [npsCompradorMetrica, setNpsCompradorMetrica] = useState<any>(null);
   const [cargandoNpsComprador, setCargandoNpsComprador] = useState(true);
 
+  // Metrica 1.3 "NPS Cliente Empresa" (DEUDA 39, 2026-06-11).
+  // Datos del endpoint /api/torre-de-control/nps-cliente-empresa.
+  // Scope global. Universo: encuestas trimestrales (ventana 365 dias).
+  const [npsClienteEmpresaMetrica, setNpsClienteEmpresaMetrica] = useState<any>(null);
+  const [cargandoNpsClienteEmpresa, setCargandoNpsClienteEmpresa] = useState(true);
+
   useEffect(() => {
     if (!filtroEmpresaId) return;
     const baseParams = { filtroEmpresa: filtroEmpresaId, page: "1", limit: "1" };
@@ -363,6 +369,22 @@ export default function TorreDeControl() {
       .catch(err => {
         console.error("[Torre de Control] error fetching nps-comprador:", err);
         setCargandoNpsComprador(false);
+      });
+  }, [esEquipoShipro]);
+
+  // Torre de Control Metrica 1.3: fetch del endpoint de nps-cliente-empresa.
+  useEffect(() => {
+    if (!esEquipoShipro) return;
+    setCargandoNpsClienteEmpresa(true);
+    fetch("/api/torre-de-control/nps-cliente-empresa")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setNpsClienteEmpresaMetrica(data);
+        setCargandoNpsClienteEmpresa(false);
+      })
+      .catch(err => {
+        console.error("[Torre de Control] error fetching nps-cliente-empresa:", err);
+        setCargandoNpsClienteEmpresa(false);
       });
   }, [esEquipoShipro]);
 
@@ -2662,6 +2684,184 @@ export default function TorreDeControl() {
                 )}
               </div>
 
+            ) : metricaAnalisis === "NPS Cliente Empresa" ? (
+              // Metrica 1.3 (DEUDA 39, 2026-06-11): modal NPS Cliente Empresa.
+              // Consume /api/torre-de-control/nps-cliente-empresa.
+              <div className="p-8 space-y-6">
+                {cargandoNpsClienteEmpresa ? (
+                  <div className="text-center py-12 text-gray-500">Cargando NPS del cliente empresa...</div>
+                ) : !npsClienteEmpresaMetrica ? (
+                  <div className="text-center py-12 text-red-600">Error cargando datos. Reintentar.</div>
+                ) : npsClienteEmpresaMetrica.resumen.totalEncuestasVotadas === 0 ? (
+                  <div className="text-center py-12 text-gray-500">
+                    <p className="mb-2">Sin votos en la ventana de {npsClienteEmpresaMetrica.calidadDatos.ventanaDias} dias (4 trimestres).</p>
+                    <p className="text-xs text-gray-400">El cron trimestral aun no se dispara automaticamente (DEUDA 60). Cuando se active, las encuestas llegaran solas a los gerentes/operadores cada trimestre.</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+                    {/* COLUMNA IZQUIERDA */}
+                    <div className="lg:col-span-5 space-y-6">
+
+                      {/* Hero tile */}
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">NPS Cliente Empresa</h4>
+                        <p className="text-xs text-gray-500 mb-3">{npsClienteEmpresaMetrica.calidadDatos.periodoActual} (ventana 4 trimestres)</p>
+                        <div className="flex items-center justify-center mb-3">
+                          <div className={`w-36 h-36 rounded-full border-8 flex items-center justify-center bg-white shadow-inner ${
+                            npsClienteEmpresaMetrica.resumen.npsScorePonderado >= 50 ? 'border-green-500' :
+                            npsClienteEmpresaMetrica.resumen.npsScorePonderado >= 0 ? 'border-yellow-500' :
+                            'border-red-500'
+                          }`}>
+                            <span className="text-5xl font-black text-gray-800">
+                              {npsClienteEmpresaMetrica.resumen.npsScorePonderado > 0 ? `+${npsClienteEmpresaMetrica.resumen.npsScorePonderado}` : npsClienteEmpresaMetrica.resumen.npsScorePonderado}
+                            </span>
+                          </div>
+                        </div>
+                        <p className="text-sm text-gray-600 text-center">
+                          NPS Ponderado por empresa. Escala -100 a +100.
+                        </p>
+                        <p className="text-xs text-gray-400 text-center mt-2">
+                          NPS Raw (sin ponderar): <span className="font-bold">{npsClienteEmpresaMetrica.resumen.npsScoreRaw > 0 ? `+${npsClienteEmpresaMetrica.resumen.npsScoreRaw}` : npsClienteEmpresaMetrica.resumen.npsScoreRaw}</span> · Score promedio: <span className="font-bold">{npsClienteEmpresaMetrica.resumen.scorePromedioRaw}/10</span>
+                        </p>
+                        <p className="text-xs text-gray-400 text-center mt-2">
+                          {npsClienteEmpresaMetrica.resumen.totalEncuestasVotadas} de {npsClienteEmpresaMetrica.resumen.totalEncuestasEnviadas} respondidas · {npsClienteEmpresaMetrica.resumen.totalEmpresasConVoto} empresa{npsClienteEmpresaMetrica.resumen.totalEmpresasConVoto === 1 ? '' : 's'} · tasa respuesta {npsClienteEmpresaMetrica.resumen.tasaRespuesta}%
+                        </p>
+                      </div>
+
+                      {/* Distribucion */}
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Distribucion de Votos</h4>
+                        <div className="space-y-3">
+                          <div>
+                            <div className="flex justify-between text-sm font-bold mb-1">
+                              <span className="text-green-700">Promotores (9-10)</span>
+                              <span className="text-green-700">{npsClienteEmpresaMetrica.resumen.totalPromotores}</span>
+                            </div>
+                            <div className="w-full bg-gray-100 rounded-full h-3"><div className="bg-green-500 h-3 rounded-full" style={{ width: `${npsClienteEmpresaMetrica.resumen.totalEncuestasVotadas > 0 ? (npsClienteEmpresaMetrica.resumen.totalPromotores / npsClienteEmpresaMetrica.resumen.totalEncuestasVotadas) * 100 : 0}%` }}></div></div>
+                          </div>
+                          <div>
+                            <div className="flex justify-between text-sm font-bold mb-1">
+                              <span className="text-yellow-600">Pasivos (7-8)</span>
+                              <span className="text-yellow-600">{npsClienteEmpresaMetrica.resumen.totalPasivos}</span>
+                            </div>
+                            <div className="w-full bg-gray-100 rounded-full h-3"><div className="bg-yellow-400 h-3 rounded-full" style={{ width: `${npsClienteEmpresaMetrica.resumen.totalEncuestasVotadas > 0 ? (npsClienteEmpresaMetrica.resumen.totalPasivos / npsClienteEmpresaMetrica.resumen.totalEncuestasVotadas) * 100 : 0}%` }}></div></div>
+                          </div>
+                          <div>
+                            <div className="flex justify-between text-sm font-bold mb-1">
+                              <span className="text-red-600">Detractores (0-6)</span>
+                              <span className="text-red-600">{npsClienteEmpresaMetrica.resumen.totalDetractores}</span>
+                            </div>
+                            <div className="w-full bg-gray-100 rounded-full h-3"><div className="bg-red-500 h-3 rounded-full" style={{ width: `${npsClienteEmpresaMetrica.resumen.totalEncuestasVotadas > 0 ? (npsClienteEmpresaMetrica.resumen.totalDetractores / npsClienteEmpresaMetrica.resumen.totalEncuestasVotadas) * 100 : 0}%` }}></div></div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Satisfacciones complementarias */}
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Satisfacciones Complementarias</h4>
+                        <div className="grid grid-cols-2 gap-3 text-center">
+                          <div className="border-r border-gray-200 pr-2">
+                            <p className="text-3xl font-black text-indigo-700">
+                              {npsClienteEmpresaMetrica.resumen.satisfaccionPlataformaPromedio ?? '—'}
+                            </p>
+                            <p className="text-xs text-gray-500 uppercase mt-1">Satisfaccion Plataforma</p>
+                            <p className="text-xs text-gray-400">Escala 1-5</p>
+                          </div>
+                          <div className="pl-2">
+                            <p className="text-3xl font-black text-indigo-700">
+                              {npsClienteEmpresaMetrica.resumen.calidadSoportePromedio ?? '—'}
+                            </p>
+                            <p className="text-xs text-gray-500 uppercase mt-1">Calidad Soporte</p>
+                            <p className="text-xs text-gray-400">Escala 1-5</p>
+                          </div>
+                        </div>
+                      </div>
+
+                    </div>
+
+                    {/* COLUMNA DERECHA */}
+                    <div className="lg:col-span-7 space-y-6">
+
+                      {/* NPS por Empresa */}
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">NPS por Empresa</h4>
+                        {npsClienteEmpresaMetrica.porEmpresa.length === 0 ? (
+                          <p className="text-sm text-gray-400">Sin datos por empresa.</p>
+                        ) : (
+                          <div className="space-y-2">
+                            {npsClienteEmpresaMetrica.porEmpresa.map((e: any, idx: number) => (
+                              <div key={idx} className="flex items-center justify-between">
+                                <span className="text-sm font-bold text-gray-700">{e.empresaNombre}</span>
+                                <span className="text-xs text-gray-500 flex-1 mx-3">{e.totalVotos} voto{e.totalVotos === 1 ? '' : 's'} · score prom. {e.scorePromedio}/10 · {e.promotores}P/{e.pasivos}Pas/{e.detractores}D</span>
+                                <span className={`text-lg font-black ${e.npsScore >= 50 ? 'text-green-700' : e.npsScore >= 0 ? 'text-yellow-600' : 'text-red-600'}`}>
+                                  {e.npsScore > 0 ? `+${e.npsScore}` : e.npsScore}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Evolucion por Periodo */}
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Evolucion por Trimestre</h4>
+                        {npsClienteEmpresaMetrica.porPeriodo.length === 0 ? (
+                          <p className="text-sm text-gray-400">Sin datos por periodo.</p>
+                        ) : (
+                          <div className="space-y-2">
+                            {npsClienteEmpresaMetrica.porPeriodo.map((p: any) => (
+                              <div key={p.periodo} className="flex items-center gap-3">
+                                <span className="text-xs font-bold text-gray-500 w-20">{p.periodo}</span>
+                                <span className="text-xs text-gray-700 flex-1">{p.totalVotos} voto{p.totalVotos === 1 ? '' : 's'} · score {p.scorePromedio}/10</span>
+                                <span className={`text-sm font-bold ${p.npsScorePonderado >= 50 ? 'text-green-700' : p.npsScorePonderado >= 0 ? 'text-yellow-600' : 'text-red-600'}`}>
+                                  {p.npsScorePonderado > 0 ? `+${p.npsScorePonderado}` : p.npsScorePonderado}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Voces Promotoras */}
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Voces Promotoras</h4>
+                        {npsClienteEmpresaMetrica.topPromotores.length === 0 ? (
+                          <p className="text-sm text-gray-400">Sin promotores con comentario.</p>
+                        ) : (
+                          <div className="space-y-2 max-h-64 overflow-y-auto">
+                            {npsClienteEmpresaMetrica.topPromotores.map((p: any, idx: number) => (
+                              <div key={idx} className="border-l-4 border-green-400 pl-3 py-1">
+                                <p className="text-xs text-gray-700 italic">"{p.fortaleza}"</p>
+                                <p className="text-xs text-gray-400 mt-1">{p.empresaNombre} · {p.usuarioNombre} · score {p.score}/10 · {p.periodo}</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Voces Criticas */}
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Voces Criticas</h4>
+                        {npsClienteEmpresaMetrica.topDetractores.length === 0 ? (
+                          <p className="text-sm text-gray-400">Sin detractores con sugerencia.</p>
+                        ) : (
+                          <div className="space-y-3">
+                            {npsClienteEmpresaMetrica.topDetractores.map((d: any, idx: number) => (
+                              <div key={idx} className="border-l-4 border-red-400 pl-3 py-1">
+                                <p className="text-xs text-blue-600">💡 {d.sugerencia}</p>
+                                <p className="text-xs text-gray-400 mt-1">{d.empresaNombre} · {d.usuarioNombre} · score {d.score}/10 · {d.periodo}</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                    </div>
+                  </div>
+                )}
+              </div>
+
             ) : (
               <div className="flex-1 p-8 overflow-y-auto bg-gray-50 flex flex-col items-center justify-center text-center">
                 <BarChart className="w-24 h-24 text-gray-200 mb-4" />
@@ -2982,7 +3182,7 @@ export default function TorreDeControl() {
         {/* BLOQUE 4: VOZ DEL COMPRADOR */}
         <div className="pb-10">
            <h3 className="text-lg font-black text-gray-800 uppercase tracking-wider mb-3 mt-8 flex items-center gap-2">
-             <HeartHandshake className="w-5 h-5 text-indigo-500" /> Voz del Comprador
+             <HeartHandshake className="w-5 h-5 text-indigo-500" /> Voz del Comprador y del Cliente
            </h3>
            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2">
              12. Experiencia del Consumidor (NPS Analítico)
@@ -3014,6 +3214,34 @@ export default function TorreDeControl() {
                    : 'Sin datos'}
              </p>
              <button onClick={() => abrirAnalisis("NPS Comprador")} className="w-full py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold mt-auto hover:bg-blue-50">Analizar</button>
+           </div>
+           <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm flex flex-col h-full max-w-md">
+             <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+               <HeartHandshake className="w-4 h-4 text-indigo-500" /> 13. NPS Cliente Empresa
+             </h4>
+             <div className="flex items-center justify-center mb-4">
+               <div className={`w-28 h-28 rounded-full border-8 flex items-center justify-center bg-white shadow-inner ${
+                 cargandoNpsClienteEmpresa ? 'border-gray-300' :
+                 (npsClienteEmpresaMetrica?.resumen?.npsScorePonderado ?? 0) >= 50 ? 'border-green-500' :
+                 (npsClienteEmpresaMetrica?.resumen?.npsScorePonderado ?? 0) >= 0 ? 'border-yellow-500' :
+                 'border-red-500'
+               }`}>
+                 <span className="text-4xl font-black text-gray-800">
+                   {cargandoNpsClienteEmpresa ? '…' :
+                    (npsClienteEmpresaMetrica?.resumen?.npsScorePonderado ?? 0) > 0
+                      ? `+${npsClienteEmpresaMetrica.resumen.npsScorePonderado}`
+                      : (npsClienteEmpresaMetrica?.resumen?.npsScorePonderado ?? 0)}
+                 </span>
+               </div>
+             </div>
+             <p className="text-xs text-center text-gray-500 mb-4">
+               {cargandoNpsClienteEmpresa
+                 ? 'Cargando…'
+                 : npsClienteEmpresaMetrica
+                   ? `${npsClienteEmpresaMetrica.resumen.totalEncuestasVotadas} de ${npsClienteEmpresaMetrica.resumen.totalEncuestasEnviadas} respondieron · ${npsClienteEmpresaMetrica.calidadDatos.periodoActual}`
+                   : 'Sin datos'}
+             </p>
+             <button onClick={() => abrirAnalisis("NPS Cliente Empresa")} className="w-full py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold mt-auto hover:bg-blue-50">Analizar</button>
            </div>
         </div>
 

@@ -1113,3 +1113,40 @@ C. **Documentar como "future use":** dejar el modelo intacto pero agregar un com
 **Prioridad:** Media. La infraestructura ya esta lista 80% (template + endpoints + modelo). Solo falta el "primer mover".
 
 **Estimado:** 2-4 horas (modificar cron + agregar campo opcional + validar logica anti-doble-envio + testing).
+
+---
+
+## DEUDA 60 — Activar disparo trimestral del cron NPS Cliente Empresa (registrada 2026-06-11, scope chico)
+
+**Origen:** Metrica 1.3 (NPS Cliente Empresa) cierre, 2026-06-11. Toda la infraestructura de captura esta construida y operativa:
+
+1. Modelo `EncuestaNPSEmpresa` (13 columnas, 4 indexes).
+2. Cron disparador `/api/cron/nps-empresa/route.ts` (167 lineas) listo para ejecutar.
+3. Template email `enviarMailEncuestaEmpresa` en `lib/mailer.ts` con grilla 0-10 color-coded.
+4. Endpoint voto `/api/nps-empresa/route.ts` (GET + POST) operativo, whitelistado en proxy.
+5. Pagina publica `/encuesta-nps-empresa` con form de 5 preguntas + 6 estados client-side.
+6. Endpoint Torre `/api/torre-de-control/nps-cliente-empresa` + Card 13 + modal en dashboard.
+
+**Estado actual:** Metrica 1.3 V1 funciona via seed sintetico. Falta activar el cron en programador (Vercel cron, Railway, CronJob, etc.) para disparo automatico trimestral.
+
+**Plan de resolucion:**
+
+1. Configurar `CRON_SECRET` en variables de entorno de produccion (no esta en `.env` local).
+2. Configurar scheduler para invocar `GET /api/cron/nps-empresa` con header `Authorization: Bearer ${CRON_SECRET}` el primer dia de cada trimestre (1 enero, 1 abril, 1 julio, 1 octubre).
+3. Decision sobre backfill historico: NO (consistente con DEUDA 59 para NPS Comprador). Solo entregas a partir de la activacion.
+4. Validar que `APP_URL` este configurada en produccion (el cron usa `getAppUrlOrThrow()` para generar links del email).
+5. Monitorear primer disparo: verificar logs + contar encuestas creadas + verificar emails entregados.
+6. Documentar para el equipo de operaciones.
+
+**Casos de uso desbloqueados:**
+
+- Metrica 1.3 recibe data real continua cada trimestre sin seed sintetico.
+- Cliente Shipro obtiene voz cuantitativa de cada empresa cliente cada 3 meses.
+- Detectar empresas en riesgo de churn (NPS bajo + sin mejorias trimestre a trimestre).
+- Detectar fortalezas para usar en marketing (testimonios de promotores con consentimiento).
+
+**Prioridad:** Media. La infraestructura ya esta lista 100%. Solo falta activacion en programador.
+
+**Estimado:** 1-2 horas (configuracion en infra + primer test + monitoreo + documentacion).
+
+**Adicional opcional (registrar como DEUDA 61 si se quiere):** endpoint admin `/api/admin/nps-empresa/disparar` para reenvio manual override (en caso de querer pedir feedback fuera de ciclo a una empresa especifica, o reenviar a un usuario que reporta no haber recibido el email).

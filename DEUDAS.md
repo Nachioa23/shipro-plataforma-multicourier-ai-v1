@@ -1076,3 +1076,40 @@ C. **Documentar como "future use":** dejar el modelo intacto pero agregar un com
 - Soporte a Metrica 3.4 NIVEL 2 + cualquier auditoria financiera futura.
 
 **Prioridad:** Baja. Tecnicamente es solo cleanup / activacion de infraestructura latente. Pero merece resolverse junto con DEUDA 57 para evitar abrir dos veces el codigo.
+
+---
+
+## DEUDA 59 — Activar disparo automatico del email NPS post-entrega (registrada 2026-06-11, scope chico-medio)
+
+**Origen:** Metrica 1.2 (NPS Comprador) PRE-STEP, 2026-06-11. Durante la investigacion se descubrio que:
+
+1. La funcion `enviarMailEntregadoNPS` en `lib/mailer.ts` esta completa con template HTML rico (grilla 0-10 color-coded, subject "Paquete entregado! Como fue tu experiencia?", redirige al /api/nps endpoint con tracking + score).
+2. El endpoint `/api/nps/route.ts` que recibe el voto funciona correctamente (categoriza, persiste, calcula slaCumplido inline).
+3. El endpoint `/api/nps/comentario/route.ts` para follow-up tambien funciona.
+4. **Pero ninguna parte del codigo invoca `enviarMailEntregadoNPS`**. Resultado: ningun comprador recibe el email, EncuestaNPS queda en 0 filas en produccion.
+
+**Estado actual:** Metrica 1.2 V1 funciona via seed sintetico. Sin activar el disparo automatico, la metrica nunca recibira data real continua. Es una infraestructura ~80% construida que necesita un ultimo paso de activacion.
+
+**Plan de resolucion:**
+
+1. Modificar `/api/cron/rastreo/route.ts` (cron de tracking que detecta cambios de estado) para que cuando un envio transicione a `ENTREGADO`:
+   - Validar que aun no exista una `EncuestaNPS` asociada al envio (evitar doble envio).
+   - Validar que el envio tenga email del destinatario disponible (no todos lo tienen).
+   - Invocar `enviarMailEntregadoNPS(destino.email, trackingNumber, destino.nombre, courier.nombre, getAppUrlOrThrow())`.
+
+2. Agregar campo opcional `encuestaEnviada Boolean @default(false)` en `Envio` para marcar disparos exitosos (alternativa: consultar `EncuestaNPS.findUnique({ where: { envioId } })` antes de cada envio, mas simple pero menos eficiente).
+
+3. **Decision sobre backfill historico (director, 2026-06-11):** SOLO entregas nuevas (post-activacion). NO enviar email retroactivo a entregas historicas para no confundir compradores que ya olvidaron el envio.
+
+4. Logging: cada disparo exitoso/fallido se registra para auditoria post-mortem.
+
+**Casos de uso desbloqueados:**
+
+- Metrica 1.2 recibe data real continua sin seed sintetico.
+- Cliente Shipro obtiene voz cuantitativa del comprador final.
+- Detectar correlacion SLA cumplido vs satisfaccion en tiempo real.
+- Identificar campeones de marca (promotores con comentario) vs riesgos (detractores con sugerencia).
+
+**Prioridad:** Media. La infraestructura ya esta lista 80% (template + endpoints + modelo). Solo falta el "primer mover".
+
+**Estimado:** 2-4 horas (modificar cron + agregar campo opcional + validar logica anti-doble-envio + testing).

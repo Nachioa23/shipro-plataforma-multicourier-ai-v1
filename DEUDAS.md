@@ -1013,3 +1013,66 @@ Sin el NIVEL 2 el cliente Shipro no puede evaluar si su mix actual de couriers e
 - Hace visible el valor de la red integrada de Shipro (no solo "te integramos couriers", sino "te ahorras X plata si activas Y").
 
 **Prioridad:** Media-alta. Es feature comercialmente fuerte (justifica el valor de la red integrada Shipro). Estimado: 6-10 horas (logica de cotizacion paralela + persistencia + UI).
+
+---
+
+## DEUDA 57 — Persistir dimensiones del paquete + Nivel 2 de Metrica 3.4 (registrada 2026-06-11, scope medio)
+
+**Origen:** Metrica 3.4 (Desvio Financiero por Peso Volumetrico), 2026-06-11. Durante el PRE-STEP se descubrio que:
+
+1. El modelo `Envio` solo persiste `pesoReal` (numerico). NO guarda dimensiones del paquete (largo, ancho, alto).
+2. Las dimensiones viajan por el sistema (al cotizar / imprimir / despachar al courier) pero se pierden despues del flow — no quedan persistidas en ningun lado consumible.
+3. `CotizacionSnapshot.paqueteSnapshotJson` podria contener esas dimensiones pero esta sin uso (ver DEUDA 58).
+
+**Estado actual:** Metrica 3.4 V1 funciona solo en NIVEL 1 — compara `pesoCobrado` (lo cotizado al imprimir) vs `pesoAforado` (lo facturado por el courier en su liquidacion). Esto detecta fuga monetaria pero no diagnostica donde esta el error:
+- Puede ser que el cliente declaro mal las medidas → cotizacion baja → liquidacion alta = bug del cliente.
+- Puede ser que el courier aplique abusivamente su formula de aforo → bug del courier.
+
+Sin las dimensiones persistidas, no podemos discriminar estos dos casos.
+
+**Plan de resolucion (NIVEL 2):**
+
+1. Persistir dimensiones del paquete en `Envio` (campos `largoCm Float?`, `anchoCm Float?`, `altoCm Float?`) o conectar `CotizacionSnapshot.paqueteSnapshotJson` (resuelve DEUDA 58 tambien).
+2. Documentar la formula estandar de aforo: factor 3.5 cm3/kg para Andreani, otros couriers segun catalogo.
+3. Cuando llegue la liquidacion, recomputar pesoVolumetricoEsperado = (largo × ancho × alto × factor) / 10000 y compararlo contra pesoAforado del courier.
+4. Si pesoVolumetricoEsperado != pesoAforado → el courier esta aplicando una formula distinta a la documentada (posible abuso o cambio de tarifa no detectado).
+5. Extender modal de Metrica 3.4 con un panel "Discrepancia con Aforo Esperado" que diferencie entre fuga por "datos mal declarados por cliente" vs "courier aplicando formula no canonica".
+
+**Casos de uso desbloqueados:**
+- Identificar empresas cliente que declaran sistematicamente mal las medidas (problema de capacitacion / API).
+- Detectar abusos del courier en su computo de aforo.
+- Negociar con el courier en base a evidencia cuantitativa.
+- Recomendaciones especificas: "tu producto X declarado como 1kg en realidad mide 40x40x30 = 16.8kg aforados — actualiza tu ficha".
+
+**Prioridad:** Media. No bloquea Metrica 3.4 V1 que ya es valiosa (detecta la fuga monetaria). Pero NIVEL 2 multiplica el valor diagnostico.
+
+**Estimado:** 8-12 horas (Prisma schema migration + flow de creacion de envio + helper de aforo configurable por courier + extender endpoint + extender modal).
+
+---
+
+## DEUDA 58 — CotizacionSnapshot.paqueteSnapshotJson sin consumer (registrada 2026-06-11, scope chico)
+
+**Origen:** Metrica 3.4 PRE-STEP, 2026-06-11. La tabla `CotizacionSnapshot` existe en el schema con el campo `paqueteSnapshotJson String` (presumiblemente contendria snapshot del paquete cotizado incluyendo dimensiones), pero:
+
+1. Cero referencias en codigo (`grep -rln "paqueteSnapshotJson" app/ lib/` retorna vacio).
+2. Cero filas en la BD demo.
+3. Infraestructura latente — declarada pero sin productor ni consumer.
+
+**Estado actual:** El modelo `CotizacionSnapshot` esta abandonado. Si se quisiera auditar lo cotizado contra lo entregado (caso de uso de Metrica 3.4 NIVEL 2 — ver DEUDA 57), seria la fuente natural pero no existe ningun proceso que la popule.
+
+**Plan de resolucion (3 opciones):**
+
+A. **Activar:** modificar `lib/cotizador.ts` para escribir un snapshot en cada cotizacion exitosa. Conectarlo en el flow de impresion (`lib/envios/crear.ts`) para asociarlo al envio creado via `usadaEnEnvioId`. Vincula con DEUDA 57.
+
+B. **Deprecar:** si el caso de uso original esta abandonado, eliminar la tabla del schema en una migracion Prisma para reducir ruido.
+
+C. **Documentar como "future use":** dejar el modelo intacto pero agregar un comentario en el schema explicando que esta latente para un futuro uso.
+
+**Recomendacion:** opcion A es la mejor si DEUDA 57 se va a atacar — la tabla provee infraestructura ya pensada para snapshots de cotizacion. Opcion B si DEUDA 57 nunca se va a hacer. Opcion C como compromiso.
+
+**Casos de uso desbloqueados (si opcion A):**
+- Auditar lo cotizado vs lo facturado por el courier.
+- Reconstruir el historial de cotizaciones para debugging.
+- Soporte a Metrica 3.4 NIVEL 2 + cualquier auditoria financiera futura.
+
+**Prioridad:** Baja. Tecnicamente es solo cleanup / activacion de infraestructura latente. Pero merece resolverse junto con DEUDA 57 para evitar abrir dos veces el codigo.

@@ -99,6 +99,12 @@ export default function TorreDeControl() {
   const [fugaRuteoMetrica, setFugaRuteoMetrica] = useState<any>(null);
   const [cargandoFugaRuteo, setCargandoFugaRuteo] = useState(true);
 
+  // Metrica 3.4 "Desvio Financiero por Peso Volumetrico" (DEUDA 39, 2026-06-11).
+  // Datos del endpoint /api/torre-de-control/desvio-peso.
+  // Scope global. Universo: envios en ventana 90 dias con FinanzasEnvio.pesoAforado > 0.
+  const [desvioPesoMetrica, setDesvioPesoMetrica] = useState<any>(null);
+  const [cargandoDesvioPeso, setCargandoDesvioPeso] = useState(true);
+
   useEffect(() => {
     if (!filtroEmpresaId) return;
     const baseParams = { filtroEmpresa: filtroEmpresaId, page: "1", limit: "1" };
@@ -325,6 +331,22 @@ export default function TorreDeControl() {
       });
   }, [esEquipoShipro]);
 
+  // Torre de Control Metrica 3.4: fetch del endpoint de desvio-peso.
+  useEffect(() => {
+    if (!esEquipoShipro) return;
+    setCargandoDesvioPeso(true);
+    fetch("/api/torre-de-control/desvio-peso")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setDesvioPesoMetrica(data);
+        setCargandoDesvioPeso(false);
+      })
+      .catch(err => {
+        console.error("[Torre de Control] error fetching desvio-peso:", err);
+        setCargandoDesvioPeso(false);
+      });
+  }, [esEquipoShipro]);
+
   const totalEnvios = metricas?.totalEnvios || 1;
   // Torre de Control Metrica 2.1 (2026-06-04): cambio de fuente.
   // Antes: metricas?.tiempoColectaPromedioDias (campo aspiracional, nunca
@@ -400,14 +422,14 @@ export default function TorreDeControl() {
   // El concepto antiguo "envios retenidos por checkout" queda como DEUDA 54.
   // Metrica 3.2 (2026-06-10): ruteoStats legacy removido en Sub-step D.
   // Card 3 + modal ahora consumen fugaRuteoMetrica del endpoint nuevo.
-  const aforoStats = metricas?.aforoStats || { fugaTotal: 0, porcentajeFugaPeso: 0, desvioPromedioKg: 0, costoPromedioDesvio: 0, distribucionError: { leve: 0, moderado: 0, grave: 0 }, topEstrictos: [] };
+  // Metrica 3.4 (2026-06-11): aforoStats legacy removido en Sub-step E.
+  // Card 4 + modal ahora consumen desvioPesoMetrica del endpoint nuevo.
   // Metrica 2.2 (2026-06-09): efectividadStats legacy removido en Sub-step G.
   // Card 5 + modal ahora consumen efectividadMetrica del endpoint nuevo
   // /api/torre-de-control/efectividad-primera-visita (ver useEffect en lineas ~195-210).
   // Metrica 2.4 (2026-06-09): soporteStats legacy removido en Sub-step D.
   // Card 7 + modal ahora consumen ticketsMesaAyudaMetrica del endpoint nuevo.
 
-  const fugaPeso = aforoStats.porcentajeFugaPeso;
   // Card 5: fuente cambiada al endpoint nuevo de Metrica 2.2 (Sub-step E.2).
   // Fallback a 0 si el endpoint no respondio aun (loading) o si universo es 0.
   const efectividadGlobal = efectividadMetrica?.resumen?.porcentajePrimeraVisita ?? 0;
@@ -1238,96 +1260,198 @@ export default function TorreDeControl() {
               </div>
 
             ) : metricaAnalisis === "Desvío Financiero por Peso Volumétrico" ? (
-              <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden">
-                <div className="bg-white border-b border-gray-200 p-4 flex flex-wrap gap-3 items-center shrink-0 shadow-sm z-10">
-                  {esEquipoShipro && (
-                    <div className="flex items-center gap-2 border border-blue-200 rounded-lg px-3 py-1.5 bg-blue-50/50">
-                      <Building2 className="w-4 h-4 text-blue-500" />
-                      <select value={filtroEmpresaId} onChange={(e) => setFiltroEmpresaId(e.target.value)} className="bg-transparent text-xs font-bold text-blue-800 outline-none cursor-pointer max-w-[180px] truncate">
-                        <option value="TODAS">Todo el Ecosistema</option>
-                        {listaClientes.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-                      </select>
-                    </div>
-                  )}
-                  <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-1.5 bg-gray-50">
-                    <Calendar className="w-4 h-4 text-gray-400" />
-                    <input type="date" value={filtroRuteoDesde} onChange={e => setFiltroRuteoDesde(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"/>
-                    <span className="text-gray-400 text-xs font-bold">a</span>
-                    <input type="date" value={filtroRuteoHasta} onChange={e => setFiltroRuteoHasta(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"/>
+              // Metrica 3.4 (DEUDA 39, 2026-06-11): refactor del modal a
+              // p-8 space-y-6. Consume /api/torre-de-control/desvio-peso.
+              <div className="p-8 space-y-6">
+                {cargandoDesvioPeso ? (
+                  <div className="text-center py-12 text-gray-500">Cargando datos de aforo...</div>
+                ) : !desvioPesoMetrica ? (
+                  <div className="text-center py-12 text-red-600">Error cargando datos. Reintentar.</div>
+                ) : desvioPesoMetrica.resumen.totalEnvios === 0 ? (
+                  <div className="text-center py-12 text-gray-500">No hay envios en la ventana de {desvioPesoMetrica.calidadDatos.ventanaDias} dias.</div>
+                ) : desvioPesoMetrica.resumen.enviosConAforo === 0 ? (
+                  <div className="text-center py-12 text-gray-500">
+                    <p className="mb-2">Aun no hay liquidaciones procesadas.</p>
+                    <p className="text-xs text-gray-400">Los aforos llegan post-cierre mensual al subir el Excel del courier via /api/conciliacion.</p>
                   </div>
-                  <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-1.5 bg-gray-50">
-                    <Truck className="w-4 h-4 text-gray-400" />
-                    <select value={filtroRuteoCourier} onChange={e => setFiltroRuteoCourier(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer">
-                      <option value="TODOS">Couriers Evaluados: Todos</option>
-                      {couriersLista.map(c => <option key={c} value={c}>{c}</option>)}
-                    </select>
-                  </div>
-                </div>
+                ) : (
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
 
-                <div className="flex-1 overflow-y-auto p-6 lg:p-8">
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 max-w-7xl mx-auto">
+                    {/* COLUMNA IZQUIERDA */}
                     <div className="lg:col-span-5 space-y-6">
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-center text-center">
-                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Tasa de Inexactitud</h4>
-                          <p className="text-4xl font-black text-red-600 mb-1">{aforoStats.porcentajeFugaPeso}%</p>
-                          <p className="text-[10px] font-bold text-gray-500">Envíos con aforo final superior al declarado.</p>
+
+                      {/* Hero tile */}
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Fuga por Aforo (90 dias)</h4>
+                        <p className="text-5xl font-black text-red-600 tracking-tighter">{formatPesos(desvioPesoMetrica.resumen.fugaTotal)}</p>
+                        <p className="text-sm text-gray-600 mt-2">
+                          <span className="font-bold">{desvioPesoMetrica.resumen.enviosConDesvio}</span> de {desvioPesoMetrica.resumen.enviosConAforo} envios con aforo procesado
+                        </p>
+                        <p className={`text-sm font-bold mt-1 ${desvioPesoMetrica.resumen.tasaSobreAforados > 50 ? 'text-red-600' : 'text-orange-600'}`}>
+                          Tasa de desvio: {desvioPesoMetrica.resumen.tasaSobreAforados}% (sobre aforados)
+                        </p>
+                        <p className="text-xs text-gray-400 mt-1">
+                          {desvioPesoMetrica.resumen.tasaSobreTotal}% sobre total de envios ({desvioPesoMetrica.resumen.totalEnvios})
+                        </p>
+                        <p className="text-xs text-gray-400 mt-2">
+                          Ahorro proyectado anual: <span className="font-bold text-green-700">{formatPesos(desvioPesoMetrica.resumen.ahorroProyectadoAnual)}</span>
+                        </p>
+                      </div>
+
+                      {/* Magnitud por envio */}
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Magnitud por Envio</h4>
+                        <div className="grid grid-cols-2 gap-3 text-center">
+                          <div className="border-r border-gray-200 pr-2">
+                            <p className="text-xl font-black text-gray-800">{formatPesos(desvioPesoMetrica.resumen.fugaPromedio)}</p>
+                            <p className="text-xs text-gray-500 uppercase">Fuga promedio</p>
+                          </div>
+                          <div className="pl-2">
+                            <p className="text-xl font-black text-gray-800">{formatPesos(desvioPesoMetrica.resumen.fugaMax)}</p>
+                            <p className="text-xs text-gray-500 uppercase">Fuga maxima</p>
+                          </div>
                         </div>
-                        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-center text-center">
-                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Desvío Promedio</h4>
-                          <p className="text-3xl font-black text-orange-600 mb-1 flex justify-center items-center gap-1">+{aforoStats.desvioPromedioKg} <span className="text-lg">kg</span></p>
-                          <p className="text-[10px] font-bold text-gray-500">Volumen extra cobrado por el correo.</p>
+                        <div className="grid grid-cols-2 gap-3 text-center mt-4 pt-4 border-t border-gray-100">
+                          <div className="border-r border-gray-200 pr-2">
+                            <p className="text-xl font-black text-orange-600">+{desvioPesoMetrica.resumen.desvioPromedioKg} kg</p>
+                            <p className="text-xs text-gray-500 uppercase">Desvio prom.</p>
+                          </div>
+                          <div className="pl-2">
+                            <p className="text-xl font-black text-orange-600">+{desvioPesoMetrica.resumen.desvioMaxKg} kg</p>
+                            <p className="text-xs text-gray-500 uppercase">Desvio max.</p>
+                          </div>
                         </div>
                       </div>
 
-                      <div className="bg-white p-6 rounded-2xl shadow-sm border border-red-100 relative overflow-hidden">
-                        <div className="absolute top-0 right-0 w-32 h-32 bg-red-50 rounded-bl-full -z-10 opacity-50"></div>
-                        <h4 className="text-xs font-black text-red-600 uppercase tracking-widest mb-1 flex items-center gap-2"><Scale className="w-4 h-4"/> Fuga de Capital Acumulada</h4>
-                        <p className="text-5xl font-black text-gray-800 mb-2 tracking-tighter">{formatPesos(aforoStats.fugaTotal)}</p>
-                        <p className="text-xs font-medium text-gray-500 leading-relaxed">Dinero que el e-commerce no le cobró al comprador final, pero que el courier facturó a fin de mes.</p>
+                      {/* Distribucion por severidad */}
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Distribucion por Severidad</h4>
+                        <div className="space-y-3">
+                          {[
+                            { key: 'leve', label: 'Leve (≤1 kg)', color: 'bg-yellow-400' },
+                            { key: 'moderado', label: 'Moderado (1-3 kg)', color: 'bg-orange-500' },
+                            { key: 'grave', label: 'Grave (>3 kg)', color: 'bg-red-500' },
+                          ].map((sev) => {
+                            const cantidad = desvioPesoMetrica.resumen.distribucionSeveridad[sev.key];
+                            const pct = desvioPesoMetrica.resumen.distribucionSeveridadPct[sev.key];
+                            return (
+                              <div key={sev.key}>
+                                <div className="flex justify-between text-sm font-bold mb-1">
+                                  <span className="text-gray-700">{sev.label}</span>
+                                  <span className="text-gray-700">{cantidad} ({pct}%)</span>
+                                </div>
+                                <div className="w-full bg-gray-100 rounded-full h-2">
+                                  <div className={`${sev.color} h-2 rounded-full`} style={{ width: `${pct}%` }}></div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
+
                     </div>
 
+                    {/* COLUMNA DERECHA */}
                     <div className="lg:col-span-7 space-y-6">
-                      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
-                        <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center gap-2">
-                          <BarChart className="w-5 h-5 text-red-500"/> Distribución del Error
-                        </h4>
-                        <div className="space-y-6">
-                          <div>
-                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-yellow-600 flex items-center gap-2">Leve (hasta +1kg)</span><span className="text-yellow-600">{aforoStats.distribucionError.leve}%</span></div>
-                            <div className="w-full bg-gray-100 rounded-full h-4"><div className="bg-yellow-400 h-4 rounded-full transition-all duration-1000" style={{ width: `${aforoStats.distribucionError.leve}%` }}></div></div>
+
+                      {/* Por Courier */}
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Rigurosidad por Courier</h4>
+                        {desvioPesoMetrica.porCourier.length === 0 ? (
+                          <p className="text-sm text-gray-400">Sin datos por courier.</p>
+                        ) : (
+                          <div className="space-y-3">
+                            {desvioPesoMetrica.porCourier.map((c: any) => (
+                              <div key={c.courierId} className="border-l-4 border-orange-300 pl-3 py-1">
+                                <div className="flex justify-between items-start">
+                                  <div className="flex-1">
+                                    <p className="text-sm font-bold text-gray-800">{c.nombre}</p>
+                                    <p className="text-xs text-gray-500">
+                                      {c.enviosConDesvio} de {c.enviosConAforo} aforados | Desvio prom. {c.desvioPromedioKg} kg
+                                    </p>
+                                  </div>
+                                  <div className="text-right ml-3">
+                                    <p className="text-lg font-black text-red-600">{c.porcentajeDesvio}%</p>
+                                    <p className="text-xs text-gray-500">{formatPesos(c.fugaTotal)}</p>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
                           </div>
-                          <div>
-                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-orange-600 flex items-center gap-2">Moderado (de +1kg a +3kg)</span><span className="text-orange-600">{aforoStats.distribucionError.moderado}%</span></div>
-                            <div className="w-full bg-gray-100 rounded-full h-4"><div className="bg-orange-500 h-4 rounded-full transition-all duration-1000" style={{ width: `${aforoStats.distribucionError.moderado}%` }}></div></div>
-                          </div>
-                          <div>
-                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-red-600 flex items-center gap-2">Grave (+3kg)</span><span className="text-red-600">{aforoStats.distribucionError.grave}%</span></div>
-                            <div className="w-full bg-gray-100 rounded-full h-4"><div className="bg-red-600 h-4 rounded-full transition-all duration-1000" style={{ width: `${aforoStats.distribucionError.grave}%` }}></div></div>
-                          </div>
-                        </div>
+                        )}
                       </div>
 
-                      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 h-full">
-                        <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center gap-2">
-                          <Truck className="w-5 h-5 text-gray-500"/> Rigurosidad por Courier
-                        </h4>
-                        <div className="space-y-4">
-                          {aforoStats.topEstrictos.map((c:any, idx:number) => (
-                            <div key={`str-${idx}`} className="flex items-center gap-4">
-                              <div className="w-24 text-xs font-bold text-gray-700 truncate">{c.courier}</div>
-                              <div className="flex-1 bg-gray-100 rounded-full h-2 relative">
-                                <div className="bg-gray-400 h-2 rounded-full absolute left-0" style={{ width: `${c.porcentajeAforos}%` }}></div>
+                      {/* Por Empresa */}
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Por Empresa</h4>
+                        {desvioPesoMetrica.porEmpresa.length === 0 ? (
+                          <p className="text-sm text-gray-400">Sin datos por empresa.</p>
+                        ) : (
+                          <div className="space-y-3">
+                            {desvioPesoMetrica.porEmpresa.map((e: any) => (
+                              <div key={e.empresaId}>
+                                <div className="flex justify-between text-sm mb-1">
+                                  <span className="font-bold text-gray-700">{e.nombre}</span>
+                                  <span className="text-gray-500">
+                                    {e.enviosConDesvio} de {e.enviosTotal} envios | <span className="font-bold text-red-600">{formatPesos(e.fugaTotal)}</span> | desvio prom. {e.desvioPromedioKg} kg
+                                  </span>
+                                </div>
                               </div>
-                              <div className="w-10 text-right text-xs font-black text-gray-500">{c.porcentajeAforos}%</div>
-                            </div>
-                          ))}
-                        </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
+
+                      {/* Por Mes */}
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Evolucion Mensual</h4>
+                        {desvioPesoMetrica.porMes.length === 0 ? (
+                          <p className="text-sm text-gray-400">Sin datos por mes.</p>
+                        ) : (
+                          <div className="space-y-2">
+                            {desvioPesoMetrica.porMes.map((m: any) => (
+                              <div key={m.mes} className="flex items-center gap-3">
+                                <span className="text-xs font-bold text-gray-500 w-16">{m.mes}</span>
+                                <span className="text-xs text-gray-700 flex-1">{m.enviosConDesvio} envios con desvio</span>
+                                <span className="text-xs text-red-600 font-bold">{formatPesos(m.fugaTotal)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Top envios */}
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Top 10 Envios con Mas Fuga</h4>
+                        {desvioPesoMetrica.topEnvios.length === 0 ? (
+                          <p className="text-sm text-gray-400">Sin envios para mostrar.</p>
+                        ) : (
+                          <div className="space-y-2 max-h-96 overflow-y-auto">
+                            {desvioPesoMetrica.topEnvios.slice(0, 10).map((e: any) => {
+                              const sevColor =
+                                e.severidad === 'GRAVE' ? 'text-red-600' :
+                                e.severidad === 'MODERADO' ? 'text-orange-600' : 'text-yellow-600';
+                              return (
+                                <div key={e.envioId} className="border border-gray-200 rounded-lg p-3">
+                                  <div className="flex justify-between items-start mb-1">
+                                    <div className="flex-1">
+                                      <p className="text-xs font-bold text-gray-800">Envio #{e.envioId} — {e.empresaNombre}</p>
+                                      <p className="text-xs text-gray-500">
+                                        {e.courierNombre} | {e.pesoCobrado} kg declarado → <span className={sevColor}>{e.pesoAforado} kg facturado (+{e.diffKg} kg)</span>
+                                      </p>
+                                    </div>
+                                    <p className="text-sm font-black text-red-600 ml-3">{formatPesos(e.fugaPesos)}</p>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
                     </div>
                   </div>
-                </div>
+                )}
               </div>
 
             ) : metricaAnalisis === "Efectividad de Entregas en 1ra Visita" ? (
@@ -2463,9 +2587,9 @@ export default function TorreDeControl() {
         <div>
            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><Activity className="w-5 h-5 text-blue-600" /> Rendimiento Core</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
-            <div className={`bg-white p-5 rounded-xl border shadow-sm flex flex-col h-full ${fugaPeso > 20 ? 'border-red-300' : 'border-gray-200'}`}>
+            <div className={`bg-white p-5 rounded-xl border shadow-sm flex flex-col h-full ${(desvioPesoMetrica?.resumen?.tasaSobreAforados ?? 0) > 20 ? 'border-red-300' : 'border-gray-200'}`}>
               <p className="text-xs font-bold text-gray-500 uppercase mb-2 flex items-center gap-1.5"><Box className="text-red-500" /> 4. Desvío de Peso</p>
-              <h3 className="text-3xl font-black mb-1">{fugaPeso}%</h3>
+              <h3 className="text-3xl font-black mb-1">{cargandoDesvioPeso ? '…' : (desvioPesoMetrica?.resumen?.tasaSobreAforados ?? 0)}%</h3>
               <button onClick={() => abrirAnalisis("Desvío Financiero por Peso Volumétrico")} className="w-full py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold mt-auto hover:bg-blue-50">Desglosar</button>
             </div>
             <div className={`bg-white p-5 rounded-xl border shadow-sm flex flex-col h-full ${efectividadGlobal < 85 ? 'border-orange-300' : 'border-gray-200'}`}>

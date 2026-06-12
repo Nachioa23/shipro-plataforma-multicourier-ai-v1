@@ -1150,3 +1150,49 @@ C. **Documentar como "future use":** dejar el modelo intacto pero agregar un com
 **Estimado:** 1-2 horas (configuracion en infra + primer test + monitoreo + documentacion).
 
 **Adicional opcional (registrar como DEUDA 61 si se quiere):** endpoint admin `/api/admin/nps-empresa/disparar` para reenvio manual override (en caso de querer pedir feedback fuera de ciclo a una empresa especifica, o reenviar a un usuario que reporta no haber recibido el email).
+
+---
+
+## DEUDA 61 — Bugs preservados en Mapa SLA durante migracion legacy → endpoint dedicado (registrada 2026-06-12, scope medio)
+
+**Origen:** Metrica 12 (Mapa SLA) migracion del legacy `/api/metricas` a endpoint dedicado `/api/torre-de-control/mapa-sla`, 2026-06-12. Decision del director: "Opcion A — migracion pura sin corregir bugs preservados". Los 3 bugs siguientes se mantienen identicos al legacy para no alterar numeros visibles durante la migracion arquitectonica.
+
+**Adicional importante:** durante la migracion el director identifico que la logica legacy de medicion del SLA usaba el primer hito (entrega exitosa O visita fallida) como `fechaHitoSla`. En el mercado argentino los couriers actualizan estados virtualmente para mantener SLA artificial sin sacar el paquete a distribuir. Por eso el nuevo helper mide hasta entrega real (`fechaEntrega`), que es la verdad operativa. Esta decision NO es bug, es mejora consciente que cambia el significado del campo `slaHealthIndex` post-migracion.
+
+**Bugs preservados (NO corregidos en V1):**
+
+### BUG 1 — Key mismatch en diccionarioSlas
+
+El cron `metricas-sla` pre-computa SLA por `provinciaDestino` raw ("Buenos Aires", "Cordoba"). La logica de calculo en `calcularMapaSLA()` usa `zona normalizada` ("Buenos Aires", "CABA" despues del mapeo `normalizarZona()`). El diccionario `SlaCourier` espera `zonaNombre` ("Interior 1", "AMBA", "Patagonia"). La clave buscada es `${courierId}-${zona}` donde zona es el resultado del normalizador. Resultado: el `diccionarioSlas.get()` raramente matchea y se aplica el fallback `meta = 5 dias` para la mayoria de los envios.
+
+**Impacto:** el `slaHealthIndex` actual usa meta=5d casi siempre, por lo que el indice esta calculado contra una meta uniforme en lugar de la pactada por courier+zona.
+
+**Plan de correccion:** unificar el sistema de zonas. Opciones:
+
+1. Normalizar `SlaCourier.zonaNombre` para coincidir con la normalizacion de `calcularMapaSLA` (cambio en BD).
+2. Refactorizar `normalizarZona()` para producir las mismas zonas canonicas que `SlaCourier.zonaNombre` ("Interior 1", "AMBA", "Patagonia").
+3. Cargar mapeo provincia → zona canonica desde tabla maestra (mas mantenible).
+
+Opcion 3 es la mas robusta pero requiere mas trabajo.
+
+### BUG 2 — metaPactada sobrescribe en mapaZonas
+
+En el loop por envio, si una zona tiene multiples couriers con metas distintas, la asignacion `desgloseZonas[zona].meta = meta` (linea 152) sobrescribe la meta del envio anterior. La zona reporta solo la meta del ultimo courier procesado, no un promedio o desglose.
+
+**Impacto:** si una zona tiene Courier A con 3 dias pactados y Courier B con 5 dias pactados, la zona en el mapa puede reportar 3 o 5 dependiendo del orden de iteracion.
+
+**Plan de correccion:** cambiar `desgloseZonas[zona]` a mantener un mapa `meta -> count` para reportar la meta dominante (mayor cantidad de envios) o exponer un objeto `metasPorCourier` con desglose completo.
+
+### BUG 3 — Tabla MetricaSLA pre-computada ignorada
+
+Existe modelo `MetricaSLA` con campos `courierId + provinciaDestino + slaPromedioHs + muestraEnvios` que es poblado por el cron `metricas-sla` con calculos pre-procesados sobre ventana 90 dias. El endpoint legacy y el nuevo helper recalculan on-the-fly en lugar de leer esta tabla.
+
+**Impacto:** queries lentas en datasets grandes. Trabajo redundante en cada request al endpoint Torre. La tabla pre-computada existe pero no aporta.
+
+**Plan de correccion:** modificar `calcularMapaSLA()` para leer de `MetricaSLA` cuando la query es analitica (lectura del Torre dashboard). Mantener el calculo on-the-fly solo para validaciones o calculos en tiempo real. Requiere alineacion con `MetricaSLA.provinciaDestino` (BUG 1 relacionado).
+
+**Prioridad de DEUDA 61:** Media-alta. Los 3 bugs degradan la precision de la metrica pero no la rompen funcionalmente. El BUG 1 es el de mayor impacto porque distorsiona el `slaHealthIndex` global.
+
+**Estimado:** 4-6 horas (BUG 1: 2-3h, BUG 2: 1h, BUG 3: 1-2h). Sugerencia: resolver BUG 1 y BUG 3 en conjunto porque comparten el sistema de zonas. BUG 2 es independiente.
+
+**Adicional para validar:** despues de corregir BUG 1, verificar que el `slaHealthIndex` cambia significativamente con BD real. Si los numeros cambian mucho hay que comunicar a equipo operacional antes de pushear.

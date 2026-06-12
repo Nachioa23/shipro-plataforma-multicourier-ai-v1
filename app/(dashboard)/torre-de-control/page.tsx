@@ -114,6 +114,12 @@ export default function TorreDeControl() {
   const [npsClienteEmpresaMetrica, setNpsClienteEmpresaMetrica] = useState<any>(null);
   const [cargandoNpsClienteEmpresa, setCargandoNpsClienteEmpresa] = useState(true);
 
+  // Metrica 12 "Mapa SLA (Real)" (DEUDA 39, 2026-06-12).
+  // Datos del endpoint /api/torre-de-control/mapa-sla (migracion de legacy).
+  // Scope global. Universo: envios ENTREGADO ventana 90 dias.
+  const [mapaSlaMetrica, setMapaSlaMetrica] = useState<any>(null);
+  const [cargandoMapaSla, setCargandoMapaSla] = useState(true);
+
   useEffect(() => {
     if (!filtroEmpresaId) return;
     const baseParams = { filtroEmpresa: filtroEmpresaId, page: "1", limit: "1" };
@@ -388,6 +394,22 @@ export default function TorreDeControl() {
       });
   }, [esEquipoShipro]);
 
+  // Torre de Control Metrica 12: fetch del endpoint de mapa-sla.
+  useEffect(() => {
+    if (!esEquipoShipro) return;
+    setCargandoMapaSla(true);
+    fetch("/api/torre-de-control/mapa-sla")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setMapaSlaMetrica(data);
+        setCargandoMapaSla(false);
+      })
+      .catch(err => {
+        console.error("[Torre de Control] error fetching mapa-sla:", err);
+        setCargandoMapaSla(false);
+      });
+  }, [esEquipoShipro]);
+
   const totalEnvios = metricas?.totalEnvios || 1;
   // Torre de Control Metrica 2.1 (2026-06-04): cambio de fuente.
   // Antes: metricas?.tiempoColectaPromedioDias (campo aspiracional, nunca
@@ -420,8 +442,6 @@ export default function TorreDeControl() {
   
   // Metrica 1.2 (2026-06-11): nps legacy removido en Sub-step E.
   // Card 12 + modal ahora consumen npsCompradorMetrica del endpoint nuevo.
-  const slaStats = metricas?.slaStats || { indiceGlobal: 0, promedioPrepNacional: 0, cumplimientoE2E: 0, promedioPreparacion: 0, slaHealthIndex: 0, mapaZonas: [] };
-
   let couriersLista: string[] = [];
   if (metricas && metricas.nombresCouriers) {
     couriersLista = metricas.nombresCouriers.map((c:any) => c.nombre);
@@ -2382,88 +2402,140 @@ export default function TorreDeControl() {
               </div>
 
             ) : metricaAnalisis === "Mapa de Calor SLA" ? (
-              <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden p-8">
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 max-w-7xl mx-auto h-full">
-                  
-                  {/* PANEL IZQUIERDO: EL DASHBOARD DE CUMPLIMIENTO */}
-                  <div className="lg:col-span-5 space-y-6">
-                    <div className="flex justify-between items-center">
-                      <h4 className="text-sm font-black text-gray-800 uppercase">
-                        {zonaSlaSeleccionada ? `Zona: ${zonaSlaSeleccionada.zona}` : 'Promedio Ecosistema'}
-                      </h4>
-                      {zonaSlaSeleccionada && (
-                        <button onClick={() => setZonaSlaSeleccionada(null)} className="text-[10px] font-bold text-blue-600 px-2 py-1 bg-blue-50 rounded">Ver Global</button>
-                      )}
-                    </div>
+              // Metrica 12 (DEUDA 39, 2026-06-12): modal Mapa SLA migrado del legacy /api/metricas.
+              // Consume /api/torre-de-control/mapa-sla. Patron p-8 space-y-6.
+              <div className="p-8 space-y-6">
+                {cargandoMapaSla ? (
+                  <div className="text-center py-12 text-gray-500">Cargando Mapa SLA...</div>
+                ) : !mapaSlaMetrica ? (
+                  <div className="text-center py-12 text-red-600">Error cargando datos. Reintentar.</div>
+                ) : (
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
 
-                    {/* MÉTRICA 1: SLA HEALTH INDEX (COURIER) */}
-                    <div className={`p-6 rounded-3xl border-2 flex flex-col items-center justify-center text-center transition-all ${
-                      (zonaSlaSeleccionada?.indice || slaStats.slaHealthIndex) <= 1 ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'
-                    }`}>
-                      <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Courier Health Index</h4>
-                      <p className={`text-6xl font-black ${(zonaSlaSeleccionada?.indice || slaStats.slaHealthIndex) <= 1 ? 'text-green-600' : 'text-red-600'}`}>
-                        {zonaSlaSeleccionada ? zonaSlaSeleccionada.indice : slaStats.slaHealthIndex}
-                      </p>
-                      <p className="text-[10px] font-bold text-gray-500 uppercase mt-1">
-                        Días Reales / Días Pactados
-                      </p>
-                    </div>
+                    {/* COLUMNA IZQUIERDA */}
+                    <div className="lg:col-span-5 space-y-6">
 
-                    {/* MÉTRICA 2: CUMPLIMIENTO E2E (SHIPRO) */}
-                    <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm relative overflow-hidden">
-                      <div className="flex justify-between items-start mb-4">
-                        <div>
-                          <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Cumplimiento Shipro</h4>
-                          <p className="text-4xl font-black text-gray-800">{slaStats.cumplimientoE2E}%</p>
-                        </div>
-                        <div className="p-2 bg-blue-50 rounded-lg"><Target className="w-5 h-5 text-blue-600"/></div>
+                      {/* Header dinamico zona / global */}
+                      <div className="bg-white border border-gray-200 rounded-xl p-4 flex items-center justify-between">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest">
+                          {zonaSlaSeleccionada ? `Zona: ${zonaSlaSeleccionada.zona}` : 'Promedio Ecosistema'}
+                        </h4>
+                        {zonaSlaSeleccionada && (
+                          <button onClick={() => setZonaSlaSeleccionada(null)} className="text-xs text-blue-600 hover:underline">Ver Global</button>
+                        )}
                       </div>
-                      <p className="text-[11px] text-gray-500 leading-relaxed font-medium">
-                        Porcentaje de compradores que recibieron su pedido dentro de la <strong>Promesa de Checkout</strong> (End-to-End).
-                      </p>
-                    </div>
 
-                    {/* MÉTRICA 3: PREPARACIÓN */}
-                    <div className="bg-gray-100 p-5 rounded-2xl border border-gray-200 flex justify-between items-center">
-                       <div>
-                         <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Demora de Preparación</h4>
-                         <p className="text-2xl font-black text-gray-700">{slaStats.promedioPreparacion} días</p>
-                       </div>
-                       <Clock className="w-8 h-8 text-gray-300"/>
-                    </div>
-                  </div>
+                      {/* Hero 1: SLA Health Index */}
+                      <div className={`border-2 rounded-xl p-6 ${
+                        (zonaSlaSeleccionada?.indice ?? mapaSlaMetrica.resumen.slaHealthIndex) <= 1
+                          ? 'bg-green-50 border-green-200'
+                          : 'bg-red-50 border-red-200'
+                      }`}>
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Courier Health Index</h4>
+                        <div className="flex items-center justify-center">
+                          <p className={`text-6xl font-black ${
+                            (zonaSlaSeleccionada?.indice ?? mapaSlaMetrica.resumen.slaHealthIndex) <= 1
+                              ? 'text-green-600'
+                              : 'text-red-600'
+                          }`}>
+                            {zonaSlaSeleccionada ? zonaSlaSeleccionada.indice : mapaSlaMetrica.resumen.slaHealthIndex}
+                          </p>
+                        </div>
+                        <p className="text-xs text-gray-500 text-center mt-2">
+                          Index ≤ 1: courier cumple SLA pactado · &gt; 1: lento
+                        </p>
+                      </div>
 
-                  {/* PANEL DERECHO: RENDIMIENTO POR ZONA */}
-                  <div className="lg:col-span-7 bg-white rounded-2xl p-6 border border-gray-200 overflow-y-auto">
-                    <h4 className="text-sm font-black mb-6 flex items-center gap-2"><MapPinned className="text-blue-600"/> Rendimiento Geográfico</h4>
-                    <div className="space-y-3">
-                      {slaStats.mapaZonas.map((z:any, i:number) => (
-                        <div 
-                          key={i} 
-                          onClick={() => setZonaSlaSeleccionada(z)}
-                          className={`p-4 border rounded-xl flex items-center justify-between cursor-pointer transition-all ${
-                            zonaSlaSeleccionada?.zona === z.zona ? 'border-blue-600 bg-blue-50 shadow-md' : 'border-gray-100 bg-gray-50 hover:bg-white'
-                          }`}
-                        >
+                      {/* Hero 2: Cumplimiento Shipro E2E */}
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-3">Cumplimiento Shipro (E2E)</h4>
+                        <div className="flex items-center gap-3">
+                          <p className="text-4xl font-black text-gray-800">{mapaSlaMetrica.resumen.cumplimientoE2E}%</p>
+                          <p className="text-xs text-gray-500">de envios cumplen promesa<br />impresion → entrega</p>
+                        </div>
+                      </div>
+
+                      {/* Hero 3: Demora Preparacion */}
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-3">Demora de Preparacion</h4>
+                        <div className="flex items-center gap-3">
+                          <Clock className="w-8 h-8 text-blue-500" />
                           <div>
-                            <p className="font-black text-gray-800 text-sm">{z.zona}</p>
-                            <p className="text-[9px] font-bold text-gray-400 uppercase">{z.volumen} envíos medidos</p>
-                          </div>
-                          <div className="flex gap-8">
-                            <div className="text-right">
-                              <p className="text-[8px] font-bold text-gray-400 uppercase">Tránsito Real</p>
-                              <p className="text-sm font-black text-gray-700">{z.transitoReal}d</p>
-                            </div>
-                            <div className="text-right">
-                              <p className="text-[8px] font-bold text-gray-400 uppercase">SLA Index</p>
-                              <p className={`text-sm font-black ${z.indice <= 1 ? 'text-green-600' : 'text-red-600'}`}>{z.indice}</p>
-                            </div>
+                            <p className="text-2xl font-black text-gray-700">{mapaSlaMetrica.resumen.promedioPreparacion} dias</p>
+                            <p className="text-xs text-gray-500">promedio impresion → colecta</p>
                           </div>
                         </div>
-                      ))}
+                      </div>
+
+                      {/* NUEVO: Realidad Operativa (3 metricas) */}
+                      <div className="bg-amber-50 border-2 border-amber-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-amber-700 uppercase tracking-widest mb-3">Realidad Operativa</h4>
+                        <p className="text-xs text-gray-600 mb-4">
+                          Friccion operativa real medida sobre envios ENTREGADO. Detecta couriers que actualizan estados virtualmente sin distribuir.
+                        </p>
+                        <div className="grid grid-cols-3 gap-3 text-center">
+                          <div className="border-r border-amber-200 pr-2">
+                            <p className="text-2xl font-black text-amber-700">{mapaSlaMetrica.resumen.totalEnviosConIncidencia}</p>
+                            <p className="text-xs text-gray-500 uppercase mt-1">Envios con incidencia</p>
+                          </div>
+                          <div className="border-r border-amber-200 px-2">
+                            <p className="text-2xl font-black text-amber-700">{mapaSlaMetrica.resumen.porcentajeEnviosConIncidencia}%</p>
+                            <p className="text-xs text-gray-500 uppercase mt-1">% del total</p>
+                          </div>
+                          <div className="pl-2">
+                            <p className="text-2xl font-black text-amber-700">{mapaSlaMetrica.resumen.promedioIntentosEntrega}</p>
+                            <p className="text-xs text-gray-500 uppercase mt-1">Intentos promedio</p>
+                          </div>
+                        </div>
+                      </div>
+
+                    </div>
+
+                    {/* COLUMNA DERECHA */}
+                    <div className="lg:col-span-7 space-y-6">
+
+                      {/* Rendimiento Geografico */}
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                          <MapPinned className="w-4 h-4 text-[#233b6b]" /> Rendimiento Geografico
+                        </h4>
+                        {mapaSlaMetrica.mapaZonas.length === 0 ? (
+                          <p className="text-sm text-gray-400">Sin datos de zonas en la ventana de {mapaSlaMetrica.calidadDatos.ventanaDias} dias.</p>
+                        ) : (
+                          <div className="space-y-2 max-h-96 overflow-y-auto">
+                            {mapaSlaMetrica.mapaZonas.map((z: any, i: number) => (
+                              <div
+                                key={i}
+                                onClick={() => setZonaSlaSeleccionada(z)}
+                                className={`flex items-center justify-between p-3 rounded-lg cursor-pointer hover:bg-gray-50 ${
+                                  zonaSlaSeleccionada?.zona === z.zona ? 'bg-blue-50 border border-blue-200' : 'border border-gray-100'
+                                }`}
+                              >
+                                <div className="flex-1">
+                                  <p className="text-sm font-bold text-gray-700">{z.zona}</p>
+                                  <p className="text-xs text-gray-500">{z.volumen} envios · transito real {z.transitoReal}d · meta {z.metaPactada}d</p>
+                                </div>
+                                <span className={`text-lg font-black ${z.indice <= 1 ? 'text-green-700' : 'text-red-600'}`}>
+                                  {z.indice}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Calidad Datos */}
+                      <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Calidad de Datos</h4>
+                        <p className="text-xs text-gray-600">
+                          Ventana: {mapaSlaMetrica.calidadDatos.ventanaDias} dias · {mapaSlaMetrica.calidadDatos.totalEnviosE2E} envios E2E · {mapaSlaMetrica.calidadDatos.totalEnviosTransito} envios transito · {mapaSlaMetrica.calidadDatos.totalEnviosPrep} envios preparacion
+                        </p>
+                        <p className="text-xs text-gray-400 mt-1">{mapaSlaMetrica.calidadDatos.nivelImplementado}</p>
+                      </div>
+
                     </div>
                   </div>
-                </div>
+                )}
               </div>
 
             ) : metricaAnalisis === "NPS Comprador" ? (
@@ -3111,7 +3183,7 @@ export default function TorreDeControl() {
         {/* BLOQUE 3: ANÁLISIS VIVOS */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 flex flex-col h-full">
-            <h3 className="text-sm font-black text-gray-800 uppercase mb-6 flex items-center justify-between"><span><Store className="w-4 h-4 text-[#233b6b] inline mr-2" /> 9. Modalidades</span><button onClick={() => abrirAnalisis("Adopción de Modalidades")} className="p-1.5 bg-gray-50 hover:bg-blue-50 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
+            <h3 className="text-sm font-black text-gray-800 uppercase mb-6 flex items-center justify-between"><span><Store className="w-4 h-4 text-[#233b6b] inline mr-2" /> 10. Modalidades</span><button onClick={() => abrirAnalisis("Adopción de Modalidades")} className="p-1.5 bg-gray-50 hover:bg-blue-50 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
             {cargandoModalidades ? (
               <div className="space-y-5 flex-1 animate-pulse">
                 <div className="h-4 bg-gray-100 rounded"></div>
@@ -3148,7 +3220,7 @@ export default function TorreDeControl() {
           </div>
 
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 flex flex-col h-full">
-            <h3 className="text-sm font-black text-gray-800 uppercase mb-6 flex items-center justify-between"><span><PieChart className="w-4 h-4 text-[#233b6b] inline mr-2" /> 10. Riesgo Courier</span><button onClick={() => abrirAnalisis("Concentración Courier")} className="p-1.5 bg-gray-50 hover:bg-blue-50 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
+            <h3 className="text-sm font-black text-gray-800 uppercase mb-6 flex items-center justify-between"><span><PieChart className="w-4 h-4 text-[#233b6b] inline mr-2" /> 11. Riesgo Courier</span><button onClick={() => abrirAnalisis("Concentración Courier")} className="p-1.5 bg-gray-50 hover:bg-blue-50 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
             <div className="flex-1 flex flex-col justify-center space-y-4">
               {cargandoConcentracionCourier ? (
                 <p className="text-xs text-gray-400 text-center font-bold">Cargando...</p>
@@ -3164,9 +3236,9 @@ export default function TorreDeControl() {
           </div>
 
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 flex flex-col h-full">
-            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center justify-between"><span className="flex items-center gap-2"><Map className="w-4 h-4 text-[#233b6b]" /> 11. Mapa SLA (Real)</span><button onClick={() => abrirAnalisis("Mapa de Calor SLA")} className="p-1.5 bg-gray-50 hover:bg-blue-50 text-gray-500 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
+            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center justify-between"><span className="flex items-center gap-2"><Map className="w-4 h-4 text-[#233b6b]" /> 12. Mapa SLA (Real)</span><button onClick={() => abrirAnalisis("Mapa de Calor SLA")} className="p-1.5 bg-gray-50 hover:bg-blue-50 text-gray-500 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
             <div className="flex-1 grid grid-cols-3 sm:grid-cols-4 gap-2 text-[10px] font-bold text-center text-white items-center content-start">
-              {slaStats.mapaZonas.length === 0 ? <p className="col-span-full text-gray-400 py-4 font-bold text-center">Sin datos de SLA finalizados</p> : slaStats.mapaZonas.slice(0, 12).map((z: any, i: number) => {
+              {cargandoMapaSla ? <p className="col-span-full text-gray-400 py-4 font-bold text-center">Cargando…</p> : (mapaSlaMetrica?.mapaZonas?.length ?? 0) === 0 ? <p className="col-span-full text-gray-400 py-4 font-bold text-center">Sin datos de SLA finalizados</p> : (mapaSlaMetrica?.mapaZonas ?? []).slice(0, 12).map((z: any, i: number) => {
                 const color = z.indice <= 0.8 ? 'bg-green-500' : z.indice <= 1 ? 'bg-blue-500' : 'bg-red-500';
                 return (
                   <div key={i} className={`${color} rounded p-2 flex flex-col items-center justify-center shadow-sm hover:scale-105 transition-transform`} title={z.zona}>
@@ -3185,11 +3257,11 @@ export default function TorreDeControl() {
              <HeartHandshake className="w-5 h-5 text-indigo-500" /> Voz del Comprador y del Cliente
            </h3>
            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2">
-             12. Experiencia del Consumidor (NPS Analítico)
+             13. Experiencia del Consumidor (NPS Analítico)
            </h3>
            <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm flex flex-col h-full max-w-md">
              <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-               <HeartHandshake className="w-4 h-4 text-indigo-500" /> 12. Experiencia del Consumidor (NPS)
+               <HeartHandshake className="w-4 h-4 text-indigo-500" /> 13. Experiencia del Consumidor (NPS)
              </h4>
              <div className="flex items-center justify-center mb-4">
                <div className={`w-28 h-28 rounded-full border-8 flex items-center justify-center bg-white shadow-inner ${
@@ -3217,7 +3289,7 @@ export default function TorreDeControl() {
            </div>
            <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm flex flex-col h-full max-w-md">
              <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-               <HeartHandshake className="w-4 h-4 text-indigo-500" /> 13. NPS Cliente Empresa
+               <HeartHandshake className="w-4 h-4 text-indigo-500" /> 14. NPS Cliente Empresa
              </h4>
              <div className="flex items-center justify-center mb-4">
                <div className={`w-28 h-28 rounded-full border-8 flex items-center justify-center bg-white shadow-inner ${

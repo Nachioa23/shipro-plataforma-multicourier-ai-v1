@@ -390,3 +390,370 @@ export function resumirDevoluciones(
     distribucionPuntosPerdida: distPuntos,
   };
 }
+
+// ============================================================================
+// ORQUESTACION SCOPE-AWARE — calcularEfectividad(ctx)
+//
+// Phase 1.3.b (Panel cliente migration, 2026-06-13).
+// Extrae al helper la logica de orquestacion que estaba inline en el
+// endpoint /api/torre-de-control/efectividad-primera-visita.
+//
+// Patron: igual a calcularFugaRuteo + calcularDesvioPeso.
+// Auto-detecta scope desde AuthContext:
+//
+// - Cliente (modoDios=false): filtra por ctx.empresaId, retorna shape
+//   "cliente" sin porEmpresa.
+// - Shipro Torre (modoDios=true, sin filtroEmpresa): scope global,
+//   retorna shape "shipro" completo con porEmpresa.
+// - Shipro inspeccion (modoDios=true, con filtroEmpresa=N): empresa
+//   especifica, retorna shape "shipro" sin porEmpresa (1-entry).
+//
+// Reusa primitives existentes: clasificarEfectividad, obtenerMotivoUltimaFalla,
+// resumirEfectividad, extraerCosto. NO recomputa logica de clasificacion.
+//
+// Decisiones de producto (director 2026-06-13):
+// D1 - costoInversaEstimado integrado al shape (opcion alpha) — usa
+//      extraerCosto sobre envios DEVUELTO_AL_REMITENTE.
+// D2 - porProvincia reusa el shape Torre con porcentajeDevoluciones
+//      (tasa relativa, no volumen absoluto). UI Panel relabel "Mapa
+//      Logistica Inversa" → "Tasa de Devolucion por Provincia".
+// D3 - porEmpresa expuesto solo en shape Shipro.
+// D4 - calidadDatos preserva shape actual { ventanaDias, cantidadEnviosSinEventos }.
+// ============================================================================
+
+import prisma from "@/lib/prisma";
+import type { AuthContext } from "@/lib/auth-context";
+
+const VENTANA_DIAS_DEFAULT_EFECTIVIDAD = 90;
+
+export interface ResumenEfectividadOutput {
+  totalEnvios: number;
+  totalEntregados: number;
+  totalDevueltos: number;
+  totalUniverso: number;
+  porcentajePrimeraVisita: number;
+  porcentajeVisitasForzadas: number;
+  porcentajeDevoluciones: number;
+  costoInversaEstimado: number;       // D1: agregado al shape
+}
+
+export interface FunnelBucket {
+  cantidad: number;
+  porcentaje: number;
+}
+
+export interface FunnelEfectividad {
+  primeraVisitaExitosa: FunnelBucket;
+  visitasForzadas: FunnelBucket;
+  devoluciones: FunnelBucket;
+}
+
+export interface GrupoCourierEfectividad {
+  courierId: number;
+  nombre: string;
+  total: number;
+  universo: number;
+  porcentajePrimeraVisita: number;
+  porcentajeVisitasForzadas: number;
+  porcentajeDevoluciones: number;
+}
+
+export interface GrupoProvinciaEfectividad {
+  provincia: string;
+  total: number;
+  universo: number;
+  porcentajePrimeraVisita: number;
+  porcentajeVisitasForzadas: number;
+  porcentajeDevoluciones: number;
+}
+
+export interface GrupoMesEfectividad {
+  mes: string;
+  total: number;
+  universo: number;
+  porcentajePrimeraVisita: number;
+  porcentajeVisitasForzadas: number;
+  porcentajeDevoluciones: number;
+}
+
+export interface GrupoEmpresaEfectividad {
+  empresaId: number;
+  empresaNombre: string;
+  total: number;
+  universo: number;
+  porcentajePrimeraVisita: number;
+  porcentajeVisitasForzadas: number;
+  porcentajeDevoluciones: number;
+}
+
+export interface MotivoFallaEfectividad {
+  motivo: string;
+  cantidad: number;
+  porcentaje: number;
+}
+
+export interface CalidadDatosEfectividad {
+  ventanaDias: number;
+  cantidadEnviosSinEventos: number;
+}
+
+export interface ResultadoEfectividadCliente {
+  resumen: ResumenEfectividadOutput;
+  funnel: FunnelEfectividad;
+  porCourier: GrupoCourierEfectividad[];
+  porProvincia: GrupoProvinciaEfectividad[];
+  porMes: GrupoMesEfectividad[];
+  topMotivosFalla: MotivoFallaEfectividad[];
+  calidadDatos: CalidadDatosEfectividad;
+  scope: "cliente";
+}
+
+export interface ResultadoEfectividadShipro {
+  resumen: ResumenEfectividadOutput;
+  funnel: FunnelEfectividad;
+  porCourier: GrupoCourierEfectividad[];
+  porProvincia: GrupoProvinciaEfectividad[];
+  porMes: GrupoMesEfectividad[];
+  porEmpresa: GrupoEmpresaEfectividad[];
+  topMotivosFalla: MotivoFallaEfectividad[];
+  calidadDatos: CalidadDatosEfectividad;
+  scope: "shipro";
+}
+
+export type ResultadoEfectividad = ResultadoEfectividadCliente | ResultadoEfectividadShipro;
+
+export async function calcularEfectividad(
+  ctx: AuthContext,
+  ventanaDias: number = VENTANA_DIAS_DEFAULT_EFECTIVIDAD
+): Promise<ResultadoEfectividad> {
+  const ventanaInicio = new Date();
+  ventanaInicio.setDate(ventanaInicio.getDate() - ventanaDias);
+
+  // Build where clause scope-aware.
+  const whereClause: any = {
+    fechaImpresion: { gte: ventanaInicio },
+  };
+  if (!ctx.modoDios) {
+    whereClause.empresaId = ctx.empresaId;
+  } else if (ctx.empresaId !== null) {
+    whereClause.empresaId = ctx.empresaId;
+  }
+
+  const envios = await prisma.envio.findMany({
+    where: whereClause,
+    include: {
+      eventos: { orderBy: { fecha: "asc" } },
+      courier: { select: { id: true, nombre: true } },
+      destino: { select: { provincia: true } },
+      empresa: { select: { id: true, nombre: true } },
+      finanzas: true,
+    },
+  });
+
+  // ============================================================
+  // 1. Resumen global agregado.
+  // ============================================================
+  const resumenBase = resumirEfectividad(envios.map(e => ({ id: e.id, eventos: e.eventos })));
+
+  // D1: cost inversa = suma precioFactura de envios DEVUELTOS.
+  let costoInversaEstimado = 0;
+  for (const envio of envios) {
+    const clasif = clasificarEfectividad(envio.eventos);
+    if (clasif === "DEVUELTO_AL_REMITENTE") {
+      const { precioFactura } = extraerCosto(envio);
+      if (precioFactura != null) costoInversaEstimado += precioFactura;
+    }
+  }
+
+  const resumen: ResumenEfectividadOutput = {
+    totalEnvios: resumenBase.totalEnvios,
+    totalEntregados: resumenBase.totalEntregados,
+    totalDevueltos: resumenBase.totalDevueltos,
+    totalUniverso: resumenBase.totalUniverso,
+    porcentajePrimeraVisita: resumenBase.porcentajePrimeraVisita,
+    porcentajeVisitasForzadas: resumenBase.porcentajeVisitasForzadas,
+    porcentajeDevoluciones: resumenBase.porcentajeDevoluciones,
+    costoInversaEstimado: Math.round(costoInversaEstimado * 100) / 100,
+  };
+
+  // ============================================================
+  // 2. Funnel.
+  // ============================================================
+  const universo = resumen.totalUniverso;
+  const pct = (n: number) => universo > 0 ? Math.round((n / universo) * 1000) / 10 : 0;
+
+  const funnel: FunnelEfectividad = {
+    primeraVisitaExitosa: {
+      cantidad: resumenBase.totalPrimeraVisitaExitosa,
+      porcentaje: pct(resumenBase.totalPrimeraVisitaExitosa),
+    },
+    visitasForzadas: {
+      cantidad: resumenBase.totalVisitasForzadas,
+      porcentaje: pct(resumenBase.totalVisitasForzadas),
+    },
+    devoluciones: {
+      cantidad: resumenBase.totalDevueltos,
+      porcentaje: pct(resumenBase.totalDevueltos),
+    },
+  };
+
+  // ============================================================
+  // 3. Groupings reutilizables.
+  // ============================================================
+  type AccumBucket = {
+    total: number;
+    universo: number;
+    primera: number;
+    forzadas: number;
+    devoluciones: number;
+  };
+
+  const newAccum = (): AccumBucket => ({ total: 0, universo: 0, primera: 0, forzadas: 0, devoluciones: 0 });
+
+  const accumulate = (acc: AccumBucket, clasif: ClasificacionEfectividad) => {
+    acc.total++;
+    if (clasif !== "NO_APLICA") {
+      acc.universo++;
+      if (clasif === "PRIMERA_VISITA_EXITOSA") acc.primera++;
+      else if (clasif === "VISITAS_FORZADAS") acc.forzadas++;
+      else if (clasif === "DEVUELTO_AL_REMITENTE") acc.devoluciones++;
+    }
+  };
+
+  const accumToOutput = (acc: AccumBucket) => ({
+    total: acc.total,
+    universo: acc.universo,
+    porcentajePrimeraVisita: acc.universo > 0 ? Math.round((acc.primera / acc.universo) * 1000) / 10 : 0,
+    porcentajeVisitasForzadas: acc.universo > 0 ? Math.round((acc.forzadas / acc.universo) * 1000) / 10 : 0,
+    porcentajeDevoluciones: acc.universo > 0 ? Math.round((acc.devoluciones / acc.universo) * 1000) / 10 : 0,
+  });
+
+  // ============================================================
+  // 4. porCourier.
+  // ============================================================
+  const courierMap = new Map<number, { courierId: number; nombre: string; acc: AccumBucket }>();
+
+  // ============================================================
+  // 5. porProvincia.
+  // ============================================================
+  const provinciaMap = new Map<string, AccumBucket>();
+
+  // ============================================================
+  // 6. porMes.
+  // ============================================================
+  const mesMap = new Map<string, AccumBucket>();
+
+  // ============================================================
+  // 7. porEmpresa (solo shipro sin filtroEmpresa).
+  // ============================================================
+  const empresaMap = new Map<number, { empresaId: number; empresaNombre: string; acc: AccumBucket }>();
+
+  // ============================================================
+  // 8. topMotivosFalla.
+  // ============================================================
+  const motivosMap = new Map<string, number>();
+  let totalConFalla = 0;
+  let cantidadEnviosSinEventos = 0;
+
+  // ============================================================
+  // 9. Single pass.
+  // ============================================================
+  for (const envio of envios) {
+    if (envio.eventos.length === 0) cantidadEnviosSinEventos++;
+    const clasif = clasificarEfectividad(envio.eventos);
+
+    // courier
+    const cid = envio.courier.id;
+    if (!courierMap.has(cid)) {
+      courierMap.set(cid, { courierId: cid, nombre: envio.courier.nombre, acc: newAccum() });
+    }
+    accumulate(courierMap.get(cid)!.acc, clasif);
+
+    // provincia
+    const prov = (envio.destino?.provincia || "Desconocida").toLowerCase().trim();
+    if (!provinciaMap.has(prov)) provinciaMap.set(prov, newAccum());
+    accumulate(provinciaMap.get(prov)!, clasif);
+
+    // mes
+    const f = envio.fechaImpresion;
+    const mes = `${f.getFullYear()}-${String(f.getMonth() + 1).padStart(2, "0")}`;
+    if (!mesMap.has(mes)) mesMap.set(mes, newAccum());
+    accumulate(mesMap.get(mes)!, clasif);
+
+    // empresa (only modoDios global)
+    if (ctx.modoDios && ctx.empresaId === null) {
+      const eid = envio.empresa.id;
+      if (!empresaMap.has(eid)) {
+        empresaMap.set(eid, { empresaId: eid, empresaNombre: envio.empresa.nombre, acc: newAccum() });
+      }
+      accumulate(empresaMap.get(eid)!.acc, clasif);
+    }
+
+    // motivo falla
+    const motivo = obtenerMotivoUltimaFalla(envio.eventos);
+    if (motivo) {
+      motivosMap.set(motivo, (motivosMap.get(motivo) || 0) + 1);
+      totalConFalla++;
+    }
+  }
+
+  // ============================================================
+  // 10. Materialize outputs.
+  // ============================================================
+  const porCourier: GrupoCourierEfectividad[] = Array.from(courierMap.values())
+    .map(c => ({ courierId: c.courierId, nombre: c.nombre, ...accumToOutput(c.acc) }))
+    .sort((a, b) => b.universo - a.universo);
+
+  const porProvincia: GrupoProvinciaEfectividad[] = Array.from(provinciaMap.entries())
+    .map(([provincia, acc]) => ({ provincia, ...accumToOutput(acc) }))
+    .sort((a, b) => b.universo - a.universo)
+    .slice(0, 10);
+
+  const porMes: GrupoMesEfectividad[] = Array.from(mesMap.entries())
+    .map(([mes, acc]) => ({ mes, ...accumToOutput(acc) }))
+    .sort((a, b) => a.mes.localeCompare(b.mes));
+
+  const topMotivosFalla: MotivoFallaEfectividad[] = Array.from(motivosMap.entries())
+    .map(([motivo, cantidad]) => ({
+      motivo,
+      cantidad,
+      porcentaje: totalConFalla > 0 ? Math.round((cantidad / totalConFalla) * 1000) / 10 : 0,
+    }))
+    .sort((a, b) => b.cantidad - a.cantidad)
+    .slice(0, 5);
+
+  const calidadDatos: CalidadDatosEfectividad = {
+    ventanaDias,
+    cantidadEnviosSinEventos,
+  };
+
+  if (!ctx.modoDios) {
+    return {
+      resumen,
+      funnel,
+      porCourier,
+      porProvincia,
+      porMes,
+      topMotivosFalla,
+      calidadDatos,
+      scope: "cliente",
+    };
+  }
+
+  // Shipro: include porEmpresa.
+  const porEmpresa: GrupoEmpresaEfectividad[] = Array.from(empresaMap.values())
+    .map(e => ({ empresaId: e.empresaId, empresaNombre: e.empresaNombre, ...accumToOutput(e.acc) }))
+    .sort((a, b) => b.universo - a.universo);
+
+  return {
+    resumen,
+    funnel,
+    porCourier,
+    porProvincia,
+    porMes,
+    porEmpresa,
+    topMotivosFalla,
+    calidadDatos,
+    scope: "shipro",
+  };
+}

@@ -42,6 +42,11 @@ export default function Dashboard() {
   // /api/torre-de-control/desvio-peso (scope-aware: cliente o shipro).
   const [desvioPesoMetrica, setDesvioPesoMetrica] = useState<any>(null);
   const [cargandoDesvioPeso, setCargandoDesvioPeso] = useState(true);
+
+  // Phase 1.3.d (2026-06-13): metrica Efectividad 1ra Visita migrada al endpoint
+  // Torre /api/torre-de-control/efectividad-primera-visita (scope-aware).
+  const [efectividadMetrica, setEfectividadMetrica] = useState<any>(null);
+  const [cargandoEfectividad, setCargandoEfectividad] = useState(true);
   const [filtroRuteoHasta, setFiltroRuteoHasta] = useState("");
   const [filtroRuteoServicio, setFiltroRuteoServicio] = useState("TODOS");
   const [filtroRuteoCourier, setFiltroRuteoCourier] = useState("TODOS");
@@ -103,6 +108,22 @@ export default function Dashboard() {
       .catch(err => {
         console.error("[Panel] error fetching desvio-peso:", err);
         setCargandoDesvioPeso(false);
+      });
+  }, [tienePermiso, empresaActivaId]);
+
+  // Phase 1.3.d: fetch efectividad-primera-visita desde endpoint Torre.
+  useEffect(() => {
+    if (!tienePermiso) return;
+    setCargandoEfectividad(true);
+    fetch("/api/torre-de-control/efectividad-primera-visita")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setEfectividadMetrica(data);
+        setCargandoEfectividad(false);
+      })
+      .catch(err => {
+        console.error("[Panel] error fetching efectividad:", err);
+        setCargandoEfectividad(false);
       });
   }, [tienePermiso, empresaActivaId]);
 
@@ -171,7 +192,7 @@ export default function Dashboard() {
 
   // INSIGHTS LÓGICOS
   const fugaPeso = desvioPesoMetrica?.resumen?.tasaSobreAforados ?? 0;
-  const efectividadGlobal = efectividadStats.tasaPrimeraVisita;
+  const efectividadGlobal = efectividadMetrica?.resumen?.porcentajePrimeraVisita ?? 0;
   const tasaSoporteGlobal = soporteStats.tasaSoporte;
 
   let insightRuteoP = "Enrutamiento 100% optimizado.";
@@ -437,7 +458,7 @@ export default function Dashboard() {
                     <div className="lg:col-span-5 space-y-6">
                       <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 relative overflow-hidden">
                         <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Efectividad 1ra Visita</h4>
-                        <p className="text-6xl font-black text-gray-800 tracking-tighter">{efectividadStats.tasaPrimeraVisita}%</p>
+                        <p className="text-6xl font-black text-gray-800 tracking-tighter">{efectividadMetrica?.resumen?.porcentajePrimeraVisita ?? 0}%</p>
                         <p className="text-xs font-medium text-gray-500 mt-2">Envíos que llegaron a destino con una sola salida a distribución.</p>
                       </div>
 
@@ -445,16 +466,16 @@ export default function Dashboard() {
                         <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-6">Funnel de Última Milla</h4>
                         <div className="space-y-5">
                           <div>
-                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-green-700 flex items-center gap-2"><Check className="w-4 h-4"/> 1ra Visita Exitosa</span><span className="text-green-700">{efectividadStats.tasaPrimeraVisita}%</span></div>
-                            <div className="w-full bg-gray-100 rounded-full h-3"><div className="bg-green-500 h-3 rounded-full transition-all duration-1000" style={{ width: `${efectividadStats.tasaPrimeraVisita}%` }}></div></div>
+                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-green-700 flex items-center gap-2"><Check className="w-4 h-4"/> 1ra Visita Exitosa</span><span className="text-green-700">{efectividadMetrica?.resumen?.porcentajePrimeraVisita ?? 0}%</span></div>
+                            <div className="w-full bg-gray-100 rounded-full h-3"><div className="bg-green-500 h-3 rounded-full transition-all duration-1000" style={{ width: `${efectividadMetrica?.resumen?.porcentajePrimeraVisita ?? 0}%` }}></div></div>
                           </div>
                           <div>
-                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-orange-600 flex items-center gap-2"><Clock className="w-4 h-4"/> Entregas Forzadas (2da+)</span><span className="text-orange-600">{efectividadStats.tasaEntregasForzadas}%</span></div>
-                            <div className="w-full bg-gray-100 rounded-full h-3"><div className="bg-orange-500 h-3 rounded-full transition-all duration-1000" style={{ width: `${efectividadStats.tasaEntregasForzadas}%` }}></div></div>
+                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-orange-600 flex items-center gap-2"><Clock className="w-4 h-4"/> Entregas Forzadas (2da+)</span><span className="text-orange-600">{efectividadMetrica?.resumen?.porcentajeVisitasForzadas ?? 0}%</span></div>
+                            <div className="w-full bg-gray-100 rounded-full h-3"><div className="bg-orange-500 h-3 rounded-full transition-all duration-1000" style={{ width: `${efectividadMetrica?.resumen?.porcentajeVisitasForzadas ?? 0}%` }}></div></div>
                           </div>
                           <div>
-                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-red-600 flex items-center gap-2"><Undo2 className="w-4 h-4"/> Logística Inversa (Devuelto)</span><span className="text-red-600">{efectividadStats.tasaDevolucion}%</span></div>
-                            <div className="w-full bg-gray-100 rounded-full h-3"><div className="bg-red-600 h-3 rounded-full transition-all duration-1000" style={{ width: `${efectividadStats.tasaDevolucion}%` }}></div></div>
+                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-red-600 flex items-center gap-2"><Undo2 className="w-4 h-4"/> Logística Inversa (Devuelto)</span><span className="text-red-600">{efectividadMetrica?.resumen?.porcentajeDevoluciones ?? 0}%</span></div>
+                            <div className="w-full bg-gray-100 rounded-full h-3"><div className="bg-red-600 h-3 rounded-full transition-all duration-1000" style={{ width: `${efectividadMetrica?.resumen?.porcentajeDevoluciones ?? 0}%` }}></div></div>
                           </div>
                         </div>
                       </div>
@@ -466,7 +487,7 @@ export default function Dashboard() {
                           <SearchCode className="w-5 h-5 text-orange-500"/> Top Motivos de Falla en Visita
                         </h4>
                         <div className="space-y-4">
-                          {efectividadStats.topMotivosFalla.map((falla: any, idx: number) => (
+                          {(efectividadMetrica?.topMotivosFalla ?? []).map((falla: any, idx: number) => (
                             <div key={`efec-${idx}`} className="p-4 bg-orange-50/50 border border-orange-100 rounded-xl flex justify-between items-center group hover:bg-orange-50 transition-colors">
                               <div className="flex items-center gap-3">
                                 <div className="w-8 h-8 rounded-full bg-orange-100 text-orange-700 font-black flex items-center justify-center text-xs">#{idx + 1}</div>
@@ -482,24 +503,24 @@ export default function Dashboard() {
                         <div className="flex justify-between items-start mb-6">
                           <div>
                             <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider flex items-center gap-2">
-                              <Undo2 className="w-5 h-5 text-red-500"/> Mapa de Logística Inversa
+                              <Undo2 className="w-5 h-5 text-red-500"/> Tasa de Devolución por Provincia
                             </h4>
-                            <p className="text-xs text-gray-500 mt-1">Zonas con mayor cantidad de paquetes devueltos a origen.</p>
+                            <p className="text-xs text-gray-500 mt-1">Provincias con mayor tasa de devolución sobre envíos completados.</p>
                           </div>
                           <div className="text-right">
                             <p className="text-[10px] font-bold text-red-400 uppercase">Costo Hundido Estimado</p>
-                            <p className="text-xl font-black text-red-600">{formatPesos(efectividadStats.costoInversaEstimado)}</p>
+                            <p className="text-xl font-black text-red-600">{formatPesos(efectividadMetrica?.resumen?.costoInversaEstimado ?? 0)}</p>
                           </div>
                         </div>
                         <div className="space-y-4 mt-6">
-                          {efectividadStats.mapaDevoluciones.map((dev:any, idx:number) => (
+                          {(efectividadMetrica?.porProvincia ?? []).map((dev:any, idx:number) => (
                             <div key={`map-${idx}`} className="flex items-center gap-4">
                               <div className="w-32 text-xs font-bold text-gray-700 truncate"><MapPin className="w-3 h-3 inline mr-1 text-gray-400"/> {dev.provincia}</div>
                               <div className="flex-1 bg-gray-100 rounded-full h-2 relative">
-                                <div className="bg-red-400 h-2 rounded-full absolute left-0 transition-all duration-1000" style={{ width: `${dev.porcentaje}%` }}></div>
+                                <div className="bg-red-400 h-2 rounded-full absolute left-0 transition-all duration-1000" style={{ width: `${dev.porcentajeDevoluciones}%` }}></div>
                               </div>
                               <div className="w-16 text-right">
-                                <span className="text-xs font-black text-gray-800 block">{dev.devoluciones} pqts</span>
+                                <span className="text-xs font-black text-gray-800 block">{dev.porcentajeDevoluciones}%</span>
                               </div>
                             </div>
                           ))}
@@ -967,7 +988,7 @@ export default function Dashboard() {
             <div className={`bg-white p-5 rounded-xl border shadow-sm flex flex-col h-full transition-colors ${efectividadGlobal < 85 ? 'border-orange-300' : 'border-gray-200'}`}>
               <div className="flex-1">
                 <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5"><PackageCheck className="w-3.5 h-3.5 text-green-500" /> 5. 1ra Visita</p>
-                <h3 className="text-3xl font-black text-gray-800 mb-1">{efectividadGlobal}%</h3>
+                <h3 className="text-3xl font-black text-gray-800 mb-1">{cargandoEfectividad ? '...' : `${efectividadGlobal}%`}</h3>
                 <p className="text-[10px] font-bold text-green-500 mb-4">Efectividad de entrega</p>
               </div>
               <button onClick={() => abrirAnalisis("Efectividad de Entregas en 1ra Visita")} className="w-full py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold text-gray-700 hover:bg-blue-50 transition-colors flex justify-center items-center gap-1 mt-auto"><ZoomIn className="w-3.5 h-3.5" /> Analizar</button>

@@ -37,6 +37,11 @@ export default function Dashboard() {
   // Backend: scope-aware via AuthContext.
   const [fugaRuteoMetrica, setFugaRuteoMetrica] = useState<any>(null);
   const [cargandoFugaRuteo, setCargandoFugaRuteo] = useState(true);
+
+  // Phase 1.2.d (2026-06-13): metrica Desvio de Peso migrada al endpoint Torre
+  // /api/torre-de-control/desvio-peso (scope-aware: cliente o shipro).
+  const [desvioPesoMetrica, setDesvioPesoMetrica] = useState<any>(null);
+  const [cargandoDesvioPeso, setCargandoDesvioPeso] = useState(true);
   const [filtroRuteoHasta, setFiltroRuteoHasta] = useState("");
   const [filtroRuteoServicio, setFiltroRuteoServicio] = useState("TODOS");
   const [filtroRuteoCourier, setFiltroRuteoCourier] = useState("TODOS");
@@ -82,6 +87,22 @@ export default function Dashboard() {
       .catch(err => {
         console.error("[Panel] error fetching fuga-ruteo:", err);
         setCargandoFugaRuteo(false);
+      });
+  }, [tienePermiso, empresaActivaId]);
+
+  // Phase 1.2.d: fetch desvio-peso desde endpoint Torre.
+  useEffect(() => {
+    if (!tienePermiso) return;
+    setCargandoDesvioPeso(true);
+    fetch("/api/torre-de-control/desvio-peso")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setDesvioPesoMetrica(data);
+        setCargandoDesvioPeso(false);
+      })
+      .catch(err => {
+        console.error("[Panel] error fetching desvio-peso:", err);
+        setCargandoDesvioPeso(false);
       });
   }, [tienePermiso, empresaActivaId]);
 
@@ -149,7 +170,7 @@ export default function Dashboard() {
   const coloresRiesgo = ['bg-yellow-400', 'bg-red-500', 'bg-purple-500'];
 
   // INSIGHTS LÓGICOS
-  const fugaPeso = aforoStats.porcentajeFugaPeso;
+  const fugaPeso = desvioPesoMetrica?.resumen?.tasaSobreAforados ?? 0;
   const efectividadGlobal = efectividadStats.tasaPrimeraVisita;
   const tasaSoporteGlobal = soporteStats.tasaSoporte;
 
@@ -166,8 +187,8 @@ export default function Dashboard() {
   let insightAforoS = "Tus dimensiones declaradas coinciden con las del correo.";
   let colorAforo = "green"; let IconoAforo = CheckCircle2;
   if(fugaPeso > 20) {
-     insightAforoP = `Estás subsidiando envíos. Desvío promedio: +${aforoStats.desvioPromedioKg}kg.`;
-     insightAforoS = `Recomendamos sumar ${aforoStats.desvioPromedioKg}kg al peso base de tus productos en tu e-commerce.`;
+     insightAforoP = `Estás subsidiando envíos. Desvío promedio: +${desvioPesoMetrica?.resumen?.desvioPromedioKg ?? 0}kg.`;
+     insightAforoS = `Recomendamos sumar ${desvioPesoMetrica?.resumen?.desvioPromedioKg ?? 0}kg al peso base de tus productos en tu e-commerce.`;
      colorAforo = "red"; IconoAforo = Lightbulb;
   }
 
@@ -340,12 +361,12 @@ export default function Dashboard() {
                       <div className="grid grid-cols-2 gap-4">
                         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-center text-center">
                           <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Tasa de Inexactitud</h4>
-                          <p className="text-4xl font-black text-red-600 mb-1">{aforoStats.porcentajeFugaPeso}%</p>
+                          <p className="text-4xl font-black text-red-600 mb-1">{desvioPesoMetrica?.resumen?.tasaSobreAforados ?? 0}%</p>
                           <p className="text-[10px] font-bold text-gray-500">Envíos con aforo final superior al declarado.</p>
                         </div>
                         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-center text-center">
                           <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Desvío Promedio</h4>
-                          <p className="text-3xl font-black text-orange-600 mb-1 flex justify-center items-center gap-1">+{aforoStats.desvioPromedioKg} <span className="text-lg">kg</span></p>
+                          <p className="text-3xl font-black text-orange-600 mb-1 flex justify-center items-center gap-1">+{desvioPesoMetrica?.resumen?.desvioPromedioKg ?? 0} <span className="text-lg">kg</span></p>
                           <p className="text-[10px] font-bold text-gray-500">Volumen extra cobrado por el correo.</p>
                         </div>
                       </div>
@@ -353,7 +374,7 @@ export default function Dashboard() {
                       <div className="bg-white p-6 rounded-2xl shadow-sm border border-red-100 relative overflow-hidden">
                         <div className="absolute top-0 right-0 w-32 h-32 bg-red-50 rounded-bl-full -z-10 opacity-50"></div>
                         <h4 className="text-xs font-black text-red-600 uppercase tracking-widest mb-1 flex items-center gap-2"><Scale className="w-4 h-4"/> Fuga de Capital Acumulada</h4>
-                        <p className="text-5xl font-black text-gray-800 mb-2 tracking-tighter">{formatPesos(aforoStats.fugaTotal)}</p>
+                        <p className="text-5xl font-black text-gray-800 mb-2 tracking-tighter">{formatPesos(desvioPesoMetrica?.resumen?.fugaTotal ?? 0)}</p>
                         <p className="text-xs font-medium text-gray-500 leading-relaxed">Dinero que el e-commerce no le cobró al comprador final, pero que el courier facturó a fin de mes.</p>
                       </div>
                     </div>
@@ -365,32 +386,32 @@ export default function Dashboard() {
                         </h4>
                         <div className="space-y-6">
                           <div>
-                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-yellow-600 flex items-center gap-2">Leve (hasta +1kg)</span><span className="text-yellow-600">{aforoStats.distribucionError.leve}%</span></div>
-                            <div className="w-full bg-gray-100 rounded-full h-4"><div className="bg-yellow-400 h-4 rounded-full transition-all duration-1000" style={{ width: `${aforoStats.distribucionError.leve}%` }}></div></div>
+                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-yellow-600 flex items-center gap-2">Leve (hasta +1kg)</span><span className="text-yellow-600">{desvioPesoMetrica?.resumen?.distribucionSeveridadPct?.leve ?? 0}%</span></div>
+                            <div className="w-full bg-gray-100 rounded-full h-4"><div className="bg-yellow-400 h-4 rounded-full transition-all duration-1000" style={{ width: `${desvioPesoMetrica?.resumen?.distribucionSeveridadPct?.leve ?? 0}%` }}></div></div>
                           </div>
                           <div>
-                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-orange-600 flex items-center gap-2">Moderado (de +1kg a +3kg)</span><span className="text-orange-600">{aforoStats.distribucionError.moderado}%</span></div>
-                            <div className="w-full bg-gray-100 rounded-full h-4"><div className="bg-orange-500 h-4 rounded-full transition-all duration-1000" style={{ width: `${aforoStats.distribucionError.moderado}%` }}></div></div>
+                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-orange-600 flex items-center gap-2">Moderado (de +1kg a +3kg)</span><span className="text-orange-600">{desvioPesoMetrica?.resumen?.distribucionSeveridadPct?.moderado ?? 0}%</span></div>
+                            <div className="w-full bg-gray-100 rounded-full h-4"><div className="bg-orange-500 h-4 rounded-full transition-all duration-1000" style={{ width: `${desvioPesoMetrica?.resumen?.distribucionSeveridadPct?.moderado ?? 0}%` }}></div></div>
                           </div>
                           <div>
-                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-red-600 flex items-center gap-2">Grave (+3kg)</span><span className="text-red-600">{aforoStats.distribucionError.grave}%</span></div>
-                            <div className="w-full bg-gray-100 rounded-full h-4"><div className="bg-red-600 h-4 rounded-full transition-all duration-1000" style={{ width: `${aforoStats.distribucionError.grave}%` }}></div></div>
+                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-red-600 flex items-center gap-2">Grave (+3kg)</span><span className="text-red-600">{desvioPesoMetrica?.resumen?.distribucionSeveridadPct?.grave ?? 0}%</span></div>
+                            <div className="w-full bg-gray-100 rounded-full h-4"><div className="bg-red-600 h-4 rounded-full transition-all duration-1000" style={{ width: `${desvioPesoMetrica?.resumen?.distribucionSeveridadPct?.grave ?? 0}%` }}></div></div>
                           </div>
                         </div>
                       </div>
 
                       <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 h-full">
                         <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center gap-2">
-                          <Truck className="w-5 h-5 text-gray-500"/> Rigurosidad por Courier
+                          <Truck className="w-5 h-5 text-gray-500"/> Tasa de Desvío por Courier
                         </h4>
                         <div className="space-y-4">
-                          {aforoStats.topEstrictos.map((c:any, idx:number) => (
+                          {(desvioPesoMetrica?.porCourier ?? []).map((c:any, idx:number) => (
                             <div key={`str-${idx}`} className="flex items-center gap-4">
-                              <div className="w-24 text-xs font-bold text-gray-700 truncate">{c.courier}</div>
+                              <div className="w-24 text-xs font-bold text-gray-700 truncate">{c.nombre}</div>
                               <div className="flex-1 bg-gray-100 rounded-full h-2 relative">
-                                <div className="bg-gray-400 h-2 rounded-full absolute left-0" style={{ width: `${c.porcentajeAforos}%` }}></div>
+                                <div className="bg-gray-400 h-2 rounded-full absolute left-0" style={{ width: `${c.porcentajeDesvio}%` }}></div>
                               </div>
-                              <div className="w-10 text-right text-xs font-black text-gray-500">{c.porcentajeAforos}%</div>
+                              <div className="w-10 text-right text-xs font-black text-gray-500">{c.porcentajeDesvio}%</div>
                             </div>
                           ))}
                         </div>
@@ -936,7 +957,7 @@ export default function Dashboard() {
             <div className={`bg-white p-5 rounded-xl border shadow-sm flex flex-col h-full transition-colors ${fugaPeso > 20 ? 'border-red-300' : 'border-gray-200'}`}>
               <div className="flex-1">
                 <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5"><Box className="w-3.5 h-3.5 text-red-500" /> 4. Desvío de Peso</p>
-                <h3 className="text-3xl font-black text-gray-800 mb-1">{fugaPeso}%</h3>
+                <h3 className="text-3xl font-black text-gray-800 mb-1">{cargandoDesvioPeso ? '...' : `${fugaPeso}%`}</h3>
                 <p className="text-[10px] font-bold text-red-500 mb-4">Aforos penalizados</p>
               </div>
               <button onClick={() => abrirAnalisis("Desvío Financiero por Peso Volumétrico")} className="w-full py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold text-gray-700 hover:bg-blue-50 transition-colors flex justify-center items-center gap-1 mt-auto"><ZoomIn className="w-3.5 h-3.5" /> Analizar</button>

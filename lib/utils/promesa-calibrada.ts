@@ -273,3 +273,354 @@ async function intentarMetricaSLA(
     esCalibracionReal: false,
   };
 }
+
+// ============================================================================
+// ORQUESTACION SCOPE-AWARE — calcularPromesaAnalitica(ctx)
+//
+// Phase 1.5.b (Panel cliente migration, 2026-06-13).
+// Extrae al helper la logica de orquestacion que estaba inline en el
+// endpoint /api/torre-de-control/promesa-calibrada.
+//
+// SEMANTICA: analitica retroactiva. Diferente a calcularPromesaCalibrada()
+// que esta arriba — esa es para el cotizador real-time al checkout con
+// cuadruple fallback (Nivel 1-4). calcularPromesaAnalitica retorna el
+// resumen global + combinaciones sobre envios YA entregados en la ventana,
+// para mostrar en Torre y Panel cliente.
+//
+// SCOPE-AWARE: auto-detecta scope desde AuthContext:
+// - Cliente (modoDios=false): filtra por ctx.empresaId, omite porEmpresa.
+// - Shipro Torre global (modoDios=true, sin filtroEmpresa): shape completo
+//   con porEmpresa adicional.
+// - Shipro inspeccion (modoDios=true, con filtroEmpresa=N): shape "shipro".
+//
+// Decisiones de producto (director 2026-06-13):
+// D1 - Nombre: calcularPromesaAnalitica (claro vs calcularPromesaCalibrada cotizador).
+// D2 - porEmpresa solo en shape Shipro.
+// D3 - Discriminated union scope cliente/shipro.
+// D4 - Panel cliente shape = identico al Torre (4-tile + tabla con columna Confiable).
+// D5 - Slot Card 10 reservado en Panel.
+// D6 - No romper helper existente.
+// ============================================================================
+
+import type { AuthContext } from "@/lib/auth-context";
+import { calcularEstadisticos } from "./percentiles";
+
+function horasADiasCorridos(horas: number): number {
+  return Math.ceil(horas / 24);
+}
+
+export interface CombinacionPromesa {
+  depositoId: number;
+  depositoNombre: string;
+  courierId: number;
+  courierNombre: string;
+  provinciaDestino: string;
+  p50Horas: number;
+  p75Horas: number;
+  p90Horas: number;
+  promedioHoras: number;
+  p50Dias: number;
+  p75Dias: number;
+  p90Dias: number;
+  promedioDias: number;
+  cantidad: number;
+  muestraConfiable: boolean;
+  promesaCalibradaDias: number;
+  promesaCalibradaHoras: number;
+  tasaCumplimiento: number | null;
+  cantidadConPromesa: number;
+}
+
+export interface EstadisticosPromesaGlobales {
+  p50Horas: number;
+  p75Horas: number | null;
+  p95Horas: number;
+  promedioHoras: number;
+  p50Dias: number;
+  p75Dias: number | null;
+  p95Dias: number;
+  promedioDias: number;
+  cantidad: number;
+}
+
+export interface GrupoEmpresaPromesa {
+  empresaId: number;
+  empresaNombre: string;
+  cantidad: number;
+  p50Dias: number;
+  p75Dias: number | null;
+  tasaCumplimiento: number | null;
+}
+
+export interface ResultadoPromesaCliente {
+  ventanaDias: number;
+  estadisticosGlobales: EstadisticosPromesaGlobales | null;
+  tasaCumplimientoGlobal: number | null;
+  cantidadEnviosConPromesa: number;
+  cantidadEnviosTotal: number;
+  cantidadEnviosValidos: number;
+  cantidadEnviosSinDatos: number;
+  umbralMuestraMinima: number;
+  combinaciones: CombinacionPromesa[];
+  scope: "cliente";
+}
+
+export interface ResultadoPromesaShipro {
+  ventanaDias: number;
+  estadisticosGlobales: EstadisticosPromesaGlobales | null;
+  tasaCumplimientoGlobal: number | null;
+  cantidadEnviosConPromesa: number;
+  cantidadEnviosTotal: number;
+  cantidadEnviosValidos: number;
+  cantidadEnviosSinDatos: number;
+  umbralMuestraMinima: number;
+  combinaciones: CombinacionPromesa[];
+  porEmpresa: GrupoEmpresaPromesa[];
+  scope: "shipro";
+}
+
+export type ResultadoPromesa = ResultadoPromesaCliente | ResultadoPromesaShipro;
+
+export async function calcularPromesaAnalitica(
+  ctx: AuthContext,
+  ventanaDias: number = VENTANA_DIAS_DEFAULT
+): Promise<ResultadoPromesa> {
+  const ventanaInicio = new Date();
+  ventanaInicio.setDate(ventanaInicio.getDate() - ventanaDias);
+
+  // Build where clause scope-aware.
+  const whereClause: any = {
+    fechaImpresion: { gte: ventanaInicio },
+    fechaEntrega: { not: null },
+    destinoId: { not: null },
+  };
+  if (!ctx.modoDios) {
+    whereClause.empresaId = ctx.empresaId;
+  } else if (ctx.empresaId !== null) {
+    whereClause.empresaId = ctx.empresaId;
+  }
+
+  const envios = await prisma.envio.findMany({
+    where: whereClause,
+    select: {
+      id: true,
+      fechaImpresion: true,
+      fechaEntrega: true,
+      diasPrometidosCheckout: true,
+      depositoId: true,
+      courierId: true,
+      empresaId: true,
+      deposito: { select: { id: true, nombre: true } },
+      courier: { select: { id: true, nombre: true } },
+      destino: { select: { provincia: true } },
+      empresa: { select: { id: true, nombre: true } },
+    },
+  });
+
+  const cantidadEnviosTotal = envios.length;
+
+  // Filter envios validos.
+  const enviosValidos = envios.filter(e =>
+    e.fechaEntrega !== null && e.fechaImpresion !== null &&
+    e.depositoId !== null && e.courierId !== null &&
+    e.destino !== null && e.destino.provincia !== null &&
+    e.deposito !== null && e.courier !== null
+  );
+  const cantidadEnviosValidos = enviosValidos.length;
+  const cantidadEnviosSinDatos = cantidadEnviosTotal - cantidadEnviosValidos;
+
+  // Compute delta horas + accumulate.
+  type ComboAccum = {
+    depositoId: number;
+    depositoNombre: string;
+    courierId: number;
+    courierNombre: string;
+    provinciaDestino: string;
+    horas: number[];
+    cumplimientosPromesa: { real: number; prometida: number }[];
+  };
+  const combinacionesMap = new Map<string, ComboAccum>();
+
+  type EmpresaAccum = {
+    empresaId: number;
+    empresaNombre: string;
+    horas: number[];
+    cumplimientosPromesa: { real: number; prometida: number }[];
+  };
+  const empresaMap = new Map<number, EmpresaAccum>();
+
+  const todasLasHoras: number[] = [];
+  let cantidadEnviosConPromesa = 0;
+  let cumplidosGlobales = 0;
+
+  for (const e of enviosValidos) {
+    const provNorm = normalizarProvincia(e.destino!.provincia);
+    if (!provNorm) continue;
+
+    const horasDelta = (e.fechaEntrega!.getTime() - e.fechaImpresion!.getTime()) / 3600000;
+    todasLasHoras.push(horasDelta);
+
+    const clave = `${e.depositoId}|${e.courierId}|${provNorm}`;
+    if (!combinacionesMap.has(clave)) {
+      combinacionesMap.set(clave, {
+        depositoId: e.depositoId!,
+        depositoNombre: e.deposito!.nombre,
+        courierId: e.courierId!,
+        courierNombre: e.courier!.nombre,
+        provinciaDestino: provNorm,
+        horas: [],
+        cumplimientosPromesa: [],
+      });
+    }
+    const combo = combinacionesMap.get(clave)!;
+    combo.horas.push(horasDelta);
+
+    if (e.diasPrometidosCheckout != null) {
+      const diasReales = horasADiasCorridos(horasDelta);
+      combo.cumplimientosPromesa.push({
+        real: diasReales,
+        prometida: e.diasPrometidosCheckout,
+      });
+      cantidadEnviosConPromesa++;
+      if (diasReales <= e.diasPrometidosCheckout) cumplidosGlobales++;
+    }
+
+    // Per-empresa accum (solo modoDios global).
+    if (ctx.modoDios && ctx.empresaId === null && e.empresa) {
+      const eid = e.empresa.id;
+      if (!empresaMap.has(eid)) {
+        empresaMap.set(eid, {
+          empresaId: eid,
+          empresaNombre: e.empresa.nombre,
+          horas: [],
+          cumplimientosPromesa: [],
+        });
+      }
+      const emp = empresaMap.get(eid)!;
+      emp.horas.push(horasDelta);
+      if (e.diasPrometidosCheckout != null) {
+        emp.cumplimientosPromesa.push({
+          real: horasADiasCorridos(horasDelta),
+          prometida: e.diasPrometidosCheckout,
+        });
+      }
+    }
+  }
+
+  // Compute estadisticosGlobales.
+  let estadisticosGlobales: EstadisticosPromesaGlobales | null = null;
+  if (todasLasHoras.length > 0) {
+    const stats = calcularEstadisticos(todasLasHoras);
+    if (stats) {
+      const p75H = calcularP75(todasLasHoras);
+      estadisticosGlobales = {
+        p50Horas: Math.round(stats.p50),
+        p75Horas: p75H !== null ? Math.round(p75H) : null,
+        p95Horas: Math.round(stats.p95),
+        promedioHoras: Math.round(stats.promedio),
+        p50Dias: horasADiasCorridos(stats.p50),
+        p75Dias: p75H !== null ? horasADiasCorridos(p75H) : null,
+        p95Dias: horasADiasCorridos(stats.p95),
+        promedioDias: horasADiasCorridos(stats.promedio),
+        cantidad: stats.cantidad,
+      };
+    }
+  }
+
+  // tasaCumplimientoGlobal.
+  const tasaCumplimientoGlobal = cantidadEnviosConPromesa > 0
+    ? cumplidosGlobales / cantidadEnviosConPromesa
+    : null;
+
+  // Build combinaciones output.
+  const combinaciones: CombinacionPromesa[] = Array.from(combinacionesMap.values())
+    .map(c => {
+      const stats = calcularEstadisticos(c.horas);
+      const p75H = calcularP75(c.horas);
+      const ordenados = [...c.horas].sort((a, b) => a - b);
+      const idx90 = Math.floor(ordenados.length * 0.90);
+      const p90H = ordenados[Math.min(idx90, ordenados.length - 1)];
+
+      const promesaH = p75H !== null ? Math.round(p75H) : Math.round(stats?.p50 ?? 0);
+      const promesaD = p75H !== null ? horasADiasCorridos(p75H) : horasADiasCorridos(stats?.p50 ?? 0);
+
+      let tasaCumplimiento: number | null = null;
+      if (c.cumplimientosPromesa.length > 0) {
+        const cumplidos = c.cumplimientosPromesa.filter(cp => cp.real <= cp.prometida).length;
+        tasaCumplimiento = cumplidos / c.cumplimientosPromesa.length;
+      }
+
+      return {
+        depositoId: c.depositoId,
+        depositoNombre: c.depositoNombre,
+        courierId: c.courierId,
+        courierNombre: c.courierNombre,
+        provinciaDestino: c.provinciaDestino,
+        p50Horas: Math.round(stats?.p50 ?? 0),
+        p75Horas: p75H !== null ? Math.round(p75H) : 0,
+        p90Horas: Math.round(p90H),
+        promedioHoras: Math.round(stats?.promedio ?? 0),
+        p50Dias: horasADiasCorridos(stats?.p50 ?? 0),
+        p75Dias: p75H !== null ? horasADiasCorridos(p75H) : 0,
+        p90Dias: horasADiasCorridos(p90H),
+        promedioDias: horasADiasCorridos(stats?.promedio ?? 0),
+        cantidad: c.horas.length,
+        muestraConfiable: c.horas.length >= UMBRAL_MUESTRA_MINIMA,
+        promesaCalibradaDias: promesaD,
+        promesaCalibradaHoras: promesaH,
+        tasaCumplimiento,
+        cantidadConPromesa: c.cumplimientosPromesa.length,
+      };
+    })
+    .sort((a, b) => b.cantidad - a.cantidad);
+
+  if (!ctx.modoDios) {
+    return {
+      ventanaDias,
+      estadisticosGlobales,
+      tasaCumplimientoGlobal,
+      cantidadEnviosConPromesa,
+      cantidadEnviosTotal,
+      cantidadEnviosValidos,
+      cantidadEnviosSinDatos,
+      umbralMuestraMinima: UMBRAL_MUESTRA_MINIMA,
+      combinaciones,
+      scope: "cliente",
+    };
+  }
+
+  // Shipro: include porEmpresa.
+  const porEmpresa: GrupoEmpresaPromesa[] = Array.from(empresaMap.values())
+    .map(e => {
+      const stats = calcularEstadisticos(e.horas);
+      const p75H = calcularP75(e.horas);
+      let tasaCumplimiento: number | null = null;
+      if (e.cumplimientosPromesa.length > 0) {
+        const cumplidos = e.cumplimientosPromesa.filter(cp => cp.real <= cp.prometida).length;
+        tasaCumplimiento = cumplidos / e.cumplimientosPromesa.length;
+      }
+      return {
+        empresaId: e.empresaId,
+        empresaNombre: e.empresaNombre,
+        cantidad: e.horas.length,
+        p50Dias: horasADiasCorridos(stats?.p50 ?? 0),
+        p75Dias: p75H !== null ? horasADiasCorridos(p75H) : null,
+        tasaCumplimiento,
+      };
+    })
+    .sort((a, b) => b.cantidad - a.cantidad);
+
+  return {
+    ventanaDias,
+    estadisticosGlobales,
+    tasaCumplimientoGlobal,
+    cantidadEnviosConPromesa,
+    cantidadEnviosTotal,
+    cantidadEnviosValidos,
+    cantidadEnviosSinDatos,
+    umbralMuestraMinima: UMBRAL_MUESTRA_MINIMA,
+    combinaciones,
+    porEmpresa,
+    scope: "shipro",
+  };
+}

@@ -52,6 +52,11 @@ export default function Dashboard() {
   // endpoint Torre /api/torre-de-control/tiempos-colecta (scope-aware).
   const [tiemposColectaMetrica, setTiemposColectaMetrica] = useState<any>(null);
   const [cargandoTiemposColecta, setCargandoTiemposColecta] = useState(true);
+
+  // Phase 1.5.d (2026-06-13): metrica Promesa Calibrada (Card 10 nueva) consume
+  // endpoint Torre /api/torre-de-control/promesa-calibrada (scope-aware).
+  const [promesaCalibradaMetrica, setPromesaCalibradaMetrica] = useState<any>(null);
+  const [cargandoPromesaCalibrada, setCargandoPromesaCalibrada] = useState(true);
   const [filtroRuteoHasta, setFiltroRuteoHasta] = useState("");
   const [filtroRuteoServicio, setFiltroRuteoServicio] = useState("TODOS");
   const [filtroRuteoCourier, setFiltroRuteoCourier] = useState("TODOS");
@@ -145,6 +150,22 @@ export default function Dashboard() {
       .catch(err => {
         console.error("[Panel] error fetching tiempos-colecta:", err);
         setCargandoTiemposColecta(false);
+      });
+  }, [tienePermiso, empresaActivaId]);
+
+  // Phase 1.5.d: fetch promesa-calibrada desde endpoint Torre.
+  useEffect(() => {
+    if (!tienePermiso) return;
+    setCargandoPromesaCalibrada(true);
+    fetch("/api/torre-de-control/promesa-calibrada")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setPromesaCalibradaMetrica(data);
+        setCargandoPromesaCalibrada(false);
+      })
+      .catch(err => {
+        console.error("[Panel] error fetching promesa-calibrada:", err);
+        setCargandoPromesaCalibrada(false);
       });
   }, [tienePermiso, empresaActivaId]);
 
@@ -1051,6 +1072,144 @@ export default function Dashboard() {
                   </div>
                 )}
               </div>
+            ) : metricaAnalisis === "Promesa Calibrada" ? (
+              <div className="flex-1 p-6 overflow-y-auto bg-gray-50">
+                {cargandoPromesaCalibrada ? (
+                  <div className="flex items-center justify-center py-20 text-gray-500"><Loader2 className="w-5 h-5 animate-spin mr-2" /> Cargando metrica...</div>
+                ) : !promesaCalibradaMetrica || promesaCalibradaMetrica.cantidadEnviosValidos === 0 ? (
+                  <div className="text-center py-20 text-gray-500">
+                    Sin envios entregados en la ventana de {promesaCalibradaMetrica?.ventanaDias || 90} dias.
+                    {promesaCalibradaMetrica?.cantidadEnviosSinDatos > 0 && (
+                      <p className="mt-2 text-xs text-gray-400">
+                        Hay {promesaCalibradaMetrica.cantidadEnviosSinDatos} envios sin datos completos en la ventana.
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-6">
+                    {/* 4-tile Resumen */}
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                      <div className="bg-white rounded-xl border border-gray-200 p-5">
+                        <p className="text-xs font-bold text-gray-500 uppercase mb-2">Mediana (P50)</p>
+                        <p className="text-3xl font-black text-gray-800">
+                          {promesaCalibradaMetrica.estadisticosGlobales.p50Dias} dias
+                        </p>
+                        <p className="text-xs text-gray-500 mt-1">
+                          {promesaCalibradaMetrica.estadisticosGlobales.p50Horas}h · caso tipico
+                        </p>
+                      </div>
+                      <div className="bg-white rounded-xl border border-blue-200 p-5 bg-blue-50">
+                        <p className="text-xs font-bold text-blue-600 uppercase mb-2">Promesa Calibrada (P75)</p>
+                        <p className="text-3xl font-black text-blue-600">
+                          {promesaCalibradaMetrica.estadisticosGlobales.p75Dias ?? "--"} dias
+                        </p>
+                        <p className="text-xs text-blue-500 mt-1">
+                          {promesaCalibradaMetrica.estadisticosGlobales.p75Horas !== null
+                            ? `${promesaCalibradaMetrica.estadisticosGlobales.p75Horas}h · lo que prometemos`
+                            : "Sin muestra suficiente"}
+                        </p>
+                      </div>
+                      <div className="bg-white rounded-xl border border-gray-200 p-5">
+                        <p className="text-xs font-bold text-gray-500 uppercase mb-2">Promedio</p>
+                        <p className="text-3xl font-black text-gray-800">
+                          {promesaCalibradaMetrica.estadisticosGlobales.promedioDias} dias
+                        </p>
+                        <p className="text-xs text-gray-500 mt-1">
+                          {promesaCalibradaMetrica.estadisticosGlobales.promedioHoras}h
+                        </p>
+                      </div>
+                      <div className="bg-white rounded-xl border border-orange-200 p-5">
+                        <p className="text-xs font-bold text-orange-600 uppercase mb-2">P95 (Cola lenta)</p>
+                        <p className="text-3xl font-black text-orange-600">
+                          {promesaCalibradaMetrica.estadisticosGlobales.p95Dias} dias
+                        </p>
+                        <p className="text-xs text-orange-500 mt-1">
+                          {promesaCalibradaMetrica.estadisticosGlobales.p95Horas}h · 95% por debajo
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Cumplimiento Historico */}
+                    <div className="bg-white rounded-xl border border-gray-200 p-5">
+                      <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><CheckCircle2 className="w-5 h-5 text-green-500" /> Cumplimiento Historico</h4>
+                      {promesaCalibradaMetrica.tasaCumplimientoGlobal !== null ? (
+                        <div className="flex items-baseline gap-3">
+                          <p className={`text-4xl font-black ${promesaCalibradaMetrica.tasaCumplimientoGlobal >= 0.9 ? 'text-green-600' : promesaCalibradaMetrica.tasaCumplimientoGlobal >= 0.7 ? 'text-orange-500' : 'text-red-600'}`}>
+                            {(promesaCalibradaMetrica.tasaCumplimientoGlobal * 100).toFixed(1)}%
+                          </p>
+                          <div className="text-xs text-gray-600">
+                            <p>de envios cumplidos dentro de promesa</p>
+                            <p>{promesaCalibradaMetrica.cantidadEnviosConPromesa} envios evaluados</p>
+                            <p className="text-gray-400">(de {promesaCalibradaMetrica.cantidadEnviosValidos} entregados)</p>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-sm text-gray-500">
+                          Sin datos de cumplimiento aun.
+                          <p className="text-xs text-gray-400 mt-1">La promesa al checkout empezara a registrarse cuando se procesen pedidos con cotizador activo.</p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Calidad de datos */}
+                    <div className="bg-white rounded-xl border border-gray-200 p-4 text-xs text-gray-600">
+                      <span className="font-bold text-gray-900">{promesaCalibradaMetrica.cantidadEnviosValidos}</span> envios entregados validos
+                      {" "}de <span className="font-bold text-gray-900">{promesaCalibradaMetrica.cantidadEnviosTotal}</span> en ventana de {promesaCalibradaMetrica.ventanaDias} dias.
+                      <span className="ml-2 text-gray-500">
+                        Umbral muestra confiable: {promesaCalibradaMetrica.umbralMuestraMinima} envios.
+                      </span>
+                    </div>
+
+                    {/* Tabla combinaciones */}
+                    {promesaCalibradaMetrica.combinaciones?.length > 0 && (
+                      <div className="bg-white rounded-xl border border-gray-200 p-5">
+                        <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><Truck className="w-5 h-5 text-gray-500" /> Promesa por Ruta (Deposito x Courier x Provincia)</h4>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
+                                <th className="pb-2 font-bold">Deposito</th>
+                                <th className="pb-2 font-bold">Courier</th>
+                                <th className="pb-2 font-bold">Provincia</th>
+                                <th className="pb-2 font-bold text-right">P75 Promesa</th>
+                                <th className="pb-2 font-bold text-right">P50</th>
+                                <th className="pb-2 font-bold text-right">P90</th>
+                                <th className="pb-2 font-bold text-right">Envios</th>
+                                <th className="pb-2 font-bold text-right">Cumplim.</th>
+                                <th className="pb-2 font-bold text-right">Confiable</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {promesaCalibradaMetrica.combinaciones.map((c: any, idx: number) => (
+                                <tr key={`combo-${idx}`} className="border-b border-gray-100">
+                                  <td className="py-2 font-bold text-gray-800">{c.depositoNombre}</td>
+                                  <td className="py-2 text-gray-700">{c.courierNombre}</td>
+                                  <td className="py-2 text-gray-700 capitalize">{c.provinciaDestino}</td>
+                                  <td className="py-2 text-right font-bold text-blue-600">{c.p75Dias} d</td>
+                                  <td className="py-2 text-right text-gray-700">{c.p50Dias} d</td>
+                                  <td className="py-2 text-right text-gray-700">{c.p90Dias} d</td>
+                                  <td className="py-2 text-right text-gray-500">{c.cantidad}</td>
+                                  <td className="py-2 text-right">
+                                    {c.tasaCumplimiento !== null
+                                      ? <span className={c.tasaCumplimiento >= 0.9 ? 'text-green-600 font-bold' : c.tasaCumplimiento >= 0.7 ? 'text-orange-500' : 'text-red-600 font-bold'}>{(c.tasaCumplimiento * 100).toFixed(0)}%</span>
+                                      : <span className="text-gray-400">--</span>}
+                                  </td>
+                                  <td className="py-2 text-right">
+                                    {c.muestraConfiable
+                                      ? <span className="text-green-600 font-bold text-xs">SI</span>
+                                      : <span className="text-orange-500 font-bold text-xs">NO</span>}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+
+                  </div>
+                )}
+              </div>
             ) : (
               // FALLBACK (Para métricas que aún no diseñamos)
               <div className="flex-1 p-8 overflow-y-auto bg-gray-50 flex flex-col items-center justify-center text-center">
@@ -1202,13 +1361,42 @@ export default function Dashboard() {
               <button onClick={() => abrirAnalisis("Tiempos Colecta")} className="w-full py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold text-gray-700 hover:bg-blue-50 transition-colors flex justify-center items-center gap-1 mt-auto"><ZoomIn className="w-3.5 h-3.5" /> Analizar</button>
             </div>
 
+            {/* M2.3: Promesa Calibrada (Phase 1.5.d, 2026-06-13) */}
+            <div className="bg-white p-5 rounded-xl border shadow-sm flex flex-col h-full transition-colors border-gray-200">
+              <div className="flex-1">
+                <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5"><Clock className="w-3.5 h-3.5 text-blue-500" /> 10. Promesa Calibrada</p>
+                {cargandoPromesaCalibrada ? (
+                  <h3 className="text-3xl font-black text-gray-800 mb-1">...</h3>
+                ) : promesaCalibradaMetrica?.estadisticosGlobales?.p75Dias == null || (promesaCalibradaMetrica?.cantidadEnviosValidos ?? 0) === 0 ? (
+                  <>
+                    <h3 className="text-3xl font-black text-gray-400 mb-1">--</h3>
+                    <p className="text-[10px] font-bold text-gray-500 mb-4">Sin envios entregados</p>
+                  </>
+                ) : (
+                  <>
+                    <h3 className="text-3xl font-black text-gray-800 mb-1">
+                      {promesaCalibradaMetrica.estadisticosGlobales.p75Dias}
+                      <span className="text-lg font-bold text-gray-400"> dias</span>
+                    </h3>
+                    <p className="text-[10px] font-bold text-blue-500 mb-4">
+                      {promesaCalibradaMetrica.tasaCumplimientoGlobal !== null
+                        ? `Cumplimiento ${(promesaCalibradaMetrica.tasaCumplimientoGlobal * 100).toFixed(0)}%`
+                        : "Sin promesa registrada"}
+                      {" "}· {promesaCalibradaMetrica.cantidadEnviosValidos} envios
+                    </p>
+                  </>
+                )}
+              </div>
+              <button onClick={() => abrirAnalisis("Promesa Calibrada")} className="w-full py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold text-gray-700 hover:bg-blue-50 transition-colors flex justify-center items-center gap-1 mt-auto"><ZoomIn className="w-3.5 h-3.5" /> Analizar</button>
+            </div>
+
           </div>
         </div>
 
         {/* BLOQUE 3: ANÁLISIS VIVOS (M8, M9, M10) */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 flex flex-col h-full">
-            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center justify-between"><span className="flex items-center gap-2"><Store className="w-4 h-4 text-[#233b6b]" /> 10. Modalidades (Real)</span><button onClick={() => abrirAnalisis("Adopción de Modalidades")} className="p-1.5 bg-gray-50 hover:bg-blue-50 text-gray-500 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
+            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center justify-between"><span className="flex items-center gap-2"><Store className="w-4 h-4 text-[#233b6b]" /> 11. Modalidades (Real)</span><button onClick={() => abrirAnalisis("Adopción de Modalidades")} className="p-1.5 bg-gray-50 hover:bg-blue-50 text-gray-500 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
             <div className="space-y-5 flex-1 flex flex-col justify-center">
               <div>
                 <div className="flex justify-between text-xs font-bold mb-1"><span className="text-gray-600">Domicilio Estándar</span><span>{pctEstandar}%</span></div>
@@ -1226,7 +1414,7 @@ export default function Dashboard() {
           </div>
 
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 flex flex-col h-full">
-            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center justify-between"><span className="flex items-center gap-2"><PieChart className="w-4 h-4 text-[#233b6b]" /> 11. Riesgo Courier (Real)</span><button onClick={() => abrirAnalisis("Concentración Courier")} className="p-1.5 bg-gray-50 hover:bg-blue-50 text-gray-500 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
+            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center justify-between"><span className="flex items-center gap-2"><PieChart className="w-4 h-4 text-[#233b6b]" /> 12. Riesgo Courier (Real)</span><button onClick={() => abrirAnalisis("Concentración Courier")} className="p-1.5 bg-gray-50 hover:bg-blue-50 text-gray-500 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
             <div className="flex-1 flex flex-col justify-center space-y-4">
               {topCouriers.length === 0 ? <p className="text-sm text-gray-400 text-center font-bold">Sin datos para graficar</p> : (
                 topCouriers.map((c: any, i: number) => {
@@ -1250,7 +1438,7 @@ export default function Dashboard() {
           </div>
 
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 flex flex-col h-full">
-            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center justify-between"><span className="flex items-center gap-2"><Map className="w-4 h-4 text-[#233b6b]" /> 12. Mapa SLA (Real)</span><button onClick={() => abrirAnalisis("Mapa de Calor SLA")} className="p-1.5 bg-gray-50 hover:bg-blue-50 text-gray-500 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
+            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center justify-between"><span className="flex items-center gap-2"><Map className="w-4 h-4 text-[#233b6b]" /> 13. Mapa SLA (Real)</span><button onClick={() => abrirAnalisis("Mapa de Calor SLA")} className="p-1.5 bg-gray-50 hover:bg-blue-50 text-gray-500 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
             
             {/* TARJETA M10 ACTUALIZADA CON ÍNDICES */}
             <div className="flex-1 grid grid-cols-3 sm:grid-cols-4 gap-2 text-[10px] font-bold text-center text-white items-center content-start">
@@ -1270,7 +1458,7 @@ export default function Dashboard() {
         {/* BLOQUE 4: NPS DINÁMICO */}
         <div className="pb-10">
            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2">
-             <HeartHandshake className="w-5 h-5 text-indigo-500" /> 13. Experiencia del Consumidor (NPS Transaccional)
+             <HeartHandshake className="w-5 h-5 text-indigo-500" /> 14. Experiencia del Consumidor (NPS Transaccional)
            </h3>
            <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
              

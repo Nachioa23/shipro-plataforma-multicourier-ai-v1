@@ -1164,7 +1164,7 @@ export default function TorreDeControl() {
                   <div className="text-center py-12 text-gray-500">Cargando datos de ruteo...</div>
                 ) : !fugaRuteoMetrica ? (
                   <div className="text-center py-12 text-red-600">Error cargando datos. Reintentar.</div>
-                ) : fugaRuteoMetrica.resumen.totalEnvios === 0 ? (
+                ) : fugaRuteoMetrica.resumen.totalEnviosEvaluados === 0 ? (
                   <div className="text-center py-12 text-gray-500">No hay envios en la ventana de {fugaRuteoMetrica.calidadDatos.ventanaDias} dias.</div>
                 ) : (
                   <>
@@ -1179,7 +1179,7 @@ export default function TorreDeControl() {
                           <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Costo de Oportunidad (90 dias)</h4>
                           <p className="text-5xl font-black text-purple-700 tracking-tighter">{formatPesos(fugaRuteoMetrica.resumen.fugaTotal)}</p>
                           <p className="text-sm text-gray-600 mt-2">
-                            <span className="font-bold">{fugaRuteoMetrica.resumen.enviosConFuga}</span> de {fugaRuteoMetrica.resumen.totalEnvios} envios sub-optimizados
+                            <span className="font-bold">{fugaRuteoMetrica.resumen.enviosConFuga}</span> de {fugaRuteoMetrica.resumen.totalEnviosEvaluados} envios sub-optimizados
                           </p>
                           <p className={`text-sm font-bold mt-1 ${fugaRuteoMetrica.resumen.tasaIneficiencia > 50 ? 'text-red-600' : 'text-orange-600'}`}>
                             Tasa de ineficiencia: {fugaRuteoMetrica.resumen.tasaIneficiencia}%
@@ -1226,11 +1226,11 @@ export default function TorreDeControl() {
                         {/* Top Desvios */}
                         <div className="bg-white border border-gray-200 rounded-xl p-6">
                           <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Top Desvios (Elegido vs Sugerido)</h4>
-                          {fugaRuteoMetrica.topDesvios.length === 0 ? (
+                          {fugaRuteoMetrica.topDesviosPorCombo.length === 0 ? (
                             <p className="text-sm text-gray-400">Sin desvios registrados.</p>
                           ) : (
                             <div className="space-y-3">
-                              {fugaRuteoMetrica.topDesvios.map((d: any, idx: number) => (
+                              {fugaRuteoMetrica.topDesviosPorCombo.map((d: any, idx: number) => (
                                 <div key={idx} className="border-l-4 border-purple-300 pl-3 py-1">
                                   <div className="flex justify-between items-start mb-1">
                                     <div className="flex-1">
@@ -1307,7 +1307,7 @@ export default function TorreDeControl() {
                                         <span className="text-green-700"> {e.courierSugerido} ({e.servicioSugerido})</span>
                                       </p>
                                     </div>
-                                    <p className="text-sm font-black text-purple-700 ml-3">{formatPesos(e.fuga)}</p>
+                                    <p className="text-sm font-black text-purple-700 ml-3">{formatPesos(e.fugaFinanciera)}</p>
                                   </div>
                                 </div>
                               ))}

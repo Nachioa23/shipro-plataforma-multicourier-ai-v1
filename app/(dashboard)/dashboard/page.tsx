@@ -31,6 +31,12 @@ export default function Dashboard() {
   const [npsDimension, setNpsDimension] = useState('courier'); // <-- ACÁ ESTÁ LA VARIABLE CORREGIDA PARA EL M11
   
   const [filtroRuteoDesde, setFiltroRuteoDesde] = useState("");
+
+  // Phase 1.1.d (2026-06-12): nuevo state consumiendo endpoint Torre.
+  // El proxy inyecta x-empresa-id de la sesion del usuario.
+  // Backend: scope-aware via AuthContext.
+  const [fugaRuteoMetrica, setFugaRuteoMetrica] = useState<any>(null);
+  const [cargandoFugaRuteo, setCargandoFugaRuteo] = useState(true);
   const [filtroRuteoHasta, setFiltroRuteoHasta] = useState("");
   const [filtroRuteoServicio, setFiltroRuteoServicio] = useState("TODOS");
   const [filtroRuteoCourier, setFiltroRuteoCourier] = useState("TODOS");
@@ -61,6 +67,23 @@ export default function Dashboard() {
     };
     fetchDashboardData();
   }, [empresaActivaId, filtroTiempo, tienePermiso]);
+
+  // Phase 1.1.d (2026-06-12): fetch del endpoint Torre fuga-ruteo.
+  // Scope auto-detectado: cliente o shipro segun sesion del proxy.
+  useEffect(() => {
+    if (!tienePermiso) return;
+    setCargandoFugaRuteo(true);
+    fetch("/api/torre-de-control/fuga-ruteo")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setFugaRuteoMetrica(data);
+        setCargandoFugaRuteo(false);
+      })
+      .catch(err => {
+        console.error("[Panel] error fetching fuga-ruteo:", err);
+        setCargandoFugaRuteo(false);
+      });
+  }, [tienePermiso, empresaActivaId]);
 
   if (!tienePermiso) {
     return (
@@ -133,7 +156,7 @@ export default function Dashboard() {
   let insightRuteoP = "Enrutamiento 100% optimizado.";
   let insightRuteoS = "Tus envíos están utilizando las tarifas más eficientes. No hay fugas financieras detectadas.";
   let colorRuteo = "green"; let IconoRuteo = CheckCircle2;
-  if (ruteoStats.fugaFinancieraTotal > 0) {
+  if ((fugaRuteoMetrica?.resumen?.fugaTotal ?? 0) > 0) {
     insightRuteoP = `Se están pagando de más por elección ineficiente en checkout.`;
     insightRuteoS = `Recomendamos activar reglas de Protección de Margen en el módulo Mis Transportes.`;
     colorRuteo = "purple"; IconoRuteo = Lightbulb;
@@ -213,7 +236,7 @@ export default function Dashboard() {
                       <div className="bg-white p-6 rounded-2xl shadow-sm border border-purple-100 relative overflow-hidden">
                         <div className="absolute top-0 right-0 w-32 h-32 bg-purple-50 rounded-bl-full -z-10 opacity-50"></div>
                         <h4 className="text-xs font-black text-purple-600 uppercase tracking-widest mb-1">Costo de Oportunidad Total</h4>
-                        <p className="text-5xl font-black text-gray-800 mb-2 tracking-tighter">{formatPesos(ruteoStats.fugaFinancieraTotal)}</p>
+                        <p className="text-5xl font-black text-gray-800 mb-2 tracking-tighter">{cargandoFugaRuteo ? '...' : formatPesos(fugaRuteoMetrica?.resumen?.fugaTotal ?? 0)}</p>
                         <p className="text-xs font-medium text-gray-500 leading-relaxed">Dinero perdido por no utilizar la tarifa más económica habilitada en Shipro al momento del despacho.</p>
                       </div>
 
@@ -221,12 +244,12 @@ export default function Dashboard() {
                         <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-6">Eficiencia de Enrutamiento</h4>
                         <div className="space-y-5">
                           <div>
-                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-green-700 flex items-center gap-2"><Check className="w-4 h-4"/> Envíos Optimizados (Ahorro)</span><span className="text-green-700">{ruteoStats.enviosOptimizados}%</span></div>
-                            <div className="w-full bg-gray-100 rounded-full h-4"><div className="bg-green-500 h-4 rounded-full transition-all duration-1000" style={{ width: `${ruteoStats.enviosOptimizados}%` }}></div></div>
+                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-green-700 flex items-center gap-2"><Check className="w-4 h-4"/> Envíos Optimizados (Ahorro)</span><span className="text-green-700">{fugaRuteoMetrica?.resumen?.tasaOptimizacion ?? 0}%</span></div>
+                            <div className="w-full bg-gray-100 rounded-full h-4"><div className="bg-green-500 h-4 rounded-full transition-all duration-1000" style={{ width: `${fugaRuteoMetrica?.resumen?.tasaOptimizacion ?? 0}%` }}></div></div>
                           </div>
                           <div>
-                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-red-600 flex items-center gap-2"><TrendingUp className="w-4 h-4"/> Envíos Ineficientes (Fuga)</span><span className="text-red-600">{ruteoStats.enviosIneficientes}%</span></div>
-                            <div className="w-full bg-gray-100 rounded-full h-4"><div className="bg-red-500 h-4 rounded-full transition-all duration-1000" style={{ width: `${ruteoStats.enviosIneficientes}%` }}></div></div>
+                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-red-600 flex items-center gap-2"><TrendingUp className="w-4 h-4"/> Envíos Ineficientes (Fuga)</span><span className="text-red-600">{fugaRuteoMetrica?.resumen?.tasaIneficiencia ?? 0}%</span></div>
+                            <div className="w-full bg-gray-100 rounded-full h-4"><div className="bg-red-500 h-4 rounded-full transition-all duration-1000" style={{ width: `${fugaRuteoMetrica?.resumen?.tasaIneficiencia ?? 0}%` }}></div></div>
                           </div>
                         </div>
                       </div>
@@ -250,16 +273,16 @@ export default function Dashboard() {
                         </div>
                         
                         <div className="p-6 flex-1 space-y-4 overflow-y-auto">
-                          {ruteoStats.topDesvios.length === 0 ? (
+                          {(fugaRuteoMetrica?.topDesviosPorZona?.length ?? 0) === 0 ? (
                             <p className="text-sm font-bold text-gray-400 text-center py-10">No se detectaron fugas de capital en la segmentación actual.</p>
                           ) : (
-                            ruteoStats.topDesvios.map((desvio: any, idx: number) => (
+                            (fugaRuteoMetrica?.topDesviosPorZona ?? []).map((desvio: any, idx: number) => (
                               <div key={`fuga-${idx}`} className="p-5 bg-white border border-gray-200 hover:border-purple-300 rounded-xl transition-all shadow-sm group">
                                 <div className="flex justify-between items-start mb-4">
                                   <div className="flex items-center gap-3">
                                     <div className="w-8 h-8 rounded-full bg-purple-100 text-purple-700 font-black flex items-center justify-center text-xs">#{idx + 1}</div>
                                     <div>
-                                      <h5 className="font-bold text-gray-800 text-sm">{desvio.sugerido}</h5>
+                                      <h5 className="font-bold text-gray-800 text-sm">{desvio.courierMasSugerido}</h5>
                                       <p className="text-[10px] font-bold text-gray-400 flex items-center gap-1 uppercase tracking-wider mt-0.5"><MapPin className="w-3 h-3" /> Zona: {desvio.destino} • {desvio.enviosAfectados} envíos</p>
                                     </div>
                                   </div>
@@ -271,12 +294,12 @@ export default function Dashboard() {
                                 <div className="bg-gray-50 rounded-lg p-3 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between border border-gray-100">
                                   <div className="flex items-center gap-2">
                                     <div className="w-1.5 h-8 bg-red-400 rounded-full"></div>
-                                    <div><p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">Se eligió</p><p className="text-xs font-bold text-gray-700">{desvio.elegidos}</p></div>
+                                    <div><p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">Se eligió</p><p className="text-xs font-bold text-gray-700">{desvio.courierMasElegido}</p></div>
                                   </div>
                                   <div className="hidden sm:block text-gray-300"><ArrowRightLeft className="w-4 h-4" /></div>
                                   <div className="flex items-center gap-2">
                                     <div className="w-1.5 h-8 bg-green-500 rounded-full"></div>
-                                    <div><p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">Se Sugería</p><p className="text-xs font-bold text-gray-700">{desvio.sugerido}</p></div>
+                                    <div><p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">Se Sugería</p><p className="text-xs font-bold text-gray-700">{desvio.courierMasSugerido}</p></div>
                                   </div>
                                   <div className="bg-white px-3 py-1.5 rounded-md shadow-sm border border-gray-200 text-center w-full sm:w-auto">
                                     <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">Brecha p/Envío</p>
@@ -900,10 +923,10 @@ export default function Dashboard() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             
             {/* M3: Ruteo */}
-            <div className={`bg-white border rounded-xl p-5 shadow-sm flex flex-col h-full transition-colors ${ruteoStats.fugaFinancieraTotal > 0 ? 'border-purple-300' : 'border-gray-200'}`}>
+            <div className={`bg-white border rounded-xl p-5 shadow-sm flex flex-col h-full transition-colors ${(fugaRuteoMetrica?.resumen?.fugaTotal ?? 0) > 0 ? 'border-purple-300' : 'border-gray-200'}`}>
               <div className="flex-1">
                 <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5"><Target className="w-3.5 h-3.5 text-purple-500" /> 3. Fuga por Ruteo</p>
-                <h3 className="text-3xl font-black text-gray-800 mb-1">{formatPesos(ruteoStats.fugaFinancieraTotal)}</h3>
+                <h3 className="text-3xl font-black text-gray-800 mb-1">{cargandoFugaRuteo ? '...' : formatPesos(fugaRuteoMetrica?.resumen?.fugaTotal ?? 0)}</h3>
                 <p className="text-[10px] font-bold text-purple-500 mb-4">Costo Oportunidad</p>
               </div>
               <button onClick={() => abrirAnalisis("Fuga por Ruteo Ineficiente")} className="w-full py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold text-gray-700 hover:bg-blue-50 transition-colors flex justify-center items-center gap-1 mt-auto"><ZoomIn className="w-3.5 h-3.5" /> Analizar</button>

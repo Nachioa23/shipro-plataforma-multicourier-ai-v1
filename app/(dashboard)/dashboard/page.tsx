@@ -8,7 +8,7 @@ import {
   Map, ArrowRightLeft, Target, Building2, Activity, Box,
   Headset, Truck, Store, MapPin, ZoomIn, X, BarChart, PieChart, 
   HeartHandshake, Smile, Meh, Frown, MessageSquare, ShieldCheck, 
-  SearchCode, TrendingUp, Lightbulb, Calendar, CheckCircle2, Scale, Undo2, ListChecks, Check, MapPinned, LifeBuoy
+  SearchCode, TrendingUp, Lightbulb, Calendar, CheckCircle2, Scale, Undo2, ListChecks, Check, MapPinned, LifeBuoy, Warehouse
 } from 'lucide-react';
 
 export default function Dashboard() {
@@ -47,6 +47,11 @@ export default function Dashboard() {
   // Torre /api/torre-de-control/efectividad-primera-visita (scope-aware).
   const [efectividadMetrica, setEfectividadMetrica] = useState<any>(null);
   const [cargandoEfectividad, setCargandoEfectividad] = useState(true);
+
+  // Phase 1.4.d (2026-06-13): metrica Tiempos Colecta (Card 9 nueva) consume
+  // endpoint Torre /api/torre-de-control/tiempos-colecta (scope-aware).
+  const [tiemposColectaMetrica, setTiemposColectaMetrica] = useState<any>(null);
+  const [cargandoTiemposColecta, setCargandoTiemposColecta] = useState(true);
   const [filtroRuteoHasta, setFiltroRuteoHasta] = useState("");
   const [filtroRuteoServicio, setFiltroRuteoServicio] = useState("TODOS");
   const [filtroRuteoCourier, setFiltroRuteoCourier] = useState("TODOS");
@@ -124,6 +129,22 @@ export default function Dashboard() {
       .catch(err => {
         console.error("[Panel] error fetching efectividad:", err);
         setCargandoEfectividad(false);
+      });
+  }, [tienePermiso, empresaActivaId]);
+
+  // Phase 1.4.d: fetch tiempos-colecta desde endpoint Torre.
+  useEffect(() => {
+    if (!tienePermiso) return;
+    setCargandoTiemposColecta(true);
+    fetch("/api/torre-de-control/tiempos-colecta")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setTiemposColectaMetrica(data);
+        setCargandoTiemposColecta(false);
+      })
+      .catch(err => {
+        console.error("[Panel] error fetching tiempos-colecta:", err);
+        setCargandoTiemposColecta(false);
       });
   }, [tienePermiso, empresaActivaId]);
 
@@ -886,6 +907,150 @@ export default function Dashboard() {
     </div>
   </div>
 
+            ) : metricaAnalisis === "Tiempos Colecta" ? (
+              <div className="flex-1 p-6 overflow-y-auto bg-gray-50">
+                {cargandoTiemposColecta ? (
+                  <div className="flex items-center justify-center py-20 text-gray-500"><Loader2 className="w-5 h-5 animate-spin mr-2" /> Cargando metrica...</div>
+                ) : !tiemposColectaMetrica || tiemposColectaMetrica.cantidadEnviosValidos === 0 ? (
+                  <div className="text-center py-20 text-gray-500">
+                    Sin envios con fecha de colecta en la ventana de {tiemposColectaMetrica?.ventanaDias || 30} dias.
+                    {tiemposColectaMetrica?.cantidadEnviosSinFechaColecta > 0 && (
+                      <p className="mt-2 text-xs text-gray-400">
+                        Hay {tiemposColectaMetrica.cantidadEnviosSinFechaColecta} envios sin fecha de colecta poblada todavia.
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-6">
+                    {/* 3-tile Resumen */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="bg-white rounded-xl border border-gray-200 p-5">
+                        <p className="text-xs font-bold text-gray-500 uppercase mb-2">Mediana (P50)</p>
+                        <p className="text-3xl font-black text-blue-600">
+                          {tiemposColectaMetrica.estadisticosGlobales.p50 < 48
+                            ? `${Math.round(tiemposColectaMetrica.estadisticosGlobales.p50)}h`
+                            : `${(tiemposColectaMetrica.estadisticosGlobales.p50 / 24).toFixed(1)} dias`}
+                        </p>
+                      </div>
+                      <div className="bg-white rounded-xl border border-gray-200 p-5">
+                        <p className="text-xs font-bold text-gray-500 uppercase mb-2">Promedio</p>
+                        <p className="text-3xl font-black text-gray-800">
+                          {tiemposColectaMetrica.estadisticosGlobales.promedio < 48
+                            ? `${Math.round(tiemposColectaMetrica.estadisticosGlobales.promedio)}h`
+                            : `${(tiemposColectaMetrica.estadisticosGlobales.promedio / 24).toFixed(1)} dias`}
+                        </p>
+                      </div>
+                      <div className="bg-white rounded-xl border border-gray-200 p-5">
+                        <p className="text-xs font-bold text-gray-500 uppercase mb-2">P95 (Cola lenta)</p>
+                        <p className="text-3xl font-black text-orange-600">
+                          {tiemposColectaMetrica.estadisticosGlobales.p95 < 48
+                            ? `${Math.round(tiemposColectaMetrica.estadisticosGlobales.p95)}h`
+                            : `${(tiemposColectaMetrica.estadisticosGlobales.p95 / 24).toFixed(1)} dias`}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Calidad de datos */}
+                    <div className="bg-white rounded-xl border border-gray-200 p-4 text-xs text-gray-600">
+                      <span className="font-bold text-gray-900">{tiemposColectaMetrica.cantidadEnviosValidos}</span> envios validos
+                      {" "}de <span className="font-bold text-gray-900">{tiemposColectaMetrica.cantidadEnviosTotal}</span> en ventana de {tiemposColectaMetrica.ventanaDias} dias.
+                      {tiemposColectaMetrica.cantidadEnviosSinFechaColecta > 0 && (
+                        <span className="ml-2 text-gray-500">
+                          ({tiemposColectaMetrica.cantidadEnviosSinFechaColecta} sin fecha de colecta)
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Tabla Por Deposito */}
+                    {tiemposColectaMetrica.porDeposito?.length > 0 && (
+                      <div className="bg-white rounded-xl border border-gray-200 p-5">
+                        <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><Warehouse className="w-5 h-5 text-gray-500" /> Por Deposito</h4>
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
+                              <th className="pb-2 font-bold">Deposito</th>
+                              <th className="pb-2 font-bold text-right">Mediana</th>
+                              <th className="pb-2 font-bold text-right">Promedio</th>
+                              <th className="pb-2 font-bold text-right">P95</th>
+                              <th className="pb-2 font-bold text-right">Envios</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {tiemposColectaMetrica.porDeposito.map((d: any) => (
+                              <tr key={`dep-${d.depositoId}`} className="border-b border-gray-100">
+                                <td className="py-2 font-bold text-gray-800">{d.depositoNombre}</td>
+                                <td className="py-2 text-right text-gray-700">{d.medianaHoras < 48 ? `${Math.round(d.medianaHoras)}h` : `${(d.medianaHoras / 24).toFixed(1)}d`}</td>
+                                <td className="py-2 text-right text-gray-700">{d.promedioHoras < 48 ? `${Math.round(d.promedioHoras)}h` : `${(d.promedioHoras / 24).toFixed(1)}d`}</td>
+                                <td className="py-2 text-right text-gray-700">{d.p95Horas < 48 ? `${Math.round(d.p95Horas)}h` : `${(d.p95Horas / 24).toFixed(1)}d`}</td>
+                                <td className="py-2 text-right text-gray-500">{d.cantidad}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {/* Tabla Por Courier */}
+                    {tiemposColectaMetrica.porCourier?.length > 0 && (
+                      <div className="bg-white rounded-xl border border-gray-200 p-5">
+                        <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><Truck className="w-5 h-5 text-gray-500" /> Por Courier</h4>
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
+                              <th className="pb-2 font-bold">Courier</th>
+                              <th className="pb-2 font-bold text-right">Mediana</th>
+                              <th className="pb-2 font-bold text-right">Promedio</th>
+                              <th className="pb-2 font-bold text-right">P95</th>
+                              <th className="pb-2 font-bold text-right">Envios</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {tiemposColectaMetrica.porCourier.map((c: any) => (
+                              <tr key={`cou-${c.courierId}`} className="border-b border-gray-100">
+                                <td className="py-2 font-bold text-gray-800">{c.courierNombre}</td>
+                                <td className="py-2 text-right text-gray-700">{c.medianaHoras < 48 ? `${Math.round(c.medianaHoras)}h` : `${(c.medianaHoras / 24).toFixed(1)}d`}</td>
+                                <td className="py-2 text-right text-gray-700">{c.promedioHoras < 48 ? `${Math.round(c.promedioHoras)}h` : `${(c.promedioHoras / 24).toFixed(1)}d`}</td>
+                                <td className="py-2 text-right text-gray-700">{c.p95Horas < 48 ? `${Math.round(c.p95Horas)}h` : `${(c.p95Horas / 24).toFixed(1)}d`}</td>
+                                <td className="py-2 text-right text-gray-500">{c.cantidad}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {/* Tabla Por Dia Semana */}
+                    {tiemposColectaMetrica.porDiaSemana?.length > 0 && (
+                      <div className="bg-white rounded-xl border border-gray-200 p-5">
+                        <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><Calendar className="w-5 h-5 text-gray-500" /> Por Dia de Semana</h4>
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
+                              <th className="pb-2 font-bold">Dia</th>
+                              <th className="pb-2 font-bold text-right">Mediana</th>
+                              <th className="pb-2 font-bold text-right">Promedio</th>
+                              <th className="pb-2 font-bold text-right">P95</th>
+                              <th className="pb-2 font-bold text-right">Envios</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {tiemposColectaMetrica.porDiaSemana.map((d: any) => (
+                              <tr key={`dia-${d.diaSemana}`} className="border-b border-gray-100">
+                                <td className="py-2 font-bold text-gray-800">{d.diaSemanaNombre}</td>
+                                <td className="py-2 text-right text-gray-700">{d.medianaHoras < 48 ? `${Math.round(d.medianaHoras)}h` : `${(d.medianaHoras / 24).toFixed(1)}d`}</td>
+                                <td className="py-2 text-right text-gray-700">{d.promedioHoras < 48 ? `${Math.round(d.promedioHoras)}h` : `${(d.promedioHoras / 24).toFixed(1)}d`}</td>
+                                <td className="py-2 text-right text-gray-700">{d.p95Horas < 48 ? `${Math.round(d.p95Horas)}h` : `${(d.p95Horas / 24).toFixed(1)}d`}</td>
+                                <td className="py-2 text-right text-gray-500">{d.cantidad}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                  </div>
+                )}
+              </div>
             ) : (
               // FALLBACK (Para métricas que aún no diseñamos)
               <div className="flex-1 p-8 overflow-y-auto bg-gray-50 flex flex-col items-center justify-center text-center">
@@ -940,19 +1105,19 @@ export default function Dashboard() {
         {/* BLOQUE 1: KPIs CORE */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-            <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-2">Despachos Periodo</p>
+            <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-2">1. Despachos Periodo</p>
             <h3 className="text-3xl font-black text-gray-800">{data.enviosMes || 0} <span className="text-xs text-gray-400">pqts</span></h3>
           </div>
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-            <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-2">Éxito Histórico</p>
+            <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-2">2. Éxito Histórico</p>
             <h3 className="text-3xl font-black text-gray-800">{data.porcentajeExito || 0}% <span className="text-xs text-gray-400">efectividad</span></h3>
           </div>
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-            <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-2">Gasto Logístico</p>
+            <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-2">3. Gasto Logístico</p>
             <h3 className="text-3xl font-black text-gray-800">{formatPesos(data.gastoTotal)}</h3>
           </div>
           <div className="bg-red-50 p-6 rounded-2xl shadow-sm border border-red-200">
-            <p className="text-[11px] font-bold text-red-500 uppercase tracking-wider mb-2 flex items-center gap-1"><AlertCircle className="w-4 h-4"/> Tickets Abiertos</p>
+            <p className="text-[11px] font-bold text-red-500 uppercase tracking-wider mb-2 flex items-center gap-1"><AlertCircle className="w-4 h-4"/> 4. Tickets Abiertos</p>
             <h3 className="text-3xl font-black text-red-600">{data.ticketsActivos || 0} <span className="text-xs text-red-400">incidencias</span></h3>
           </div>
         </div>
@@ -967,7 +1132,7 @@ export default function Dashboard() {
             {/* M3: Ruteo */}
             <div className={`bg-white border rounded-xl p-5 shadow-sm flex flex-col h-full transition-colors ${(fugaRuteoMetrica?.resumen?.fugaTotal ?? 0) > 0 ? 'border-purple-300' : 'border-gray-200'}`}>
               <div className="flex-1">
-                <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5"><Target className="w-3.5 h-3.5 text-purple-500" /> 3. Fuga por Ruteo</p>
+                <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5"><Target className="w-3.5 h-3.5 text-purple-500" /> 5. Fuga por Ruteo</p>
                 <h3 className="text-3xl font-black text-gray-800 mb-1">{cargandoFugaRuteo ? '...' : formatPesos(fugaRuteoMetrica?.resumen?.fugaTotal ?? 0)}</h3>
                 <p className="text-[10px] font-bold text-purple-500 mb-4">Costo Oportunidad</p>
               </div>
@@ -977,7 +1142,7 @@ export default function Dashboard() {
             {/* M4: Aforo */}
             <div className={`bg-white p-5 rounded-xl border shadow-sm flex flex-col h-full transition-colors ${fugaPeso > 20 ? 'border-red-300' : 'border-gray-200'}`}>
               <div className="flex-1">
-                <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5"><Box className="w-3.5 h-3.5 text-red-500" /> 4. Desvío de Peso</p>
+                <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5"><Box className="w-3.5 h-3.5 text-red-500" /> 6. Desvío de Peso</p>
                 <h3 className="text-3xl font-black text-gray-800 mb-1">{cargandoDesvioPeso ? '...' : `${fugaPeso}%`}</h3>
                 <p className="text-[10px] font-bold text-red-500 mb-4">Aforos penalizados</p>
               </div>
@@ -987,7 +1152,7 @@ export default function Dashboard() {
             {/* M5: Efectividad */}
             <div className={`bg-white p-5 rounded-xl border shadow-sm flex flex-col h-full transition-colors ${efectividadGlobal < 85 ? 'border-orange-300' : 'border-gray-200'}`}>
               <div className="flex-1">
-                <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5"><PackageCheck className="w-3.5 h-3.5 text-green-500" /> 5. 1ra Visita</p>
+                <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5"><PackageCheck className="w-3.5 h-3.5 text-green-500" /> 7. Primera Visita</p>
                 <h3 className="text-3xl font-black text-gray-800 mb-1">{cargandoEfectividad ? '...' : `${efectividadGlobal}%`}</h3>
                 <p className="text-[10px] font-bold text-green-500 mb-4">Efectividad de entrega</p>
               </div>
@@ -997,7 +1162,7 @@ export default function Dashboard() {
             {/* M6: Soporte */}
             <div className={`bg-white p-5 rounded-xl border shadow-sm flex flex-col h-full transition-colors ${tasaSoporteGlobal > 5 ? 'border-red-300' : 'border-gray-200'}`}>
               <div className="flex-1">
-                <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5"><Headset className="w-3.5 h-3.5 text-orange-500" /> 6. Soporte</p>
+                <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5"><Headset className="w-3.5 h-3.5 text-orange-500" /> 8. Soporte</p>
                 <h3 className="text-3xl font-black text-gray-800 mb-1">{tasaSoporteGlobal}%</h3>
                 <p className="text-[10px] font-bold text-orange-500 mb-4">Tickets c/ 100 envíos</p>
               </div>
@@ -1006,10 +1171,44 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {/* BLOQUE Velocidad Operativa (Phase 1.4.d, 2026-06-13) */}
+        <div>
+          <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><TrendingDown className="w-5 h-5 text-blue-600" /> Velocidad Operativa</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+
+            {/* M2.1: Tiempos Colecta */}
+            <div className="bg-white p-5 rounded-xl border shadow-sm flex flex-col h-full transition-colors border-gray-200">
+              <div className="flex-1">
+                <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5"><TrendingDown className="w-3.5 h-3.5 text-blue-500" /> 9. Tiempos Colecta</p>
+                {cargandoTiemposColecta ? (
+                  <h3 className="text-3xl font-black text-gray-800 mb-1">...</h3>
+                ) : tiemposColectaMetrica?.estadisticosGlobales?.p50 == null ? (
+                  <>
+                    <h3 className="text-3xl font-black text-gray-400 mb-1">--</h3>
+                    <p className="text-[10px] font-bold text-gray-500 mb-4">Sin data en ventana</p>
+                  </>
+                ) : (
+                  <>
+                    <h3 className="text-3xl font-black text-gray-800 mb-1">
+                      {tiemposColectaMetrica.estadisticosGlobales.p50 < 48
+                        ? `${Math.round(tiemposColectaMetrica.estadisticosGlobales.p50)}`
+                        : (tiemposColectaMetrica.estadisticosGlobales.p50 / 24).toFixed(1)}
+                      <span className="text-lg font-bold text-gray-400">{" "}{tiemposColectaMetrica.estadisticosGlobales.p50 < 48 ? "h" : "dias"}</span>
+                    </h3>
+                    <p className="text-[10px] font-bold text-blue-500 mb-4">Mediana de colecta</p>
+                  </>
+                )}
+              </div>
+              <button onClick={() => abrirAnalisis("Tiempos Colecta")} className="w-full py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold text-gray-700 hover:bg-blue-50 transition-colors flex justify-center items-center gap-1 mt-auto"><ZoomIn className="w-3.5 h-3.5" /> Analizar</button>
+            </div>
+
+          </div>
+        </div>
+
         {/* BLOQUE 3: ANÁLISIS VIVOS (M8, M9, M10) */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 flex flex-col h-full">
-            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center justify-between"><span className="flex items-center gap-2"><Store className="w-4 h-4 text-[#233b6b]" /> 8. Modalidades (Real)</span><button onClick={() => abrirAnalisis("Adopción de Modalidades")} className="p-1.5 bg-gray-50 hover:bg-blue-50 text-gray-500 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
+            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center justify-between"><span className="flex items-center gap-2"><Store className="w-4 h-4 text-[#233b6b]" /> 10. Modalidades (Real)</span><button onClick={() => abrirAnalisis("Adopción de Modalidades")} className="p-1.5 bg-gray-50 hover:bg-blue-50 text-gray-500 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
             <div className="space-y-5 flex-1 flex flex-col justify-center">
               <div>
                 <div className="flex justify-between text-xs font-bold mb-1"><span className="text-gray-600">Domicilio Estándar</span><span>{pctEstandar}%</span></div>
@@ -1027,7 +1226,7 @@ export default function Dashboard() {
           </div>
 
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 flex flex-col h-full">
-            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center justify-between"><span className="flex items-center gap-2"><PieChart className="w-4 h-4 text-[#233b6b]" /> 9. Riesgo Courier (Real)</span><button onClick={() => abrirAnalisis("Concentración Courier")} className="p-1.5 bg-gray-50 hover:bg-blue-50 text-gray-500 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
+            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center justify-between"><span className="flex items-center gap-2"><PieChart className="w-4 h-4 text-[#233b6b]" /> 11. Riesgo Courier (Real)</span><button onClick={() => abrirAnalisis("Concentración Courier")} className="p-1.5 bg-gray-50 hover:bg-blue-50 text-gray-500 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
             <div className="flex-1 flex flex-col justify-center space-y-4">
               {topCouriers.length === 0 ? <p className="text-sm text-gray-400 text-center font-bold">Sin datos para graficar</p> : (
                 topCouriers.map((c: any, i: number) => {
@@ -1051,7 +1250,7 @@ export default function Dashboard() {
           </div>
 
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 flex flex-col h-full">
-            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center justify-between"><span className="flex items-center gap-2"><Map className="w-4 h-4 text-[#233b6b]" /> 10. Mapa SLA (Real)</span><button onClick={() => abrirAnalisis("Mapa de Calor SLA")} className="p-1.5 bg-gray-50 hover:bg-blue-50 text-gray-500 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
+            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center justify-between"><span className="flex items-center gap-2"><Map className="w-4 h-4 text-[#233b6b]" /> 12. Mapa SLA (Real)</span><button onClick={() => abrirAnalisis("Mapa de Calor SLA")} className="p-1.5 bg-gray-50 hover:bg-blue-50 text-gray-500 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
             
             {/* TARJETA M10 ACTUALIZADA CON ÍNDICES */}
             <div className="flex-1 grid grid-cols-3 sm:grid-cols-4 gap-2 text-[10px] font-bold text-center text-white items-center content-start">
@@ -1071,7 +1270,7 @@ export default function Dashboard() {
         {/* BLOQUE 4: NPS DINÁMICO */}
         <div className="pb-10">
            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2">
-             <HeartHandshake className="w-5 h-5 text-indigo-500" /> 11. Experiencia del Consumidor (NPS Transaccional)
+             <HeartHandshake className="w-5 h-5 text-indigo-500" /> 13. Experiencia del Consumidor (NPS Transaccional)
            </h3>
            <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
              

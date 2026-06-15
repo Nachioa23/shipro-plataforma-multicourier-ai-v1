@@ -57,6 +57,11 @@ export default function Dashboard() {
   // endpoint Torre /api/torre-de-control/promesa-calibrada (scope-aware).
   const [promesaCalibradaMetrica, setPromesaCalibradaMetrica] = useState<any>(null);
   const [cargandoPromesaCalibrada, setCargandoPromesaCalibrada] = useState(true);
+
+  // Phase 2.1.d (2026-06-15): metrica Mapa SLA (Card 13) migrada al endpoint
+  // Torre /api/torre-de-control/mapa-sla scope-aware (reemplaza slaStats legacy).
+  const [mapaSlaMetrica, setMapaSlaMetrica] = useState<any>(null);
+  const [cargandoMapaSla, setCargandoMapaSla] = useState(true);
   const [filtroRuteoHasta, setFiltroRuteoHasta] = useState("");
   const [filtroRuteoServicio, setFiltroRuteoServicio] = useState("TODOS");
   const [filtroRuteoCourier, setFiltroRuteoCourier] = useState("TODOS");
@@ -166,6 +171,22 @@ export default function Dashboard() {
       .catch(err => {
         console.error("[Panel] error fetching promesa-calibrada:", err);
         setCargandoPromesaCalibrada(false);
+      });
+  }, [tienePermiso, empresaActivaId]);
+
+  // Phase 2.1.d: fetch mapa-sla desde endpoint Torre.
+  useEffect(() => {
+    if (!tienePermiso) return;
+    setCargandoMapaSla(true);
+    fetch("/api/torre-de-control/mapa-sla")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setMapaSlaMetrica(data);
+        setCargandoMapaSla(false);
+      })
+      .catch(err => {
+        console.error("[Panel] error fetching mapa-sla:", err);
+        setCargandoMapaSla(false);
       });
   }, [tienePermiso, empresaActivaId]);
 
@@ -860,11 +881,11 @@ export default function Dashboard() {
 
         {/* MÉTRICA 1: SLA HEALTH INDEX (COURIER) */}
         <div className={`p-6 rounded-3xl border-2 flex flex-col items-center justify-center text-center transition-all ${
-          (zonaSlaSeleccionada?.indice || slaStats.slaHealthIndex) <= 1 ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'
+          (zonaSlaSeleccionada?.indice || (mapaSlaMetrica?.resumen?.slaHealthIndex ?? 0)) <= 1 ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'
         }`}>
           <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Courier Health Index</h4>
-          <p className={`text-6xl font-black ${(zonaSlaSeleccionada?.indice || slaStats.slaHealthIndex) <= 1 ? 'text-green-600' : 'text-red-600'}`}>
-            {zonaSlaSeleccionada ? zonaSlaSeleccionada.indice : slaStats.slaHealthIndex}
+          <p className={`text-6xl font-black ${(zonaSlaSeleccionada?.indice || (mapaSlaMetrica?.resumen?.slaHealthIndex ?? 0)) <= 1 ? 'text-green-600' : 'text-red-600'}`}>
+            {zonaSlaSeleccionada ? zonaSlaSeleccionada.indice : (mapaSlaMetrica?.resumen?.slaHealthIndex ?? 0)}
           </p>
           <p className="text-[10px] font-bold text-gray-500 uppercase mt-1">
             Días Reales / Días Pactados
@@ -876,7 +897,7 @@ export default function Dashboard() {
           <div className="flex justify-between items-start mb-4">
             <div>
               <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Cumplimiento Shipro</h4>
-              <p className="text-4xl font-black text-gray-800">{slaStats.cumplimientoE2E}%</p>
+              <p className="text-4xl font-black text-gray-800">{mapaSlaMetrica?.resumen?.cumplimientoE2E ?? 0}%</p>
             </div>
             <div className="p-2 bg-blue-50 rounded-lg"><Target className="w-5 h-5 text-blue-600"/></div>
           </div>
@@ -889,7 +910,7 @@ export default function Dashboard() {
         <div className="bg-gray-100 p-5 rounded-2xl border border-gray-200 flex justify-between items-center">
            <div>
              <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Demora de Preparación</h4>
-             <p className="text-2xl font-black text-gray-700">{slaStats.promedioPreparacion} días</p>
+             <p className="text-2xl font-black text-gray-700">{mapaSlaMetrica?.resumen?.promedioPreparacion ?? 0} días</p>
            </div>
            <Clock className="w-8 h-8 text-gray-300"/>
         </div>
@@ -899,7 +920,7 @@ export default function Dashboard() {
       <div className="lg:col-span-7 bg-white rounded-2xl p-6 border border-gray-200 overflow-y-auto">
         <h4 className="text-sm font-black mb-6 flex items-center gap-2"><MapPinned className="text-blue-600"/> Rendimiento Geográfico</h4>
         <div className="space-y-3">
-          {slaStats.mapaZonas.map((z:any, i:number) => (
+          {(mapaSlaMetrica?.mapaZonas ?? []).map((z:any, i:number) => (
             <div 
               key={i} 
               onClick={() => setZonaSlaSeleccionada(z)}
@@ -1442,7 +1463,7 @@ export default function Dashboard() {
             
             {/* TARJETA M10 ACTUALIZADA CON ÍNDICES */}
             <div className="flex-1 grid grid-cols-3 sm:grid-cols-4 gap-2 text-[10px] font-bold text-center text-white items-center content-start">
-              {slaStats.mapaZonas.length === 0 ? <p className="col-span-full text-gray-400 py-4 font-bold text-center">Sin datos de SLA finalizados</p> : slaStats.mapaZonas.slice(0, 12).map((z: any, i: number) => {
+              {cargandoMapaSla ? <p className="col-span-full text-gray-400 py-4 font-bold text-center">Cargando...</p> : (mapaSlaMetrica?.mapaZonas?.length ?? 0) === 0 ? <p className="col-span-full text-gray-400 py-4 font-bold text-center">Sin datos de SLA finalizados</p> : (mapaSlaMetrica?.mapaZonas ?? []).slice(0, 12).map((z: any, i: number) => {
                 const color = z.indice <= 0.8 ? 'bg-green-500' : z.indice <= 1 ? 'bg-blue-500' : 'bg-red-500';
                 return (
                   <div key={`cajita-${i}`} className={`${color} rounded p-2 flex flex-col items-center justify-center shadow-sm hover:scale-105 transition-transform`} title={z.zona}>

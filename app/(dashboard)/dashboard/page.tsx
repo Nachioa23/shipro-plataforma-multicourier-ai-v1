@@ -80,6 +80,15 @@ export default function Dashboard() {
   // separados verde/rojo. Legacy nps default L243 preservado (Phase 4 cleanup).
   const [npsCompradorMetrica, setNpsCompradorMetrica] = useState<any>(null);
   const [cargandoNpsComprador, setCargandoNpsComprador] = useState(true);
+
+  // Phase 2.4.d (2026-06-15): metrica Tickets Mesa de Ayuda (Card 8 migrada)
+  // consume endpoint Torre /api/torre-de-control/tickets-mesa-ayuda
+  // (scope-aware). Card 8 rebindeada via tasaSoporteGlobal derive.
+  // Modal Panel expandido a paridad Torre (D2 beta): Hero 2-tile + Distribucion
+  // Estados + Origen + Top Motivos + tabla porCourier + Evolucion Mensual.
+  // Legacy soporteStats default L268 preservado (Phase 4 cleanup).
+  const [ticketsMesaAyudaMetrica, setTicketsMesaAyudaMetrica] = useState<any>(null);
+  const [cargandoTicketsMesaAyuda, setCargandoTicketsMesaAyuda] = useState(true);
   const [filtroRuteoHasta, setFiltroRuteoHasta] = useState("");
   const [filtroRuteoServicio, setFiltroRuteoServicio] = useState("TODOS");
   const [filtroRuteoCourier, setFiltroRuteoCourier] = useState("TODOS");
@@ -240,6 +249,22 @@ export default function Dashboard() {
       });
   }, [tienePermiso, empresaActivaId]);
 
+  // Phase 2.4.d: fetch tickets-mesa-ayuda desde endpoint Torre.
+  useEffect(() => {
+    if (!tienePermiso) return;
+    setCargandoTicketsMesaAyuda(true);
+    fetch("/api/torre-de-control/tickets-mesa-ayuda")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setTicketsMesaAyudaMetrica(data);
+        setCargandoTicketsMesaAyuda(false);
+      })
+      .catch(err => {
+        console.error("[Panel] error fetching tickets-mesa-ayuda:", err);
+        setCargandoTicketsMesaAyuda(false);
+      });
+  }, [tienePermiso, empresaActivaId]);
+
   if (!tienePermiso) {
     return (
       <div className="flex flex-col h-full bg-gray-50 items-center justify-center p-8 text-center">
@@ -322,7 +347,9 @@ export default function Dashboard() {
   // INSIGHTS LÓGICOS
   const fugaPeso = desvioPesoMetrica?.resumen?.tasaSobreAforados ?? 0;
   const efectividadGlobal = efectividadMetrica?.resumen?.porcentajePrimeraVisita ?? 0;
-  const tasaSoporteGlobal = soporteStats.tasaSoporte;
+  // Phase 2.4.d: rebind a nuevo state ticketsMesaAyudaMetrica (helper scope-aware).
+  // Legacy soporteStats default L268 preservado (Phase 4 cleanup).
+  const tasaSoporteGlobal = ticketsMesaAyudaMetrica?.resumen?.tasaSoporte ?? 0;
 
   let insightRuteoP = "Enrutamiento 100% optimizado.";
   let insightRuteoS = "Tus envíos están utilizando las tarifas más eficientes. No hay fugas financieras detectadas.";
@@ -661,99 +688,180 @@ export default function Dashboard() {
               </div>
 
             ) : metricaAnalisis === "Tasa de Tickets de Mesa de Ayuda" ? (
-              <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden">
-                <div className="bg-white border-b border-gray-200 p-4 flex flex-wrap gap-3 items-center shrink-0 shadow-sm z-10">
-                  <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-1.5 bg-gray-50">
-                    <Calendar className="w-4 h-4 text-gray-400" />
-                    <input type="date" value={filtroRuteoDesde} onChange={e => setFiltroRuteoDesde(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"/>
-                    <span className="text-gray-400 text-xs font-bold">a</span>
-                    <input type="date" value={filtroRuteoHasta} onChange={e => setFiltroRuteoHasta(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"/>
+              <div className="flex-1 p-6 overflow-y-auto bg-gray-50">
+                {cargandoTicketsMesaAyuda ? (
+                  <div className="flex items-center justify-center py-20 text-gray-500"><Loader2 className="w-5 h-5 animate-spin mr-2" /> Cargando metrica...</div>
+                ) : !ticketsMesaAyudaMetrica || ticketsMesaAyudaMetrica.resumen.totalTickets === 0 ? (
+                  <div className="text-center py-20 text-gray-500">
+                    Sin tickets en la ventana de {ticketsMesaAyudaMetrica?.calidadDatos?.ventanaDias ?? 90} dias.
+                    {ticketsMesaAyudaMetrica && (
+                      <p className="text-xs text-gray-400 mt-2">{ticketsMesaAyudaMetrica.resumen.totalEnviosEnVentana} envios en la ventana.</p>
+                    )}
                   </div>
-                </div>
-
-                <div className="flex-1 overflow-y-auto p-6 lg:p-8">
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 max-w-7xl mx-auto">
+                ) : (
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                    {/* LEFT: Hero 2-tile + Distribucion + Origen */}
                     <div className="lg:col-span-5 space-y-6">
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 relative overflow-hidden">
-                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Tasa de Soporte</h4>
-                          <p className="text-5xl font-black text-gray-800 tracking-tighter">{soporteStats.tasaSoporte}%</p>
-                          <p className="text-[10px] font-bold text-gray-500 mt-2">Tickets generados cada 100 envíos.</p>
+                      {/* Hero 2-tile */}
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="bg-white p-5 rounded-2xl border border-gray-200 text-center">
+                          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Tasa de Soporte</p>
+                          <p className="text-5xl font-black text-gray-800 tracking-tighter">{ticketsMesaAyudaMetrica.resumen.tasaSoporte}%</p>
+                          <p className="text-[10px] text-gray-500 mt-2">{ticketsMesaAyudaMetrica.resumen.totalTickets} tickets / {ticketsMesaAyudaMetrica.resumen.totalEnviosEnVentana} envios</p>
                         </div>
-                        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 relative overflow-hidden">
-                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Resolución Media</h4>
-                          <p className="text-4xl font-black text-blue-600 tracking-tighter flex items-center gap-1"><Timer className="w-6 h-6"/> {soporteStats.tiempoMedioResolucion}</p>
-                          <p className="text-[10px] font-bold text-gray-500 mt-2">Promedio desde creación al cierre.</p>
+                        <div className="bg-white p-5 rounded-2xl border border-gray-200 text-center">
+                          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Resolucion Mediana</p>
+                          <p className="text-4xl font-black text-blue-600 tracking-tighter flex items-center justify-center gap-1">
+                            <Timer className="w-6 h-6"/>
+                            {(() => {
+                              const d = ticketsMesaAyudaMetrica.resumen.tiempoMedianoResolucion;
+                              if (d === null) return "--";
+                              if (d < 1) return `${Math.round(d * 24)}h`;
+                              return `${d % 1 === 0 ? d : d.toFixed(1)}d`;
+                            })()}
+                          </p>
+                          <p className="text-[10px] text-gray-500 mt-2">de tickets cerrados</p>
                         </div>
                       </div>
 
-                      <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                        <div className="flex justify-between items-center mb-6">
-                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest">Distribución de Estados</h4>
-                          <span className="bg-red-100 text-red-700 text-[10px] font-black px-2 py-0.5 rounded-full border border-red-200 animate-pulse">{soporteStats.ticketsAbiertos} Fuegos Abiertos</span>
+                      {/* Distribucion Estados */}
+                      <div className="bg-white p-6 rounded-2xl border border-gray-200">
+                        <div className="flex items-center justify-between mb-4">
+                          <h4 className="text-xs font-black text-gray-800 uppercase tracking-wider">Distribucion de Estados</h4>
+                          {ticketsMesaAyudaMetrica.resumen.totalActivos > 0 && (
+                            <span className="bg-red-100 text-red-700 text-[10px] font-black px-2 py-0.5 rounded-full border border-red-200 animate-pulse">
+                              {ticketsMesaAyudaMetrica.resumen.totalActivos} Activos
+                            </span>
+                          )}
                         </div>
-                        <div className="space-y-5">
+                        <div className="space-y-3">
                           <div>
-                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-green-700 flex items-center gap-2"><Check className="w-4 h-4"/> Resueltos / Cerrados</span><span className="text-green-700">{soporteStats.distribucionEstados.resueltos}%</span></div>
-                            <div className="w-full bg-gray-100 rounded-full h-3"><div className="bg-green-500 h-3 rounded-full transition-all duration-1000" style={{ width: `${soporteStats.distribucionEstados.resueltos}%` }}></div></div>
+                            <div className="flex justify-between text-sm font-bold mb-1">
+                              <span className="text-green-700 flex items-center gap-2"><Check className="w-4 h-4"/> Cerrados</span>
+                              <span className="text-green-700">{ticketsMesaAyudaMetrica.distribucionEstados.cerrado.cantidad} ({ticketsMesaAyudaMetrica.distribucionEstados.cerrado.porcentaje}%)</span>
+                            </div>
+                            <div className="w-full bg-gray-100 rounded-full h-2"><div className="bg-green-500 h-2 rounded-full" style={{ width: `${ticketsMesaAyudaMetrica.distribucionEstados.cerrado.porcentaje}%` }}></div></div>
                           </div>
                           <div>
-                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-blue-600 flex items-center gap-2"><Activity className="w-4 h-4"/> En Progreso / Espera Courier</span><span className="text-blue-600">{soporteStats.distribucionEstados.progreso}%</span></div>
-                            <div className="w-full bg-gray-100 rounded-full h-3"><div className="bg-blue-500 h-3 rounded-full transition-all duration-1000" style={{ width: `${soporteStats.distribucionEstados.progreso}%` }}></div></div>
+                            <div className="flex justify-between text-sm font-bold mb-1">
+                              <span className="text-orange-600 flex items-center gap-2"><Activity className="w-4 h-4"/> En Progreso</span>
+                              <span className="text-orange-600">{ticketsMesaAyudaMetrica.distribucionEstados.enProgreso.cantidad} ({ticketsMesaAyudaMetrica.distribucionEstados.enProgreso.porcentaje}%)</span>
+                            </div>
+                            <div className="w-full bg-gray-100 rounded-full h-2"><div className="bg-orange-500 h-2 rounded-full" style={{ width: `${ticketsMesaAyudaMetrica.distribucionEstados.enProgreso.porcentaje}%` }}></div></div>
                           </div>
                           <div>
-                            <div className="flex justify-between text-sm font-bold mb-2"><span className="text-red-600 flex items-center gap-2"><AlertCircle className="w-4 h-4"/> Abiertos / Críticos</span><span className="text-red-600">{soporteStats.distribucionEstados.abiertos}%</span></div>
-                            <div className="w-full bg-gray-100 rounded-full h-3"><div className="bg-red-600 h-3 rounded-full transition-all duration-1000" style={{ width: `${soporteStats.distribucionEstados.abiertos}%` }}></div></div>
+                            <div className="flex justify-between text-sm font-bold mb-1">
+                              <span className="text-red-600 flex items-center gap-2"><AlertCircle className="w-4 h-4"/> Abiertos</span>
+                              <span className="text-red-600">{ticketsMesaAyudaMetrica.distribucionEstados.abierto.cantidad} ({ticketsMesaAyudaMetrica.distribucionEstados.abierto.porcentaje}%)</span>
+                            </div>
+                            <div className="w-full bg-gray-100 rounded-full h-2"><div className="bg-red-500 h-2 rounded-full" style={{ width: `${ticketsMesaAyudaMetrica.distribucionEstados.abierto.porcentaje}%` }}></div></div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Origen Tickets */}
+                      <div className="bg-white p-6 rounded-2xl border border-gray-200">
+                        <h4 className="text-xs font-black text-gray-800 uppercase tracking-wider mb-4">Origen de la Solicitud</h4>
+                        <div className="space-y-3">
+                          <div>
+                            <div className="flex justify-between text-sm font-bold mb-1">
+                              <span className="text-blue-600">Radar Shipro (Auto-creado)</span>
+                              <span className="text-blue-600">{ticketsMesaAyudaMetrica.origen.radarShipro.cantidad} ({ticketsMesaAyudaMetrica.origen.radarShipro.porcentaje}%)</span>
+                            </div>
+                            <div className="w-full bg-gray-100 rounded-full h-2"><div className="bg-blue-500 h-2 rounded-full" style={{ width: `${ticketsMesaAyudaMetrica.origen.radarShipro.porcentaje}%` }}></div></div>
+                          </div>
+                          <div>
+                            <div className="flex justify-between text-sm font-bold mb-1">
+                              <span className="text-purple-600">Auto-Gestion Cliente</span>
+                              <span className="text-purple-600">{ticketsMesaAyudaMetrica.origen.cliente.cantidad} ({ticketsMesaAyudaMetrica.origen.cliente.porcentaje}%)</span>
+                            </div>
+                            <div className="w-full bg-gray-100 rounded-full h-2"><div className="bg-purple-500 h-2 rounded-full" style={{ width: `${ticketsMesaAyudaMetrica.origen.cliente.porcentaje}%` }}></div></div>
                           </div>
                         </div>
                       </div>
                     </div>
 
+                    {/* RIGHT: Top Motivos + porCourier + porMes */}
                     <div className="lg:col-span-7 space-y-6">
-                      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
-                        <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center gap-2">
-                          <ListChecks className="w-5 h-5 text-[#233b6b]"/> Top Motivos de Intervención Manual
-                        </h4>
-                        <div className="space-y-4">
-                          {soporteStats.topMotivos.map((falla: any, idx: number) => (
-                            <div key={`sopt-${idx}`} className="p-4 bg-gray-50 border border-gray-200 rounded-xl flex justify-between items-center group transition-colors">
-                              <div className="flex items-center gap-3">
-                                <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 font-black flex items-center justify-center text-xs">#{idx + 1}</div>
-                                <div>
-                                  <span className="text-sm font-bold text-gray-800 block">{falla.motivo}</span>
-                                  <span className="text-[10px] font-bold text-gray-500 flex items-center gap-1 mt-0.5"><Truck className="w-3 h-3"/> {falla.courierAsociado}</span>
-                                </div>
-                              </div>
-                              <span className="text-lg font-black text-gray-600">{falla.porcentaje}%</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
 
-                      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 h-fit">
-                        <div className="flex justify-between items-start mb-6">
-                          <div>
-                            <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider flex items-center gap-2">
-                              <LifeBuoy className="w-5 h-5 text-green-600"/> Origen de la Solicitud
-                            </h4>
-                            <p className="text-xs text-gray-500 mt-1">¿Quién detectó y abrió la incidencia?</p>
-                          </div>
+                      {/* Top Motivos */}
+                      {ticketsMesaAyudaMetrica.topMotivos.length > 0 && (
+                        <div className="bg-white rounded-xl border border-gray-200 p-5">
+                          <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><AlertCircle className="w-5 h-5 text-orange-500" /> Top Motivos de Intervencion</h4>
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
+                                <th className="pb-2 font-bold">Motivo</th>
+                                <th className="pb-2 font-bold text-right">Cantidad</th>
+                                <th className="pb-2 font-bold text-right">%</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {ticketsMesaAyudaMetrica.topMotivos.map((m: any, idx: number) => (
+                                <tr key={`mot-${idx}`} className="border-b border-gray-100">
+                                  <td className="py-2 font-bold text-gray-800">{m.motivo}</td>
+                                  <td className="py-2 text-right text-gray-500">{m.cantidad}</td>
+                                  <td className="py-2 text-right font-bold text-orange-600">{m.porcentaje}%</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
                         </div>
-                        
-                        <div className="flex h-12 w-full rounded-xl overflow-hidden shadow-inner border border-gray-200">
-                           <div className="bg-green-500 h-full flex flex-col justify-center px-4 transition-all duration-1000" style={{width: `${soporteStats.creadorTicket.clienteAutoServicio}%`}}>
-                             <span className="text-white font-black text-sm">{soporteStats.creadorTicket.clienteAutoServicio}%</span>
-                             <span className="text-green-100 font-bold text-[9px] uppercase tracking-wider">Auto-Gestión (Cliente)</span>
-                           </div>
-                           <div className="bg-[#233b6b] h-full flex flex-col justify-center px-4 text-right transition-all duration-1000" style={{width: `${soporteStats.creadorTicket.shiproRadar}%`}}>
-                             <span className="text-white font-black text-sm">{soporteStats.creadorTicket.shiproRadar}%</span>
-                             <span className="text-blue-200 font-bold text-[9px] uppercase tracking-wider">Radar Shipro (Bot)</span>
-                           </div>
+                      )}
+
+                      {/* Tabla por Courier */}
+                      {ticketsMesaAyudaMetrica.porCourier.length > 0 && (
+                        <div className="bg-white rounded-xl border border-gray-200 p-5">
+                          <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><Truck className="w-5 h-5 text-gray-500" /> Tickets por Courier</h4>
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
+                                <th className="pb-2 font-bold">Courier</th>
+                                <th className="pb-2 font-bold text-right">Tickets</th>
+                                <th className="pb-2 font-bold text-right">Envios</th>
+                                <th className="pb-2 font-bold text-right">Tasa</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {ticketsMesaAyudaMetrica.porCourier.map((c: any, idx: number) => (
+                                <tr key={`cou-${idx}`} className="border-b border-gray-100">
+                                  <td className="py-2 font-bold text-gray-800">{c.nombre}</td>
+                                  <td className="py-2 text-right text-gray-500">{c.cantidad}</td>
+                                  <td className="py-2 text-right text-gray-500">{c.enviosTotales}</td>
+                                  <td className={`py-2 text-right font-bold ${c.tasaSoporte > 5 ? 'text-red-600' : 'text-gray-700'}`}>{c.tasaSoporte}%</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
                         </div>
-                      </div>
+                      )}
+
+                      {/* Evolucion Mensual */}
+                      {ticketsMesaAyudaMetrica.porMes.length > 0 && (
+                        <div className="bg-white rounded-xl border border-gray-200 p-5">
+                          <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><Calendar className="w-5 h-5 text-gray-500" /> Evolucion Mensual</h4>
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
+                                <th className="pb-2 font-bold">Mes</th>
+                                <th className="pb-2 font-bold text-right">Cantidad</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {ticketsMesaAyudaMetrica.porMes.map((m: any) => (
+                                <tr key={`mes-${m.mes}`} className="border-b border-gray-100">
+                                  <td className="py-2 font-bold text-gray-800">{m.mes}</td>
+                                  <td className="py-2 text-right text-gray-500">{m.cantidad}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
                     </div>
                   </div>
-                </div>
+                )}
               </div>
 
             ) : metricaAnalisis === "Adopción de Modalidades" ? (

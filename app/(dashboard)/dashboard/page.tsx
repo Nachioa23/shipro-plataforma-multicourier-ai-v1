@@ -70,6 +70,16 @@ export default function Dashboard() {
   // porProvincia/porMes + Forward/Reverse split + warning Desconocidas.
   const [modalidadesMetrica, setModalidadesMetrica] = useState<any>(null);
   const [cargandoModalidades, setCargandoModalidades] = useState(true);
+
+  // Phase 2.3.d (2026-06-15): metrica NPS Comprador (Card 14 migrada) consume
+  // endpoint Torre /api/torre-de-control/nps-comprador (scope-aware).
+  // Card 14 widget BLOQUE 4 full-width convertido a mini-Card en BLOQUE 3.
+  // Modal nuevo expandido a paridad Torre (D1 gamma): Hero NPS + 3 bars
+  // distribucion + Cruce SLA 3-tile + Friccion Entrega + 4 dimensiones
+  // (Courier/Provincia/Modalidad/Mes) + topPromotores/topDetractores
+  // separados verde/rojo. Legacy nps default L243 preservado (Phase 4 cleanup).
+  const [npsCompradorMetrica, setNpsCompradorMetrica] = useState<any>(null);
+  const [cargandoNpsComprador, setCargandoNpsComprador] = useState(true);
   const [filtroRuteoHasta, setFiltroRuteoHasta] = useState("");
   const [filtroRuteoServicio, setFiltroRuteoServicio] = useState("TODOS");
   const [filtroRuteoCourier, setFiltroRuteoCourier] = useState("TODOS");
@@ -211,6 +221,22 @@ export default function Dashboard() {
       .catch(err => {
         console.error("[Panel] error fetching modalidades:", err);
         setCargandoModalidades(false);
+      });
+  }, [tienePermiso, empresaActivaId]);
+
+  // Phase 2.3.d: fetch nps-comprador desde endpoint Torre.
+  useEffect(() => {
+    if (!tienePermiso) return;
+    setCargandoNpsComprador(true);
+    fetch("/api/torre-de-control/nps-comprador")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setNpsCompradorMetrica(data);
+        setCargandoNpsComprador(false);
+      })
+      .catch(err => {
+        console.error("[Panel] error fetching nps-comprador:", err);
+        setCargandoNpsComprador(false);
       });
   }, [tienePermiso, empresaActivaId]);
 
@@ -1356,6 +1382,275 @@ export default function Dashboard() {
                   </div>
                 )}
               </div>
+            ) : metricaAnalisis === "Experiencia del Consumidor" ? (
+              <div className="flex-1 p-6 overflow-y-auto bg-gray-50">
+                {cargandoNpsComprador ? (
+                  <div className="flex items-center justify-center py-20 text-gray-500"><Loader2 className="w-5 h-5 animate-spin mr-2" /> Cargando metrica...</div>
+                ) : !npsCompradorMetrica || npsCompradorMetrica.resumen.totalEncuestas === 0 ? (
+                  <div className="text-center py-20 text-gray-500">
+                    Sin encuestas en la ventana de {npsCompradorMetrica?.calidadDatos?.ventanaDias ?? 90} dias.
+                    {npsCompradorMetrica && (
+                      <p className="text-xs text-gray-400 mt-2">{npsCompradorMetrica.calidadDatos.totalEntregados} envios entregados en la ventana.</p>
+                    )}
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                    {/* LEFT: Hero + Distribucion + Cruce SLA */}
+                    <div className="lg:col-span-5 space-y-6">
+                      {/* Hero NPS Score */}
+                      <div className="bg-white rounded-2xl border border-gray-200 p-8 text-center">
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">NPS Score</p>
+                        <div className={`w-32 h-32 rounded-full border-8 flex items-center justify-center bg-white shadow-inner mb-4 mx-auto ${
+                          npsCompradorMetrica.resumen.npsScore >= 50 ? 'border-green-500' :
+                          npsCompradorMetrica.resumen.npsScore >= 0 ? 'border-yellow-500' :
+                          'border-red-500'
+                        }`}>
+                          <span className="text-5xl font-black text-gray-800">
+                            {npsCompradorMetrica.resumen.npsScore > 0 ? `+${npsCompradorMetrica.resumen.npsScore}` : npsCompradorMetrica.resumen.npsScore}
+                          </span>
+                        </div>
+                        <p className="text-xs text-gray-500">
+                          Escala -100 a +100. Score promedio: <span className="font-bold">{npsCompradorMetrica.resumen.scorePromedio}/10</span>
+                        </p>
+                        <p className="text-xs text-gray-400 mt-2">
+                          {npsCompradorMetrica.resumen.totalEncuestas} encuestas · tasa respuesta {npsCompradorMetrica.resumen.tasaRespuesta ?? '-'}% sobre {npsCompradorMetrica.calidadDatos.totalEntregados} entregas
+                        </p>
+                      </div>
+
+                      {/* Distribucion 3 bars */}
+                      <div className="bg-white rounded-2xl border border-gray-200 p-6">
+                        <h4 className="text-xs font-black text-gray-800 uppercase tracking-wider mb-4">Distribucion</h4>
+                        <div className="space-y-4">
+                          <div>
+                            <div className="flex justify-between text-xs font-bold mb-1">
+                              <span className="text-green-700 flex items-center gap-1"><Smile className="w-3.5 h-3.5"/> Promotores</span>
+                              <span className="text-green-700">{npsCompradorMetrica.resumen.promotores} ({npsCompradorMetrica.resumen.promotoresPct}%)</span>
+                            </div>
+                            <div className="w-full bg-gray-100 rounded-full h-3"><div className="bg-green-500 h-3 rounded-full" style={{ width: `${npsCompradorMetrica.resumen.promotoresPct}%` }}></div></div>
+                          </div>
+                          <div>
+                            <div className="flex justify-between text-xs font-bold mb-1">
+                              <span className="text-yellow-600 flex items-center gap-1"><Meh className="w-3.5 h-3.5"/> Pasivos</span>
+                              <span className="text-yellow-600">{npsCompradorMetrica.resumen.pasivos} ({npsCompradorMetrica.resumen.pasivosPct}%)</span>
+                            </div>
+                            <div className="w-full bg-gray-100 rounded-full h-3"><div className="bg-yellow-400 h-3 rounded-full" style={{ width: `${npsCompradorMetrica.resumen.pasivosPct}%` }}></div></div>
+                          </div>
+                          <div>
+                            <div className="flex justify-between text-xs font-bold mb-1">
+                              <span className="text-red-600 flex items-center gap-1"><Frown className="w-3.5 h-3.5"/> Detractores</span>
+                              <span className="text-red-600">{npsCompradorMetrica.resumen.detractores} ({npsCompradorMetrica.resumen.detractoresPct}%)</span>
+                            </div>
+                            <div className="w-full bg-gray-100 rounded-full h-3"><div className="bg-red-500 h-3 rounded-full" style={{ width: `${npsCompradorMetrica.resumen.detractoresPct}%` }}></div></div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Cruce SLA 3-tile */}
+                      <div className="bg-white rounded-2xl border border-gray-200 p-6">
+                        <h4 className="text-xs font-black text-gray-800 uppercase tracking-wider mb-4">NPS Segun Cumplimiento SLA</h4>
+                        <div className="grid grid-cols-2 gap-3 mb-3">
+                          <div className="text-center p-3 rounded-lg bg-gray-50">
+                            <p className="text-[10px] font-bold text-gray-500 uppercase mb-1">Con SLA Cumplido</p>
+                            <p className={`text-2xl font-black ${
+                              npsCompradorMetrica.cruceSLA.conSlaCumplido.npsScore >= 50 ? 'text-green-700' :
+                              npsCompradorMetrica.cruceSLA.conSlaCumplido.npsScore >= 0 ? 'text-yellow-600' :
+                              'text-red-600'
+                            }`}>
+                              {npsCompradorMetrica.cruceSLA.conSlaCumplido.npsScore > 0 ? `+${npsCompradorMetrica.cruceSLA.conSlaCumplido.npsScore}` : npsCompradorMetrica.cruceSLA.conSlaCumplido.npsScore}
+                            </p>
+                            <p className="text-xs text-gray-400">{npsCompradorMetrica.cruceSLA.conSlaCumplido.totalEncuestas} encuestas</p>
+                          </div>
+                          <div className="text-center p-3 rounded-lg bg-gray-50">
+                            <p className="text-[10px] font-bold text-gray-500 uppercase mb-1">Sin SLA Cumplido</p>
+                            <p className={`text-2xl font-black ${
+                              npsCompradorMetrica.cruceSLA.sinSlaCumplido.npsScore >= 50 ? 'text-green-700' :
+                              npsCompradorMetrica.cruceSLA.sinSlaCumplido.npsScore >= 0 ? 'text-yellow-600' :
+                              'text-red-600'
+                            }`}>
+                              {npsCompradorMetrica.cruceSLA.sinSlaCumplido.npsScore > 0 ? `+${npsCompradorMetrica.cruceSLA.sinSlaCumplido.npsScore}` : npsCompradorMetrica.cruceSLA.sinSlaCumplido.npsScore}
+                            </p>
+                            <p className="text-xs text-gray-400">{npsCompradorMetrica.cruceSLA.sinSlaCumplido.totalEncuestas} encuestas</p>
+                          </div>
+                        </div>
+                        {npsCompradorMetrica.cruceSLA.sinDatoSLA > 0 && (
+                          <p className="text-xs text-gray-400 text-center">{npsCompradorMetrica.cruceSLA.sinDatoSLA} encuestas sin dato de SLA</p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* RIGHT: Friccion + Tablas + Comentarios */}
+                    <div className="lg:col-span-7 space-y-6">
+
+                      {/* Friccion Entrega */}
+                      {npsCompradorMetrica.friccionEntrega.length > 0 && (
+                        <div className="bg-white rounded-xl border border-gray-200 p-5">
+                          <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><AlertCircle className="w-5 h-5 text-orange-500" /> Friccion en la Entrega</h4>
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
+                                <th className="pb-2 font-bold">Motivo</th>
+                                <th className="pb-2 font-bold text-right">Cantidad</th>
+                                <th className="pb-2 font-bold text-right">%</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {npsCompradorMetrica.friccionEntrega.map((f: any, idx: number) => (
+                                <tr key={`fric-${idx}`} className="border-b border-gray-100">
+                                  <td className="py-2 font-bold text-gray-800">{f.motivo}</td>
+                                  <td className="py-2 text-right text-gray-500">{f.cantidad}</td>
+                                  <td className="py-2 text-right font-bold text-orange-600">{f.porcentaje}%</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      {/* Tabla por Courier */}
+                      {npsCompradorMetrica.porCourier.length > 0 && (
+                        <div className="bg-white rounded-xl border border-gray-200 p-5">
+                          <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><Truck className="w-5 h-5 text-gray-500" /> NPS por Courier</h4>
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
+                                <th className="pb-2 font-bold">Courier</th>
+                                <th className="pb-2 font-bold text-right">Encuestas</th>
+                                <th className="pb-2 font-bold text-right">NPS Score</th>
+                                <th className="pb-2 font-bold text-right">Score Prom.</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {npsCompradorMetrica.porCourier.map((c: any, idx: number) => (
+                                <tr key={`cou-${idx}`} className="border-b border-gray-100">
+                                  <td className="py-2 font-bold text-gray-800">{c.nombre}</td>
+                                  <td className="py-2 text-right text-gray-500">{c.totalEncuestas}</td>
+                                  <td className={`py-2 text-right font-bold ${c.npsScore >= 50 ? 'text-green-700' : c.npsScore >= 0 ? 'text-yellow-600' : 'text-red-600'}`}>{c.npsScore > 0 ? `+${c.npsScore}` : c.npsScore}</td>
+                                  <td className="py-2 text-right text-gray-700">{c.scorePromedio}/10</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      {/* Tabla por Provincia */}
+                      {npsCompradorMetrica.porProvincia.length > 0 && (
+                        <div className="bg-white rounded-xl border border-gray-200 p-5">
+                          <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><MapPin className="w-5 h-5 text-gray-500" /> NPS por Provincia (Top 10)</h4>
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
+                                <th className="pb-2 font-bold">Provincia</th>
+                                <th className="pb-2 font-bold text-right">Encuestas</th>
+                                <th className="pb-2 font-bold text-right">NPS Score</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {npsCompradorMetrica.porProvincia.slice(0, 10).map((p: any, idx: number) => (
+                                <tr key={`prov-${idx}`} className="border-b border-gray-100">
+                                  <td className="py-2 font-bold text-gray-800 capitalize">{p.nombre}</td>
+                                  <td className="py-2 text-right text-gray-500">{p.totalEncuestas}</td>
+                                  <td className={`py-2 text-right font-bold ${p.npsScore >= 50 ? 'text-green-700' : p.npsScore >= 0 ? 'text-yellow-600' : 'text-red-600'}`}>{p.npsScore > 0 ? `+${p.npsScore}` : p.npsScore}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      {/* Tabla por Modalidad */}
+                      {npsCompradorMetrica.porModalidad.length > 0 && (
+                        <div className="bg-white rounded-xl border border-gray-200 p-5">
+                          <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><Store className="w-5 h-5 text-gray-500" /> NPS por Modalidad</h4>
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
+                                <th className="pb-2 font-bold">Modalidad</th>
+                                <th className="pb-2 font-bold text-right">Encuestas</th>
+                                <th className="pb-2 font-bold text-right">NPS Score</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {npsCompradorMetrica.porModalidad.map((m: any, idx: number) => (
+                                <tr key={`mod-${idx}`} className="border-b border-gray-100">
+                                  <td className="py-2 font-bold text-gray-800">{m.nombre}</td>
+                                  <td className="py-2 text-right text-gray-500">{m.totalEncuestas}</td>
+                                  <td className={`py-2 text-right font-bold ${m.npsScore >= 50 ? 'text-green-700' : m.npsScore >= 0 ? 'text-yellow-600' : 'text-red-600'}`}>{m.npsScore > 0 ? `+${m.npsScore}` : m.npsScore}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      {/* Evolucion Mensual */}
+                      {npsCompradorMetrica.porMes.length > 0 && (
+                        <div className="bg-white rounded-xl border border-gray-200 p-5">
+                          <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><Calendar className="w-5 h-5 text-gray-500" /> Evolucion Mensual</h4>
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
+                                <th className="pb-2 font-bold">Mes</th>
+                                <th className="pb-2 font-bold text-right">Encuestas</th>
+                                <th className="pb-2 font-bold text-right">NPS Score</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {npsCompradorMetrica.porMes.map((m: any) => (
+                                <tr key={`mes-${m.mes}`} className="border-b border-gray-100">
+                                  <td className="py-2 font-bold text-gray-800">{m.mes}</td>
+                                  <td className="py-2 text-right text-gray-500">{m.totalEncuestas}</td>
+                                  <td className={`py-2 text-right font-bold ${m.npsScore >= 50 ? 'text-green-700' : m.npsScore >= 0 ? 'text-yellow-600' : 'text-red-600'}`}>{m.npsScore > 0 ? `+${m.npsScore}` : m.npsScore}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      {/* Top Promotores (verde) */}
+                      {npsCompradorMetrica.topPromotores.length > 0 && (
+                        <div className="bg-green-50 rounded-xl border border-green-200 p-5">
+                          <h4 className="text-sm font-black text-green-700 uppercase tracking-wider mb-4 flex items-center gap-2"><Smile className="w-5 h-5" /> Top Promotores ({npsCompradorMetrica.topPromotores.length})</h4>
+                          <div className="space-y-3">
+                            {npsCompradorMetrica.topPromotores.map((p: any) => (
+                              <div key={`prom-${p.envioId}`} className="bg-white rounded-lg p-3 border border-green-100">
+                                <div className="flex justify-between items-start mb-1">
+                                  <span className="text-xs font-bold text-green-700">Score: {p.score}/10</span>
+                                  <span className="text-[10px] text-gray-400">{p.courierNombre ?? '--'}</span>
+                                </div>
+                                <p className="text-sm text-gray-700 italic">"{p.comentario}"</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Top Detractores (rojo) */}
+                      {npsCompradorMetrica.topDetractores.length > 0 && (
+                        <div className="bg-red-50 rounded-xl border border-red-200 p-5">
+                          <h4 className="text-sm font-black text-red-700 uppercase tracking-wider mb-4 flex items-center gap-2"><Frown className="w-5 h-5" /> Top Detractores ({npsCompradorMetrica.topDetractores.length})</h4>
+                          <div className="space-y-3">
+                            {npsCompradorMetrica.topDetractores.map((d: any) => (
+                              <div key={`det-${d.envioId}`} className="bg-white rounded-lg p-3 border border-red-100">
+                                <div className="flex justify-between items-start mb-1">
+                                  <span className="text-xs font-bold text-red-700">Score: {d.score}/10</span>
+                                  <span className="text-[10px] text-gray-400">{d.courierNombre ?? '--'}</span>
+                                </div>
+                                <p className="text-sm text-gray-700 italic">"{d.comentario}"</p>
+                                {d.sugerenciaMejora && (
+                                  <p className="text-xs text-gray-500 mt-2"><strong>Sugerencia:</strong> {d.sugerenciaMejora}</p>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                    </div>
+                  </div>
+                )}
+              </div>
             ) : (
               // FALLBACK (Para métricas que aún no diseñamos)
               <div className="flex-1 p-8 overflow-y-auto bg-gray-50 flex flex-col items-center justify-center text-center">
@@ -1599,95 +1894,36 @@ export default function Dashboard() {
               })}
             </div>
           </div>
-        </div>
 
-        {/* BLOQUE 4: NPS DINÁMICO */}
-        <div className="pb-10">
-           <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2">
-             <HeartHandshake className="w-5 h-5 text-indigo-500" /> 14. Experiencia del Consumidor (NPS Transaccional)
-           </h3>
-           <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
-             
-             <div className="grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-gray-200">
-               <div className="lg:col-span-3 p-8 flex flex-col items-center justify-center bg-gray-50/50">
-                 <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-4">NPS Global</p>
-                 <div className={`w-32 h-32 rounded-full border-8 flex items-center justify-center bg-white shadow-inner mb-4 ${nps.global >= 0 ? 'border-green-500' : 'border-red-500'}`}>
-                   <span className="text-5xl font-black text-gray-800">{nps.global > 0 ? `+${nps.global}` : nps.global}</span>
-                 </div>
-                 <div className="w-full space-y-2 mt-2 max-w-[200px]">
-                   <div className="flex justify-between text-xs font-bold"><span className="text-green-600 flex items-center gap-1"><Smile className="w-3.5 h-3.5"/> Promotores</span><span>{nps.promotores}%</span></div>
-                   <div className="flex justify-between text-xs font-bold"><span className="text-yellow-600 flex items-center gap-1"><Meh className="w-3.5 h-3.5"/> Pasivos</span><span>{nps.pasivos}%</span></div>
-                   <div className="flex justify-between text-xs font-bold"><span className="text-red-600 flex items-center gap-1"><Frown className="w-3.5 h-3.5"/> Detractores</span><span>{nps.detractores}%</span></div>
-                 </div>
-               </div>
-
-               <div className="lg:col-span-6 p-8 flex flex-col">
-                 <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 mb-6">
-                   <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider">Motor de Cruces (NPS por Atributo)</h4>
-                   <select 
-                     value={npsDimension}
-                     onChange={(e) => setNpsDimension(e.target.value)}
-                     className="bg-indigo-50 border border-indigo-200 text-indigo-800 text-xs font-bold rounded-lg px-3 py-2 outline-none cursor-pointer w-full sm:w-auto"
-                   >
-                     <option value="courier">Por Courier</option>
-                   </select>
-                 </div>
-                 
-                 <div className="space-y-6 flex-1 flex flex-col justify-center">
-                   {npsDimension === 'courier' && (
-                     Object.keys(nps.porCourier || {}).length === 0 ? (
-                       <p className="text-sm text-gray-400 text-center font-bold">Sin datos de encuestas para graficar</p>
-                     ) : (
-                       Object.entries(nps.porCourier).map(([nombreCourier, stats]: any) => {
-                         const maxPosible = 100;
-                         const porcentajePositivo = stats.scoreNps > 0 ? Math.min((stats.scoreNps / maxPosible) * 100, 100) : 0;
-                         const colorBarra = stats.scoreNps >= 30 ? 'bg-green-500' : stats.scoreNps >= 0 ? 'bg-yellow-400' : 'bg-red-500';
-                         const colorTexto = stats.scoreNps >= 30 ? 'text-green-600' : stats.scoreNps >= 0 ? 'text-yellow-600' : 'text-red-600';
-
-                         return (
-                           <div key={`nps-${nombreCourier}`}>
-                             <div className="flex justify-between text-xs font-bold mb-1">
-                               <span>{nombreCourier} <span className="text-gray-400 font-medium text-[10px]">({stats.total} votos)</span></span>
-                               <span className={colorTexto}>{stats.scoreNps > 0 ? `+${stats.scoreNps}` : stats.scoreNps}</span>
-                             </div>
-                             <div className="w-full bg-gray-100 rounded-full h-2">
-                               <div className={`${colorBarra} h-2 rounded-full transition-all duration-1000`} style={{ width: `${Math.max(porcentajePositivo, 5)}%` }}></div>
-                             </div>
-                           </div>
-                         );
-                       })
-                     )
-                   )}
-                 </div>
-               </div>
-
-               <div className="lg:col-span-3 bg-white flex flex-col h-full">
-                 <div className="p-4 border-b border-gray-100 shrink-0">
-                   <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1.5"><MessageSquare className="w-3.5 h-3.5" /> Últimos Feedbacks</h4>
-                 </div>
-                 <div className="flex-1 overflow-y-auto p-4 space-y-4 max-h-[300px]">
-                    {nps.ultimosComentarios && nps.ultimosComentarios.length > 0 ? (
-                      nps.ultimosComentarios.map((comentario: any, idx: number) => (
-                        <div key={`com-${idx}`} className={`p-3 rounded-lg border ${comentario.score >= 9 ? 'bg-green-50 border-green-100' : comentario.score >= 7 ? 'bg-yellow-50 border-yellow-100' : 'bg-red-50 border-red-100'}`}>
-                          <div className="flex justify-between items-start mb-2">
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1 ${comentario.score >= 9 ? 'bg-green-100 text-green-700' : comentario.score >= 7 ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700'}`}>
-                              {comentario.score >= 9 ? <Smile className="w-3 h-3"/> : comentario.score >= 7 ? <Meh className="w-3 h-3"/> : <Frown className="w-3 h-3"/>}
-                              Score: {comentario.score}
-                            </span>
-                            <span className="text-[9px] text-gray-400 font-mono truncate max-w-[80px]">{comentario.tracking}</span>
-                          </div>
-                          <p className="text-xs text-gray-700 font-medium italic">"{comentario.comentario}"</p>
-                          <div className="mt-2 text-[10px] font-bold text-gray-400 flex gap-2"><span>{comentario.courier}</span></div>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="text-xs text-gray-400 text-center mt-10">Esperando respuestas de usuarios...</p>
-                    )}
-                 </div>
-               </div>
-
-             </div>
-           </div>
+          {/* CARD 14: NPS Comprador (mini) — Phase 2.3.d */}
+          <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 flex flex-col h-full">
+            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center justify-between"><span className="flex items-center gap-2"><HeartHandshake className="w-4 h-4 text-indigo-500" /> 14. Experiencia (NPS)</span><button onClick={() => abrirAnalisis("Experiencia del Consumidor")} className="p-1.5 bg-gray-50 hover:bg-blue-50 text-gray-500 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
+            {cargandoNpsComprador ? (
+              <p className="text-gray-400 text-sm text-center py-8">Cargando...</p>
+            ) : !npsCompradorMetrica || npsCompradorMetrica.resumen.totalEncuestas === 0 ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-gray-400 text-sm text-center py-4">
+                <p>Sin encuestas en la ventana de {npsCompradorMetrica?.calidadDatos?.ventanaDias ?? 90} dias.</p>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center flex-1">
+                <div className={`w-24 h-24 rounded-full border-4 flex items-center justify-center bg-white shadow-inner mb-3 ${
+                  npsCompradorMetrica.resumen.npsScore >= 50 ? 'border-green-500' :
+                  npsCompradorMetrica.resumen.npsScore >= 0 ? 'border-yellow-500' :
+                  'border-red-500'
+                }`}>
+                  <span className="text-3xl font-black text-gray-800">
+                    {npsCompradorMetrica.resumen.npsScore > 0 ? `+${npsCompradorMetrica.resumen.npsScore}` : npsCompradorMetrica.resumen.npsScore}
+                  </span>
+                </div>
+                <div className="w-full space-y-2 mt-2">
+                  <div className="flex justify-between text-xs font-bold"><span className="text-green-600 flex items-center gap-1"><Smile className="w-3.5 h-3.5"/> Promotores</span><span>{npsCompradorMetrica.resumen.promotoresPct}%</span></div>
+                  <div className="flex justify-between text-xs font-bold"><span className="text-yellow-600 flex items-center gap-1"><Meh className="w-3.5 h-3.5"/> Pasivos</span><span>{npsCompradorMetrica.resumen.pasivosPct}%</span></div>
+                  <div className="flex justify-between text-xs font-bold"><span className="text-red-600 flex items-center gap-1"><Frown className="w-3.5 h-3.5"/> Detractores</span><span>{npsCompradorMetrica.resumen.detractoresPct}%</span></div>
+                </div>
+                <p className="text-[10px] text-gray-400 mt-3">{npsCompradorMetrica.resumen.totalEncuestas} encuestas / {npsCompradorMetrica.calidadDatos.totalEntregados} entregas</p>
+              </div>
+            )}
+          </div>
         </div>
 
       </div>

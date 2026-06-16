@@ -195,3 +195,243 @@ export function calcularCruceSLA(encuestas: EncuestaParaResumir[]): CruceSLA {
     sinDatoSLA: sinDato,
   };
 }
+
+// ============================================================================
+// ORQUESTACION SCOPE-AWARE — calcularNpsCompradorAnalitica(ctx)
+//
+// Phase 2.3.b (Panel cliente migration, 2026-06-15).
+// Agrega orquestador analitico scope-aware al helper, sin romper los 9
+// exports existentes (primitivas + aggregators usados por endpoint Torre
+// actual y por nps-empresa).
+//
+// SEMANTICA: extrae al helper la logica que estaba inline en el endpoint
+// /api/torre-de-control/nps-comprador. La migracion del endpoint a
+// delegate-al-helper sucede en Phase 2.3.c.
+//
+// SCOPE-AWARE:
+// - Cliente (modoDios=false): filtra prisma.encuestaNPS por ctx.empresaId
+//   (campo directo en EncuestaNPS, no via envio.empresaId).
+//   Retorna shape "cliente" sin porEmpresa.
+// - Shipro Torre global (modoDios=true, sin filtroEmpresa): sin filtro
+//   de empresa. Retorna shape "shipro" con porEmpresa adicional.
+// - Shipro inspeccion (modoDios=true, con filtroEmpresa=N): filtra a esa
+//   empresa. Retorna shape "shipro" sin porEmpresa.
+//
+// Decisiones de producto (director 2026-06-15):
+// D1 - Nombre: calcularNpsCompradorAnalitica (claro vs futuro
+//      calcularNpsClienteEmpresaAnalitica de nps-empresa.ts).
+// D2 - Discriminated union estricto: porEmpresa solo en shape Shipro.
+// D3 - Top comentarios separados: topPromotores + topDetractores
+//      (Panel cliente los muestra separados verde/rojo).
+// D4 - Provincia/modalidad: leidos directo de EncuestaNPS.provincia y
+//      EncuestaNPS.modalidad (desnormalizados, no via envio.destino).
+// D5 - sugerenciaMejora preservada en topDetractores items.
+// ============================================================================
+
+import prisma from "@/lib/prisma";
+import type { AuthContext } from "@/lib/auth-context";
+
+const VENTANA_DIAS_DEFAULT_NPS = 90;
+
+export interface ComentarioNPSItem {
+  envioId: number;
+  score: number;
+  categoria: CategoriaNPS;
+  comentario: string;
+  experienciaEntrega: string | null;
+  satisfaccionProducto: number | null;
+  probabilidadRecompra: number | null;
+  sugerenciaMejora: string | null;
+  courierNombre: string | null;
+  empresaNombre: string | null;
+  provincia: string | null;
+  modalidad: string | null;
+  fechaVoto: Date;
+}
+
+export interface MesNPSItem {
+  mes: string;
+  totalEncuestas: number;
+  npsScore: number;
+  promotoresPct: number;
+  pasivosPct: number;
+  detractoresPct: number;
+}
+
+export interface CalidadDatosNPS {
+  ventanaDias: number;
+  totalEntregados: number;
+  totalEncuestas: number;
+  cobertura: string;
+  fuente: string;
+}
+
+export interface ResultadoNPSBase {
+  resumen: ResumenNPS;
+  porCourier: GrupoNPS[];
+  porProvincia: GrupoNPS[];
+  porModalidad: GrupoNPS[];
+  porMes: MesNPSItem[];
+  friccionEntrega: FriccionEntrega[];
+  cruceSLA: CruceSLA;
+  topPromotores: ComentarioNPSItem[];
+  topDetractores: ComentarioNPSItem[];
+  calidadDatos: CalidadDatosNPS;
+}
+
+export interface ResultadoNPSCliente extends ResultadoNPSBase {
+  scope: "cliente";
+}
+
+export interface ResultadoNPSShipro extends ResultadoNPSBase {
+  porEmpresa: GrupoNPS[];
+  scope: "shipro";
+}
+
+export type ResultadoNPS = ResultadoNPSCliente | ResultadoNPSShipro;
+
+export async function calcularNpsCompradorAnalitica(
+  ctx: AuthContext,
+  ventanaDias: number = VENTANA_DIAS_DEFAULT_NPS
+): Promise<ResultadoNPS> {
+  const ventanaInicio = new Date();
+  ventanaInicio.setDate(ventanaInicio.getDate() - ventanaDias);
+
+  // Build where clause scope-aware (empresaId directo en EncuestaNPS).
+  const whereClause: any = {
+    fechaVoto: { gte: ventanaInicio },
+  };
+  if (!ctx.modoDios) {
+    whereClause.empresaId = ctx.empresaId;
+  } else if (ctx.empresaId !== null) {
+    whereClause.empresaId = ctx.empresaId;
+  }
+
+  // Fetch encuestas con includes simplificados (empresaId directo).
+  const encuestas = await prisma.encuestaNPS.findMany({
+    where: whereClause,
+    include: {
+      courier: { select: { id: true, nombre: true } },
+      empresa: { select: { id: true, nombre: true } },
+    },
+    orderBy: { fechaVoto: "desc" },
+  });
+
+  // Total entregados (denominador para tasaRespuesta), tambien scope-aware.
+  const entregadosWhere: any = {
+    fechaImpresion: { gte: ventanaInicio },
+    estadoActual: "ENTREGADO",
+  };
+  if (!ctx.modoDios) {
+    entregadosWhere.empresaId = ctx.empresaId;
+  } else if (ctx.empresaId !== null) {
+    entregadosWhere.empresaId = ctx.empresaId;
+  }
+  const totalEntregados = await prisma.envio.count({ where: entregadosWhere });
+
+  // Build encuestas para helpers (shape minimo).
+  const encuestasParaHelper: EncuestaParaResumir[] = encuestas.map(e => ({
+    score: e.score,
+    categoria: e.categoria,
+    slaCumplido: e.slaCumplido,
+    experienciaEntrega: e.experienciaEntrega,
+  }));
+
+  // Resumen global.
+  const resumen = calcularNPS(encuestasParaHelper, totalEntregados);
+
+  // Cortes por dimension.
+  const porCourier = agruparPorDimension(encuestas, (e: any) => e.courier?.nombre ?? "Sin courier");
+  const porProvincia = agruparPorDimension(encuestas, (e: any) => e.provincia ?? "Sin provincia");
+  const porModalidad = agruparPorDimension(encuestas, (e: any) => e.modalidad ?? "Sin modalidad");
+
+  // Friccion + Cruce SLA.
+  const friccionEntrega = calcularFriccion(encuestasParaHelper);
+  const cruceSLA = calcularCruceSLA(encuestasParaHelper);
+
+  // Top promotores (score >= 9) y top detractores (score <= 6), con comentario no vacio.
+  const conComentario = encuestas.filter(e => e.comentario && e.comentario.trim() !== "");
+
+  const buildComentarioItem = (e: any): ComentarioNPSItem => ({
+    envioId: e.envioId,
+    score: e.score,
+    categoria: clasificarScore(e.score),
+    comentario: e.comentario ?? "",
+    experienciaEntrega: e.experienciaEntrega,
+    satisfaccionProducto: e.satisfaccionProducto,
+    probabilidadRecompra: e.probabilidadRecompra,
+    sugerenciaMejora: e.sugerenciaMejora,
+    courierNombre: e.courier?.nombre ?? null,
+    empresaNombre: e.empresa?.nombre ?? null,
+    provincia: e.provincia,
+    modalidad: e.modalidad,
+    fechaVoto: e.fechaVoto,
+  });
+
+  const topPromotores: ComentarioNPSItem[] = conComentario
+    .filter(e => e.score >= 9)
+    .slice(0, 10)
+    .map(buildComentarioItem);
+
+  const topDetractores: ComentarioNPSItem[] = conComentario
+    .filter(e => e.score <= SCORE_DETRACTOR_MAX)
+    .slice(0, 10)
+    .map(buildComentarioItem);
+
+  // porMes: agrupar por YYYY-MM via fechaVoto.
+  const mesMap = new Map<string, EncuestaParaResumir[]>();
+  for (const e of encuestas) {
+    const mesKey = `${e.fechaVoto.getFullYear()}-${String(e.fechaVoto.getMonth() + 1).padStart(2, "0")}`;
+    if (!mesMap.has(mesKey)) mesMap.set(mesKey, []);
+    mesMap.get(mesKey)!.push({
+      score: e.score,
+      categoria: e.categoria,
+      slaCumplido: e.slaCumplido,
+      experienciaEntrega: e.experienciaEntrega,
+    });
+  }
+  const porMes: MesNPSItem[] = Array.from(mesMap.entries())
+    .map(([mes, encs]) => {
+      const r = calcularNPS(encs);
+      return {
+        mes,
+        totalEncuestas: r.totalEncuestas,
+        npsScore: r.npsScore,
+        promotoresPct: r.promotoresPct,
+        pasivosPct: r.pasivosPct,
+        detractoresPct: r.detractoresPct,
+      };
+    })
+    .sort((a, b) => a.mes.localeCompare(b.mes));
+
+  const calidadDatos: CalidadDatosNPS = {
+    ventanaDias,
+    totalEntregados,
+    totalEncuestas: encuestas.length,
+    cobertura: totalEntregados > 0
+      ? `${Math.round((encuestas.length / totalEntregados) * 100)}% de envios entregados con encuesta`
+      : "Sin envios entregados en la ventana",
+    fuente: "EncuestaNPS post-entrega (Q1 score 0-10)",
+  };
+
+  const base: ResultadoNPSBase = {
+    resumen,
+    porCourier,
+    porProvincia,
+    porModalidad,
+    porMes,
+    friccionEntrega,
+    cruceSLA,
+    topPromotores,
+    topDetractores,
+    calidadDatos,
+  };
+
+  if (!ctx.modoDios) {
+    return { ...base, scope: "cliente" };
+  }
+
+  const porEmpresa = agruparPorDimension(encuestas, (e: any) => e.empresa?.nombre ?? "Sin empresa");
+
+  return { ...base, porEmpresa, scope: "shipro" };
+}

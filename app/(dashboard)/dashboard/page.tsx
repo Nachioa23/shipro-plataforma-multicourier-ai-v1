@@ -62,6 +62,14 @@ export default function Dashboard() {
   // Torre /api/torre-de-control/mapa-sla scope-aware (reemplaza slaStats legacy).
   const [mapaSlaMetrica, setMapaSlaMetrica] = useState<any>(null);
   const [cargandoMapaSla, setCargandoMapaSla] = useState(true);
+
+  // Phase 2.2.d (2026-06-15): metrica Modalidades (Card 11 migrada) consume
+  // endpoint Torre /api/torre-de-control/modalidades (scope-aware).
+  // Card 11 agrupa las 8 canonicas en 3 buckets (Estandar/Same-Day/Sucursal).
+  // Modal expande a paridad con Torre (D3): 8 canonicas + tablas porCourier/
+  // porProvincia/porMes + Forward/Reverse split + warning Desconocidas.
+  const [modalidadesMetrica, setModalidadesMetrica] = useState<any>(null);
+  const [cargandoModalidades, setCargandoModalidades] = useState(true);
   const [filtroRuteoHasta, setFiltroRuteoHasta] = useState("");
   const [filtroRuteoServicio, setFiltroRuteoServicio] = useState("TODOS");
   const [filtroRuteoCourier, setFiltroRuteoCourier] = useState("TODOS");
@@ -190,6 +198,22 @@ export default function Dashboard() {
       });
   }, [tienePermiso, empresaActivaId]);
 
+  // Phase 2.2.d: fetch modalidades desde endpoint Torre.
+  useEffect(() => {
+    if (!tienePermiso) return;
+    setCargandoModalidades(true);
+    fetch("/api/torre-de-control/modalidades")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setModalidadesMetrica(data);
+        setCargandoModalidades(false);
+      })
+      .catch(err => {
+        console.error("[Panel] error fetching modalidades:", err);
+        setCargandoModalidades(false);
+      });
+  }, [tienePermiso, empresaActivaId]);
+
   if (!tienePermiso) {
     return (
       <div className="flex flex-col h-full bg-gray-50 items-center justify-center p-8 text-center">
@@ -238,6 +262,22 @@ export default function Dashboard() {
     pctSameDay = Math.round((countSameDay / enviosTotales) * 100);
     pctSucursal = Math.round((countSucursal / enviosTotales) * 100);
     pctEstandar = Math.round((countEstandar / enviosTotales) * 100);
+  }
+
+  // Phase 2.2.d: derivacion nueva basada en modalidadesMetrica (8 canonicas).
+  // Mapeo D2: Card 11 agrupa a 3 buckets. Reverse modalidades NO se cuentan
+  // en estos buckets (van al widget Forward/Reverse split del modal).
+  let pctEstandarV2 = 0; let pctSameDayV2 = 0; let pctSucursalV2 = 0;
+  if (modalidadesMetrica?.distribucionGlobal) {
+    const dist = modalidadesMetrica.distribucionGlobal;
+    const total = modalidadesMetrica.cantidadEnviosTotal || 1;
+    const findCount = (name: string) => dist.find((d: any) => d.modalidad === name)?.cantidad || 0;
+    const countEstandarV2 = findCount("Entrega a Domicilio (Estandar)") + findCount("Retiro en Punto de Retiro (Estandar)") + findCount("Retiro en e-locker (Estandar)");
+    const countSameDayV2 = findCount("Entrega a Domicilio (Same Day)");
+    const countSucursalV2 = findCount("Retiro en Sucursal (Estandar)");
+    pctEstandarV2 = Math.round((countEstandarV2 / total) * 100);
+    pctSameDayV2 = Math.round((countSameDayV2 / total) * 100);
+    pctSucursalV2 = Math.round((countSucursalV2 / total) * 100);
   }
 
   // M9: CONEXIÓN REAL DE RIESGO COURIER
@@ -691,83 +731,168 @@ export default function Dashboard() {
               </div>
 
             ) : metricaAnalisis === "Adopción de Modalidades" ? (
-              <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden">
-                <div className="bg-white border-b border-gray-200 p-4 flex flex-wrap gap-3 items-center shrink-0 shadow-sm z-10">
-                  <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-1.5 bg-gray-50">
-                    <Calendar className="w-4 h-4 text-gray-400" />
-                    <input type="date" value={filtroRuteoDesde} onChange={e => setFiltroRuteoDesde(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"/>
-                    <span className="text-gray-400 text-xs font-bold">a</span>
-                    <input type="date" value={filtroRuteoHasta} onChange={e => setFiltroRuteoHasta(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"/>
+              <div className="flex-1 p-6 overflow-y-auto bg-gray-50">
+                {cargandoModalidades ? (
+                  <div className="flex items-center justify-center py-20 text-gray-500"><Loader2 className="w-5 h-5 animate-spin mr-2" /> Cargando metrica...</div>
+                ) : !modalidadesMetrica || modalidadesMetrica.cantidadEnviosTotal === 0 ? (
+                  <div className="text-center py-20 text-gray-500">
+                    Sin envios en la ventana de {modalidadesMetrica?.ventanaDias || 90} dias.
                   </div>
-                </div>
-
-                <div className="flex-1 overflow-y-auto p-6 lg:p-8">
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 max-w-7xl mx-auto">
-                    
+                ) : (
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                    {/* COLUMNA IZQUIERDA: VOLUMEN + INSIGHT + WARNING */}
                     <div className="lg:col-span-5 space-y-6">
-                      <div className="bg-white p-6 rounded-2xl shadow-sm border border-blue-100 relative overflow-hidden">
-                        <div className="absolute top-0 right-0 w-32 h-32 bg-blue-50 rounded-bl-full -z-10 opacity-50"></div>
-                        <h4 className="text-xs font-black text-blue-600 uppercase tracking-widest mb-1">Volumen Analizado</h4>
-                        <p className="text-5xl font-black text-gray-800 mb-2 tracking-tighter">{(enviosTotales || 0).toLocaleString()}</p>
-                        <p className="text-xs font-medium text-gray-500 leading-relaxed">Paquetes distribuidos según el servicio elegido en el checkout.</p>
+                      <div className="bg-white rounded-2xl border border-gray-200 p-6 text-center">
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">Volumen Analizado</p>
+                        <p className="text-5xl font-black text-gray-800 mb-2 tracking-tighter">{modalidadesMetrica.cantidadEnviosTotal.toLocaleString()}</p>
+                        <p className="text-xs text-gray-500">Paquetes distribuidos en {modalidadesMetrica.ventanaDias} dias segun modalidad elegida en checkout.</p>
                       </div>
-
-                      <div className="bg-blue-50 p-6 rounded-2xl border border-blue-100 shadow-sm">
-                        <h4 className="text-xs font-black text-blue-800 uppercase tracking-widest mb-3 flex items-center gap-2">
-                          <Lightbulb className="w-4 h-4" /> Insight de Conversión
-                        </h4>
-                        <p className="text-lg font-bold text-gray-800 mb-3 leading-tight">Diversificar eleva las ventas.</p>
-                        <p className="text-xs text-blue-700 font-medium leading-relaxed mb-3">Tener habilitado <strong>"Retiro en Sucursal"</strong> reduce la tasa de abandono de carrito en un 15% para clientes que no están en su domicilio durante el día.</p>
-                        <p className="text-xs text-blue-700 font-medium leading-relaxed">El <strong>"Same-Day"</strong> aumenta la recompra (LTV) en un 30% al generar gratificación instantánea.</p>
+                      <div className="bg-indigo-50 rounded-2xl border border-indigo-200 p-6">
+                        <h4 className="text-xs font-black text-indigo-700 uppercase tracking-wider mb-3 flex items-center gap-2"><Lightbulb className="w-4 h-4"/> Insight de Conversion</h4>
+                        <ul className="text-sm space-y-2 text-indigo-900">
+                          <li className="flex items-start gap-2"><span className="text-indigo-500 font-black">·</span> Mejorar la oferta <strong>Same-Day</strong> puede aumentar el LTV en hasta <strong>30%</strong>.</li>
+                          <li className="flex items-start gap-2"><span className="text-indigo-500 font-black">·</span> Una opcion de <strong>Sucursal</strong> robusta reduce el abandono de carrito en un <strong>15%</strong>.</li>
+                        </ul>
                       </div>
-                    </div>
-
-                    <div className="lg:col-span-7 space-y-6">
-                      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
-                        <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center gap-2">
-                          <Store className="w-5 h-5 text-indigo-500"/> Distribución del Mix Logístico
-                        </h4>
-                        
-                        <div className="space-y-6">
-                          <div className="p-5 bg-gray-50 rounded-xl border border-gray-100">
-                            <div className="flex justify-between items-center mb-3">
-                              <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center"><Truck className="w-5 h-5 text-slate-600"/></div>
-                                <div><h5 className="font-bold text-gray-800 text-sm">Domicilio Estándar</h5><p className="text-[10px] text-gray-500 uppercase tracking-wider font-bold">Logística Tradicional</p></div>
-                              </div>
-                              <div className="text-right"><p className="text-2xl font-black text-slate-700">{pctEstandar}%</p></div>
-                            </div>
-                            <div className="w-full bg-gray-200 rounded-full h-2"><div className="bg-slate-600 h-2 rounded-full" style={{ width: `${pctEstandar}%` }}></div></div>
-                          </div>
-
-                          <div className="p-5 bg-gray-50 rounded-xl border border-gray-100">
-                            <div className="flex justify-between items-center mb-3">
-                              <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-full bg-purple-100 flex items-center justify-center"><Activity className="w-5 h-5 text-purple-600"/></div>
-                                <div><h5 className="font-bold text-gray-800 text-sm">Same-Day / Flex</h5><p className="text-[10px] text-gray-500 uppercase tracking-wider font-bold">Gratificación Inmediata</p></div>
-                              </div>
-                              <div className="text-right"><p className="text-2xl font-black text-purple-700">{pctSameDay}%</p></div>
-                            </div>
-                            <div className="w-full bg-gray-200 rounded-full h-2"><div className="bg-purple-500 h-2 rounded-full" style={{ width: `${pctSameDay}%` }}></div></div>
-                          </div>
-
-                          <div className="p-5 bg-gray-50 rounded-xl border border-gray-100">
-                            <div className="flex justify-between items-center mb-3">
-                              <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center"><Store className="w-5 h-5 text-blue-600"/></div>
-                                <div><h5 className="font-bold text-gray-800 text-sm">Punto de Retiro (Sucursal)</h5><p className="text-[10px] text-gray-500 uppercase tracking-wider font-bold">Conveniencia Horaria</p></div>
-                              </div>
-                              <div className="text-right"><p className="text-2xl font-black text-blue-700">{pctSucursal}%</p></div>
-                            </div>
-                            <div className="w-full bg-gray-200 rounded-full h-2"><div className="bg-blue-500 h-2 rounded-full" style={{ width: `${pctSucursal}%` }}></div></div>
-                          </div>
+                      {modalidadesMetrica.cantidadEnviosDesconocida > 0 && (
+                        <div className="bg-orange-50 rounded-2xl border border-orange-200 p-4 text-xs text-orange-800">
+                          <strong>{modalidadesMetrica.cantidadEnviosDesconocida}</strong> envios no pudieron clasificarse en el catalogo canonico (modalidad legacy o no reconocida). Excluidos de los porcentajes.
                         </div>
-
-                      </div>
+                      )}
                     </div>
 
+                    {/* COLUMNA DERECHA: ANALISIS COMPLETO */}
+                    <div className="lg:col-span-7 space-y-6">
+                      {/* 3-tile Resumen Forward/Reverse */}
+                      <div className="grid grid-cols-3 gap-4">
+                        <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
+                          <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Total Envios</p>
+                          <p className="text-2xl font-black text-gray-800">{modalidadesMetrica.cantidadEnviosTotal}</p>
+                          <p className="text-[10px] text-gray-400 mt-1">en {modalidadesMetrica.ventanaDias} dias</p>
+                        </div>
+                        <div className="bg-white rounded-xl border border-green-200 p-4 text-center">
+                          <p className="text-[10px] font-bold text-green-600 uppercase mb-1">Forward</p>
+                          <p className="text-2xl font-black text-green-600">{modalidadesMetrica.splitForwardReverse.forward.porcentaje}%</p>
+                          <p className="text-[10px] text-gray-400 mt-1">{modalidadesMetrica.splitForwardReverse.forward.cantidad} envios</p>
+                        </div>
+                        <div className="bg-white rounded-xl border border-orange-200 p-4 text-center">
+                          <p className="text-[10px] font-bold text-orange-600 uppercase mb-1">Reverse</p>
+                          <p className="text-2xl font-black text-orange-600">{modalidadesMetrica.splitForwardReverse.reverse.porcentaje}%</p>
+                          <p className="text-[10px] text-gray-400 mt-1">{modalidadesMetrica.splitForwardReverse.reverse.cantidad} envios</p>
+                        </div>
+                      </div>
+
+                      {/* Distribucion por Modalidad (8 canonicas) */}
+                      <div className="bg-white rounded-xl border border-gray-200 p-5">
+                        <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><Store className="w-5 h-5 text-gray-500" /> Distribucion por Modalidad</h4>
+                        <div className="space-y-3">
+                          {modalidadesMetrica.distribucionGlobal.map((item: any) => (
+                            <div key={`mod-${item.modalidad}`}>
+                              <div className="flex justify-between text-xs font-bold mb-1">
+                                <span className="text-gray-700">{item.modalidad}</span>
+                                <span className="text-gray-500">{item.porcentaje}% <span className="text-gray-400">({item.cantidad})</span></span>
+                              </div>
+                              <div className="w-full bg-gray-100 rounded-full h-2">
+                                <div className="bg-indigo-500 h-2 rounded-full transition-all duration-1000" style={{ width: `${item.porcentaje}%` }}></div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Tabla Por Courier */}
+                      {modalidadesMetrica.porCourier?.length > 0 && (
+                        <div className="bg-white rounded-xl border border-gray-200 p-5">
+                          <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><Truck className="w-5 h-5 text-gray-500" /> Modalidades por Courier</h4>
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
+                                <th className="pb-2 font-bold">Courier</th>
+                                <th className="pb-2 font-bold text-right">Envios</th>
+                                <th className="pb-2 font-bold">Modalidad Dominante</th>
+                                <th className="pb-2 font-bold text-right">%</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {modalidadesMetrica.porCourier.map((c: any) => {
+                                const dom = c.distribucion[0];
+                                return (
+                                  <tr key={`cou-${c.courierId}`} className="border-b border-gray-100">
+                                    <td className="py-2 font-bold text-gray-800">{c.courierNombre}</td>
+                                    <td className="py-2 text-right text-gray-500">{c.cantidad}</td>
+                                    <td className="py-2 text-gray-700">{dom?.modalidad ?? "--"}</td>
+                                    <td className="py-2 text-right font-bold text-indigo-600">{dom?.porcentaje ?? 0}%</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      {/* Tabla Por Provincia top 10 */}
+                      {modalidadesMetrica.porProvincia?.length > 0 && (
+                        <div className="bg-white rounded-xl border border-gray-200 p-5">
+                          <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><MapPin className="w-5 h-5 text-gray-500" /> Modalidades por Provincia (Top 10)</h4>
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
+                                <th className="pb-2 font-bold">Provincia</th>
+                                <th className="pb-2 font-bold text-right">Envios</th>
+                                <th className="pb-2 font-bold">Modalidad Dominante</th>
+                                <th className="pb-2 font-bold text-right">%</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {modalidadesMetrica.porProvincia.slice(0, 10).map((p: any, idx: number) => {
+                                const dom = p.distribucion[0];
+                                return (
+                                  <tr key={`prov-${idx}`} className="border-b border-gray-100">
+                                    <td className="py-2 font-bold text-gray-800 capitalize">{p.provincia}</td>
+                                    <td className="py-2 text-right text-gray-500">{p.cantidad}</td>
+                                    <td className="py-2 text-gray-700">{dom?.modalidad ?? "--"}</td>
+                                    <td className="py-2 text-right font-bold text-indigo-600">{dom?.porcentaje ?? 0}%</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      {/* Evolucion Mensual */}
+                      {modalidadesMetrica.porMes?.length > 0 && (
+                        <div className="bg-white rounded-xl border border-gray-200 p-5">
+                          <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><Calendar className="w-5 h-5 text-gray-500" /> Evolucion Mensual</h4>
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
+                                <th className="pb-2 font-bold">Mes</th>
+                                <th className="pb-2 font-bold text-right">Envios</th>
+                                <th className="pb-2 font-bold">Modalidad Dominante</th>
+                                <th className="pb-2 font-bold text-right">%</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {modalidadesMetrica.porMes.map((m: any) => {
+                                const dom = m.distribucion[0];
+                                return (
+                                  <tr key={`mes-${m.mes}`} className="border-b border-gray-100">
+                                    <td className="py-2 font-bold text-gray-800">{m.mes}</td>
+                                    <td className="py-2 text-right text-gray-500">{m.cantidad}</td>
+                                    <td className="py-2 text-gray-700">{dom?.modalidad ?? "--"}</td>
+                                    <td className="py-2 text-right font-bold text-indigo-600">{dom?.porcentaje ?? 0}%</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
 
             ) : metricaAnalisis === "Concentración Courier" ? (
@@ -1420,16 +1545,16 @@ export default function Dashboard() {
             <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center justify-between"><span className="flex items-center gap-2"><Store className="w-4 h-4 text-[#233b6b]" /> 11. Modalidades (Real)</span><button onClick={() => abrirAnalisis("Adopción de Modalidades")} className="p-1.5 bg-gray-50 hover:bg-blue-50 text-gray-500 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
             <div className="space-y-5 flex-1 flex flex-col justify-center">
               <div>
-                <div className="flex justify-between text-xs font-bold mb-1"><span className="text-gray-600">Domicilio Estándar</span><span>{pctEstandar}%</span></div>
-                <div className="w-full bg-gray-100 rounded-full h-1.5"><div className="bg-slate-700 h-1.5 rounded-full transition-all duration-1000" style={{ width: `${pctEstandar}%` }}></div></div>
+                <div className="flex justify-between text-xs font-bold mb-1"><span className="text-gray-600">Domicilio Estándar</span><span>{pctEstandarV2}%</span></div>
+                <div className="w-full bg-gray-100 rounded-full h-1.5"><div className="bg-slate-700 h-1.5 rounded-full transition-all duration-1000" style={{ width: `${pctEstandarV2}%` }}></div></div>
               </div>
               <div>
-                <div className="flex justify-between text-xs font-bold mb-1"><span className="text-gray-600">Same-Day</span><span className="text-purple-600">{pctSameDay}%</span></div>
-                <div className="w-full bg-gray-100 rounded-full h-1.5"><div className="bg-purple-500 h-1.5 rounded-full transition-all duration-1000" style={{ width: `${pctSameDay}%` }}></div></div>
+                <div className="flex justify-between text-xs font-bold mb-1"><span className="text-gray-600">Same-Day</span><span className="text-purple-600">{pctSameDayV2}%</span></div>
+                <div className="w-full bg-gray-100 rounded-full h-1.5"><div className="bg-purple-500 h-1.5 rounded-full transition-all duration-1000" style={{ width: `${pctSameDayV2}%` }}></div></div>
               </div>
               <div>
-                <div className="flex justify-between text-xs font-bold mb-1"><span className="text-gray-600">Sucursal</span><span className="text-blue-600">{pctSucursal}%</span></div>
-                <div className="w-full bg-gray-100 rounded-full h-1.5"><div className="bg-blue-500 h-1.5 rounded-full transition-all duration-1000" style={{ width: `${pctSucursal}%` }}></div></div>
+                <div className="flex justify-between text-xs font-bold mb-1"><span className="text-gray-600">Sucursal</span><span className="text-blue-600">{pctSucursalV2}%</span></div>
+                <div className="w-full bg-gray-100 rounded-full h-1.5"><div className="bg-blue-500 h-1.5 rounded-full transition-all duration-1000" style={{ width: `${pctSucursalV2}%` }}></div></div>
               </div>
             </div>
           </div>

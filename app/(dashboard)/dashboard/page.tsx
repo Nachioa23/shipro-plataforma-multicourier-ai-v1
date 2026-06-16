@@ -89,6 +89,16 @@ export default function Dashboard() {
   // Legacy soporteStats default L268 preservado (Phase 4 cleanup).
   const [ticketsMesaAyudaMetrica, setTicketsMesaAyudaMetrica] = useState<any>(null);
   const [cargandoTicketsMesaAyuda, setCargandoTicketsMesaAyuda] = useState(true);
+
+  // Phase 2.5.d (2026-06-15): metrica Concentracion Courier / Riesgo Courier
+  // (Card 12 migrada) consume endpoint Torre
+  // /api/torre-de-control/concentracion-courier (scope-aware).
+  // Card 12 rebindeada al nuevo state. Deprecadas topCouriers + data.couriers
+  // + data.nombresCouriers legacy derives (Phase 4 cleanup global).
+  // Modal Panel expandido a paridad Torre: Hero Riesgo + HHI gauge + Insight
+  // + Share of Wallet + Evolucion Mensual.
+  const [concentracionCourierMetrica, setConcentracionCourierMetrica] = useState<any>(null);
+  const [cargandoConcentracionCourier, setCargandoConcentracionCourier] = useState(true);
   const [filtroRuteoHasta, setFiltroRuteoHasta] = useState("");
   const [filtroRuteoServicio, setFiltroRuteoServicio] = useState("TODOS");
   const [filtroRuteoCourier, setFiltroRuteoCourier] = useState("TODOS");
@@ -265,6 +275,22 @@ export default function Dashboard() {
       });
   }, [tienePermiso, empresaActivaId]);
 
+  // Phase 2.5.d: fetch concentracion-courier desde endpoint Torre.
+  useEffect(() => {
+    if (!tienePermiso) return;
+    setCargandoConcentracionCourier(true);
+    fetch("/api/torre-de-control/concentracion-courier")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setConcentracionCourierMetrica(data);
+        setCargandoConcentracionCourier(false);
+      })
+      .catch(err => {
+        console.error("[Panel] error fetching concentracion-courier:", err);
+        setCargandoConcentracionCourier(false);
+      });
+  }, [tienePermiso, empresaActivaId]);
+
   if (!tienePermiso) {
     return (
       <div className="flex flex-col h-full bg-gray-50 items-center justify-center p-8 text-center">
@@ -332,15 +358,10 @@ export default function Dashboard() {
   }
 
   // M9: CONEXIÓN REAL DE RIESGO COURIER
-  let topCouriers: any[] = [];
-  if (data.couriers && data.nombresCouriers) {
-    const cList = data.couriers.map((item:any) => {
-      const nc = data.nombresCouriers.find((x:any) => String(x.id) === String(item.courierId));
-      const nombre = nc ? nc.nombre : (item.courierId || 'Desconocido');
-      return { courier: nombre, cantidad: item._count?.courierId || 0 };
-    });
-    topCouriers = cList.sort((a:any, b:any) => b.cantidad - a.cantidad).slice(0, 3);
-  }
+  // Phase 2.5.d: topCouriers legacy derive eliminado. Card 12 + modal
+  // consumen concentracionCourierMetrica.shareByCourier directo del helper
+  // scope-aware. data.couriers + data.nombresCouriers legacy fields de
+  // /api/dashboard sin consumers tras esta migracion (Phase 4 cleanup global).
 
   const coloresRiesgo = ['bg-yellow-400', 'bg-red-500', 'bg-purple-500'];
 
@@ -1030,97 +1051,130 @@ export default function Dashboard() {
               </div>
 
             ) : metricaAnalisis === "Concentración Courier" ? (
-              <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden">
-                <div className="bg-white border-b border-gray-200 p-4 flex flex-wrap gap-3 items-center shrink-0 shadow-sm z-10">
-                  <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-1.5 bg-gray-50">
-                    <Calendar className="w-4 h-4 text-gray-400" />
-                    <input type="date" value={filtroRuteoDesde} onChange={e => setFiltroRuteoDesde(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"/>
-                    <span className="text-gray-400 text-xs font-bold">a</span>
-                    <input type="date" value={filtroRuteoHasta} onChange={e => setFiltroRuteoHasta(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"/>
+              <div className="flex-1 p-6 overflow-y-auto bg-gray-50">
+                {cargandoConcentracionCourier ? (
+                  <div className="flex items-center justify-center py-20 text-gray-500"><Loader2 className="w-5 h-5 animate-spin mr-2" /> Cargando metrica...</div>
+                ) : !concentracionCourierMetrica || concentracionCourierMetrica.resumen.totalEnvios === 0 ? (
+                  <div className="text-center py-20 text-gray-500">
+                    Sin envios en la ventana de {concentracionCourierMetrica?.calidadDatos?.ventanaDias ?? 90} dias.
                   </div>
-                </div>
-
-                <div className="flex-1 overflow-y-auto p-6 lg:p-8">
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 max-w-7xl mx-auto">
-                    
+                ) : (
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                    {/* LEFT: Hero Riesgo + HHI gauge + Insight */}
                     <div className="lg:col-span-5 space-y-6">
-                      {/* Cálculo de riesgo en vivo */}
-                      {(() => {
-                        const topShare = topCouriers.length > 0 ? Math.round((topCouriers[0].cantidad / enviosTotales) * 100) : 0; 
-                        const esRiesgoAlto = topShare >= 60;
-                        const colorRiesgo = esRiesgoAlto ? 'red' : 'green';
-                        const tituloRiesgo = esRiesgoAlto ? 'Alta Dependencia (SPOF)' : 'Ecosistema Sano';
-                        
-                        return (
-                          <>
-                            <div className={`bg-white p-6 rounded-2xl shadow-sm border border-${colorRiesgo}-100 relative overflow-hidden`}>
-                              <div className={`absolute top-0 right-0 w-32 h-32 bg-${colorRiesgo}-50 rounded-bl-full -z-10 opacity-50`}></div>
-                              <h4 className={`text-xs font-black text-${colorRiesgo}-600 uppercase tracking-widest mb-1`}>Nivel de Riesgo Operativo</h4>
-                              <p className="text-4xl font-black text-gray-800 mb-2 tracking-tighter">{tituloRiesgo}</p>
-                              <p className="text-xs font-medium text-gray-500 leading-relaxed">El proveedor principal concentra el <strong className={`text-${colorRiesgo}-600`}>{topShare}%</strong> del volumen.</p>
-                            </div>
 
-                            <div className={`bg-${colorRiesgo}-50 p-6 rounded-2xl border border-${colorRiesgo}-100 shadow-sm`}>
-                              <h4 className={`text-xs font-black text-${colorRiesgo}-800 uppercase tracking-widest mb-3 flex items-center gap-2`}>
-                                <AlertCircle className="w-4 h-4" /> Insight de Continuidad
-                              </h4>
-                              {esRiesgoAlto ? (
-                                <>
-                                  <p className="text-lg font-bold text-gray-800 mb-3 leading-tight">Peligro de cuello de botella.</p>
-                                  <p className={`text-xs text-${colorRiesgo}-700 font-medium leading-relaxed`}>Concentrar más del 60% de tus envíos en un solo operador te expone a un <strong>Punto Único de Fallo (SPOF)</strong>. Si este courier entra en paro sindical o colapsa, tu operación se detiene. Recomendamos balancear la carga usando las reglas de enrutamiento.</p>
-                                </>
-                              ) : (
-                                <>
-                                  <p className="text-lg font-bold text-gray-800 mb-3 leading-tight">Operación resiliente.</p>
-                                  <p className={`text-xs text-${colorRiesgo}-700 font-medium leading-relaxed`}>Tu volumen logístico está bien distribuido. Tenés planes de contingencia automáticos si un operador falla, asegurando la continuidad de las entregas.</p>
-                                </>
-                              )}
-                            </div>
-                          </>
-                        );
-                      })()}
-                    </div>
+                      {/* Hero Riesgo Operativo */}
+                      <div className={`bg-white rounded-2xl border-2 p-6 text-center ${concentracionCourierMetrica.resumen.esRiesgoAlto ? 'border-red-300' : 'border-green-300'}`}>
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Nivel de Riesgo Operativo</p>
+                        <p className={`text-6xl font-black tracking-tighter ${concentracionCourierMetrica.resumen.esRiesgoAlto ? 'text-red-600' : 'text-green-700'}`}>
+                          {concentracionCourierMetrica.resumen.topShare}%
+                        </p>
+                        <p className="text-xs text-gray-500 mt-3">
+                          Concentracion del courier lider sobre {concentracionCourierMetrica.resumen.totalEnvios} envios totales.
+                        </p>
+                        <p className="text-[10px] text-gray-400 mt-1">
+                          Umbral SPOF: {concentracionCourierMetrica.resumen.thresholdSPOF}%
+                        </p>
+                      </div>
 
-                    <div className="lg:col-span-7 space-y-6">
-                      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 h-full">
-                        <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center gap-2">
-                          <PieChart className="w-5 h-5 text-blue-500"/> Share of Wallet (Participación)
+                      {/* HHI Gauge */}
+                      <div className="bg-white rounded-2xl border border-gray-200 p-6 text-center">
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Indice HHI</p>
+                        <p className="text-4xl font-black text-gray-800 tracking-tighter">{concentracionCourierMetrica.resumen.hhi}</p>
+                        <p className={`text-xs font-bold uppercase mt-2 ${
+                          concentracionCourierMetrica.resumen.nivelConcentracion === 'alto' ? 'text-red-600' :
+                          concentracionCourierMetrica.resumen.nivelConcentracion === 'moderado' ? 'text-orange-600' :
+                          'text-green-700'
+                        }`}>
+                          Nivel {concentracionCourierMetrica.resumen.nivelConcentracion}
+                        </p>
+                        <p className="text-[10px] text-gray-400 mt-2">
+                          Herfindahl-Hirschman Index (0-10000)
+                        </p>
+                      </div>
+
+                      {/* Insight Continuidad */}
+                      <div className={`rounded-2xl border p-6 ${concentracionCourierMetrica.resumen.esRiesgoAlto ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
+                        <h4 className={`text-xs font-black uppercase tracking-wider mb-3 flex items-center gap-2 ${concentracionCourierMetrica.resumen.esRiesgoAlto ? 'text-red-700' : 'text-green-700'}`}>
+                          <Lightbulb className="w-4 h-4"/> Insight de Continuidad
                         </h4>
-                        
-                        <div className="space-y-4">
-                          {topCouriers.length === 0 ? (
-                            <p className="text-sm font-bold text-gray-400 text-center py-10">Sin datos operativos aún.</p>
-                          ) : (
-                            topCouriers.map((c: any, idx: number) => {
-                              const share = Math.round((c.cantidad / enviosTotales) * 100);
-                              const isDominant = share >= 60;
-                              return (
-                                <div key={`spof-${idx}`} className="p-5 bg-gray-50 border border-gray-200 rounded-xl transition-all shadow-sm">
-                                  <div className="flex justify-between items-end mb-3">
-                                    <div>
-                                      <h5 className="font-black text-gray-800 text-sm flex items-center gap-2">
-                                        {c.courier} 
-                                        {idx === 0 && <span className="px-2 py-0.5 bg-yellow-100 text-yellow-700 text-[9px] rounded-full uppercase tracking-widest">Líder</span>}
-                                      </h5>
-                                    </div>
-                                    <div className="text-right">
-                                      <p className={`text-2xl font-black ${isDominant ? 'text-red-600' : 'text-gray-700'}`}>{share}%</p>
-                                    </div>
-                                  </div>
-                                  <div className="w-full bg-gray-200 rounded-full h-3">
-                                    <div className={`${isDominant ? 'bg-red-500' : 'bg-slate-600'} h-3 rounded-full transition-all duration-1000`} style={{ width: `${share}%` }}></div>
-                                  </div>
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
-
+                        {concentracionCourierMetrica.resumen.esRiesgoAlto ? (
+                          <>
+                            <p className="text-sm font-bold text-red-800 mb-2">Riesgo de SPOF (Single Point of Failure)</p>
+                            <p className="text-xs text-red-700 leading-relaxed">
+                              Hay un courier que concentra <strong>{concentracionCourierMetrica.resumen.topShare}%</strong> del volumen. Una falla, huelga o cambio en sus condiciones impactaria masivamente las operaciones.
+                            </p>
+                          </>
+                        ) : (
+                          <>
+                            <p className="text-sm font-bold text-green-800 mb-2">Diversificacion saludable</p>
+                            <p className="text-xs text-green-700 leading-relaxed">
+                              El portafolio de couriers esta razonablemente distribuido. No hay riesgo de SPOF — una caida puntual no detendria las operaciones.
+                            </p>
+                          </>
+                        )}
                       </div>
                     </div>
 
+                    {/* RIGHT: Share of Wallet + Evolucion Mensual */}
+                    <div className="lg:col-span-7 space-y-6">
+
+                      {/* Share of Wallet */}
+                      <div className="bg-white rounded-xl border border-gray-200 p-5">
+                        <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><Truck className="w-5 h-5 text-gray-500" /> Share of Wallet</h4>
+                        <div className="space-y-4">
+                          {concentracionCourierMetrica.shareByCourier.map((c: any, idx: number) => {
+                            const barColor = c.porcentaje >= 60 ? 'bg-red-500' : c.porcentaje >= 30 ? 'bg-yellow-500' : 'bg-green-500';
+                            return (
+                              <div key={`share-${idx}`}>
+                                <div className="flex justify-between text-sm font-bold mb-1">
+                                  <span className="text-gray-800 flex items-center gap-2">
+                                    {c.nombre}
+                                    {c.esLider && <span className="text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-black">LIDER</span>}
+                                  </span>
+                                  <span className="text-gray-700">{c.porcentaje}% <span className="text-gray-400 font-normal">({c.cantidad})</span></span>
+                                </div>
+                                <div className="w-full bg-gray-100 rounded-full h-3"><div className={`${barColor} h-3 rounded-full transition-all duration-1000`} style={{ width: `${c.porcentaje}%` }}></div></div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Evolucion Mensual */}
+                      {concentracionCourierMetrica.porMes.length > 0 && (
+                        <div className="bg-white rounded-xl border border-gray-200 p-5">
+                          <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><Calendar className="w-5 h-5 text-gray-500" /> Evolucion Mensual</h4>
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
+                                <th className="pb-2 font-bold">Mes</th>
+                                <th className="pb-2 font-bold">Courier Dominante</th>
+                                <th className="pb-2 font-bold text-right">Share</th>
+                                <th className="pb-2 font-bold text-right">Envios Total Mes</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {concentracionCourierMetrica.porMes.map((m: any) => {
+                                const dom = m.distribuciones[0];
+                                const total = m.distribuciones.reduce((s: number, d: any) => s + d.cantidad, 0);
+                                return (
+                                  <tr key={`mes-${m.mes}`} className="border-b border-gray-100">
+                                    <td className="py-2 font-bold text-gray-800">{m.mes}</td>
+                                    <td className="py-2 text-gray-700">{dom?.nombre ?? "--"}</td>
+                                    <td className={`py-2 text-right font-bold ${(dom?.porcentaje ?? 0) >= 60 ? 'text-red-600' : 'text-gray-700'}`}>{dom?.porcentaje ?? 0}%</td>
+                                    <td className="py-2 text-right text-gray-500">{total}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
 
 ) : metricaAnalisis === "Mapa de Calor SLA" ? (
@@ -1942,8 +1996,8 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* BLOQUE 3: ANÁLISIS VIVOS (M8, M9, M10) */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* BLOQUE 3: ANÁLISIS VIVOS — grid 4-col para acomodar Cards 11-14 alineadas. */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 flex flex-col h-full">
             <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center justify-between"><span className="flex items-center gap-2"><Store className="w-4 h-4 text-[#233b6b]" /> 11. Modalidades (Real)</span><button onClick={() => abrirAnalisis("Adopción de Modalidades")} className="p-1.5 bg-gray-50 hover:bg-blue-50 text-gray-500 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
             <div className="space-y-5 flex-1 flex flex-col justify-center">
@@ -1965,20 +2019,24 @@ export default function Dashboard() {
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 flex flex-col h-full">
             <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center justify-between"><span className="flex items-center gap-2"><PieChart className="w-4 h-4 text-[#233b6b]" /> 12. Riesgo Courier (Real)</span><button onClick={() => abrirAnalisis("Concentración Courier")} className="p-1.5 bg-gray-50 hover:bg-blue-50 text-gray-500 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
             <div className="flex-1 flex flex-col justify-center space-y-4">
-              {topCouriers.length === 0 ? <p className="text-sm text-gray-400 text-center font-bold">Sin datos para graficar</p> : (
-                topCouriers.map((c: any, i: number) => {
-                  const share = Math.round((c.cantidad / enviosTotales) * 100);
-                  const colorClass = coloresRiesgo[i] || 'bg-gray-400';
-
+              {cargandoConcentracionCourier ? (
+                <p className="text-sm text-gray-400 text-center font-bold">Cargando...</p>
+              ) : !concentracionCourierMetrica || concentracionCourierMetrica.shareByCourier.length === 0 ? (
+                <p className="text-sm text-gray-400 text-center font-bold">Sin datos para graficar</p>
+              ) : (
+                concentracionCourierMetrica.shareByCourier.slice(0, 3).map((c: any, i: number) => {
+                  const share = c.porcentaje;
+                  const barColor = share >= 60 ? 'bg-red-500' : share >= 30 ? 'bg-yellow-500' : 'bg-green-500';
                   return (
-                    <div key={`wid-${i}`} className="w-full flex items-center gap-2">
-                      <div className="w-full bg-gray-100 rounded-full h-3">
-                        <div className={`${colorClass} h-3 rounded-full transition-all duration-1000`} style={{ width: `${Math.min(share, 100)}%` }}></div>
+                    <div key={`risk-${i}`}>
+                      <div className="flex justify-between text-xs font-bold mb-1">
+                        <span className="text-gray-700 flex items-center gap-1">
+                          {c.nombre}
+                          {c.esLider && <span className="text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-black">LIDER</span>}
+                        </span>
+                        <span className="text-gray-600">{share}%</span>
                       </div>
-                      <div className="flex flex-col text-right w-16">
-                        <span className="text-xs font-black text-gray-800">{share}%</span>
-                        <span className="text-[9px] font-bold text-gray-400 uppercase truncate" title={c.courier}>{c.courier}</span>
-                      </div>
+                      <div className="w-full bg-gray-100 rounded-full h-2"><div className={`${barColor} h-2 rounded-full transition-all duration-1000`} style={{ width: `${share}%` }}></div></div>
                     </div>
                   );
                 })

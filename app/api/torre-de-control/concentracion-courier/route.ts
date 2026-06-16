@@ -1,8 +1,9 @@
 // ============================================================================
 // API — Concentracion Courier / Riesgo Courier (Analitica)
 //
-// Endpoint scope-aware migrado a usar helper lib/utils/concentracion-courier.ts
-// (funcion calcularConcentracionCourierAnalitica). Soporta 3 modos (autodetectados):
+// Endpoint scope-aware via helper lib/utils/concentracion-courier.ts
+// (funcion calcularConcentracionCourierAnalitica). Soporta 3 modos
+// (autodetectados):
 //
 // 1. Cliente (modoDios=false): scope su empresa (ctx.empresaId).
 //    Response: shape "cliente" con resumen.vista = "empresa".
@@ -13,19 +14,14 @@
 // 3. Shipro Torre inspeccion (modoDios=true, con filtro): empresa especifica.
 //    Response: shape "shipro" con resumen.vista = "empresa".
 //
-// Migrado en Phase 2.5 (Panel cliente, 2026-06-15).
-// Antes: guard estricto modoDios + logica inline 201 lineas + parametro
-// non-standard ?empresaId=N.
-// Ahora: delegate a calcularConcentracionCourierAnalitica scope-aware
-// automatico + DUAL-PARAM compat:
-//   - ?filtroEmpresa=N (standard, prioridad).
-//   - ?empresaId=N (legacy alias para Torre dashboard L303 que aun lo usa).
+// Migrado en Phase 2.5 (Panel cliente) + Phase 4.d (limpieza dual-param).
+// Phase 2.5 introdujo DUAL-PARAM compat (?filtroEmpresa + ?empresaId legacy)
+// para no romper Torre dashboard. Phase 4.d limpia ese fallback tras la
+// migracion de Torre dashboard a ?filtroEmpresa= en Phase 4.c.
 //
-// DEUDA Phase 4 cleanup: cuando Torre dashboard L303-304 migre a
-// ?filtroEmpresa= standard, retirar el fallback ?empresaId= de este
-// endpoint route.ts.
-//
-// Acepta ?ventanaDias=N (default 90).
+// Acepta:
+// - ?filtroEmpresa=N (standard, scope-aware via resolverContext).
+// - ?ventanaDias=N (default 90).
 // ============================================================================
 
 import { NextResponse } from "next/server";
@@ -36,10 +32,7 @@ export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
 
-    // DUAL-PARAM compat: ?filtroEmpresa (standard) toma prioridad,
-    // fallback a ?empresaId (legacy alias para Torre dashboard).
-    const filtroEmpresa =
-      searchParams.get("filtroEmpresa") ?? searchParams.get("empresaId");
+    const filtroEmpresa = searchParams.get("filtroEmpresa");
 
     const ventanaDiasRaw = searchParams.get("ventanaDias");
     const ventanaDias = ventanaDiasRaw ? parseInt(ventanaDiasRaw) : undefined;

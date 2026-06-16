@@ -300,7 +300,7 @@ export default function TorreDeControl() {
     if (!esEquipoShipro) return;
     setCargandoConcentracionCourier(true);
     const url = empresaFiltroConcentracion !== null
-      ? `/api/torre-de-control/concentracion-courier?empresaId=${empresaFiltroConcentracion}`
+      ? `/api/torre-de-control/concentracion-courier?filtroEmpresa=${empresaFiltroConcentracion}`
       : "/api/torre-de-control/concentracion-courier";
     fetch(url)
       .then(res => res.ok ? res.json() : null)

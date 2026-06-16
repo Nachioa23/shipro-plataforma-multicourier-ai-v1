@@ -28,7 +28,7 @@ export default function Dashboard() {
   // MODAL DRILL-DOWN Y FILTROS INTERNOS
   const [metricaAnalisis, setMetricaAnalisis] = useState<string | null>(null);
   const [zonaSlaSeleccionada, setZonaSlaSeleccionada] = useState<any | null>(null); // ESTADO PARA M10 INTERACTIVO
-  const [npsDimension, setNpsDimension] = useState('courier'); // <-- ACÁ ESTÁ LA VARIABLE CORREGIDA PARA EL M11
+  // Phase 4.b cleanup: npsDimension state eliminado (sin consumers tras Phase 2.3).
   
   const [filtroRuteoDesde, setFiltroRuteoDesde] = useState("");
 
@@ -313,14 +313,12 @@ export default function Dashboard() {
   const data = metrics || {};
   const formatPesos = (monto: number) => new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(monto || 0);
 
-  const ruteoStats = data.ruteoStats || { fugaFinancieraTotal: 0, enviosOptimizados: 0, enviosIneficientes: 0, costoPromedioExtra: 0, topDesvios: [] };
-  const aforoStats = data.aforoStats || { fugaTotal: 0, porcentajeFugaPeso: 0, desvioPromedioKg: 0, costoPromedioDesvio: 0, distribucionError: { leve:0, moderado:0, grave:0 }, topEstrictos: [] };
-  const efectividadStats = data.efectividadStats || { tasaPrimeraVisita: 0, tasaEntregasForzadas: 0, tasaDevolucion: 0, costoInversaEstimado: 0, topMotivosFalla: [], mapaDevoluciones: [] };
-  const soporteStats = data.soporteStats || { tasaSoporte: 0, ticketsAbiertos: 0, tiempoMedioResolucion: "0h", distribucionEstados: { abiertos:0, progreso:0, resueltos:0 }, topMotivos: [], creadorTicket: { clienteAutoServicio:0, shiproRadar:0 } };
-  const nps = data.nps || { global: 0, promotores: 0, pasivos: 0, detractores: 0, porCourier: {}, ultimosComentarios: [] };
+  // Phase 4.b cleanup: 6 legacy defaults eliminados (ruteoStats, aforoStats,
+  // efectividadStats, soporteStats, nps, slaStats — sin consumers JSX tras
+  // Phases 1.1-2.4 que migraron al patron scope-aware).
   
   // ACA INYECTAMOS LA VARIABLE DEL MÓDULO 10
-  const slaStats = data.slaStats || { indiceGlobal: 0, promedioPrepNacional: 0, cumplimientoSla: 0, mapaZonas: [] };
+  // slaStats legacy default eliminado en Phase 4.b (sin consumers tras Phase 2.1).
 
   let couriersLista: string[] = [];
   if (data.nombresCouriers) {
@@ -328,18 +326,11 @@ export default function Dashboard() {
   }
 
   // M8: CONEXIÓN REAL DE MODALIDADES
-  let pctSameDay = 0; let pctSucursal = 0; let pctEstandar = 0;
-  const enviosTotales = data.enviosMes || 1;
-
-  if (data.modalidades) {
-    const countSameDay = data.modalidades.find((x:any) => x.modalidad === 'Same-Day' || x.modalidad?.includes('Same'))?._count?.modalidad || 0;
-    const countSucursal = data.modalidades.find((x:any) => x.modalidad === 'Sucursal' || x.modalidad?.includes('Sucursal'))?._count?.modalidad || 0;
-    const countEstandar = data.modalidades.find((x:any) => x.modalidad === 'Estándar' || x.modalidad?.includes('Estándar') || x.modalidad?.includes('domicilio'))?._count?.modalidad || 0;
-
-    pctSameDay = Math.round((countSameDay / enviosTotales) * 100);
-    pctSucursal = Math.round((countSucursal / enviosTotales) * 100);
-    pctEstandar = Math.round((countEstandar / enviosTotales) * 100);
-  }
+  // Phase 4.b cleanup: enviosTotales global derive + pctSameDay/pctSucursal/
+  // pctEstandar + data.modalidades parse eliminados. Card 11 + modal
+  // Modalidades migrados a modalidadesMetrica scope-aware en Phase 2.2
+  // (V2 family pctSameDayV2/pctSucursalV2/pctEstandarV2 consume helper directo).
+  // Card 1 Hero usa data.enviosMes directo en L1871.
 
   // Phase 2.2.d: derivacion nueva basada en modalidadesMetrica (8 canonicas).
   // Mapeo D2: Card 11 agrupa a 3 buckets. Reverse modalidades NO se cuentan

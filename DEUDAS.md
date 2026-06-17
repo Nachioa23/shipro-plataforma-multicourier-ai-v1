@@ -504,9 +504,22 @@ Implementar como helper `lib/permisos.ts` con `puedeEditarCampo(rol, campo): boo
 
 **Why no bloqueante hoy:** la mitigación temporal cubre el caso visible (dropdown frontend). Las 20 entradas basura en Provincia no aparecen en ningún lugar del UI porque el normalizador las filtra con null. Operativamente el sistema funciona. Pero la limpieza estructural es importante antes del deploy a Postgres en Linode (mejor migrar BD limpia que arrastrar la deuda).
 
-## DEUDA 27 — Etiqueta diferida por depósito faltante (Importante post-MVP)
+## DEUDA 27 — Etiqueta diferida por depósito faltante (RESUELTA 2026-05-04 en commit e7d92b9 — header stale hasta 2026-06-17)
 
-**Status:** Identificada el 2026-05-04 durante FASE E de DEUDA 4. PENDIENTE — sesión dedicada estimada 4-6 horas (alcance similar a DEUDA 16). Por ahora aplicamos bloqueo duro: si el cliente no tiene depósito predeterminado, `crearEnvio()` lanza `DepositoRequerido` y los handlers retornan 400.
+**Status:** Identificada el 2026-05-04 durante FASE E de DEUDA 4. RESUELTA EL MISMO DÍA en commit e7d92b9 (DEUDA 4 — Módulo de Depósitos cierre completo). Header quedó stale por más de 1 mes; sincronización realizada 2026-06-17 durante audit completo de DEUDAS.
+
+**Evidencia de cierre (verificada 2026-06-17):**
+- Estado nuevo `BLOQUEADO_DEPOSITO` implementado en lugar de bloqueo duro HTTP 400.
+- Procesador FIFO `lib/envios/procesar-bloqueados-deposito.ts` (382 líneas) paralelo a DEUDA 16.
+- Triggers automáticos on config en 3 endpoints (`/api/depositos` POST, `/api/depositos/[id]` PUT, `/api/depositos/[id]/predeterminado` POST).
+- State usage extensivo en 11+ archivos de `app/`.
+- UI condition `esBloqueadoDeposito` en `app/(dashboard)/page.tsx:737`.
+- Excluido de cron de rastreo (consistente).
+
+**Caveats menores (no bloqueantes):**
+- UI banner amber + CTA "Configurá depósito" no verificado explícitamente — posible polish UX pendiente.
+- Mail al gerente no verificado explícitamente.
+- Background cron reproceso desacoplado: cubierto por DEUDA 38 (separado).
 
 **Estado actual (post-FASE E DEUDA 4):**
 - Si el cliente intenta crear un envío sin depósito predeterminado configurado → bloqueo duro 400.
@@ -536,9 +549,24 @@ Implementar como helper `lib/permisos.ts` con `puedeEditarCampo(rol, campo): boo
 
 **Relación con DEUDA 16:** **arquitectura compartida.** El sistema de "etiqueta diferida con destrabado automático post-configuración" es transversal. Cuando se implemente DEUDA 27, considerar refactorear `procesar-bloqueados.ts` para que acepte un parámetro `motivo: "SALDO" | "DEPOSITO" | otros futuros` y centralice la lógica.
 
-## DEUDA 29 — Adapters de couriers cotizan ignorando `cpOrigen` (CRÍTICA pre-deploy MVP)
+## DEUDA 29 — Adapters de couriers cotizan ignorando `cpOrigen` (RESUELTA FUNCIONALMENTE 2026-05-26 — Sub-fases 3, 5 pendientes como robustness/completeness, no bloqueantes)
 
-**Estado:** SUB-FASE 2 CERRADA FUNCIONALMENTE (8 sub-fases resueltas + 2 decisiones documentadas; única pendiente activa: 2.C UI).
+**Estado:** CORE BUG RESUELTO. El bug crítico del cpOrigen ignorado fue cerrado en Sub-fase 2.D.despachar (commit a3d79c0, 2026-05-14). Sub-fase 2.C REDISEÑADA en commit 85a9f52 (2026-05-14) post-feedback director e implementada absorbida por la serie 6.D.* (2026-05-15 a 2026-05-26, 12+ commits hasta 6.D.7 d17bafd "Cierra DEUDA 33"). El header anterior declaraba "SUB-FASE 2 CERRADA FUNCIONALMENTE, 2.C UI pendiente" — eso quedó stale; el rediseño + absorción se cerró el 2026-05-26.
+
+**Sub-fases 6.A + 6.D.1-6.D.7 ejecutadas (nuevo modelo conceptual):**
+- 6.A (4f9702e): Alineación naming + flow onboarding.
+- 6.D.1 (75af4c8): Schema DepositoCourierConfig + migración + seed.
+- 6.D.2 (452d2e0): Endpoints CRUD DepositoCourierConfig.
+- 6.D rectificación (3084ff4 + 3add6cc): Schema + cascada inteligente.
+- 6.D.3 (7192491): Endpoint auto-asignación sucursal.
+- 6.D.4 (56bcbbb): Endpoint validación operatividad par.
+- 6.D.5 (ad68902): Refactor dispatch.ts + crear.ts.
+- 6.D.6 (19af758): Eliminación legacy modoFirstMile + courierRecolectorId.
+- 6.D.7 (d17bafd): UX consolidador dry-run + selector + modal cascada (Cierra DEUDA 33).
+
+**Pendientes NO bloqueantes (robustness items, post-launch acceptable):**
+- Sub-fase 3: retry on 401 mid-request en adapters (robustness).
+- Sub-fase 5: 22 sucursales Andreani sin CPs públicos via `/v2/puntos-de-tercero` autenticado (completeness operativa).
 
 **Identificada:** 2026-05-04 durante smoke test final de DEUDA 4 (Test 4).
 
@@ -854,7 +882,7 @@ Hoy `/api/cotizar` recibe `cpOrigen?` opcional. Si el e-commerce lo manda, se us
 
 ---
 
-## DEUDA 49 — Normalizacion de provincias en BD (descubierta en Metrica 2.3, 2026-06-08)
+## DEUDA 49 — Normalizacion de provincias en BD (descubierta en Metrica 2.3, 2026-06-08 — PARCIAL al 2026-06-17: code-level normalizer implementado, refactor estructural BD pendiente)
 `Direccion.provincia` es string libre. Conviven en BD: "Buenos Aires" y "Provincia de Buenos Aires" como entidades distintas, cuando geograficamente son la misma provincia.
 
 **Impacto actual:** metricas que agrupan por provincia fragmentan muestras. Metrica 2.3 normaliza en codigo (lowercase + trim) pero NO unifica variantes nominales.
@@ -868,7 +896,7 @@ Hoy `/api/cotizar` recibe `cpOrigen?` opcional. Si el e-commerce lo manda, se us
 
 ---
 
-## DEUDA 50 — Refactor canonico del campo Envio.estadoActual: separacion en 2 planos (interno + courier) (registrada 2026-06-09, scope grande)
+## DEUDA 50 — Refactor canonico del campo Envio.estadoActual: separacion en 2 planos (interno + courier) (registrada 2026-06-09, scope grande — PARCIAL al 2026-06-17: foundations laid en `lib/utils/estados.ts` + adapters canónicos F1, refactor estructural BD pendiente)
 
 **Contexto:** Hoy `Envio.estadoActual` es un single String field sin enum/type, sin canonical list, sin normalizer. ~25 strings distintos circulan en BD y codigo (Pendiente, PENDIENTE, BLOQUEADO_SALDO, IMPRESO, "Impreso / Listo", EN_TRANSITO, TRANSITO, INCIDENCIA, etc.). ~30 sitios escriben + ~20 sitios leen con comparaciones ad-hoc tipo `["ENTREGADO", "Entregado"].includes(...)`. El cluster `S_FALLIDA` / `S_SINIESTRO` (legacy del Nomenclador) sobrevive sin proposito claro.
 
@@ -1153,7 +1181,7 @@ C. **Documentar como "future use":** dejar el modelo intacto pero agregar un com
 
 ---
 
-## DEUDA 61 — Bugs preservados en Mapa SLA durante migracion legacy → endpoint dedicado (registrada 2026-06-12, scope medio)
+## DEUDA 61 — Bugs preservados en Mapa SLA durante migracion legacy → endpoint dedicado (registrada 2026-06-12, scope medio — PARCIAL al 2026-06-17: BUG 1 resuelto incidentalmente en Phase 2.1 commit 14e5516, BUGs 2 y 3 siguen preservados)
 
 **Origen:** Metrica 12 (Mapa SLA) migracion del legacy `/api/metricas` a endpoint dedicado `/api/torre-de-control/mapa-sla`, 2026-06-12. Decision del director: "Opcion A — migracion pura sin corregir bugs preservados". Los 3 bugs siguientes se mantienen identicos al legacy para no alterar numeros visibles durante la migracion arquitectonica.
 
@@ -1196,3 +1224,63 @@ Existe modelo `MetricaSLA` con campos `courierId + provinciaDestino + slaPromedi
 **Estimado:** 4-6 horas (BUG 1: 2-3h, BUG 2: 1h, BUG 3: 1-2h). Sugerencia: resolver BUG 1 y BUG 3 en conjunto porque comparten el sistema de zonas. BUG 2 es independiente.
 
 **Adicional para validar:** despues de corregir BUG 1, verificar que el `slaHealthIndex` cambia significativamente con BD real. Si los numeros cambian mucho hay que comunicar a equipo operacional antes de pushear.
+
+---
+
+## DEUDA 62 — Sistema unificado scope-aware para metricas Panel cliente + Torre (Phase 1+2+4 ✅, Phase 3 pendiente)
+
+**Status:** Abierta 2026-06-13. Phases 1 (5/5 Categoria A) + 2 (5/5 Legacy) + 4 (alpha/beta/g cleanup global) ✅ CERRADAS. Phase 3 (expansion Categoria B/C) PENDIENTE.
+
+**Problema legacy:** Cada metrica tenia dos pipelines paralelos — Torre `/torre-de-control` consumia endpoints dedicados con guard `modoDios`, Panel cliente `/dashboard` consumia endpoint monolitico `/api/dashboard` con logic inline duplicada (432 lineas, 17 fields). Mantenimiento doble + risk divergencia + Panel no podia reutilizar la inteligencia del Torre.
+
+**Patron resuelto:** Helper en `lib/utils/<metrica>.ts` con `calcular<X>Analitica(ctx, opts?)` que retorna discriminated union `{scope: "cliente" | "shipro"}`. Endpoint reducido a ~50 lineas delegando al helper. Panel cliente rebindeado a endpoint Torre unificado.
+
+**Phases ejecutadas:**
+- Phase 1 ✅ (5 metricas Categoria A): Fuga Ruteo, Desvio Peso, Efectividad 1ra Visita, Tiempos Colecta, Promesa Calibrada (commits 671feb3 a 47a704c).
+- Phase 2 ✅ (5 metricas Legacy): Mapa SLA, Modalidades, NPS Comprador, Tickets Soporte, Concentracion Courier (commits 14e5516 a 4d5d30b).
+- Phase 4 alpha ✅: cleanup global ~360 lineas (commit 294203b).
+- Phase 4 beta + g ✅: refactor `/api/dashboard` → kpis-hero + lista-couriers helpers + endpoint `/api/torre-de-control/kpis-hero`, delete legacy endpoint, eliminacion filtros cosmeticos 3 modales (commit 6b8b75c, DEUDA 65 registrada).
+
+**Phase 3 PENDIENTE:** expansion Categoria B/C — metricas adicionales al Panel cliente. Requiere decisiones de producto frescas sobre que metricas valen la pena. Estimado 5-7h.
+
+**Arquitectura final post-Phases 1+2+4:**
+- 10 helpers scope-aware en `lib/utils/` (concentracion-courier, desvio-peso, efectividad-primera-visita, fuga-ruteo, kpis-hero, lista-couriers, modalidades, nps, sla, tickets-mesa-ayuda).
+- 10 endpoints Torre delegan a helpers.
+- 0 endpoints legacy en `/api/dashboard/`.
+- 1 filter WIRED en Panel (filtroTiempo Card 1 Hero KPIs).
+- Cleanup neto Phase 4: -186 lineas en 2 commits (+451 / -637).
+
+**DEUDAS proyectadas vinculadas:**
+- DEUDA 53 (TicketSoporte.origen) — identificada Phase 2.4.
+- DEUDA 61 (Mapa SLA bugs) — identificada Phase 2.1.
+- DEUDA 65 (filtros funcionales) — registrada Phase 4.g.
+
+---
+
+## DEUDA 65 — Cablear filtros funcionales en 3 modales analiticos (registrada 2026-06-16, scope medio)
+
+**Status:** Registrada en commit 6b8b75c (Phase 4.g de DEUDA 62). NO INICIADA. Requiere decisiones de producto antes de implementar.
+
+**Origen:** Descubierta durante Phase 4.f.e verification cuando director observo que cambiar dropdowns no producia efecto. Auditoria revelo 4 filter states cosmeticos sin cableo (0 fetch URL refs, 0 useEffect deps, 0 .filter() calls). Phase 4.g elimino los 4 states + JSX wrappers (~50 lineas cleanup). `filtroTiempo` Card 1 preservado (unico WIRED).
+
+**Modales afectados:** Fuga por Ruteo, Desvio Financiero por Peso Volumetrico, Efectividad de Entregas en 1ra Visita.
+
+**3 issues criticos detectados que bloquean implementacion quick:**
+
+1. **Disconnect select options vs schema modalidad.** Select Fuga Ruteo ofrece "TODOS|domicilio|sucursal" pero schema usa 8 modalidades canonicas (en `lib/utils/modalidades.ts`). El select NO cubre "Punto de Retiro" ni "e-locker" — envios quedarian invisibles al filtrar.
+
+2. **Filtros no uniformes por modal.** Fuga Ruteo tiene 3 controles (dates + servicio + courier), Desvio Peso tiene 2 (dates + courier), Efectividad tiene 1 (dates). Cada modal requiere implementacion distinta.
+
+3. **Encoding strings con tilde.** Legacy "Estándar" (tilde) vs "Estandar" (sin tilde) no matchearian exactos en `contains`. SQLite case-sensitive sin `mode: "insensitive"`. Bug sutil potencial.
+
+**Decisiones de producto requeridas up-front:**
+1. Mapping select options UI vs schema modalidad (agregar Punto de Retiro + e-locker, mantener invisibles, o reemplazar con multi-select de 8 buckets canonicos).
+2. Encoding tildes consistente (normalizar `Envio.modalidad` en DB via migration o en runtime via normalizer).
+3. Backend re-fetch vs client-side filter (re-fetch con query params nuevos vs filter in-memory).
+4. State namespacing per-modal (`filtroFugaRuteoDesde`, etc) vs antipatron shared.
+
+**Helpers afectados (si se cablea backend):** `fuga-ruteo.ts`, `desvio-peso.ts`, `efectividad-primera-visita.ts` — extender signature a `(ctx, opts: {ventanaDias?, dateRange?, courier?, modalidad?})`. Endpoints aceptarian query params nuevos preservando defaults backwards-compat.
+
+**Estimado:** 180-240 min con decisiones de producto claras up-front.
+
+**Prioridad:** Media. No bloquea funcionalidad core (Card y metricas funcionan sin filter), pero degrada UX si director espera analisis profundo via filtros.

@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { Save, Loader2, CheckCircle2, AlertCircle, Lock, Key, Package, Percent, DollarSign } from 'lucide-react';
+import ModalMotivoAuditoria, { type CambioPreview } from "@/components/ModalMotivoAuditoria";
 
 interface Props {
   empresaActivaId: number | null;
@@ -21,6 +22,10 @@ export default function TransportesTab({ empresaActivaId }: Props) {
   const [mensaje, setMensaje] = useState<{ texto: string, tipo: 'ok' | 'error' } | null>(null);
   const [configsGenerales, setConfigsGenerales] = useState({ ordenamiento: "MOTOR_PRECIO" });
   const [couriers, setCouriers] = useState<any[]>([]);
+  // DEUDA 19: snapshot inmutable para detectar cambios sensibles antes de submit.
+  const [couriersOriginal, setCouriersOriginal] = useState<any[]>([]);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [cambiosPreview, setCambiosPreview] = useState<CambioPreview[]>([]);
 
   useEffect(() => {
     if (!empresaActivaId) return;
@@ -57,6 +62,8 @@ export default function TransportesTab({ empresaActivaId }: Props) {
               }
             });
             setCouriers(couriersDin);
+            // DEUDA 19: snapshot inmutable (deep clone) para diff sensible al guardar.
+            setCouriersOriginal(JSON.parse(JSON.stringify(couriersDin)));
           }
         }
       } catch (error) {
@@ -81,18 +88,94 @@ export default function TransportesTab({ empresaActivaId }: Props) {
     }
   };
 
-  const guardar = async () => {
+  // DEUDA 19: detecta cambios sensibles comparando state actual vs snapshot original.
+  // Retorna array de cambios sensibles para preview en modal.
+  const detectarCambiosSensibles = (): CambioPreview[] => {
+    const cambios: CambioPreview[] = [];
+
+    for (const actual of couriers) {
+      const original = couriersOriginal.find(o => o.id === actual.id);
+      if (!original) continue; // Sin original = creacion, no se audita (D-19-10).
+
+      if (original.activo !== actual.activo) {
+        cambios.push({
+          campo: `${actual.id} / Activo`,
+          de: String(original.activo),
+          a: String(actual.activo),
+        });
+      }
+
+      if (original.usaPropias !== actual.usaPropias) {
+        cambios.push({
+          campo: `${actual.id} / Modelo`,
+          de: original.usaPropias ? "Credenciales propias (B)" : "Cuenta Shipro (A)",
+          a: actual.usaPropias ? "Credenciales propias (B)" : "Cuenta Shipro (A)",
+        });
+      }
+
+      const credsOriginal = JSON.stringify(original.credenciales || {});
+      const credsActual = JSON.stringify(actual.credenciales || {});
+      if (credsOriginal !== credsActual) {
+        cambios.push({
+          campo: `${actual.id} / Credenciales`,
+          de: "Credenciales anteriores",
+          a: "Credenciales modificadas",
+        });
+      }
+
+      if (puedeEditarTipoCuenta && (original.tipoCuenta || "") !== (actual.tipoCuenta || "")) {
+        cambios.push({
+          campo: `${actual.id} / Tipo cuenta`,
+          de: original.tipoCuenta || "(default empresa)",
+          a: actual.tipoCuenta || "(default empresa)",
+        });
+      }
+    }
+
+    return cambios;
+  };
+
+  // DEUDA 19: Click handler del boton "Guardar".
+  // Si hay cambios sensibles → abre modal con motivo obligatorio.
+  // Si no → submit directo (cambios no sensibles van al audit log sin motivo).
+  const handleGuardarClick = () => {
+    const cambios = detectarCambiosSensibles();
+    if (cambios.length > 0) {
+      setCambiosPreview(cambios);
+      setModalOpen(true);
+    } else {
+      guardar(undefined);
+    }
+  };
+
+  const guardar = async (motivoAuditoria: string | undefined) => {
     setGuardando(true);
     try {
       const res = await fetch("/api/configuracion/couriers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ empresaId: empresaActivaId, configsGenerales, couriers })
+        body: JSON.stringify({
+          empresaId: empresaActivaId,
+          configsGenerales,
+          couriers,
+          ...(motivoAuditoria ? { motivoAuditoria } : {}),
+        })
       });
-      if (res.ok) setMensaje({ texto: "Red Logística guardada exitosamente.", tipo: 'ok' });
-      else setMensaje({ texto: "Error al guardar la red.", tipo: 'error' });
-    } catch (error) {
-      setMensaje({ texto: "Error de conexión.", tipo: 'error' });
+      if (res.ok) {
+        setMensaje({ texto: "Red Logística guardada exitosamente.", tipo: 'ok' });
+        // Refrescar snapshot post-save para nuevo baseline.
+        setCouriersOriginal(JSON.parse(JSON.stringify(couriers)));
+        setModalOpen(false);
+      } else {
+        const errorData = await res.json().catch(() => ({}));
+        if (errorData?.code === "MOTIVO_AUDITORIA_REQUERIDO") {
+          throw new Error("Motivo obligatorio para cambios sensibles.");
+        }
+        setMensaje({ texto: "Error al guardar la red.", tipo: 'error' });
+      }
+    } catch (error: any) {
+      if (modalOpen) throw error; // re-throw para que el modal lo capture
+      setMensaje({ texto: error?.message || "Error de conexión.", tipo: 'error' });
     } finally {
       setGuardando(false);
       setTimeout(() => setMensaje(null), 5000);
@@ -102,10 +185,20 @@ export default function TransportesTab({ empresaActivaId }: Props) {
   return (
     <div className="p-8 max-w-5xl mx-auto w-full space-y-8">
       <div className="flex justify-end">
-        <button onClick={guardar} disabled={guardando || cargando} className="flex items-center gap-2 px-6 py-2.5 bg-[#233b6b] hover:bg-blue-900 text-white font-bold rounded-xl transition-colors shadow-sm disabled:opacity-50">
+        <button onClick={handleGuardarClick} disabled={guardando || cargando} className="flex items-center gap-2 px-6 py-2.5 bg-[#233b6b] hover:bg-blue-900 text-white font-bold rounded-xl transition-colors shadow-sm disabled:opacity-50">
           {guardando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Guardar Credenciales
         </button>
       </div>
+
+      {/* DEUDA 19: Modal de confirmacion con motivo para cambios sensibles. */}
+      <ModalMotivoAuditoria
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        onConfirm={async (motivo) => { await guardar(motivo); }}
+        title="Confirmar cambios sensibles en credenciales"
+        description="Estos cambios quedaran registrados en el audit log con tu identidad, IP y motivo."
+        changesPreview={cambiosPreview}
+      />
 
       {mensaje && (
         <div className={`p-4 rounded-xl font-bold flex items-center gap-2 animate-in slide-in-from-top-2 ${mensaje.tipo === 'ok' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>

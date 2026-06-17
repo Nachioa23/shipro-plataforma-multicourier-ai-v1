@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
-import prisma from "@/lib/prisma"; 
+import prisma from "@/lib/prisma";
 // IMPORTAMOS LA NUEVA FUNCIÓN DEL MAILER
 import { enviarMailBienvenida } from "@/lib/mailer";
 import { getAppUrl } from "@/lib/utils/app-url";
+import {
+  registrarCambioConfiguracion,
+  MotivoRequeridoError
+} from "@/lib/auditoria-configuracion";
 
 export async function GET() {
   try {
@@ -73,11 +77,41 @@ export async function PUT(request: Request) {
     const body = await request.json();
 
     if (body.accion === 'toggle_activo') {
-      const empresa = await prisma.empresa.update({
-        where: { id: parseInt(body.empresaId) },
-        data: { activo: body.activo }
+      const empresaIdNum = parseInt(body.empresaId);
+
+      // DEUDA 19: read-before-write para audit log.
+      const empresaAntes = await prisma.empresa.findUnique({
+        where: { id: empresaIdNum },
+        select: { activo: true }
       });
-      return NextResponse.json(empresa);
+
+      try {
+        // DEUDA 19: audit ANTES del update (throw temprano si motivo missing).
+        if (empresaAntes) {
+          await registrarCambioConfiguracion({
+            request,
+            empresaId: empresaIdNum,
+            campo: "activo",
+            valorAnterior: empresaAntes.activo,
+            valorNuevo: body.activo,
+            motivo: body.motivoAuditoria,
+          });
+        }
+
+        const empresa = await prisma.empresa.update({
+          where: { id: empresaIdNum },
+          data: { activo: body.activo }
+        });
+        return NextResponse.json(empresa);
+      } catch (error: any) {
+        if (error instanceof MotivoRequeridoError) {
+          return NextResponse.json(
+            { error: error.message, code: "MOTIVO_AUDITORIA_REQUERIDO" },
+            { status: 400 }
+          );
+        }
+        throw error;
+      }
     }
 
     if (body.accion === 'crear_usuario') {

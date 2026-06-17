@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Sora } from "next/font/google";
 import Link from "next/link";
-import { Inbox, Tags, Package, LayoutDashboard, Truck, ShieldAlert, Users, CreditCard, ArrowRightLeft, Activity, LogOut, Building2, Calculator, Landmark, Scale, FileSpreadsheet, Settings2, Settings } from 'lucide-react';
+import { Inbox, Tags, Package, LayoutDashboard, Truck, ShieldAlert, Users, CreditCard, ArrowRightLeft, Activity, LogOut, Building2, Calculator, Landmark, Scale, FileSpreadsheet, Settings2, Settings, ScrollText } from 'lucide-react';
 import { useSession, signOut, SessionProvider } from "next-auth/react";
 import CotizadorModal from '@/components/CotizadorModal';
 import "../globals.css";
@@ -149,6 +149,10 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
                   </Link>
                   <Link href="/torre-de-control" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-slate-200 hover:text-slate-800 rounded-lg font-medium text-sm transition-all mt-2 bg-slate-100 border border-slate-200">
                     <Activity className="w-5 h-5 text-slate-800" /><span className="font-bold text-slate-800">Torre de Control</span>
+                  </Link>
+                  {/* DEUDA 19: Auditoria de Configuracion — audit log de cambios sensibles */}
+                  <Link href="/admin-auditoria-configuracion" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-rose-50 hover:text-rose-800 rounded-lg font-medium text-sm transition-all mt-2 bg-rose-50/50 border border-rose-100">
+                    <ScrollText className="w-5 h-5 text-rose-600" /><span className="font-bold text-rose-800">Auditoría Config</span>
                   </Link>
                 </>
               )}

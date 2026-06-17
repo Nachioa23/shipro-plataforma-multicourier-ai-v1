@@ -1257,6 +1257,30 @@ Existe modelo `MetricaSLA` con campos `courierId + provinciaDestino + slaPromedi
 
 ---
 
+## DEUDA 68 — Gaps de UI + endpoints para audit log de Empresa.* sensible fields (registrada 2026-06-17, scope chico)
+
+**Origen:** DEUDA 19 Sub-paso 19.d.3 + 19.f.3 PRE-STEPs, 2026-06-17. Durante la implementacion del audit log de configuracion (DEUDA 19) se detectaron 2 gaps:
+
+**Gap 1 — Endpoints faltantes para campos sensibles de Empresa:**
+- `Empresa.modalidadPago` — sin endpoint que lo mute.
+- `Empresa.limiteDescubierto` — sin endpoint que lo mute.
+- `Empresa.modeloAHabilitado` — sin endpoint que lo mute.
+
+Los 3 campos estan en `CAMPOS_AUDITABLES` (lib/auditoria-configuracion.ts) listos para auditarse, pero ningun endpoint los muta hoy. Probablemente se manejan via Prisma Studio o SQL directo. Cuando se construyan los endpoints (probablemente como parte de DEUDA 17 onboarding wizard o DEUDA 22 suspension auto), agregar `registrarCambioConfiguracion` para activar el audit.
+
+**Gap 2 — UI page para rotacion de API Key del cliente:**
+- Backend `/api/empresa/api-key` GET + POST listos con audit log integrado (DEUDA 19 Sub-paso 19.d.2).
+- Frontend page para que `gerente_cliente` pueda rotar su API Key NO EXISTE.
+- Hoy la rotacion solo es posible via Postman/curl.
+
+**Plan de resolucion:**
+- Gap 1: agregar endpoints PUT/PATCH cuando se prioricen (durante DEUDA 17 o DEUDA 22).
+- Gap 2: crear `app/(dashboard)/configuracion/api-key/page.tsx` durante DEUDA 17 onboarding wizard (logico fit ya que el gerente_cliente necesita su API Key al integrar e-commerce).
+
+**Por que no se cierra en DEUDA 19:** scope creep — DEUDA 19 era audit log, no construir endpoints/UI faltantes. La infraestructura de audit esta lista para esos casos cuando se construyan.
+
+---
+
 ## DEUDA 65 — Cablear filtros funcionales en 3 modales analiticos (registrada 2026-06-16, scope medio)
 
 **Status:** Registrada en commit 6b8b75c (Phase 4.g de DEUDA 62). NO INICIADA. Requiere decisiones de producto antes de implementar.

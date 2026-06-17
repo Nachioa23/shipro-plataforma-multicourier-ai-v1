@@ -46,6 +46,8 @@ model Empresa {
   reglasRuteo             ReglaRuteo[]
   // DEUDA 32+37 (Fase J): registro de cotizaciones que devolvieron cero couriers.
   registrosCoberturaVacia RegistroCoberturaVacia[]
+  // DEUDA 19: audit log de cambios sensibles (credenciales/config).
+  auditoriasConfiguracion AuditoriaConfiguracion[]
 }
 
 // ==========================================
@@ -198,6 +200,9 @@ model Courier {
 
   // DEUDA 32+37: servicios comerciales que este courier ofrece al cliente final.
   servicios ServicioCourier[]
+
+  // DEUDA 19: audit log de cambios sensibles per-courier (credencialesJson, tipoCuenta, etc).
+  auditoriasConfiguracion AuditoriaConfiguracion[]
 }
 
 // ==========================================
@@ -542,6 +547,45 @@ model AuditoriaSoporte {
 
   ticketId Int
   ticket   TicketSoporte @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+}
+
+// ==========================================
+// DEUDA 19 — AUDITORÍA DE CONFIGURACIÓN
+// Audit log de cambios sensibles en credenciales y configuración financiera.
+// 12 campos auditados (CRÍTICOS + ALTOS): credencialesJson, tipoCuenta,
+// usaCredencialesPropias, activo, modalidadPago, limiteDescubierto, apiKey,
+// apiKeyActiva, modeloAHabilitado, ajusteTarifaPorcentaje, markupFijo,
+// requiereSeguro.
+// Email + IP origen capturados via headers inyectados por proxy.ts (x-usuario-email
+// + x-ip-origen). Motivo obligatorio para cambios sensibles (validacion backend).
+// ==========================================
+model AuditoriaConfiguracion {
+  id           Int      @id @default(autoincrement())
+  fecha        DateTime @default(now())
+
+  // Quien hizo el cambio
+  usuarioEmail String?
+  rolUsuario   String?
+  ipOrigen     String?
+
+  // A quien afecta
+  empresaId Int
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  courierId Int?
+  courier   Courier? @relation(fields: [courierId], references: [id], onDelete: SetNull)
+
+  // Que cambio
+  campo         String  // "tipoCuenta", "modalidadPago", "apiKey", "credencialesJson", etc.
+  valorAnterior String?
+  valorNuevo    String?
+
+  // Por que (obligatorio para cambios sensibles)
+  motivo String?
+
+  @@index([empresaId, fecha])
+  @@index([courierId, fecha])
+  @@index([campo, fecha])
 }
 
 // ==========================================

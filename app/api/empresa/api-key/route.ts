@@ -2,6 +2,10 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getToken } from "next-auth/jwt";
 import crypto from "crypto";
 import prisma from "@/lib/prisma";
+import {
+  registrarCambioConfiguracion,
+  MotivoRequeridoError
+} from "@/lib/auditoria-configuracion";
 
 const API_KEY_PREFIX = "shipro_live_";
 const ROLES_AUTORIZADOS_ROTACION = ["gerente_cliente", "admin_shipro"];
@@ -59,23 +63,62 @@ export async function POST(request: NextRequest) {
   }
 
   const empresaId = token.empresaId;
+
+  // DEUDA 19: motivoAuditoria opcional desde body (apiKey es sensible → motivo obligatorio).
+  // Si no viene, registrarCambioConfiguracion lanzara MotivoRequeridoError → 400.
+  let motivoAuditoria: string | undefined;
+  try {
+    const body = await request.json();
+    motivoAuditoria = body?.motivoAuditoria;
+  } catch {
+    // Body opcional / vacio (POST tradicional sin body). Helper validara.
+  }
+
+  // DEUDA 19: read-before-write para audit log.
+  const empresaAntes = await prisma.empresa.findUnique({
+    where: { id: empresaId },
+    select: { apiKey: true }
+  });
+
   const nuevaKey = API_KEY_PREFIX + crypto.randomBytes(16).toString("hex");
 
-  const empresa = await prisma.empresa.update({
-    where: { id: empresaId },
-    data: {
-      apiKey: nuevaKey,
-      apiKeyCreadaEn: new Date(),
-      apiKeyActiva: true
-    },
-    select: { apiKey: true, apiKeyCreadaEn: true, apiKeyActiva: true }
-  });
+  try {
+    // DEUDA 19: auditar ANTES del update (si motivo falta, throw temprano, no se rota).
+    if (empresaAntes) {
+      await registrarCambioConfiguracion({
+        request,
+        empresaId,
+        campo: "apiKey",
+        valorAnterior: empresaAntes.apiKey,
+        valorNuevo: nuevaKey,
+        motivo: motivoAuditoria,
+      });
+    }
 
-  // ESTA ES LA ÚNICA VEZ QUE LA KEY COMPLETA SE EXPONE.
-  // GET solo devuelve los últimos 4 chars. Si el cliente la pierde, debe regenerar (la nueva invalida esta).
-  return NextResponse.json({
-    apiKey: empresa.apiKey,
-    apiKeyCreadaEn: empresa.apiKeyCreadaEn,
-    apiKeyActiva: empresa.apiKeyActiva
-  });
+    const empresa = await prisma.empresa.update({
+      where: { id: empresaId },
+      data: {
+        apiKey: nuevaKey,
+        apiKeyCreadaEn: new Date(),
+        apiKeyActiva: true
+      },
+      select: { apiKey: true, apiKeyCreadaEn: true, apiKeyActiva: true }
+    });
+
+    // ESTA ES LA ÚNICA VEZ QUE LA KEY COMPLETA SE EXPONE.
+    // GET solo devuelve los últimos 4 chars. Si el cliente la pierde, debe regenerar (la nueva invalida esta).
+    return NextResponse.json({
+      apiKey: empresa.apiKey,
+      apiKeyCreadaEn: empresa.apiKeyCreadaEn,
+      apiKeyActiva: empresa.apiKeyActiva
+    });
+  } catch (error: any) {
+    if (error instanceof MotivoRequeridoError) {
+      return NextResponse.json(
+        { error: error.message, code: "MOTIVO_AUDITORIA_REQUERIDO" },
+        { status: 400 }
+      );
+    }
+    throw error;
+  }
 }

@@ -30,7 +30,10 @@ export default function Dashboard() {
   const [zonaSlaSeleccionada, setZonaSlaSeleccionada] = useState<any | null>(null); // ESTADO PARA M10 INTERACTIVO
   // Phase 4.b cleanup: npsDimension state eliminado (sin consumers tras Phase 2.3).
   
-  const [filtroRuteoDesde, setFiltroRuteoDesde] = useState("");
+  // Phase 4.g cleanup: filtroRuteoDesde + Hasta + Servicio + Courier eliminados
+  // (filtros cosmeticos sin wiring). DEUDA 65 documentada para implementacion
+  // funcional en sesion separada (requiere decisiones de producto sobre mapping
+  // modalidad UI vs schema, encoding tildes, y shape per-modal).
 
   // Phase 1.1.d (2026-06-12): nuevo state consumiendo endpoint Torre.
   // El proxy inyecta x-empresa-id de la sesion del usuario.
@@ -99,9 +102,7 @@ export default function Dashboard() {
   // + Share of Wallet + Evolucion Mensual.
   const [concentracionCourierMetrica, setConcentracionCourierMetrica] = useState<any>(null);
   const [cargandoConcentracionCourier, setCargandoConcentracionCourier] = useState(true);
-  const [filtroRuteoHasta, setFiltroRuteoHasta] = useState("");
-  const [filtroRuteoServicio, setFiltroRuteoServicio] = useState("TODOS");
-  const [filtroRuteoCourier, setFiltroRuteoCourier] = useState("TODOS");
+  // Phase 4.g cleanup: states filtroRuteoHasta + Servicio + Courier eliminados.
 
   useEffect(() => {
     if (esEquipoShipro) {
@@ -119,7 +120,10 @@ export default function Dashboard() {
       if (!empresaActivaId || !tienePermiso) return;
       setLoading(true);
       try {
-        const res = await fetch(`/api/dashboard?empresaId=${empresaActivaId}&rango=${filtroTiempo}`);
+        // Phase 4.f.e: migrado a /api/torre-de-control/kpis-hero scope-aware.
+        // resolverContext deriva empresaId del header x-empresa-id (proxy)
+        // automaticamente, no requiere ?empresaId= explicito.
+        const res = await fetch(`/api/torre-de-control/kpis-hero?rango=${filtroTiempo}`);
         if (res.ok) setMetrics(await res.json());
       } catch (error) {
         console.error("Error cargando dashboard:", error);
@@ -416,30 +420,6 @@ export default function Dashboard() {
             {/* ============================================================== */}
             {metricaAnalisis === "Fuga por Ruteo Ineficiente" ? (
               <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden">
-                <div className="bg-white border-b border-gray-200 p-4 flex flex-wrap gap-3 items-center shrink-0 shadow-sm z-10">
-                  <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-1.5 bg-gray-50">
-                    <Calendar className="w-4 h-4 text-gray-400" />
-                    <input type="date" value={filtroRuteoDesde} onChange={e => setFiltroRuteoDesde(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"/>
-                    <span className="text-gray-400 text-xs font-bold">a</span>
-                    <input type="date" value={filtroRuteoHasta} onChange={e => setFiltroRuteoHasta(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"/>
-                  </div>
-                  <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-1.5 bg-gray-50">
-                    <Box className="w-4 h-4 text-gray-400" />
-                    <select value={filtroRuteoServicio} onChange={e => setFiltroRuteoServicio(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer">
-                      <option value="TODOS">Todas las Modalidades</option>
-                      <option value="domicilio">Solo A Domicilio</option>
-                      <option value="sucursal">Solo A Sucursal</option>
-                    </select>
-                  </div>
-                  <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-1.5 bg-gray-50">
-                    <Truck className="w-4 h-4 text-gray-400" />
-                    <select value={filtroRuteoCourier} onChange={e => setFiltroRuteoCourier(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer">
-                      <option value="TODOS">Couriers Evaluados: Todos</option>
-                      {couriersLista.map(c => <option key={c} value={c}>{c}</option>)}
-                    </select>
-                  </div>
-                </div>
-
                 <div className="flex-1 overflow-y-auto p-6 lg:p-8">
                   <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 max-w-7xl mx-auto">
                     <div className="lg:col-span-5 space-y-6">
@@ -528,22 +508,6 @@ export default function Dashboard() {
 
             ) : metricaAnalisis === "Desvío Financiero por Peso Volumétrico" ? (
               <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden">
-                <div className="bg-white border-b border-gray-200 p-4 flex flex-wrap gap-3 items-center shrink-0 shadow-sm z-10">
-                  <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-1.5 bg-gray-50">
-                    <Calendar className="w-4 h-4 text-gray-400" />
-                    <input type="date" value={filtroRuteoDesde} onChange={e => setFiltroRuteoDesde(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"/>
-                    <span className="text-gray-400 text-xs font-bold">a</span>
-                    <input type="date" value={filtroRuteoHasta} onChange={e => setFiltroRuteoHasta(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"/>
-                  </div>
-                  <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-1.5 bg-gray-50">
-                    <Truck className="w-4 h-4 text-gray-400" />
-                    <select value={filtroRuteoCourier} onChange={e => setFiltroRuteoCourier(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer">
-                      <option value="TODOS">Couriers Evaluados: Todos</option>
-                      {couriersLista.map(c => <option key={c} value={c}>{c}</option>)}
-                    </select>
-                  </div>
-                </div>
-
                 <div className="flex-1 overflow-y-auto p-6 lg:p-8">
                   <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 max-w-7xl mx-auto">
                     <div className="lg:col-span-5 space-y-6">
@@ -612,15 +576,6 @@ export default function Dashboard() {
 
             ) : metricaAnalisis === "Efectividad de Entregas en 1ra Visita" ? (
               <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden">
-                <div className="bg-white border-b border-gray-200 p-4 flex flex-wrap gap-3 items-center shrink-0 shadow-sm z-10">
-                  <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-1.5 bg-gray-50">
-                    <Calendar className="w-4 h-4 text-gray-400" />
-                    <input type="date" value={filtroRuteoDesde} onChange={e => setFiltroRuteoDesde(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"/>
-                    <span className="text-gray-400 text-xs font-bold">a</span>
-                    <input type="date" value={filtroRuteoHasta} onChange={e => setFiltroRuteoHasta(e.target.value)} className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer"/>
-                  </div>
-                </div>
-
                 <div className="flex-1 overflow-y-auto p-6 lg:p-8">
                   <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 max-w-7xl mx-auto">
                     <div className="lg:col-span-5 space-y-6">

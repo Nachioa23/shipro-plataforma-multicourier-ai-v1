@@ -16,28 +16,21 @@
 
 ---
 
-## 🚨 DECISIONES DE PRODUCTO (responder primero)
+## 🚨 DECISIONES DE PRODUCTO (respondidas 2026-06-17)
 
-Estas 4 decisiones definen prioridades y pueden recortar 2-4 dias del trabajo:
+- [x] **D1 — Como onboardeo los primeros pilotos?** → **Self-service desde dia 1**
+  - Implicancia: DEUDA 17 (UI onboarding) OBLIGATORIA.
 
-- [ ] **D1 — Como onboardeo los primeros pilotos?**
-  - Opcion A: 1-3 manuales por Shipro (saltea DEUDA 17 inicialmente).
-  - Opcion B: Self-service desde dia 1 (DEUDA 17 obligatoria).
+- [x] **D2 — Modelo financiero para primeros pilotos?** → **Ambos modelos (A + B)**
+  - Implicancia: DEUDA 10 (Modelo B fallback) OBLIGATORIA.
 
-- [ ] **D2 — Modelo financiero para primeros pilotos?**
-  - Opcion A: Modelo A solamente (cuenta corriente Shipro, saltea DEUDA 10).
-  - Opcion B: Modelo B (credenciales propias cliente, DEUDA 10 obligatoria).
+- [x] **D3 — Modalidad de pago para primeros pilotos?** → **PREPAGO estandar, POSTPAGO excepcional**
+  - Implicancia: DEUDA 22 (suspension auto) OBLIGATORIA para los POSTPAGO.
 
-- [ ] **D3 — Modalidad de pago para primeros pilotos?**
-  - Opcion A: PREPAGO obligatorio (mitiga DEUDA 22, riesgo cero).
-  - Opcion B: POSTPAGO permitido (DEUDA 22 obligatoria).
+- [x] **D4 — Cloud provider final?** → **Linode confirmado**
+  - Implicancia: Postgres provisioning on Linode confirmado.
 
-- [ ] **D4 — Cloud provider final?**
-  - Opcion A: Linode confirmado.
-  - Opcion B: Reevaluar antes de provisioning.
-
-**Path mas rapido a comercializar (si todas opcion A):** Postgres + DEUDA 19 = ~2 dias.
-**Path completo (cualquier opcion B):** 5-7 dias.
+**Path elegido:** Completo (~5-7 dias). Todas las DEUDAs Tier 1 + TECH 1 + Tier 2 obligatorias.
 
 ---
 
@@ -276,15 +269,30 @@ DEUDAS que pueden esperar a post-launch sin riesgo operativo. **Detalle completo
 
 ---
 
-## 🎯 ORDEN DE EJECUCION RECOMENDADO
+## 🎯 ORDEN DE EJECUCION CONFIRMADO (2026-06-17)
 
-1. **Responder D1-D4** (5 min) — Define el path.
-2. **DEUDA 19 Auditoria** (1 dia) — Primera porque DEUDA 21/22/17 se benefician del audit log.
-3. **DEUDA 22 Suspension auto** (0.5 dia) — Si D3=B. Rapido, alto valor financiero.
-4. **DEUDA 17 UI onboarding** (1-2 dias) — Si D1=B.
-5. **Postgres migration** (1 dia) — Antes de exponer a clientes externos.
-6. **TECH 1 apiKey hash** (0.5 dia) — Pre-launch security polish.
-7. **Tier 2 items en paralelo** durante primeros pilotos.
+Ordenado por dependencias tecnicas + valor:
+
+**FASE 1 — Seguridad y gobernanza (2 dias)**
+
+1. [ ] **DEUDA 19 Auditoria credenciales** (1 dia) — Primera porque DEUDAs 17/21/22 se benefician del audit log creado aca.
+2. [ ] **TECH 1 Hash apiKey en DB** (0.5 dia) — Security polish antes de exponer apiKeys a clientes.
+3. [ ] **DEUDA 22 Suspension auto saldo** (0.5 dia) — Rapido + critico financiero para POSTPAGO excepcional.
+
+**FASE 2 — Habilitacion cliente (2-3 dias)**
+
+4. [ ] **DEUDA 21 Matriz permisos granular** (0.5 dia) — Prerequisito para self-service seguro.
+5. [ ] **DEUDA 17 UI onboarding cliente** (1-2 dias) — Habilita self-service dia 1.
+6. [ ] **DEUDA 10 Modelo B fallback** (0.5 dia) — Habilita Modelo B operativo.
+
+**FASE 3 — Deploy (1.5 dias)**
+
+7. [ ] **DEUDA 18 Acceso Shipro facturacion** (0.5 dia) — Soporte real pre-launch.
+8. [ ] **BLOCK 1.1 Postgres migration** (1 dia) — ULTIMO con todo lo demas funcionando en SQLite.
+
+**Total:** 5.5-7 dias para deploy comercializable.
+
+**Empezamos con:** DEUDA 19 (Auditoria credenciales).
 
 ---
 
@@ -295,8 +303,10 @@ DEUDAS que pueden esperar a post-launch sin riesgo operativo. **Detalle completo
 | 2026-06-17 | Audit inicial 47 DEUDAS | ✅ Completado |
 | 2026-06-17 | DEUDAS.md sync (5 headers stale) | ✅ Completado |
 | 2026-06-17 | Checklist comercializacion creado | ✅ Completado |
-| — | D1-D4 decisiones de producto | ⏳ Pendiente |
-| — | Tier 1 hard-blocks | ⏳ Pendiente |
-| — | Tier 2 paralelos | ⏳ Pendiente |
+| 2026-06-17 | D1-D4 decisiones de producto respondidas | ✅ Completado |
+| 2026-06-17 | Roadmap consolidado FASE 1-2-3 | ✅ Completado |
+| — | FASE 1 Seguridad y gobernanza (DEUDAs 19, TECH 1, 22) | ⏳ En progreso |
+| — | FASE 2 Habilitacion cliente (DEUDAs 21, 17, 10) | ⏳ Pendiente |
+| — | FASE 3 Deploy (DEUDA 18, Postgres) | ⏳ Pendiente |
 
 **Actualizar este apartado cuando se completen items.**

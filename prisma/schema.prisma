@@ -16,7 +16,12 @@ model Empresa {
   cuit   String  @unique
   activo Boolean @default(true)
 
-  apiKey         String?   @unique
+  // TECH 1 (2026-06-18): apiKey ahora se almacena hasheada (HMAC-SHA256) en BD.
+  // Plain text se devuelve UNA SOLA VEZ al rotar. Cliente debe guardarla.
+  // apiKeyHash @unique permite lookup eficiente en proxy.ts authByApiKey.
+  // apiKeyUltimos4 es display-only (UI: "Tu API Key termina en ABCD").
+  apiKeyHash     String?   @unique
+  apiKeyUltimos4 String?
   apiKeyActiva   Boolean   @default(true)
   apiKeyCreadaEn DateTime?
 

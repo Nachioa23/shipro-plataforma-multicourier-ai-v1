@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getToken } from "next-auth/jwt";
 import prisma from "@/lib/prisma";
+import { hashApiKey } from "@/lib/utils/apikey-hash";
 
 const PUBLIC_API_PREFIXES = ["/api/auth/"];
 const PUBLIC_API_EXACT = [
@@ -48,8 +49,17 @@ async function authByApiKey(authHeader: string): Promise<AuthResult> {
   if (!match) {
     return { ok: false, response: NextResponse.json({ error: "API Key requerida" }, { status: 401 }) };
   }
+  // TECH 1 (2026-06-18): apiKey ahora se almacena hasheada en BD.
+  // Hash incoming + lookup por apiKeyHash (HMAC-SHA256 determinista).
+  let hash: string;
+  try {
+    hash = hashApiKey(match[1]);
+  } catch (err) {
+    console.error("[proxy.authByApiKey] APIKEY_HMAC_SECRET no configurado:", err);
+    return { ok: false, response: NextResponse.json({ error: "Servidor mal configurado" }, { status: 500 }) };
+  }
   const empresa = await prisma.empresa.findUnique({
-    where: { apiKey: match[1] },
+    where: { apiKeyHash: hash },
     select: { id: true, activo: true, apiKeyActiva: true }
   });
   if (!empresa || !empresa.apiKeyActiva || !empresa.activo) {

@@ -432,6 +432,87 @@ export async function enviarMailCierreTicket(emailDestino: string, tracking: str
 // Cadencia trimestral. Email a gerentes / operadores activos.
 // Token unico sin expiracion. Una sola respuesta por usuario por periodo.
 // ==============================================================
+/**
+ * DEUDA 22 (2026-06-18): notificacion al admin_shipro cuando una empresa
+ * cruza umbral de suspension automatica (saldoActivo <= -limiteDescubierto * 1.5).
+ *
+ * @param emailDestino - email del admin_shipro a notificar
+ * @param nombreAdmin - nombre del admin (para personalizar el mail)
+ * @param nombreEmpresa - empresa que se suspendio
+ * @param saldoActual - saldo en el momento de la suspension
+ * @param limiteDescubierto - limite vigente
+ * @param baseUrl - URL base de la app (para link a /admin-finanzas)
+ */
+export async function enviarMailEmpresaSuspendida(
+  emailDestino: string,
+  nombreAdmin: string,
+  nombreEmpresa: string,
+  saldoActual: number,
+  limiteDescubierto: number,
+  baseUrl: string
+) {
+  const fmtMoneda = (n: number) => `$${Math.abs(n).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const deuda = Math.abs(saldoActual);
+  const linkAdmin = `${baseUrl}/admin-finanzas`;
+  const fechaSuspension = new Date().toLocaleString('es-AR', { dateStyle: 'long', timeStyle: 'short' });
+
+  await transporter.sendMail({
+    from: `SHIPRO FLOW <${process.env.SMTP_USER}>`,
+    to: emailDestino,
+    subject: `[Alerta] Cuenta suspendida automaticamente: ${nombreEmpresa}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <div style="background: #fef2f2; border-left: 4px solid #dc2626; padding: 16px; margin-bottom: 24px;">
+          <h2 style="color: #991b1b; margin: 0 0 8px 0; font-size: 18px;">Suspensi&oacute;n autom&aacute;tica disparada</h2>
+          <p style="color: #7f1d1d; margin: 0; font-size: 14px;">Una empresa cruz&oacute; el umbral de suspensi&oacute;n por deuda excesiva.</p>
+        </div>
+
+        <p style="color: #333; font-size: 14px;">Hola <strong>${nombreAdmin}</strong>,</p>
+
+        <p style="color: #333; font-size: 14px; line-height: 1.6;">
+          La empresa <strong>${nombreEmpresa}</strong> fue suspendida automaticamente
+          a las <strong>${fechaSuspension}</strong> por superar el umbral del 150% de su limite descubierto.
+        </p>
+
+        <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+          <tr>
+            <td style="padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; font-weight: bold; color: #4b5563;">Saldo actual</td>
+            <td style="padding: 12px; background: #fef2f2; border: 1px solid #e5e7eb; color: #991b1b; font-weight: bold; font-family: monospace;">-${fmtMoneda(deuda)}</td>
+          </tr>
+          <tr>
+            <td style="padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; font-weight: bold; color: #4b5563;">Limite descubierto autorizado</td>
+            <td style="padding: 12px; border: 1px solid #e5e7eb; color: #4b5563; font-family: monospace;">${fmtMoneda(limiteDescubierto)}</td>
+          </tr>
+          <tr>
+            <td style="padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; font-weight: bold; color: #4b5563;">Umbral cruzado</td>
+            <td style="padding: 12px; border: 1px solid #e5e7eb; color: #4b5563; font-family: monospace;">-${fmtMoneda(limiteDescubierto * 1.5)} (150% del limite)</td>
+          </tr>
+        </table>
+
+        <p style="color: #333; font-size: 14px; line-height: 1.6;">
+          La empresa <strong>no puede crear nuevos envios</strong> hasta que su saldo
+          vuelva a <strong>-${fmtMoneda(limiteDescubierto * 0.5)}</strong> (50% del limite).
+          La reactivacion es automatica cuando se acredite el pago.
+        </p>
+
+        <div style="text-align: center; margin: 32px 0;">
+          <a href="${linkAdmin}"
+             style="background: #233b6b; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">
+            Ir al panel financiero
+          </a>
+        </div>
+
+        <p style="color: #6b7280; font-size: 12px; margin-top: 24px;">
+          Este es un mail automatico del sistema de auditoria de Shipro.
+          Cualquier cambio queda registrado en el audit log de configuracion.
+        </p>
+
+        ${firmaShipro}
+      </div>
+    `,
+  });
+}
+
 export async function enviarMailEncuestaEmpresa(
   emailDestino: string,
   nombreGerente: string,

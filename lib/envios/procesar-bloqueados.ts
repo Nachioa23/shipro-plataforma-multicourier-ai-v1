@@ -2,6 +2,10 @@ import prisma from "@/lib/prisma";
 import { despacharCourier } from "@/lib/envios/dispatch";
 import { enviarMailCreacion } from "@/lib/mailer";
 import { getAppUrl } from "@/lib/utils/app-url";
+import {
+  evaluarSuspension,
+  reactivarEmpresa,
+} from "@/lib/utils/suspension-cuenta";
 
 const MAX_INLINE = 10;
 
@@ -31,6 +35,32 @@ export async function procesarEnviosBloqueados(empresaId: number): Promise<Proce
   const empresa = await prisma.empresa.findUnique({ where: { id: empresaId } });
   if (!empresa) {
     return { procesados: 0, fallados: 0, restantes: 0, totalBloqueados: 0 };
+  }
+
+  // DEUDA 22 (2026-06-18): auto-reactivacion post-recarga.
+  // Esta funcion se llama desde /api/admin/finanzas POST despues de acreditar pago.
+  // Si la empresa esta suspendida Y el saldo cruzo umbral de reactivacion
+  // (saldoActivo >= -limiteDescubierto * 0.5), reactivamos automaticamente.
+  // El audit log queda con rolUsuario="system" (no tenemos Request aqui).
+  if (empresa.suspendida) {
+    const { debeReactivar } = evaluarSuspension(
+      empresa.saldoActivo,
+      empresa.limiteDescubierto,
+      true  // suspendidaActual = true (ya validado por el if)
+    );
+    if (debeReactivar) {
+      try {
+        await reactivarEmpresa(
+          empresaId,
+          null,
+          empresa.saldoActivo,
+          empresa.limiteDescubierto
+        );
+        console.log(`[DEUDA 22] Empresa ${empresaId} REACTIVADA automaticamente post-recarga.`);
+      } catch (reactErr) {
+        console.error(`[DEUDA 22] reactivarEmpresa fallo para empresa ${empresaId}:`, reactErr);
+      }
+    }
   }
 
   const todosBloqueados = await prisma.envio.findMany({

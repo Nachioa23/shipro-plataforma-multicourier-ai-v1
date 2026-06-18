@@ -1,4 +1,8 @@
 import prisma from "@/lib/prisma";
+import {
+  evaluarSuspension,
+  suspenderEmpresa,
+} from "@/lib/utils/suspension-cuenta";
 import { enviarMailCreacion } from "@/lib/mailer";
 import { obtenerCourier } from "@/lib/couriers/normalizar";
 import { despacharCourier } from "@/lib/envios/dispatch";
@@ -157,6 +161,17 @@ export async function crearEnvio(input: CrearEnvioInput) {
 
   if (!empresaConData) {
     throw new Error(`EmpresaNoEncontrada: empresa id=${empresaId} no existe.`);
+  }
+
+  // DEUDA 22 (2026-06-18): pre-creation gate.
+  // Si la empresa esta suspendida (saldoActivo cruzo -limiteDescubierto * 1.5),
+  // se rechaza la creacion completa con CUENTA_SUSPENDIDA. El cliente debe
+  // recargar saldo. La reactivacion es automatica via procesarEnviosBloqueados.
+  if (empresaConData.suspendida) {
+    throw new Error(
+      `CUENTA_SUSPENDIDA: la empresa ${empresaConData.nombre} esta suspendida ` +
+      `por exceso de descubierto. Recarga saldo para reactivar.`
+    );
   }
 
   let deposito: typeof empresaConData.depositos[0] | undefined;
@@ -344,6 +359,8 @@ export async function crearEnvio(input: CrearEnvioInput) {
   const montoDebito = parseFloat(String(costoEnvio)) || 0;
   const tipoCuentaEfectivo = credencialMain?.tipoCuenta || empresaConData.modalidadPago || "POSTPAGO";
   let bloqueadoPorSaldo = false;
+  // DEUDA 22: si el debit cruza umbral, se programa suspension fuera de la tx.
+  let suspensionPendiente: { saldoFinal: number; limiteAfectado: number } | null = null;
 
   if (tipoCuentaEfectivo === "PREPAGO") {
     if ((empresaConData.saldoActivo || 0) < montoDebito) {
@@ -591,6 +608,25 @@ export async function crearEnvio(input: CrearEnvioInput) {
         where: { id: empresaId },
         data: { saldoActivo: nuevoSaldo }
       });
+
+      // DEUDA 22 (2026-06-18): evaluar suspension post-debit.
+      // Si saldo cruzo umbral -(limite * 1.5), marcar Empresa.suspendida=true.
+      // El helper suspenderEmpresa actualiza BD + audit log + mail admin.
+      // NOTA: corre fuera de la tx (la tx ya cerro este update). Si suspenderEmpresa
+      // falla, el debit queda commited (intencional: no queremos rollbackear envios
+      // legitimos por fallas en notificaciones).
+      const { debeSuspender } = evaluarSuspension(
+        nuevoSaldo,
+        empresaConData.limiteDescubierto || 0,
+        false  // suspendidaActual = false porque si fuera true, el pre-check lo hubiera bloqueado
+      );
+      if (debeSuspender) {
+        // Schedule post-tx (no await dentro de la tx).
+        suspensionPendiente = {
+          saldoFinal: nuevoSaldo,
+          limiteAfectado: empresaConData.limiteDescubierto || 0,
+        };
+      }
     }
 
     if (bloqueadoPorTramoFallido) {
@@ -608,8 +644,33 @@ export async function crearEnvio(input: CrearEnvioInput) {
       await tx.eventoTracking.create({ data: { estado: "Pendiente", observacion: "Envío registrado en plataforma y etiqueta generada.", envioId: envioCreado.id } });
     }
 
+    // DEUDA 22: si el debit cruzo umbral, marcar suspensionPendiente fuera de tx.
+    // Esto se ejecuta DENTRO de la tx solo para validacion logica (no escritura).
+
     return envioCreado;
   });
+
+  // DEUDA 22 (post-tx): si el debit cruzo umbral, ejecutar suspension ahora.
+  // Pasamos request=null porque crearEnvio no recibe Request — audit log
+  // queda con rolUsuario="system". El envio del cruce ya quedo creado en
+  // BD (no rollbackeamos por fallas en notificaciones).
+  //
+  // TS narrowing nota: TS no puede trackear asignaciones dentro del closure
+  // async de prisma.$transaction, por eso narrowa a `never`. Cast explicito
+  // bypasea la limitacion. Patron estandar para state-via-closure.
+  if (suspensionPendiente) {
+    const pending = suspensionPendiente as { saldoFinal: number; limiteAfectado: number };
+    try {
+      await suspenderEmpresa(
+        empresaId,
+        null,
+        pending.saldoFinal,
+        pending.limiteAfectado
+      );
+    } catch (suspendErr) {
+      console.error("[DEUDA 22] suspenderEmpresa fallo post-tx (envio OK igual):", suspendErr);
+    }
+  }
 
   // Mails: NO mandar si está bloqueado por saldo, depósito o partial failure
   // (el destinatario no debe recibir notificación hasta que el envío se destrabe

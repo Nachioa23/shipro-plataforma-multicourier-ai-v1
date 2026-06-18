@@ -47,6 +47,14 @@ model Empresa {
   // credenciales propias), pero NO B→A. Decidido por admin_shipro en onboarding.
   modeloAHabilitado Boolean @default(false)
 
+  // DEUDA 22 (2026-06-18): Suspension automatica por exceso de limiteDescubierto.
+  // suspendida=true bloquea creacion nueva de envios (HTTP 400 + code CUENTA_SUSPENDIDA).
+  // Trigger en lib/envios/crear.ts post-debit cuando saldoActivo <= -(limiteDescubierto * 1.5).
+  // Reactivacion automatica cuando saldoActivo >= -(limiteDescubierto * 0.5) post-recarga.
+  suspendida        Boolean   @default(false)
+  fechaSuspension   DateTime?
+  fechaReactivacion DateTime?
+
   createdAt               DateTime                 @default(now())
   reglasRuteo             ReglaRuteo[]
   // DEUDA 32+37 (Fase J): registro de cotizaciones que devolvieron cero couriers.

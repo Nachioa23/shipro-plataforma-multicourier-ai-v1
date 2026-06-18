@@ -45,6 +45,14 @@ export default function BandejaPedidos() {
   const [enviosBloqueadosSaldoCount, setEnviosBloqueadosSaldoCount] = useState(0);
   const [enviosBloqueadosDepositoCount, setEnviosBloqueadosDepositoCount] = useState(0);
   const enviosBloqueadosTotal = enviosBloqueadosSaldoCount + enviosBloqueadosDepositoCount;
+
+  // DEUDA 22: estado de suspension de la empresa (para banner rojo).
+  const [empresaEstado, setEmpresaEstado] = useState<{
+    suspendida: boolean;
+    fechaSuspension: string | null;
+    saldoActivo: number;
+    limiteDescubierto: number;
+  } | null>(null);
   
   // LISTA DINÁMICA DE COURIERS
   const [couriersLista, setCouriersLista] = useState<string[]>([]);
@@ -73,6 +81,18 @@ export default function BandejaPedidos() {
   const [envioTicket, setEnvioTicket] = useState<any>(null);
   const [formTicket, setFormTicket] = useState({ motivo: "", observacion: "" });
   const [creandoTicket, setCreandoTicket] = useState(false);
+
+  // DEUDA 22: fetch estado empresa para banner suspension.
+  useEffect(() => {
+    fetch("/api/empresa/estado")
+      .then(res => res.json())
+      .then(data => {
+        if (data && typeof data.suspendida === "boolean") {
+          setEmpresaEstado(data);
+        }
+      })
+      .catch(err => console.error("Error fetching empresa estado:", err));
+  }, []);
 
   useEffect(() => {
     if (esEquipoShipro) {
@@ -379,6 +399,36 @@ export default function BandejaPedidos() {
 
   return (
     <div className="flex flex-col h-full relative bg-gray-50 overflow-hidden font-sans">
+
+      {/* DEUDA 22: Banner rojo cuando empresa.suspendida=true. Visible solo para clientes
+          (gerente_cliente + operador_cliente). Shipro admins ven /admin-finanzas. */}
+      {empresaEstado?.suspendida && (session?.user?.rol === "gerente_cliente" || session?.user?.rol === "operador_cliente") && (
+        <div className="bg-red-50 border-b-2 border-red-400 px-8 py-4 shrink-0">
+          <div className="flex items-start gap-3 mb-2">
+            <AlertTriangle className="w-5 h-5 text-red-700 shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="text-sm font-black text-red-900">
+                Cuenta suspendida automaticamente
+              </p>
+              <p className="text-xs font-bold text-red-800 mt-0.5">
+                No podes crear nuevos envios hasta regularizar tu saldo.
+              </p>
+            </div>
+            {session?.user?.rol === "gerente_cliente" && (
+              <Link
+                href="/facturacion"
+                className="px-4 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-lg transition-colors shadow-sm whitespace-nowrap"
+              >
+                Ver Facturacion
+              </Link>
+            )}
+          </div>
+          <p className="text-xs text-red-700 ml-8">
+            Tu saldo cruzo el 150% del limite descubierto autorizado. Para reactivar tu cuenta automaticamente,
+            acredita un pago que reduzca la deuda al 50% del limite o menos.
+          </p>
+        </div>
+      )}
       
       <style dangerouslySetInnerHTML={{__html: `
         .pac-container { z-index: 999999 !important; border-radius: 12px; margin-top: 4px; border: 1px solid #e5e7eb; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.2); font-family: inherit; }

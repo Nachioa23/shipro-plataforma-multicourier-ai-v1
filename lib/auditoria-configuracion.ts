@@ -61,6 +61,9 @@ export const CAMPOS_AUDITABLES = {
   ajusteTarifaPorcentaje: { sensible: false, modelo: "CredencialCourier" },
   markupFijo: { sensible: false, modelo: "CredencialCourier" },
   requiereSeguro: { sensible: false, modelo: "CredencialCourier" },
+  // DEUDA 22: suspendida es ALTO (sensible: false) porque el cambio es
+  // disparado automaticamente por el sistema (no usuario), motivo autogenerado.
+  suspendida: { sensible: false, modelo: "Empresa" },
 } as const;
 
 export type CampoAuditable = keyof typeof CAMPOS_AUDITABLES;

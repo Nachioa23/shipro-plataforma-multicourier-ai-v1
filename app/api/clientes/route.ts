@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import bcrypt from "bcryptjs";
 // IMPORTAMOS LA NUEVA FUNCIÓN DEL MAILER
 import { enviarMailBienvenida } from "@/lib/mailer";
 import { getAppUrl } from "@/lib/utils/app-url";
@@ -32,6 +33,9 @@ export async function POST(request: Request) {
     }
 
     const passwordTemporal = "Shipro2026!";
+    // QW (2026-06-18): hashear password antes de almacenar (login usa bcrypt.compare).
+    // Sin hash, cualquier cliente creado via este endpoint no podria loguearse.
+    const passwordHasheado = await bcrypt.hash(passwordTemporal, 10);
 
     const nuevaEmpresa = await prisma.empresa.create({
       data: {
@@ -41,7 +45,7 @@ export async function POST(request: Request) {
           create: {
             nombre: "Gerente",
             email: email,
-            password: passwordTemporal, 
+            password: passwordHasheado,
             rol: "gerente_cliente"
           }
         }
@@ -119,9 +123,11 @@ export async function PUT(request: Request) {
       if (!empresaId || !nombre || !email || !rol) return NextResponse.json({ error: "Faltan datos" }, { status: 400 });
 
       const passwordTemporal = "ShiproUser123!";
+      // QW (2026-06-18): hashear password antes de almacenar (login usa bcrypt.compare).
+      const passwordHasheado = await bcrypt.hash(passwordTemporal, 10);
       const nuevoUsuario = await prisma.usuario.create({
         data: {
-          nombre, email, password: passwordTemporal, rol,
+          nombre, email, password: passwordHasheado, rol,
           empresaId: parseInt(empresaId)
         }
       });

@@ -5,6 +5,7 @@ import {
   MotivoRequeridoError,
   type CampoAuditable
 } from "@/lib/auditoria-configuracion";
+import { puedeEditarCampo, esModeloBCredenciales } from "@/lib/permisos";
 
 export async function GET(request: Request) {
   try {
@@ -40,11 +41,11 @@ export async function POST(request: Request) {
     const { empresaId, configsGenerales, couriers, motivoAuditoria } = body;
     const empresaIdNum = parseInt(empresaId);
 
-    // tipoCuenta (DEUDA 16) solo lo modifica admin_shipro. Para otros roles
-    // se ignora silenciosamente — el frontend tampoco lo muestra/edita.
-    // Defense-in-depth: aunque el frontend filtre, el backend valida también.
+    // DEUDA 21 (2026-06-18): defense-in-depth via matriz de permisos.
+    // lib/permisos.ts es single source of truth. El backend NUNCA confia en
+    // el frontend — cualquier mutacion pasa por puedeEditarCampo(rol, campo).
+    // tipoCuenta (DEUDA 16) sigue siendo solo admin_shipro per la matriz.
     const rol = request.headers.get("x-rol") || "";
-    const puedeEditarTipoCuenta = rol === "admin_shipro";
 
     // 1. Guardamos reglas globales (ordenamientoDefault NO es auditable — low priority).
     await prisma.empresa.update({
@@ -62,13 +63,6 @@ export async function POST(request: Request) {
       // ahora a nivel par (depósito x courier) vía DepositoCourierConfig y
       // Deposito.courierRecolectorId. Este endpoint ya no escribe esos campos;
       // si el body los trae (TransportesTab legacy), se ignoran silenciosamente.
-
-      // tipoCuenta: solo se incluye en update/create si el rol lo permite.
-      // Valor "" (default empresa) → null en BD.
-      const nuevoTipoCuenta = courier.tipoCuenta ? courier.tipoCuenta : null;
-      const tipoCuentaPatch = puedeEditarTipoCuenta
-        ? { tipoCuenta: nuevoTipoCuenta }
-        : {};
 
       // DEUDA 19: read-before-write para diff. credAntes === null → creación inicial,
       // NO se audita (decisión: solo updates de configuración establecida).
@@ -89,9 +83,66 @@ export async function POST(request: Request) {
 
       const nuevoActivo = courier.activo;
       const nuevoUsaPropias = courier.usaPropias;
+      const nuevoTipoCuenta = courier.tipoCuenta ? courier.tipoCuenta : null;
       const nuevoAjuste = parseFloat(courier.markupClientePorcentaje) || 0;
       const nuevoMarkup = parseFloat(courier.markupClienteFijo) || 0;
       const nuevoSeguro = courier.seguroActivado || false;
+
+      // DEUDA 21: build per-field patches usando matriz de permisos.
+      // credencialesJson distingue Modelo A (Shipro, restricted) vs Modelo B
+      // (cliente, libre): contextual gating via esModeloBCredenciales.
+      const esModeloB = esModeloBCredenciales(nuevoUsaPropias);
+      const campoCredencialesJson = esModeloB
+        ? "credencialesJsonPropias"
+        : "credencialesJsonShipro";
+
+      const activoPatch = puedeEditarCampo(rol, "activo")
+        ? { activo: nuevoActivo }
+        : {};
+      const usaPropiasPatch = puedeEditarCampo(rol, "usaCredencialesPropias")
+        ? { usaCredencialesPropias: nuevoUsaPropias }
+        : {};
+      const credencialesJsonPatch = puedeEditarCampo(rol, campoCredencialesJson)
+        ? { credencialesJson: credencialesJson }
+        : {};
+      const serviciosPatch = puedeEditarCampo(rol, "serviciosActivos")
+        ? { serviciosActivos: serviciosActivos }
+        : {};
+      const ajustePatch = puedeEditarCampo(rol, "ajusteTarifaPorcentaje")
+        ? { ajusteTarifaPorcentaje: nuevoAjuste }
+        : {};
+      const markupPatch = puedeEditarCampo(rol, "markupFijo")
+        ? { markupFijo: nuevoMarkup }
+        : {};
+      const seguroPatch = puedeEditarCampo(rol, "requiereSeguro")
+        ? { requiereSeguro: nuevoSeguro }
+        : {};
+      const tipoCuentaPatch = puedeEditarCampo(rol, "tipoCuenta")
+        ? { tipoCuenta: nuevoTipoCuenta }
+        : {};
+
+      // DEUDA 21: si el rol no puede editar NINGUN campo de este item, retornar
+      // 403 (deny by default). Evita upsert no-op + senal clara para el cliente.
+      const tieneAlgunPermiso =
+        Object.keys(activoPatch).length > 0 ||
+        Object.keys(usaPropiasPatch).length > 0 ||
+        Object.keys(credencialesJsonPatch).length > 0 ||
+        Object.keys(serviciosPatch).length > 0 ||
+        Object.keys(ajustePatch).length > 0 ||
+        Object.keys(markupPatch).length > 0 ||
+        Object.keys(seguroPatch).length > 0 ||
+        Object.keys(tipoCuentaPatch).length > 0;
+
+      if (!tieneAlgunPermiso) {
+        return NextResponse.json(
+          {
+            error: "Sin permisos para editar configuracion",
+            code: "FORBIDDEN_NO_PERMISSIONS",
+            detail: `Tu rol "${rol}" no tiene permisos para modificar ningun campo de configuracion. Contactate con el gerente de tu cuenta.`,
+          },
+          { status: 403 }
+        );
+      }
 
       await prisma.credencialCourier.upsert({
         where: {
@@ -101,25 +152,25 @@ export async function POST(request: Request) {
           }
         },
         update: {
-          activo: nuevoActivo,
-          usaCredencialesPropias: nuevoUsaPropias,
-          credencialesJson: credencialesJson,
-          serviciosActivos: serviciosActivos,
-          ajusteTarifaPorcentaje: nuevoAjuste,
-          markupFijo: nuevoMarkup,
-          requiereSeguro: nuevoSeguro,
+          ...activoPatch,
+          ...usaPropiasPatch,
+          ...credencialesJsonPatch,
+          ...serviciosPatch,
+          ...ajustePatch,
+          ...markupPatch,
+          ...seguroPatch,
           ...tipoCuentaPatch,
         },
         create: {
           empresaId: empresaIdNum,
           nombreCourier: courier.id,
-          activo: nuevoActivo,
-          usaCredencialesPropias: nuevoUsaPropias,
-          credencialesJson: credencialesJson,
-          serviciosActivos: serviciosActivos,
-          ajusteTarifaPorcentaje: nuevoAjuste,
-          markupFijo: nuevoMarkup,
-          requiereSeguro: nuevoSeguro,
+          ...activoPatch,
+          ...usaPropiasPatch,
+          ...credencialesJsonPatch,
+          ...serviciosPatch,
+          ...ajustePatch,
+          ...markupPatch,
+          ...seguroPatch,
           ...tipoCuentaPatch,
         }
       });
@@ -146,14 +197,30 @@ export async function POST(request: Request) {
           });
         };
 
-        await auditarCampo("activo", credAntes.activo, nuevoActivo);
-        await auditarCampo("usaCredencialesPropias", credAntes.usaCredencialesPropias, nuevoUsaPropias);
-        await auditarCampo("credencialesJson", credAntes.credencialesJson, credencialesJson);
-        await auditarCampo("ajusteTarifaPorcentaje", credAntes.ajusteTarifaPorcentaje, nuevoAjuste);
-        await auditarCampo("markupFijo", credAntes.markupFijo, nuevoMarkup);
-        await auditarCampo("requiereSeguro", credAntes.requiereSeguro, nuevoSeguro);
-
-        if (puedeEditarTipoCuenta) {
+        // DEUDA 21: audit log per-field gated por matriz de permisos.
+        // Solo se registra el cambio si el rol pudo editarlo (sino seria ruido).
+        if (puedeEditarCampo(rol, "activo")) {
+          await auditarCampo("activo", credAntes.activo, nuevoActivo);
+        }
+        if (puedeEditarCampo(rol, "usaCredencialesPropias")) {
+          await auditarCampo("usaCredencialesPropias", credAntes.usaCredencialesPropias, nuevoUsaPropias);
+        }
+        if (puedeEditarCampo(rol, campoCredencialesJson)) {
+          await auditarCampo("credencialesJson", credAntes.credencialesJson, credencialesJson);
+        }
+        if (puedeEditarCampo(rol, "serviciosActivos")) {
+          // serviciosActivos NO esta en CAMPOS_AUDITABLES — skip audit (gating efectivo solo en upsert).
+        }
+        if (puedeEditarCampo(rol, "ajusteTarifaPorcentaje")) {
+          await auditarCampo("ajusteTarifaPorcentaje", credAntes.ajusteTarifaPorcentaje, nuevoAjuste);
+        }
+        if (puedeEditarCampo(rol, "markupFijo")) {
+          await auditarCampo("markupFijo", credAntes.markupFijo, nuevoMarkup);
+        }
+        if (puedeEditarCampo(rol, "requiereSeguro")) {
+          await auditarCampo("requiereSeguro", credAntes.requiereSeguro, nuevoSeguro);
+        }
+        if (puedeEditarCampo(rol, "tipoCuenta")) {
           await auditarCampo("tipoCuenta", credAntes.tipoCuenta, nuevoTipoCuenta);
         }
       }

@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { Save, Loader2, CheckCircle2, AlertCircle, Lock, Key, Package, Percent, DollarSign } from 'lucide-react';
 import ModalMotivoAuditoria, { type CambioPreview } from "@/components/ModalMotivoAuditoria";
+import { puedeEditarCampo, esModeloBCredenciales } from "@/lib/permisos";
 
 interface Props {
   empresaActivaId: number | null;
@@ -11,11 +12,27 @@ interface Props {
 
 export default function TransportesTab({ empresaActivaId }: Props) {
   const { data: session } = useSession();
-  const esEquipoShipro = session?.user?.rol === 'admin_shipro' || session?.user?.rol === 'operador_shipro';
-  const esAdminShipro = session?.user?.rol === 'admin_shipro';
-  const esGerenteCliente = session?.user?.rol === 'gerente_cliente';
+  const rol = session?.user?.rol || "";
+  const esEquipoShipro = rol === 'admin_shipro' || rol === 'operador_shipro';
+  const esAdminShipro = rol === 'admin_shipro';
+  const esGerenteCliente = rol === 'gerente_cliente';
+
+  // DEUDA 21: gating granular per-campo via helper (single source of truth).
+  // El backend (route.ts POST) hace el check definitivo; el frontend lo replica
+  // para dar feedback visual (disabled inputs, hidden buttons).
+  const puedeEditarActivo = puedeEditarCampo(rol, "activo");
+  const puedeEditarUsaPropias = puedeEditarCampo(rol, "usaCredencialesPropias");
+  const puedeEditarMarkup = puedeEditarCampo(rol, "markupFijo"); // markupFijo + ajustePorcentaje juntos
+  const puedeEditarSeguro = puedeEditarCampo(rol, "requiereSeguro");
+  const puedeEditarTipoCuenta = puedeEditarCampo(rol, "tipoCuenta");
+  const puedeEditarServicios = puedeEditarCampo(rol, "serviciosActivos");
+
+  // Visibilidad: solo admin_shipro y gerente_cliente ven el selector de tipoCuenta.
+  // Operador cliente NO ve nada de config financiera.
   const puedeVerTipoCuenta = esAdminShipro || esGerenteCliente;
-  const puedeEditarTipoCuenta = esAdminShipro;
+
+  // Read-only banner para operador_cliente.
+  const esReadOnly = rol === "operador_cliente";
 
   const [cargando, setCargando] = useState(true);
   const [guardando, setGuardando] = useState(false);
@@ -184,8 +201,19 @@ export default function TransportesTab({ empresaActivaId }: Props) {
 
   return (
     <div className="p-8 max-w-5xl mx-auto w-full space-y-8">
+      {/* DEUDA 21: Banner read-only para operador_cliente */}
+      {esReadOnly && (
+        <div className="bg-amber-50 border border-amber-300 rounded-xl px-5 py-3 flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-amber-700 shrink-0" />
+          <div>
+            <p className="text-sm font-bold text-amber-900">Modo lectura</p>
+            <p className="text-xs text-amber-800">Tu rol no tiene permisos para editar configuracion. Contactate con el gerente de tu cuenta.</p>
+          </div>
+        </div>
+      )}
+
       <div className="flex justify-end">
-        <button onClick={handleGuardarClick} disabled={guardando || cargando} className="flex items-center gap-2 px-6 py-2.5 bg-[#233b6b] hover:bg-blue-900 text-white font-bold rounded-xl transition-colors shadow-sm disabled:opacity-50">
+        <button onClick={handleGuardarClick} disabled={guardando || cargando || esReadOnly} className="flex items-center gap-2 px-6 py-2.5 bg-[#233b6b] hover:bg-blue-900 text-white font-bold rounded-xl transition-colors shadow-sm disabled:opacity-50">
           {guardando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Guardar Credenciales
         </button>
       </div>

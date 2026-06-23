@@ -16,7 +16,8 @@ export const authOptions: NextAuthOptions = {
 
         const user = await prisma.usuario.findUnique({
           where: { email: credentials.email },
-          include: { empresa: { select: { activo: true } } }
+          // DEUDA 17.D: incluir onboardingCompletado para gate + passwordTemporal para forzar cambio.
+          include: { empresa: { select: { activo: true, onboardingCompletado: true } } }
         });
 
         if (!user) return null;
@@ -38,7 +39,12 @@ export const authOptions: NextAuthOptions = {
           name: user.nombre,
           email: user.email,
           rol: user.rol,
-          empresaId: user.empresaId
+          empresaId: user.empresaId,
+          // DEUDA 17.D: gate wizard onboarding.
+          // Usuarios shipro (empresaId=null) no tienen onboarding → siempre true.
+          // Usuarios cliente: heredan flag de su empresa.
+          onboardingCompletado: user.empresa?.onboardingCompletado ?? true,
+          passwordTemporal: user.passwordTemporal,
         };
       }
     })
@@ -53,6 +59,9 @@ export const authOptions: NextAuthOptions = {
       if (user) {
         token.rol = user.rol;
         token.empresaId = user.empresaId;
+        // DEUDA 17.D: persistir flags onboarding en token.
+        token.onboardingCompletado = user.onboardingCompletado;
+        token.passwordTemporal = user.passwordTemporal;
       }
       return token;
     },
@@ -60,6 +69,9 @@ export const authOptions: NextAuthOptions = {
       if (session.user) {
         session.user.rol = token.rol;
         session.user.empresaId = token.empresaId;
+        // DEUDA 17.D: exponer flags onboarding al cliente.
+        session.user.onboardingCompletado = token.onboardingCompletado;
+        session.user.passwordTemporal = token.passwordTemporal;
       }
       return session;
     }

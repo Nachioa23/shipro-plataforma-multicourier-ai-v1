@@ -8,6 +8,11 @@ import {
   registrarCambioConfiguracion,
   MotivoRequeridoError
 } from "@/lib/auditoria-configuracion";
+import {
+  validarCUIT,
+  validarWhatsApp,
+  generarPasswordTemporal,
+} from "@/lib/utils/validaciones-onboarding";
 
 export async function GET() {
   try {
@@ -26,26 +31,90 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { razonSocial, cuit, email } = body;
+    const {
+      razonSocial,
+      cuit,
+      direccionFiscalCalle,
+      direccionFiscalAltura,
+      direccionFiscalCP,
+      direccionFiscalLocalidad,
+      direccionFiscalProvincia,
+      modalidadPago,
+      limiteDescubierto,
+      modeloAHabilitado,
+      gerente,
+      notasInternas,
+    } = body;
 
-    if (!razonSocial || !cuit || !email) {
-      return NextResponse.json({ error: "Faltan datos obligatorios" }, { status: 400 });
+    // DEUDA 17: validacion de campos obligatorios Fase A.
+    if (!razonSocial || !cuit) {
+      return NextResponse.json({ error: "Razon social y CUIT son obligatorios" }, { status: 400 });
     }
 
-    const passwordTemporal = "Shipro2026!";
-    // QW (2026-06-18): hashear password antes de almacenar (login usa bcrypt.compare).
-    // Sin hash, cualquier cliente creado via este endpoint no podria loguearse.
-    const passwordHasheado = await bcrypt.hash(passwordTemporal, 10);
+    const cuitLimpio = validarCUIT(cuit);
+    if (!cuitLimpio) {
+      return NextResponse.json(
+        { error: "CUIT invalido. Debe tener 11 digitos." },
+        { status: 400 }
+      );
+    }
+
+    if (!direccionFiscalCalle || !direccionFiscalAltura || !direccionFiscalCP ||
+        !direccionFiscalLocalidad || !direccionFiscalProvincia) {
+      return NextResponse.json(
+        { error: "Direccion fiscal incompleta (calle, altura, CP, localidad, provincia obligatorios)" },
+        { status: 400 }
+      );
+    }
+
+    if (!gerente || !gerente.nombre || !gerente.email || !gerente.telefono) {
+      return NextResponse.json(
+        { error: "Datos del gerente incompletos (nombre, email, telefono obligatorios)" },
+        { status: 400 }
+      );
+    }
+
+    if (!validarWhatsApp(gerente.telefono)) {
+      return NextResponse.json(
+        { error: "Telefono del gerente debe ser WhatsApp internacional estricto (+5491134567890)" },
+        { status: 400 }
+      );
+    }
+
+    const modalidadFinal = modalidadPago === "POSTPAGO" ? "POSTPAGO" : "PREPAGO";
+    const limiteFinal = modalidadFinal === "POSTPAGO" ? (parseFloat(limiteDescubierto) || 0) : 0;
+
+    if (modalidadFinal === "POSTPAGO" && limiteFinal <= 0) {
+      return NextResponse.json(
+        { error: "POSTPAGO requiere limite descubierto > 0" },
+        { status: 400 }
+      );
+    }
+
+    // DEUDA 17 B1: password temporal random (cada cliente recibe uno unico).
+    const passwordTemporalPlain = generarPasswordTemporal();
+    const passwordHasheado = await bcrypt.hash(passwordTemporalPlain, 10);
 
     const nuevaEmpresa = await prisma.empresa.create({
       data: {
         nombre: razonSocial,
-        cuit: cuit,
+        cuit: cuitLimpio,
+        direccionFiscalCalle,
+        direccionFiscalAltura,
+        direccionFiscalCP,
+        direccionFiscalLocalidad,
+        direccionFiscalProvincia,
+        modalidadPago: modalidadFinal,
+        limiteDescubierto: limiteFinal,
+        modeloAHabilitado: modeloAHabilitado === true,
+        notasInternas: notasInternas || null,
         usuarios: {
           create: {
-            nombre: "Gerente",
-            email: email,
+            nombre: gerente.nombre,
+            email: gerente.email,
+            telefono: gerente.telefono,
             password: passwordHasheado,
+            passwordTemporal: true,
             rol: "gerente_cliente"
           }
         }
@@ -60,14 +129,14 @@ export async function POST(request: Request) {
       const baseUrl = getAppUrl();
       if (baseUrl) {
         const urlLogin = `${baseUrl}/login`;
-        await enviarMailBienvenida(email, razonSocial, passwordTemporal, urlLogin);
-        console.log(`[Shipro] Mail de bienvenida enviado a ${email}`);
+        await enviarMailBienvenida(gerente.email, razonSocial, passwordTemporalPlain, urlLogin);
+        console.log(`[Shipro] Mail de bienvenida enviado a ${gerente.email}`);
       }
     } catch (e) {
       console.warn("El correo de bienvenida no se pudo enviar, pero la empresa se creó.", e);
     }
 
-    return NextResponse.json({ ...nuevaEmpresa, passwordTemporal });
+    return NextResponse.json({ ...nuevaEmpresa, passwordTemporal: passwordTemporalPlain });
   } catch (error: any) {
     if (error.code === 'P2002') {
       return NextResponse.json({ error: "El CUIT o el Email ya están registrados en el sistema." }, { status: 400 });

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Sora } from "next/font/google";
 import "./globals.css";
+import { Providers } from "./providers";
 
 const sora = Sora({ 
   subsets: ["latin"],
@@ -18,7 +19,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body className={`${sora.className} antialiased text-gray-800 bg-gray-50`}>
         {/* Aquí es donde se inyectarán todas las páginas dinámicamente. */}
         {/* Las páginas públicas de seguimiento irán directo acá, sin barra lateral. */}
-        {children}
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

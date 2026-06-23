@@ -3,6 +3,10 @@
 import { useState, useEffect } from "react";
 import { Building2, Plus, Search, Mail, CheckCircle2, Send, Loader2, AlertCircle, Settings, Users, Percent, Save, X, Copy, Trash2, ShieldAlert } from 'lucide-react';
 import { useSession } from "next-auth/react";
+import {
+  validarCUIT,
+  validarWhatsApp,
+} from "@/lib/utils/validaciones-onboarding";
 
 export default function GestionClientes() {
   const { data: session } = useSession();
@@ -13,9 +17,25 @@ export default function GestionClientes() {
   const [clientes, setClientes] = useState<any[]>([]);
   const [cargandoLista, setCargandoLista] = useState(true);
   
+  // DEUDA 17.C: form expandido Fase A — todos los datos del cliente nuevo.
   const [razonSocial, setRazonSocial] = useState("");
   const [cuit, setCuit] = useState("");
-  const [email, setEmail] = useState("");
+  // Direccion fiscal
+  const [direccionCalle, setDireccionCalle] = useState("");
+  const [direccionAltura, setDireccionAltura] = useState("");
+  const [direccionCP, setDireccionCP] = useState("");
+  const [direccionLocalidad, setDireccionLocalidad] = useState("");
+  const [direccionProvincia, setDireccionProvincia] = useState("");
+  // Configuracion comercial
+  const [modalidadPago, setModalidadPago] = useState<"PREPAGO" | "POSTPAGO">("PREPAGO");
+  const [limiteDescubierto, setLimiteDescubierto] = useState("");
+  const [modeloAHabilitado, setModeloAHabilitado] = useState(false);
+  // Datos gerente
+  const [gerenteNombre, setGerenteNombre] = useState("");
+  const [gerenteEmail, setGerenteEmail] = useState("");
+  const [gerenteTelefono, setGerenteTelefono] = useState("");
+  // Notas internas Shipro
+  const [notasInternas, setNotasInternas] = useState("");
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState("");
   const [linkMagico, setLinkMagico] = useState<any>(null); 
@@ -49,10 +69,45 @@ export default function GestionClientes() {
     setLinkMagico(null);
 
     try {
+      // DEUDA 17.C: validaciones inline (defense-in-depth, backend valida igual).
+      const cuitLimpio = validarCUIT(cuit);
+      if (!cuitLimpio) {
+        setError("CUIT invalido. Debe tener 11 digitos.");
+        setGuardando(false);
+        return;
+      }
+      if (!validarWhatsApp(gerenteTelefono)) {
+        setError("Telefono del gerente debe ser WhatsApp formato +5491134567890 (sin espacios ni guiones).");
+        setGuardando(false);
+        return;
+      }
+      if (modalidadPago === "POSTPAGO" && (parseFloat(limiteDescubierto) || 0) <= 0) {
+        setError("POSTPAGO requiere un limite descubierto mayor a 0.");
+        setGuardando(false);
+        return;
+      }
+
       const res = await fetch("/api/clientes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ razonSocial, cuit, email }),
+        body: JSON.stringify({
+          razonSocial,
+          cuit: cuitLimpio,
+          direccionFiscalCalle: direccionCalle,
+          direccionFiscalAltura: direccionAltura,
+          direccionFiscalCP: direccionCP,
+          direccionFiscalLocalidad: direccionLocalidad,
+          direccionFiscalProvincia: direccionProvincia,
+          modalidadPago,
+          limiteDescubierto: modalidadPago === "POSTPAGO" ? parseFloat(limiteDescubierto) : 0,
+          modeloAHabilitado,
+          gerente: {
+            nombre: gerenteNombre,
+            email: gerenteEmail,
+            telefono: gerenteTelefono,
+          },
+          notasInternas: notasInternas.trim() || undefined,
+        }),
       });
       const data = await res.json();
 
@@ -61,9 +116,22 @@ export default function GestionClientes() {
       } else {
         const urlLogin = `${window.location.origin}/login`;
         setLinkMagico({
-          mensajeWpp: `¡Hola! Tu cuenta corporativa en Shipro ya está activa 🚀\n\nIngresá a: ${urlLogin}\nUsuario: ${email}\nClave Temporal: ${data.passwordTemporal}\n\nPor seguridad, te recomendamos cambiar la clave al ingresar.`
+          mensajeWpp: `¡Hola ${gerenteNombre}! Tu cuenta corporativa en Shipro ya está activa 🚀\n\nIngresá a: ${urlLogin}\nUsuario: ${gerenteEmail}\nClave Temporal: ${data.passwordTemporal}\n\nAl ingresar, te vamos a guiar paso a paso para:\n1. Cambiar tu clave\n2. Confirmar datos de tu empresa\n3. Cargar tu primer depósito\n4. Conectar con un courier\n\nListo. Empezamos.`
         });
-        setRazonSocial(""); setCuit(""); setEmail("");
+        setRazonSocial("");
+        setCuit("");
+        setDireccionCalle("");
+        setDireccionAltura("");
+        setDireccionCP("");
+        setDireccionLocalidad("");
+        setDireccionProvincia("");
+        setModalidadPago("PREPAGO");
+        setLimiteDescubierto("");
+        setModeloAHabilitado(false);
+        setGerenteNombre("");
+        setGerenteEmail("");
+        setGerenteTelefono("");
+        setNotasInternas("");
         fetchClientes(); 
       }
     } catch (err) {
@@ -152,7 +220,7 @@ export default function GestionClientes() {
       {/* MODAL ALTA CLIENTE */}
       {modalAltaAbierto && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full flex flex-col overflow-hidden">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] flex flex-col overflow-hidden">
             <div className="bg-[#233b6b] p-6 text-center relative">
                <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center mx-auto mb-3">
                  {linkMagico ? <CheckCircle2 className="w-6 h-6 text-green-400" /> : <Send className="w-6 h-6 text-white" />}
@@ -161,26 +229,106 @@ export default function GestionClientes() {
             </div>
 
             {!linkMagico ? (
-              <form onSubmit={handleCrearCliente} className="flex flex-col flex-1 p-8 space-y-4">
-                  {error && <div className="bg-red-50 text-red-600 p-3 rounded-xl text-sm font-bold flex items-center gap-2"><AlertCircle className="w-5 h-5" /> {error}</div>}
+              <form onSubmit={handleCrearCliente} className="flex flex-col flex-1 p-6 space-y-5 overflow-y-auto">
+                {error && <div className="bg-red-50 text-red-600 p-3 rounded-xl text-sm font-bold flex items-center gap-2"><AlertCircle className="w-5 h-5 shrink-0" /> {error}</div>}
+
+                {/* SECCION 1 — Datos de empresa */}
+                <div className="space-y-3">
+                  <h3 className="text-xs font-black text-[#233b6b] uppercase tracking-wider border-b border-gray-100 pb-2">Datos de la empresa</h3>
                   <div>
                     <label className="block text-xs font-bold text-gray-500 mb-1">Razón Social *</label>
-                    <input type="text" value={razonSocial} onChange={(e) => setRazonSocial(e.target.value)} required className="w-full px-4 py-3 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-[#233b6b] outline-none" />
+                    <input type="text" value={razonSocial} onChange={(e) => setRazonSocial(e.target.value)} required className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-[#233b6b] outline-none" />
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-gray-500 mb-1">CUIT *</label>
-                      <input type="text" value={cuit} onChange={(e) => setCuit(e.target.value)} required className="w-full px-4 py-3 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-[#233b6b] outline-none" />
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 mb-1">CUIT * <span className="text-gray-400 font-normal">(11 dígitos, con o sin guiones)</span></label>
+                    <input type="text" value={cuit} onChange={(e) => setCuit(e.target.value)} placeholder="20-12345678-9" required className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-[#233b6b] outline-none" />
+                  </div>
+                </div>
+
+                {/* SECCION 2 — Direccion fiscal */}
+                <div className="space-y-3">
+                  <h3 className="text-xs font-black text-[#233b6b] uppercase tracking-wider border-b border-gray-100 pb-2">Dirección fiscal</h3>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="col-span-2">
+                      <label className="block text-xs font-bold text-gray-500 mb-1">Calle *</label>
+                      <input type="text" value={direccionCalle} onChange={(e) => setDireccionCalle(e.target.value)} required className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-[#233b6b] outline-none" />
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-gray-500 mb-1">Correo (Login) *</label>
-                      <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required className="w-full px-4 py-3 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-[#233b6b] outline-none" />
+                      <label className="block text-xs font-bold text-gray-500 mb-1">Altura *</label>
+                      <input type="text" value={direccionAltura} onChange={(e) => setDireccionAltura(e.target.value)} required className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-[#233b6b] outline-none" />
                     </div>
                   </div>
-                <div className="pt-4 flex gap-3">
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 mb-1">CP *</label>
+                      <input type="text" value={direccionCP} onChange={(e) => setDireccionCP(e.target.value)} required className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-[#233b6b] outline-none" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 mb-1">Localidad *</label>
+                      <input type="text" value={direccionLocalidad} onChange={(e) => setDireccionLocalidad(e.target.value)} required className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-[#233b6b] outline-none" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 mb-1">Provincia *</label>
+                      <input type="text" value={direccionProvincia} onChange={(e) => setDireccionProvincia(e.target.value)} required className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-[#233b6b] outline-none" />
+                    </div>
+                  </div>
+                </div>
+
+                {/* SECCION 3 — Configuracion comercial */}
+                <div className="space-y-3">
+                  <h3 className="text-xs font-black text-[#233b6b] uppercase tracking-wider border-b border-gray-100 pb-2">Configuración comercial</h3>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 mb-1">Modalidad de pago *</label>
+                    <select value={modalidadPago} onChange={(e) => setModalidadPago(e.target.value as "PREPAGO" | "POSTPAGO")} className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-[#233b6b] outline-none bg-white">
+                      <option value="PREPAGO">PREPAGO (billetera prepaga, default)</option>
+                      <option value="POSTPAGO">POSTPAGO (cuenta corriente)</option>
+                    </select>
+                  </div>
+                  {modalidadPago === "POSTPAGO" && (
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 mb-1">Límite descubierto autorizado * <span className="text-gray-400 font-normal">(en pesos)</span></label>
+                      <input type="number" value={limiteDescubierto} onChange={(e) => setLimiteDescubierto(e.target.value)} placeholder="100000" required min="1" className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-[#233b6b] outline-none" />
+                    </div>
+                  )}
+                  <label className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl cursor-pointer">
+                    <input type="checkbox" checked={modeloAHabilitado} onChange={(e) => setModeloAHabilitado(e.target.checked)} className="w-4 h-4 rounded text-[#233b6b] focus:ring-[#233b6b]" />
+                    <div>
+                      <p className="text-sm font-bold text-gray-700">Permitir Modelo A (cuentas Shipro)</p>
+                      <p className="text-[10px] text-gray-500">El cliente puede usar credenciales de Shipro en sus envíos. Default: false (cliente trae sus propias credenciales).</p>
+                    </div>
+                  </label>
+                </div>
+
+                {/* SECCION 4 — Datos del gerente */}
+                <div className="space-y-3">
+                  <h3 className="text-xs font-black text-[#233b6b] uppercase tracking-wider border-b border-gray-100 pb-2">Datos del gerente</h3>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 mb-1">Nombre y apellido *</label>
+                    <input type="text" value={gerenteNombre} onChange={(e) => setGerenteNombre(e.target.value)} required className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-[#233b6b] outline-none" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 mb-1">Email *</label>
+                      <input type="email" value={gerenteEmail} onChange={(e) => setGerenteEmail(e.target.value)} required className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-[#233b6b] outline-none" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 mb-1">WhatsApp * <span className="text-gray-400 font-normal">(+5491134567890)</span></label>
+                      <input type="text" value={gerenteTelefono} onChange={(e) => setGerenteTelefono(e.target.value)} placeholder="+5491134567890" required className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-[#233b6b] outline-none font-mono" />
+                    </div>
+                  </div>
+                </div>
+
+                {/* SECCION 5 — Notas internas */}
+                <div className="space-y-3">
+                  <h3 className="text-xs font-black text-[#233b6b] uppercase tracking-wider border-b border-gray-100 pb-2">Notas internas Shipro <span className="text-gray-400 font-normal normal-case">(opcional, no visible al cliente)</span></h3>
+                  <textarea value={notasInternas} onChange={(e) => setNotasInternas(e.target.value)} rows={2} placeholder="Cómo llegó, condiciones especiales, contactos secundarios, etc." className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-[#233b6b] outline-none resize-none" />
+                </div>
+
+                {/* Botones */}
+                <div className="pt-2 flex gap-3 border-t border-gray-100 -mx-6 px-6 pt-4 mt-auto sticky bottom-0 bg-white">
                   <button type="button" onClick={() => {setModalAltaAbierto(false); setError("");}} className="flex-1 py-3 bg-white border border-gray-300 text-gray-700 font-bold rounded-xl text-sm">Cancelar</button>
                   <button type="submit" disabled={guardando} className="flex-1 py-3 bg-[#233b6b] text-white font-bold rounded-xl text-sm disabled:opacity-70">
-                    {guardando ? "Creando..." : "Generar Accesos"}
+                    {guardando ? <Loader2 className="w-5 h-5 mx-auto animate-spin" /> : 'Confirmar Alta'}
                   </button>
                 </div>
               </form>

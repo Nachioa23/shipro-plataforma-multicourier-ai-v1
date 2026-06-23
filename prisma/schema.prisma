@@ -55,6 +55,23 @@ model Empresa {
   fechaSuspension   DateTime?
   fechaReactivacion DateTime?
 
+  // DEUDA 17 (2026-06-22): Direccion fiscal del cliente (datos AFIP/facturacion).
+  // Schema-level opcional (existing rows pre-DEUDA-17 no las tienen); validacion
+  // obligatoria a nivel endpoints (POST /api/clientes en Fase A).
+  direccionFiscalCalle      String?
+  direccionFiscalAltura     String?
+  direccionFiscalCP         String?
+  direccionFiscalLocalidad  String?
+  direccionFiscalProvincia  String?
+
+  // DEUDA 17: notas privadas del admin Shipro sobre el cliente (no visible al cliente).
+  notasInternas             String?
+
+  // DEUDA 17: gate del wizard obligatorio. False post-creacion via Fase A,
+  // true cuando el gerente completa los 4 pasos del onboarding.
+  // Middleware redirect a /onboarding mientras sea false.
+  onboardingCompletado      Boolean   @default(false)
+
   createdAt               DateTime                 @default(now())
   reglasRuteo             ReglaRuteo[]
   // DEUDA 32+37 (Fase J): registro de cotizaciones que devolvieron cero couriers.
@@ -142,6 +159,15 @@ model Usuario {
   password String
   nombre   String
   rol      String @default("operador_cliente")
+
+  // DEUDA 17 (2026-06-22): telefono WhatsApp del usuario.
+  // Formato esperado: internacional estricto +5491134567890 (validado en endpoints).
+  // Schema-level opcional (existing admin row no lo tiene); obligatorio en POST.
+  telefono         String?
+
+  // DEUDA 17: marca password como temporal (recien creado via admin Fase A).
+  // Login post-creacion fuerza cambio en primer ingreso (wizard paso 1).
+  passwordTemporal Boolean @default(false)
 
   empresaId Int?
   empresa   Empresa? @relation(fields: [empresaId], references: [id])

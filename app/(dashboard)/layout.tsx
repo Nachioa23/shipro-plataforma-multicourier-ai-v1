@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useRouter, usePathname } from "next/navigation";
 import { Sora } from "next/font/google";
 import Link from "next/link";
 import { Inbox, Tags, Package, LayoutDashboard, Truck, ShieldAlert, Users, CreditCard, ArrowRightLeft, Activity, LogOut, Building2, Calculator, Landmark, Scale, FileSpreadsheet, Settings2, Settings, ScrollText } from 'lucide-react';
-import { useSession, signOut, SessionProvider } from "next-auth/react";
+import { useSession, signOut } from "next-auth/react";
 import CotizadorModal from '@/components/CotizadorModal';
 import "../globals.css";
 
@@ -12,9 +13,24 @@ const sora = Sora({ subsets: ["latin"], weight: ["400", "500", "600", "700", "80
 
 function DashboardContent({ children }: { children: React.ReactNode }) {
   const { data: session, status } = useSession();
+  const router = useRouter();
+  const pathname = usePathname();
   const brandColor = '#233b6b';
 
   const [isCotizadorOpen, setIsCotizadorOpen] = useState(false);
+
+  // DEUDA 17.D.3: gate del wizard onboarding obligatorio.
+  // Si el usuario es cliente (tiene empresaId) y su empresa tiene onboardingCompletado=false,
+  // forzar redirect a /onboarding hasta que complete el wizard.
+  // Admin Shipro (empresaId=null) tiene bypass natural (onboardingCompletado=true por default).
+  useEffect(() => {
+    if (status !== "authenticated" || !session?.user) return;
+    if (session.user.empresaId === null) return; // Admin Shipro bypass.
+    if (session.user.onboardingCompletado === true) return; // Ya completo.
+    // Cliente con onboarding pendiente → redirect (a menos que ya este en /onboarding).
+    if (pathname.startsWith("/onboarding")) return;
+    router.replace("/onboarding");
+  }, [status, session, pathname, router]);
 
   if (status === "loading") {
     return <div className="flex h-screen items-center justify-center bg-gray-50 font-bold text-[#233b6b] animate-pulse">Abriendo Bóveda de Shipro...</div>;
@@ -196,9 +212,7 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
 }
 
 export default function DashboardLayout({ children }: Readonly<{ children: React.ReactNode; }>) {
-  return (
-    <SessionProvider>
-      <DashboardContent>{children}</DashboardContent>
-    </SessionProvider>
-  );
+  // DEUDA 17.D fix (2026-06-23): SessionProvider movido a app/layout.tsx root
+  // para que rutas /onboarding y /login tambien tengan useSession() acceso.
+  return <DashboardContent>{children}</DashboardContent>;
 }

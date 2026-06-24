@@ -56,7 +56,7 @@ Sin estos no es seguro operar con clientes externos. **Resolver antes de salir a
 
 ---
 
-### [ ] BLOCK 1.2 — DEUDA 17: UI onboarding cliente
+### [x] BLOCK 1.2 — DEUDA 17: UI onboarding cliente ✅ RESUELTA 2026-06-24
 
 **Por que bloquea:** Sin esto nadie puede registrarse autoservicio. Todos los onboardings son manuales 1-a-1.
 
@@ -74,7 +74,7 @@ Sin estos no es seguro operar con clientes externos. **Resolver antes de salir a
 
 ---
 
-### [ ] BLOCK 1.3 — DEUDA 19: Auditoria credenciales (CRÍTICA legal)
+### [x] BLOCK 1.3 — DEUDA 19: Auditoria credenciales ✅ RESUELTA 2026-06-17
 
 **Por que bloquea:** Sin audit log, cualquier disputa con cliente sobre cambios de credenciales o tipoCuenta no podes defender. Compliance basico SaaS.
 
@@ -91,7 +91,7 @@ Sin estos no es seguro operar con clientes externos. **Resolver antes de salir a
 
 ---
 
-### [ ] BLOCK 1.4 — DEUDA 22: Suspension auto cuenta limiteDescubierto
+### [x] BLOCK 1.4 — DEUDA 22: Suspension auto cuenta limiteDescubierto ✅ RESUELTA 2026-06-18
 
 **Por que bloquea:** Sin esto un cliente POSTPAGO puede generar deuda ILIMITADA. Riesgo financiero real.
 
@@ -136,7 +136,7 @@ Estos mejoran la operacion pero pueden hacerse en paralelo. **Tracker para no pe
 
 ---
 
-### [ ] DEUDA 21 — Matriz permisos granular /mis-transportes
+### [x] DEUDA 21 — Matriz permisos granular /mis-transportes ✅ RESUELTA 2026-06-18
 
 **Cuando atacar:** Antes de habilitar self-service masivo (D1=B).
 
@@ -148,7 +148,7 @@ Estos mejoran la operacion pero pueden hacerse en paralelo. **Tracker para no pe
 
 ## 🔒 TECH HARDENING
 
-### [ ] TECH 1 — Hash de apiKey en DB
+### [x] TECH 1 — Hash de apiKey en DB ✅ RESUELTA 2026-06-18 (registrada como DEUDA 67)
 
 **Por que:** Campo `Empresa.apiKey` en plain text. Si BD se compromete, todas las API keys son legibles.
 
@@ -305,8 +305,18 @@ Ordenado por dependencias tecnicas + valor:
 | 2026-06-17 | Checklist comercializacion creado | ✅ Completado |
 | 2026-06-17 | D1-D4 decisiones de producto respondidas | ✅ Completado |
 | 2026-06-17 | Roadmap consolidado FASE 1-2-3 | ✅ Completado |
-| — | FASE 1 Seguridad y gobernanza (DEUDAs 19, TECH 1, 22) | ⏳ En progreso |
-| — | FASE 2 Habilitacion cliente (DEUDAs 21, 17, 10) | ⏳ Pendiente |
-| — | FASE 3 Deploy (DEUDA 18, Postgres) | ⏳ Pendiente |
+| 2026-06-17 | FASE 1 Seguridad y gobernanza (DEUDA 19) | ✅ Completado |
+| 2026-06-18 | FASE 1 Seguridad y gobernanza (TECH 1 = DEUDA 67) | ✅ Completado |
+| 2026-06-18 | FASE 1 Seguridad y gobernanza (DEUDA 22) | ✅ Completado |
+| 2026-06-18 | FASE 2 Habilitacion cliente (DEUDA 21) | ✅ Completado |
+| 2026-06-22 | FASE 2 Habilitacion cliente (DEUDA 17 Fase A admin) | ✅ Completado |
+| 2026-06-24 | FASE 2 Habilitacion cliente (DEUDA 17.E + 17.F wizard + Mi equipo) | ✅ Completado |
+| — | FASE 2 Habilitacion cliente (DEUDA 10 Modelo B fallback) | ⏳ Pendiente |
+| — | FASE 3 Deploy (DEUDA 18 acceso Shipro facturacion) | ⏳ Pendiente |
+| — | FASE 3 Deploy (DEUDA 66 Postgres migration = BLOCK 1.1) | ⏳ Pendiente |
+
+**Estado al 2026-06-24:** FASE 1 ✅ 100% (3/3). FASE 2 ✅ 67% (2/3, falta DEUDA 10). FASE 3 ⏳ 0% (DEUDA 18 + DEUDA 66).
+
+**Total estimado para deploy comercializable:** ~1.5-2 dias (DEUDA 18 + DEUDA 66 + opcional DEUDA 10 segun primer piloto).
 
 **Actualizar este apartado cuando se completen items.**

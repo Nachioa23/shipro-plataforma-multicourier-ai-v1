@@ -354,7 +354,7 @@ Así el cron se rompe ruidosamente en lugar de mandar mails rotos. Aplicar tambi
 
 **Why bloquea producción:** sin esto, todos los clientes deben tener saldo virtual cargado para operar (incluso los que tienen contratos POSTPAGO con couriers vía Shipro). Es bloqueante para onboarding real.
 
-## DEUDA 17 — UI de onboarding completo de cliente (Importante pre-producción)
+## DEUDA 17 — UI de onboarding completo de cliente (RESUELTA 2026-06-24 en commits 54cd9a3 + 413927a)
 
 **Status:** Identificada el 2026-04-29 durante los tests manuales de SUB-PASO DEUDA 5. PENDIENTE — estimado 1-2 días.
 
@@ -385,7 +385,7 @@ Así el cron se rompe ruidosamente en lugar de mandar mails rotos. Aplicar tambi
 - Reemplazar el bloqueo actual del archivo `app/(dashboard)/facturacion/page.tsx` por la lógica de dropdown.
 - **No aplicar la misma lógica a `/directorio` y `/historial-manifiestos`** por ahora — esos sí son legítimamente "para usuarios cliente". Si en el futuro shipro necesita auditarlos, se evalúa caso por caso.
 
-## DEUDA 19 — Sistema de auditoría para cambios de credenciales y configuración (CRÍTICA operacional pre-producción)
+## DEUDA 19 — Sistema de auditoría para cambios de credenciales y configuración (RESUELTA 2026-06-17 en commit 201de2e)
 
 **Status:** Identificada el 2026-04-29 durante los tests manuales de SUB-PASO DEUDA 5 (refinada con escenarios concretos del usuario). PENDIENTE — estimado 1 día.
 
@@ -416,7 +416,7 @@ Así el cron se rompe ruidosamente en lugar de mandar mails rotos. Aplicar tambi
 
 **Why no bloqueante:** mientras el volumen sea bajo (< 10 bloqueados por cliente por día), el procesamiento inline post-recarga alcanza. Pasar a manual cuando aparezcan casos con cola larga.
 
-## DEUDA 21 — Matriz de permisos granular en /mis-transportes (Importante pre-producción)
+## DEUDA 21 — Matriz de permisos granular en /mis-transportes (RESUELTA 2026-06-18 en commit 05aaa17)
 
 **Status:** Identificada el 2026-04-30 durante implementación de DEUDA 16. PENDIENTE — extensión de la política defense-in-depth.
 
@@ -440,7 +440,7 @@ Implementar como helper `lib/permisos.ts` con `puedeEditarCampo(rol, campo): boo
 
 **Relación con DEUDA 19:** cada cambio sensible debe loggearse (auditoría). DEUDA 21 + DEUDA 19 trabajan en conjunto.
 
-## DEUDA 22 — Suspensión automática de cuenta al alcanzar limiteDescubierto (Importante pre-producción)
+## DEUDA 22 — Suspensión automática de cuenta al alcanzar limiteDescubierto (RESUELTA 2026-06-18 en commit 4e5041e)
 
 **Status:** Identificada el 2026-04-30 durante implementación de DEUDA 16. PENDIENTE.
 
@@ -1308,3 +1308,98 @@ Los 3 campos estan en `CAMPOS_AUDITABLES` (lib/auditoria-configuracion.ts) listo
 **Estimado:** 180-240 min con decisiones de producto claras up-front.
 
 **Prioridad:** Media. No bloquea funcionalidad core (Card y metricas funcionan sin filter), pero degrada UX si director espera analisis profundo via filtros.
+
+---
+
+## DEUDA 66 — Postgres migration para produccion (BLOCK 1.1, registrada 2026-06-24, hard-block FASE 3)
+
+**Status:** ABIERTA. Numerada en este sync (previo no tenia entry dedicada; el checklist la mencionaba como "Registrar como DEUDA 66").
+
+**Por que bloquea deploy:** SQLite no soporta produccion concurrente. Cualquier cliente real con uso simultaneo lo rompe.
+
+**Trabajo:**
+- Provisioning Linode + base Postgres.
+- Cambio `provider = "postgresql"` en `prisma/schema.prisma`.
+- Migracion data existente (seed productivo).
+- Update DATABASE_URL en `.env.local` + secrets.
+- Smoke test E2E en Postgres (cotizar + crear envio + rastreo).
+
+**Estimado:** 1 dia.
+
+**Riesgo de saltar:** ALTO. Operacion inestable bajo carga real.
+
+**Vinculo checklist:** docs/COMERCIALIZACION-CHECKLIST.md — TIER 1 BLOCK 1.1.
+
+---
+
+## DEUDA 67 — Hash de apiKey en BD (TECH 1, RESUELTA 2026-06-18 en commit 5c4b04e)
+
+**Status:** ✅ RESUELTA. Numerada en este sync (previo no tenia entry dedicada; el checklist la trackeaba como "TECH 1").
+
+**Origen:** Audit 2026-06-17 detecto `Empresa.apiKey` en plain text en BD. Si la BD se comprometia, todas las API keys quedaban legibles.
+
+**Resolucion:**
+- Migration `apiKeyHash` (HMAC-SHA256 con `APIKEY_HMAC_SECRET`).
+- POST /api/clientes y `/api/empresa/api-key` generan + retornan plain una vez, persisten solo el hash.
+- Middleware de validacion hashea incoming key + lookup por hash.
+- Cliente Demo apiKey rotada al schema nuevo: `shipro_live_36542082ea20b77554a68e8e2b3ab649`.
+
+**Sub-paso pendiente menor:** rotacion masiva de apiKeys existentes (script tech1-rotate.mjs en /scripts, ad-hoc). No bloqueante.
+
+**Vinculo checklist:** docs/COMERCIALIZACION-CHECKLIST.md — TECH HARDENING TECH 1.
+
+---
+
+## DEUDA 69 — Audit log de cambio de password (registrada 2026-06-23, scope chico)
+
+**Status:** ABIERTA. Detectada durante implementacion DEUDA 17.E.1 (`/api/onboarding/cambiar-password`).
+
+**Origen:** Claude Code observo durante 17.E.1 que el endpoint cambia `Usuario.password` sin pasar por `registrarCambioConfiguracion`. Razon de no implementarlo en el momento: scope creep — DEUDA 17 era wizard onboarding, no extender audit log. Decision explicita del director: registrar como deuda separada.
+
+**Trabajo:**
+- Agregar `passwordUsuario` a `CAMPOS_AUDITABLES` en `lib/auditoria-configuracion.ts` con `sensible: true`.
+- Modificar POST `/api/onboarding/cambiar-password` para llamar `registrarCambioConfiguracion` post-update.
+- Valor anterior y nuevo NO se loggean (solo el evento + timestamp + usuario + IP).
+
+**Estimado:** 30 min.
+
+**Prioridad:** Baja. Security audit de baja prioridad — sin audit, el incidente queda sin trazabilidad, pero el log de Next.js capta el endpoint hit.
+
+---
+
+## DEUDA 70 — `$transaction` para Empresa+Usuario updates en /api/onboarding/confirmar-datos (registrada 2026-06-23, scope chico)
+
+**Status:** ABIERTA. Detectada durante implementacion DEUDA 17.E.2.
+
+**Origen:** El endpoint hace 2 updates separados (Empresa + Usuario) sin envolver en `prisma.$transaction`. Si Empresa update succeed y Usuario falla, queda inconsistencia (razon social actualizada pero gerente nombre no).
+
+**Trabajo:**
+- Envolver `prisma.empresa.update` + `prisma.usuario.update` en `prisma.$transaction([...])`.
+- Validacion: ambos updates atomicos o ninguno.
+- Mantener audit log calls separados (ejecutar despues del transaction success).
+
+**Estimado:** 30 min.
+
+**Prioridad:** Media. Baja probabilidad de ocurrencia (DB local SQLite, Postgres en futuro), pero buena practica defensiva.
+
+---
+
+## DEUDA 71 — Guardar credenciales courier automaticamente al finalizar wizard (registrada 2026-06-24, scope medio)
+
+**Status:** ABIERTA. Detectada durante DEUDA 17.E.4.4 (paso 4 wizard).
+
+**Origen:** El paso 4 del wizard embebe `TransportesTab` con prop `embeddedInWizard=true`, lo que oculta el boton "Guardar Credenciales" interno. El cliente puede activar couriers (toggle activo=true) pero las credenciales que cargue (Andreani user/pass, Mocis API key) NO se guardan al hacer click en "Finalizar onboarding" — solo se guarda el flag `activo`.
+
+**Impacto UX:** Cliente termina onboarding con couriers "activos" pero sin credenciales validas. Debe ir a `/configuracion/transportes` post-onboarding a cargar credenciales antes del primer envio.
+
+**Mitigacion actual:** Mensaje en paso 4 paso al cliente "Las credenciales podes cargarlas ahora o mas tarde" + redirect manual post-wizard.
+
+**Trabajo:**
+- Extender `TransportesTab` con callback `onSaveCouriers: (couriers: CourierConfig[]) => Promise<void>` que devuelve el estado interno al wrapper.
+- En el wizard, antes de llamar `/api/onboarding/finalizar`, llamar `POST /api/configuracion/couriers` con el state actual.
+- Si falla el POST de couriers, mostrar error y NO finalizar (no marcar `onboardingCompletado=true`).
+
+**Estimado:** 60-90 min.
+
+**Prioridad:** Media-alta. UX flow incompleto. Cliente puede llegar al dashboard sin couriers funcionales y confundirse.
+

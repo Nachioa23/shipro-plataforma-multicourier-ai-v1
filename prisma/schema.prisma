@@ -169,6 +169,11 @@ model Usuario {
   // Login post-creacion fuerza cambio en primer ingreso (wizard paso 1).
   passwordTemporal Boolean @default(false)
 
+  // DEUDA 17.F.1 (2026-06-23): soft-delete para desactivar operadores
+  // sin perder historico de envios/audit. Gerente puede toggle desde "Mi equipo".
+  // Usuarios desactivados NO pueden loguearse (check en lib/auth.ts authorize).
+  activo           Boolean @default(true)
+
   empresaId Int?
   empresa   Empresa? @relation(fields: [empresaId], references: [id])
 

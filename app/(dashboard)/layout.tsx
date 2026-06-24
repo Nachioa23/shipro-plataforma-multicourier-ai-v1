@@ -116,6 +116,12 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
               <Link href="/configuracion/transportes" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-gray-50 hover:text-[#233b6b] rounded-lg font-medium text-sm transition-all">
                 <Settings className="w-5 h-5" /><span>Configuración</span>
               </Link>
+              {/* DEUDA 17.F.3: link "Mi equipo" solo visible para gerente_cliente */}
+              {activeRole === 'gerente_cliente' && (
+                <Link href="/mi-equipo" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-gray-50 hover:text-[#233b6b] rounded-lg font-medium text-sm transition-all">
+                  <Users className="w-5 h-5" /><span>Mi equipo</span>
+                </Link>
+              )}
             </div>
           )}
 

@@ -8,9 +8,17 @@ import { puedeEditarCampo, esModeloBCredenciales } from "@/lib/permisos";
 
 interface Props {
   empresaActivaId: number | null;
+  // DEUDA 17.E.4.4 (2026-06-23): cuando true, el componente se embebe en el wizard
+  // de onboarding. El boton "Guardar" interno queda visible (cliente debe guardar
+  // sus configs courier), pero el wrapper del wizard recibe notification cuando
+  // hay couriers activos via onCouriersActivosChange.
+  embeddedInWizard?: boolean;
+  // Callback que reporta al wrapper cuantos couriers tiene activos el cliente.
+  // Usado para validar "al menos 1 activo" antes de habilitar "Finalizar onboarding".
+  onCouriersActivosChange?: (cantidad: number) => void;
 }
 
-export default function TransportesTab({ empresaActivaId }: Props) {
+export default function TransportesTab({ empresaActivaId, embeddedInWizard = false, onCouriersActivosChange }: Props) {
   const { data: session } = useSession();
   const rol = session?.user?.rol || "";
   const esEquipoShipro = rol === 'admin_shipro' || rol === 'operador_shipro';
@@ -91,6 +99,13 @@ export default function TransportesTab({ empresaActivaId }: Props) {
     };
     cargar();
   }, [empresaActivaId]);
+
+  // DEUDA 17.E.4.4: notificar al wrapper (wizard) cuantos couriers estan activos.
+  useEffect(() => {
+    if (!onCouriersActivosChange) return;
+    const cantidadActivos = couriers.filter((c) => c.activo).length;
+    onCouriersActivosChange(cantidadActivos);
+  }, [couriers, onCouriersActivosChange]);
 
   const handleToggleCourier = (id: string) => setCouriers(couriers.map(c => c.id === id ? { ...c, activo: !c.activo } : c));
   const handleUpdateCourier = (id: string, campo: string, valor: any) => setCouriers(couriers.map(c => c.id === id ? { ...c, [campo]: valor } : c));
@@ -212,11 +227,13 @@ export default function TransportesTab({ empresaActivaId }: Props) {
         </div>
       )}
 
-      <div className="flex justify-end">
-        <button onClick={handleGuardarClick} disabled={guardando || cargando || esReadOnly} className="flex items-center gap-2 px-6 py-2.5 bg-[#233b6b] hover:bg-blue-900 text-white font-bold rounded-xl transition-colors shadow-sm disabled:opacity-50">
-          {guardando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Guardar Credenciales
-        </button>
-      </div>
+      {!embeddedInWizard && (
+        <div className="flex justify-end">
+          <button onClick={handleGuardarClick} disabled={guardando || cargando || esReadOnly} className="flex items-center gap-2 px-6 py-2.5 bg-[#233b6b] hover:bg-blue-900 text-white font-bold rounded-xl transition-colors shadow-sm disabled:opacity-50">
+            {guardando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Guardar Credenciales
+          </button>
+        </div>
+      )}
 
       {/* DEUDA 19: Modal de confirmacion con motivo para cambios sensibles. */}
       <ModalMotivoAuditoria

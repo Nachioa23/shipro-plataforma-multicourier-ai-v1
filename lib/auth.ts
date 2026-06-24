@@ -34,6 +34,11 @@ export const authOptions: NextAuthOptions = {
           throw new Error("EMPRESA_INACTIVA");
         }
 
+        // DEUDA 17.F.1: bloquear usuarios desactivados (soft-delete).
+        if (!user.activo) {
+          throw new Error("USUARIO_INACTIVO");
+        }
+
         return {
           id: user.id.toString(),
           name: user.nombre,
@@ -55,7 +60,7 @@ export const authOptions: NextAuthOptions = {
   },
   secret: process.env.NEXTAUTH_SECRET,
   callbacks: {
-    async jwt({ token, user }) {
+    async jwt({ token, user, trigger }) {
       if (user) {
         token.rol = user.rol;
         token.empresaId = user.empresaId;
@@ -63,6 +68,21 @@ export const authOptions: NextAuthOptions = {
         token.onboardingCompletado = user.onboardingCompletado;
         token.passwordTemporal = user.passwordTemporal;
       }
+
+      // DEUDA 17.E.4.0: cuando useSession().update() se llama desde el frontend,
+      // re-fetch desde BD los flags onboarding (necesario despues de
+      // /api/onboarding/finalizar para que el gate del layout se libere).
+      if (trigger === "update" && token.email) {
+        const usuario = await prisma.usuario.findUnique({
+          where: { email: token.email },
+          include: { empresa: { select: { onboardingCompletado: true } } },
+        });
+        if (usuario) {
+          token.onboardingCompletado = usuario.empresa?.onboardingCompletado ?? true;
+          token.passwordTemporal = usuario.passwordTemporal;
+        }
+      }
+
       return token;
     },
     async session({ session, token }) {

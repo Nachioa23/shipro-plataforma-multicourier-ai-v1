@@ -36,6 +36,7 @@ export default function Login() {
       // password mismatch, usuario no encontrado, y cualquier otra falla).
       const ERROR_MESSAGES: Record<string, string> = {
         EMPRESA_INACTIVA: "Tu empresa esta deshabilitada. Contactanos a soporte.",
+        USUARIO_INACTIVO: "Tu usuario esta deshabilitado. Contactate con el gerente de tu cuenta.",
       };
       setError(ERROR_MESSAGES[res.error] ?? "Email o contraseña incorrectos. Revisá tus datos.");
       setLoading(false);

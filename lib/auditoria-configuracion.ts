@@ -48,6 +48,17 @@ import prisma from "@/lib/prisma";
 // Lista canonica de campos auditados — single source of truth.
 export const CAMPOS_AUDITABLES = {
   // CRITICOS — motivo obligatorio
+  // DEUDA 17.E.2 (2026-06-23): campos editables en paso 2 del wizard onboarding.
+  // Auditados como "no sensible" (no son secrets/financiero) pero sí trackeables.
+  razonSocial: { sensible: false, modelo: "Empresa" },
+  direccionFiscalCalle: { sensible: false, modelo: "Empresa" },
+  direccionFiscalAltura: { sensible: false, modelo: "Empresa" },
+  direccionFiscalCP: { sensible: false, modelo: "Empresa" },
+  direccionFiscalLocalidad: { sensible: false, modelo: "Empresa" },
+  direccionFiscalProvincia: { sensible: false, modelo: "Empresa" },
+  usuarioNombre: { sensible: false, modelo: "Usuario" },
+  usuarioTelefono: { sensible: false, modelo: "Usuario" },
+  onboardingCompletado: { sensible: false, modelo: "Empresa" },
   credencialesJson: { sensible: true, modelo: "CredencialCourier" },
   tipoCuenta: { sensible: true, modelo: "CredencialCourier" },
   usaCredencialesPropias: { sensible: true, modelo: "CredencialCourier" },

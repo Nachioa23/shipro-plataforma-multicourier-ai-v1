@@ -16,9 +16,12 @@ interface Props {
   depositoExistente?: any | null;
   puedeEditarFlags: boolean;
   totalDepositos: number;
+  // DEUDA 17.E.4.3.a (2026-06-23): permite ocultar el boton X cuando el componente
+  // se embebe en flows donde el usuario no debe poder cerrar (ej: wizard onboarding).
+  hideCloseButton?: boolean;
 }
 
-export default function DepositoForm({ isOpen, onClose, onSaved, empresaId, depositoExistente, puedeEditarFlags, totalDepositos }: Props) {
+export default function DepositoForm({ isOpen, onClose, onSaved, empresaId, depositoExistente, puedeEditarFlags, totalDepositos, hideCloseButton = false }: Props) {
   const esEdicion = !!depositoExistente;
 
   const [nombre, setNombre] = useState('');
@@ -355,9 +358,11 @@ export default function DepositoForm({ isOpen, onClose, onSaved, empresaId, depo
               {esEdicion ? `ID #${depositoExistente.id}` : (totalDepositos === 0 ? 'Será marcado como predeterminado automáticamente.' : 'Configurá un depósito adicional.')}
             </p>
           </div>
-          <button onClick={onClose} disabled={guardando} className="p-2 hover:bg-blue-800 rounded-lg transition-colors disabled:opacity-50">
-            <X className="w-5 h-5" />
-          </button>
+          {!hideCloseButton && (
+            <button onClick={onClose} disabled={guardando} className="p-2 hover:bg-blue-800 rounded-lg transition-colors disabled:opacity-50">
+              <X className="w-5 h-5" />
+            </button>
+          )}
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-gray-50/30">

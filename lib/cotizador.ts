@@ -89,6 +89,37 @@ async function calcularFechaEstimada(horasSla: number): Promise<string> {
  * salta silenciosamente (no aparece en las opciones — política de etiqueta
  * genérica solo aplica al momento de crear el envío real).
  */
+/**
+ * DEUDA 10 Paso 3a: logica de markup extraida de cotizar() para reuso.
+ * Funcion pura: dado el costo seco del courier + la config de pricing de la
+ * credencial, devuelve { precioProveedor, precioFinal }. Misma formula que
+ * usaba la closure local calcularPrecios (sin cambio de comportamiento).
+ * La reusa el fallback de precio (lib/utils/precio-fallback.ts) para re-aplicar
+ * markup al precio CRUDO historico (D-10-PRICE-READ source 1).
+ * NOTA DEUDA 73: aqui se sumaran seguro + descuento cuando se implementen.
+ */
+export interface ConfigMarkup {
+  usaCredencialesPropias: boolean;
+  ajusteTarifaPorcentaje: number | null;
+  markupFijo: number | null;
+  tarifaIncluyeIva: boolean;
+}
+
+export function aplicarMarkup(
+  costoSecoCourier: number,
+  config: ConfigMarkup
+): { precioProveedor: number; precioFinal: number } {
+  const porcentajeMarkup = config.ajusteTarifaPorcentaje || 0;
+  const fijoMarkup = config.markupFijo || 0;
+  const costoConMarkup = config.usaCredencialesPropias
+    ? costoSecoCourier + fijoMarkup
+    : costoSecoCourier + costoSecoCourier * (porcentajeMarkup / 100) + fijoMarkup;
+  return {
+    precioProveedor: costoSecoCourier,
+    precioFinal: config.tarifaIncluyeIva ? costoConMarkup : costoConMarkup * 1.21,
+  };
+}
+
 export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
   const { empresaId, cpOrigen: cpOrigenInput, cpDestino, provinciaDestino, paquetes, valorCarrito: bodyValorCarrito } = input;
 
@@ -154,6 +185,44 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
   // explicito. Funciona para 99% de los flujos (e-commerce usa predeterminado).
   const depositoIdParaCalibracion: number | null = empresa?.depositos?.[0]?.id ?? null;
 
+  // DEUDA 10 Paso 2: resolver nombreCourier -> Courier.id real en UNA query
+  // (config.id es CredencialCourier.id, NO Courier.id). Map para el upsert del historico.
+  const nombresCouriers = couriersAptos.map((c: any) => c.nombreCourier);
+  const couriersReales = await prisma.courier.findMany({ where: { nombre: { in: nombresCouriers } } });
+  const mapaCourierIds = new Map<string, number>(couriersReales.map((c) => [c.nombre, c.id]));
+
+  // DEUDA 10 Paso 2 (fire-and-forget): persiste el ultimo precio CRUDO conocido por
+  // (courier, cpOrigen, cpDestino, pesoKg entero, modalidad). Upsert = pisa la fila si existe.
+  // No await, no rompe la cotizacion si falla (igual que registroCoberturaVacia).
+  const guardarHistorico = (courierIdReal: number | undefined, precioCrudo: number, modalidad: string) => {
+    if (!courierIdReal || !cpOrigen) return;
+    const pesoEntero = Math.floor(pesoTotal);
+    prisma.historicoCotizaciones
+      .upsert({
+        where: {
+          courierId_cpOrigen_cpDestino_pesoKg_modalidad: {
+            courierId: courierIdReal,
+            cpOrigen: cpOrigen,
+            cpDestino: cpDestino,
+            pesoKg: pesoEntero,
+            modalidad: modalidad,
+          },
+        },
+        update: { precio: precioCrudo, createdAt: new Date() },
+        create: {
+          courierId: courierIdReal,
+          cpOrigen: cpOrigen,
+          cpDestino: cpDestino,
+          pesoKg: pesoEntero,
+          precio: precioCrudo,
+          modalidad: modalidad,
+        },
+      })
+      .catch((err) => {
+        console.warn("[cotizador] No se pudo guardar historico de cotizacion:", err);
+      });
+  };
+
   for (const config of couriersAptos) {
     try {
       const nombreNormalizado = normalizarParaComparacion(config.nombreCourier);
@@ -167,13 +236,13 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
 
       const motorCourier = CourierFactory.crear(nombreNormalizado, credenciales);
 
-      let porcentajeMarkup = config.ajusteTarifaPorcentaje || 0;
-      let fijoMarkup = config.markupFijo || 0;
-
-      const calcularPrecios = (costoSecoCourier: number) => {
-        let costoConMarkup = config.usaCredencialesPropias ? costoSecoCourier + fijoMarkup : costoSecoCourier + (costoSecoCourier * (porcentajeMarkup / 100)) + fijoMarkup;
-        return { precioProveedor: costoSecoCourier, precioFinal: config.tarifaIncluyeIva ? costoConMarkup : costoConMarkup * 1.21 };
-      };
+      const calcularPrecios = (costoSecoCourier: number) =>
+        aplicarMarkup(costoSecoCourier, {
+          usaCredencialesPropias: config.usaCredencialesPropias,
+          ajusteTarifaPorcentaje: config.ajusteTarifaPorcentaje,
+          markupFijo: config.markupFijo,
+          tarifaIncluyeIva: config.tarifaIncluyeIva,
+        });
 
       // Torre de Control Metrica 2.3 (DEUDA 39, 2026-06-05): asignacion de
       // SLA via cuadruple fallback del helper compartido.
@@ -199,6 +268,7 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
           const opciones = await motorCourier.cotizar({ cpOrigen, cpDestino, paquetes, tipoEntrega: 'domicilio' });
           for (const op of opciones) {
             const precios = calcularPrecios(op.precioNeto);
+            guardarHistorico(mapaCourierIds.get(config.nombreCourier), op.precioNeto, "domicilio");
             opcionesDomicilio.push({
               id: `dom-${nombreNormalizado}-${op.servicio.replace(/\s/g, '')}`,
               courier: config.nombreCourier.toUpperCase(),
@@ -218,6 +288,7 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
           const opciones = await motorCourier.cotizar({ cpOrigen, cpDestino, paquetes, tipoEntrega: 'sucursal' });
           for (const op of opciones) {
             const precios = calcularPrecios(op.precioNeto);
+            guardarHistorico(mapaCourierIds.get(config.nombreCourier), op.precioNeto, "sucursal");
             opcionesSucursal.push({
               id: `suc-${nombreNormalizado}`,
               courier: config.nombreCourier.toUpperCase(),

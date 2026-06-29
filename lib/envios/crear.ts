@@ -11,6 +11,8 @@ import { calcularPromesaCalibrada } from "@/lib/utils/promesa-calibrada";
 import { inferirModalidad } from "@/lib/utils/modalidades";
 import { validarOperatividadPar } from "@/lib/depositos/operatividad";
 import { getAppUrl } from "@/lib/utils/app-url";
+import { resolverPrecioFallback } from "@/lib/utils/precio-fallback";
+import { calcularFeeOperacion, type ResultadoFeeOperacion } from "@/lib/utils/operacion-fee";
 import type { DepositoCourierConfig } from "@prisma/client";
 
 export interface CrearEnvioInput {
@@ -356,7 +358,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
   // no se debita saldo, no se manda mail. Se desbloquea cuando el
   // cliente recargue saldo (procesarEnviosBloqueados).
   // ==============================================================
-  const montoDebito = parseFloat(String(costoEnvio)) || 0;
+  let montoDebito = parseFloat(String(costoEnvio)) || 0;
   const tipoCuentaEfectivo = credencialMain?.tipoCuenta || empresaConData.modalidadPago || "POSTPAGO";
   let bloqueadoPorSaldo = false;
   // DEUDA 22: si el debit cruza umbral, se programa suspension fuera de la tx.
@@ -514,11 +516,55 @@ export async function crearEnvio(input: CrearEnvioInput) {
   );
   const modalidadCanonica = resultadoModalidad.modalidad;
 
+  // DEUDA 10 Paso 4a (D-10-FALLBACK-PRICE, Opcion A): red de seguridad de precio.
+  // Si el courier fallo al despachar (BLOQUEADO_PARCIAL) Y el e-commerce NO mando
+  // un costoEnvio valido, publicamos un precio de fallback para que la venta no se
+  // caiga (siempre haya tarifa en el checkout). NO pisa un precio ya aceptado por
+  // el comprador (solo entra si montoDebito <= 0). NO debita saldo ni fee (eso es Paso 4b).
+  if (bloqueadoPorTramoFallido && montoDebito <= 0 && deposito && credencialMain) {
+    // D-10-MODALIDAD-MAP: traducir modalidad canonica (8-value) -> vocabulario
+    // simple del courier ("domicilio"/"sucursal") que usa HistoricoCotizaciones.
+    const modalidadSimple = modalidadCanonica.toLowerCase().includes("sucursal") ||
+      modalidadCanonica.toLowerCase().includes("retiro")
+      ? "sucursal"
+      : "domicilio";
+
+    try {
+      const fallback = await resolverPrecioFallback({
+        courierId: courierIdReal,
+        cpOrigen: deposito.codigoPostal,
+        cpDestino: String(cpDestino),
+        pesoKg: parseFloat(String(pesoReal)) || 1,
+        modalidad: modalidadSimple,
+        tarifaPlanaRespaldo: empresaConData.tarifaPlanaRespaldo,
+        configMarkup: {
+          usaCredencialesPropias: credencialMain.usaCredencialesPropias,
+          ajusteTarifaPorcentaje: credencialMain.ajusteTarifaPorcentaje,
+          markupFijo: credencialMain.markupFijo,
+          tarifaIncluyeIva: credencialMain.tarifaIncluyeIva,
+        },
+      });
+      if (fallback.precio != null && fallback.precio > 0) {
+        montoDebito = fallback.precio;
+        console.log(`[DEUDA 10] Precio de fallback aplicado a envio bloqueado: $${fallback.precio} (fuente: ${fallback.fuente}). ${fallback.detalle}`);
+      }
+    } catch (err) {
+      console.warn("[DEUDA 10] No se pudo resolver precio de fallback:", err);
+    }
+  }
+
   const resultadoTransaccion = await prisma.$transaction(async (tx) => {
     const empresaData = await tx.empresa.findUnique({ where: { id: empresaId } });
     if (empresaData) empresaNombreParaMail = empresaData.nombre;
 
-    const nuevoSaldo = (empresaData?.saldoActivo || 0) - montoDebito;
+    let nuevoSaldo = (empresaData?.saldoActivo || 0) - montoDebito;
+
+    // DEUDA 10 Paso 4b (D-10-FEE-CHARGE): el fee por operacion se calcula y debita
+    // ABAJO, DENTRO del gate de debito de envio (solo cuando se emite etiqueta REAL
+    // del courier, es decir cuando el envio NO esta bloqueado). Decision de producto:
+    // las etiquetas genericas/bloqueadas NO debitan nada; el cobro espera a que haya
+    // etiqueta real (en el alta, o en el desbloqueo posterior — ese ultimo es DEUDA 79).
+    let feeOperacion: ResultadoFeeOperacion | null = null;
 
     // Torre de Control Metrica 2.3 (DEUDA 39, 2026-06-05):
     // Calcular promesa calibrada al crear envio para medir cumplimiento
@@ -592,17 +638,44 @@ export async function crearEnvio(input: CrearEnvioInput) {
     // MovimientoFinanciero ni actualizar saldo. El débito se aplica recién
     // cuando se desbloquee.
     if (!bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorOperatividad && !bloqueadoPorTramoFallido) {
+      // DEUDA 10 Paso 4b (D-10-FEE-CHARGE): fee por operacion para PREPAGO (Modelo B).
+      // Se cobra SOLO aca (etiqueta real, envio no bloqueado). Detector: eje comercial
+      // tipoCuentaEfectivo === "PREPAGO", NO el eje credenciales. Lectura atomica via tx.
+      // El costo courier (montoDebito) ya esta restado de nuevoSaldo arriba; aca se le
+      // resta ademas el fee, y se persiste un movimiento separado por claridad.
+      if (tipoCuentaEfectivo === "PREPAGO") {
+        feeOperacion = await calcularFeeOperacion(empresaId, montoDebito, tx);
+        if (feeOperacion) {
+          nuevoSaldo = nuevoSaldo - feeOperacion.feeConIva;
+        }
+      }
+
       await tx.movimientoFinanciero.create({
         data: {
           empresaId,
           tipo: "DEBITO_ENVIO",
           monto: -montoDebito,
-          saldoPosterior: nuevoSaldo,
+          saldoPosterior: feeOperacion ? nuevoSaldo + feeOperacion.feeConIva : nuevoSaldo,
           referencia: trackingOficial,
-          descripcion: `Generación de etiqueta ${courierReal.nombre.toUpperCase()}`,
+          descripcion: `Envío ${trackingOficial} — ${courierReal.nombre}`,
           envioId: envioCreado.id
         }
       });
+
+      // Movimiento separado para el fee (solo PREPAGO con fee vigente).
+      if (feeOperacion) {
+        await tx.movimientoFinanciero.create({
+          data: {
+            empresaId,
+            tipo: "DEBITO_OPERACION_FEE",
+            monto: -feeOperacion.feeConIva,
+            saldoPosterior: nuevoSaldo,
+            referencia: trackingOficial,
+            descripcion: `Fee de operación Shipro ${trackingOficial}`,
+            envioId: envioCreado.id
+          }
+        });
+      }
 
       await tx.empresa.update({
         where: { id: empresaId },

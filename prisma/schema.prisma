@@ -58,19 +58,25 @@ model Empresa {
   // DEUDA 17 (2026-06-22): Direccion fiscal del cliente (datos AFIP/facturacion).
   // Schema-level opcional (existing rows pre-DEUDA-17 no las tienen); validacion
   // obligatoria a nivel endpoints (POST /api/clientes en Fase A).
-  direccionFiscalCalle      String?
-  direccionFiscalAltura     String?
-  direccionFiscalCP         String?
-  direccionFiscalLocalidad  String?
-  direccionFiscalProvincia  String?
+  direccionFiscalCalle     String?
+  direccionFiscalAltura    String?
+  direccionFiscalCP        String?
+  direccionFiscalLocalidad String?
+  direccionFiscalProvincia String?
 
   // DEUDA 17: notas privadas del admin Shipro sobre el cliente (no visible al cliente).
-  notasInternas             String?
+  notasInternas String?
 
   // DEUDA 17: gate del wizard obligatorio. False post-creacion via Fase A,
   // true cuando el gerente completa los 4 pasos del onboarding.
   // Middleware redirect a /onboarding mientras sea false.
-  onboardingCompletado      Boolean   @default(false)
+  onboardingCompletado Boolean @default(false)
+
+  // DEUDA 10 (D-10-4): tarifa plana de respaldo. Ultimo recurso cuando el
+  // courier falla Y no hay historico de precio para el trayecto. La fija el
+  // admin Shipro en el alta del cliente. Nullable: si null, no hay respaldo
+  // configurado (cae a comportamiento por defecto). Float -> Decimal en DEUDA 66.
+  tarifaPlanaRespaldo Float?
 
   createdAt               DateTime                 @default(now())
   reglasRuteo             ReglaRuteo[]
@@ -78,6 +84,8 @@ model Empresa {
   registrosCoberturaVacia RegistroCoberturaVacia[]
   // DEUDA 19: audit log de cambios sensibles (credenciales/config).
   auditoriasConfiguracion AuditoriaConfiguracion[]
+  // DEUDA 10 (D-10-5): fees por operacion Modelo B de esta empresa.
+  operacionFees           OperacionFee[]
 }
 
 // ==========================================
@@ -163,7 +171,7 @@ model Usuario {
   // DEUDA 17 (2026-06-22): telefono WhatsApp del usuario.
   // Formato esperado: internacional estricto +5491134567890 (validado en endpoints).
   // Schema-level opcional (existing admin row no lo tiene); obligatorio en POST.
-  telefono         String?
+  telefono String?
 
   // DEUDA 17: marca password como temporal (recien creado via admin Fase A).
   // Login post-creacion fuerza cambio en primer ingreso (wizard paso 1).
@@ -172,7 +180,7 @@ model Usuario {
   // DEUDA 17.F.1 (2026-06-23): soft-delete para desactivar operadores
   // sin perder historico de envios/audit. Gerente puede toggle desde "Mi equipo".
   // Usuarios desactivados NO pueden loguearse (check en lib/auth.ts authorize).
-  activo           Boolean @default(true)
+  activo Boolean @default(true)
 
   empresaId Int?
   empresa   Empresa? @relation(fields: [empresaId], references: [id])
@@ -604,8 +612,8 @@ model AuditoriaSoporte {
 // + x-ip-origen). Motivo obligatorio para cambios sensibles (validacion backend).
 // ==========================================
 model AuditoriaConfiguracion {
-  id           Int      @id @default(autoincrement())
-  fecha        DateTime @default(now())
+  id    Int      @id @default(autoincrement())
+  fecha DateTime @default(now())
 
   // Quien hizo el cambio
   usuarioEmail String?
@@ -620,7 +628,7 @@ model AuditoriaConfiguracion {
   courier   Courier? @relation(fields: [courierId], references: [id], onDelete: SetNull)
 
   // Que cambio
-  campo         String  // "tipoCuenta", "modalidadPago", "apiKey", "credencialesJson", etc.
+  campo         String // "tipoCuenta", "modalidadPago", "apiKey", "credencialesJson", etc.
   valorAnterior String?
   valorNuevo    String?
 
@@ -1073,11 +1081,45 @@ model HistoricoCotizaciones {
   cpDestino String
   pesoKg    Float
   precio    Float
-  servicio  String?
+  // DEUDA 10 (D-10-PRICE-STORE): precio CRUDO del courier (costoSecoCourier),
+  // sin markup ni IVA. El markup del cliente se re-aplica al leer en el fallback.
+  servicio  String? // texto crudo del courier ("Estándar", "Same Day"). Para lectura humana, NO criterio de busqueda.
+  // DEUDA 10 (D-10-HIST-SHAPE): dimension domicilio/sucursal, que servicio NO captura.
+  // Vocabulario controlado: "domicilio" | "sucursal". El cotizador lo conoce al insertar.
+  modalidad String?
   createdAt DateTime @default(now())
 
-  @@index([courierId, cpOrigen, cpDestino])
+  // DEUDA 10 Paso 2 (D-10-WRITE-VOLUME-OVERWRITE): unicidad por trayecto+peso+modalidad.
+  // Habilita upsert: una sola fila por combinacion, pisada con el ultimo precio conocido.
+  // El @@unique cubre el lookup del fallback, asi que el index compuesto previo es redundante y se elimina.
+  @@unique([courierId, cpOrigen, cpDestino, pesoKg, modalidad])
   @@index([createdAt])
+}
+
+// DEUDA 10 (D-10-5, B-minima): fee por operacion que Shipro cobra a clientes
+// Modelo B cuando ejecuta una operacion (despacho), exitoso o no. NO es el costo
+// del envio (ese lo cobra el courier directo al cliente Modelo B).
+// - tipo: "FIJO" (monto en $) | "PORCENTAJE" (% sobre tarifa courier). Default FIJO.
+// - valor: el numero (pesos si FIJO, % si PORCENTAJE). Float -> Decimal en DEUDA 66.
+// - vigenteDesde/Hasta: soporta descuentos promocionales temporales (Hasta=null = indefinido).
+// - El "fee base" estandar de Shipro vive como constante en codigo; si la empresa
+//   no tiene fila activa aca, se usa el base. El motor de actualizacion masiva es DEUDA 72.
+model OperacionFee {
+  id        Int     @id @default(autoincrement())
+  empresaId Int
+  empresa   Empresa @relation(fields: [empresaId], references: [id])
+
+  tipo  String @default("FIJO") // "FIJO" | "PORCENTAJE"
+  valor Float
+
+  vigenteDesde DateTime  @default(now())
+  vigenteHasta DateTime? // null = indefinido
+  activo       Boolean   @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([empresaId, activo])
 }
 
 // CPs atendidos por cada sucursal de courier (1:N desde SucursalCourier).

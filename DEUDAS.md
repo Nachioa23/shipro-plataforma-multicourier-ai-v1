@@ -1403,3 +1403,135 @@ Los 3 campos estan en `CAMPOS_AUDITABLES` (lib/auditoria-configuracion.ts) listo
 
 **Prioridad:** Media-alta. UX flow incompleto. Cliente puede llegar al dashboard sin couriers funcionales y confundirse.
 
+
+---
+
+## DEUDA 72 — Motor de actualizacion masiva de fees Modelo B (registrada 2026-06-25, scope medio)
+
+**Status:** ABIERTA. Identificada durante el diseño de DEUDA 10. Post-launch, NO bloqueante.
+
+**Problema:** El `OperacionFee` (DEUDA 10) tiene estructura fee base + override por empresa. Algunos clientes Modelo B tendran un fee personalizado (tipicamente un descuento, temporal o indefinido). Cuando Shipro decida aumentar el fee estandar, hace falta propagar el cambio SIN tocar cliente por cliente, respetando los overrides/descuentos personalizados vigentes.
+
+**Pendiente de resolver:** politica de propagacion (¿el aumento del base se aplica solo a quienes estan en estandar? ¿los descuentos personalizados se recalculan proporcionalmente o se respetan tal cual? ¿los descuentos con fecha de caducidad vuelven al nuevo base al vencer?).
+
+**Vinculo:** DEUDA 10 (OperacionFee). DEUDA 10 deja solo la estructura de datos; el motor de propagacion es esta DEUDA.
+
+---
+
+## DEUDA 73 — Completar formula de precio: seguro + descuento del cliente (registrada 2026-06-25, scope medio)
+
+**Status:** ABIERTA. Identificada durante el diseño de DEUDA 10 (discovery de `lib/cotizador.ts:170-176`). Post-launch, NO bloqueante (salvo que un piloto lo requiera).
+
+**Problema:** Hoy `calcularPrecios()` en `lib/cotizador.ts` implementa solo: `tarifa_courier + fee_shipro (ajusteTarifaPorcentaje % + markupFijo) + IVA`. Faltan dos terminos de la formula de negocio completa:
+
+1. **Seguro:** existe el flag `CredencialCourier.requiereSeguro` (Boolean) y `Paquete.requiereSeguro`, pero NINGUN codigo suma un cargo de seguro al precio. El flag esta desconectado del calculo. Falta una tasa (ej: % sobre `valorDeclarado`) que se sume cuando `requiereSeguro=true`.
+
+2. **Descuento del cliente sobre la tarifa publicada:** lo aplica el e-commerce sobre lo que le cobra a SU comprador final (ej: subvencionar 50% el envio por estrategia, o sumar 3% por cuestion financiera). Es un campo CON SIGNO (negativo=subvencion, positivo=recargo). NO existe hoy. **OJO:** es DISTINTO del descuento de Shipro sobre su propio fee (capa onboarding, Shipro→cliente). Este es capa cliente→comprador.
+
+**How to apply (estimado):** agregar campos a `CredencialCourier` (tasa seguro + descuento cliente con signo) + extender `calcularPrecios()`. Mecanicamente simple (la funcion es una linea), pero es decision de producto el orden de aplicacion de los terminos.
+
+**Nota de diseño:** DEUDA 10 guarda el precio CRUDO del courier en HistoricoCotizaciones y re-aplica markup al leer (D-10-PRICE-STORE). Por eso, cuando DEUDA 73 se implemente, el fallback aplicara seguro+descuento igual que una cotizacion normal, sin trabajo extra.
+
+**Conocimiento de dominio — el seguro por courier (aportado 2026-06-25):** cada courier maneja el seguro distinto y de forma inconsistente:
+- **Andreani (via integracion):** pasa tarifa + seguro en UN SOLO numero (sin IVA discriminado). El seguro cubre hasta $4.500.
+- **Andreani (lo que Mocis nos factura):** Mocis nos presta sus credenciales, asi que la factura/liquidacion REAL viene de Mocis, NO de Andreani. Mocis nos factura tarifa +10% sobre la de la integracion Andreani, y un seguro fijo de $90/etiqueta (+$80 sobre el que Andreani pasa por integracion).
+- **Mocis (via integracion):** NO discrimina el costo del seguro; segun ellos esta incluido en su tarifa. Cobertura desconocida.
+- **Otros couriers:** algunos mandaran el seguro en su tarifa, otros por separado, otros no lo mandaran.
+- **Realidad operativa:** ningun seguro de courier garantiza nada (no aparece el paquete -> no lo resuelven).
+
+**Decision de producto — Seguro Minimo Obligatorio (SMO):** normalizar todo esto definiendo un seguro fijo propio de Shipro (ej: $120/etiqueta), como UNA variable global actualizable con una sola accion para todos los clientes. Cubre los tres casos (seguro en tarifa, seguro separado, sin seguro) de forma uniforme. Se incorpora como termino "Seguro" a la tarifa publicada Y debitada. Reemplaza/normaliza la heterogeneidad de los seguros de courier. Es la pieza que hoy falta para que la tarifa publicada sea correcta.
+
+**Vinculo con DEUDA 10:** el cobro Modelo B (DEUDA 10 Paso 4b) hoy debita costo courier + fee + IVA, SIN seguro. Cuando DEUDA 73 agregue el SMO, el debito y la tarifa publicada lo incluiran automaticamente (mismo punto de calculo).
+
+
+---
+
+## DEUDA 74 — Refresco obligatorio periodico de tarifaPlanaRespaldo (registrada 2026-06-25, scope medio)
+
+**Status:** ABIERTA. Identificada durante el diseño de DEUDA 10 (Paso 3). Post-launch, NO bloqueante.
+
+**Problema:** La `tarifaPlanaRespaldo` (DEUDA 10, D-10-4) se carga obligatoriamente en el onboarding, pero puede quedar congelada e ir perdiendo vigencia con la inflacion. Un valor cargado hace un año puede estar muy desactualizado y, cuando el fallback lo use, publicaria un precio irreal.
+
+**Solucion propuesta:** mecanismo tipo Home Banking — modal post-login que OBLIGA al gerente_cliente a revisar/actualizar su tarifaPlanaRespaldo cuando paso demasiado tiempo desde la ultima actualizacion (ej: cada 90-180 dias). Bloquea el acceso al dashboard hasta confirmar/actualizar el valor.
+
+**Alcance estimado:** feature completa — toca login flow, estado de sesion (flag tipo "tarifaRespaldoVencida"), UI del modal, timestamp de ultima actualizacion en Empresa. Similar en espiritu al gate de onboarding (DEUDA 17) y al passwordTemporal.
+
+**Vinculo:** DEUDA 10 (tarifaPlanaRespaldo). DEUDA 10 garantiza que el valor EXISTE (obligatorio en onboarding); DEUDA 74 garantiza que se mantiene VIGENTE.
+
+**Por que no bloquea deploy:** al lanzamiento, todos los clientes recien cargaron su tarifa (esta fresca). El problema de vigencia recien aparece meses despues. Hay tiempo de sobra para construirlo post-launch.
+
+
+---
+
+## DEUDA 75 — Conciliacion tarifa virtual vs facturada + exclusion de no-recolectadas (Modelo A) (registrada 2026-06-25, scope grande)
+
+**Status:** ABIERTA. Identificada durante el diseño de DEUDA 10 (Paso 4). Post-launch, NO bloqueante.
+
+**Contexto:** En Modelo A, la tarifa publicada al comprador es "virtual" (estimada al crear el envio). La tarifa REAL que Shipro factura al cliente se ajusta a fin de mes contra lo que el courier efectivamente facturo (via Excel/liquidacion del courier). Ademas, las etiquetas que el courier NUNCA recolecto NO se facturan (el courier tampoco se las facturo a Shipro).
+
+**Problema:** Hoy no existe el motor que: (1) ajuste tarifa virtual -> facturada por envio, (2) excluya de la facturacion mensual las etiquetas no-recolectadas, (3) concilie contra la liquidacion del courier. Parte de la infra existe (FinanzasEnvio.costoCourierFacturado, costoCourierEsperado, estadoAuditoria; ruta /api/conciliacion; "Escudo Tarifario") pero el flujo completo no esta cerrado.
+
+**Vinculo:** DEUDA 10 publica la tarifa virtual de fallback; DEUDA 75 la concilia a fin de mes. Probablemente se cruza con el sistema de conciliacion existente — revisar antes de construir.
+
+**Por que no bloquea deploy:** la facturacion mensual ocurre semanas despues del primer envio. Hay tiempo de construirlo post-launch.
+
+---
+
+## DEUDA 76 — Metrica de fuga: etiquetas creadas vs entregadas al courier + reclasificacion de fee (registrada 2026-06-25, scope medio-grande)
+
+**Status:** ABIERTA. Identificada durante el diseño de DEUDA 10 (Paso 4). Post-launch, NO bloqueante.
+
+**Problema:** Un cliente Modelo A podria crear etiquetas en Shipro (usando la tecnologia) pero despachar los paquetes por afuera con otro courier, sin que esas etiquetas se recolecten ni facturen. Shipro absorbe el costo de esas etiquetas sin ingreso.
+
+**Solucion propuesta:** medir el ratio etiquetas_creadas vs etiquetas_entregadas_al_courier (o facturadas) por cliente. Si el ratio de fuga es bajo, se absorbe (costo operativo normal). Si es alto (indicio de uso de tecnologia + despacho externo), reclasificar a ese cliente para cobrarle el fee de Shipro + impuestos como si fuera Modelo B (cobro por uso de tecnologia).
+
+**Vinculo:** DEUDA 10 (OperacionFee da el mecanismo de cobro de fee); DEUDA 72 (motor de fees); DEUDA 75 (datos de recoleccion/facturacion alimentan esta metrica).
+
+**Por que no bloquea deploy:** es una optimizacion de monetizacion que requiere meses de datos de envios reales para detectar patrones de fuga. No tiene sentido antes de tener volumen.
+
+
+---
+
+## DEUDA 77 — Limite de operaciones al descubierto + aviso de saldo bajo (registrada 2026-06-25, scope medio)
+
+**Status:** ABIERTA. Identificada durante el diseño de DEUDA 10 (Paso 4b). Post-launch, NO bloqueante.
+
+**Contexto:** Hoy la suspension de cuenta (DEUDA 22) se dispara por umbral de MONTO (saldoActivo <= -(limiteDescubierto * 1.5)). Para un cliente PREPAGO (Modelo B) que opera en descubierto, ese umbral es poco comunicable: el cliente no sabe cuantas operaciones mas puede hacer antes de que lo suspendan.
+
+**Solucion propuesta (2 partes):**
+1. AVISO PROACTIVO de saldo bajo: cuando el saldo del cliente baja de cierto umbral, notificarle ("te quedan ~N etiquetas de saldo, carga para no frenar tus ventas"). Previene el 90% de las suspensiones sorpresa: el cliente recarga ANTES de quedarse sin credito.
+2. LIMITE POR CANTIDAD de operaciones al descubierto (alternativa/complemento al umbral por monto): permitir hasta N operaciones en descubierto antes de bloquear, en unidades que el cliente entiende.
+
+**Por que importa:** la premisa "la venta nunca se cae" choca con la suspension por falta de saldo. El aviso proactivo + el limite por cantidad dan al cliente la chance de recargar a tiempo, sin frenar ventas.
+
+**Por que no bloquea deploy:** el limiteDescubierto bien calibrado en el onboarding (Paso 5 de DEUDA 10) sostiene la operacion mientras tanto. El aviso es una mejora de UX que se suma despues.
+
+---
+
+## DEUDA 78 — Flujo de recarga con comprobante + verificacion del operador (registrada 2026-06-25, scope grande)
+
+**Status:** ABIERTA. Identificada durante el diseño de DEUDA 10 (Paso 4b). Post-launch, NO bloqueante.
+
+**Problema:** La recarga de saldo es 100% manual hoy: el cliente transfiere, manda comprobante por mail, un humano de Shipro verifica contra el banco y carga el saldo. El DELAY entre la transferencia y la carga puede ser de minutos (martes 11hs) o de ~63 horas (viernes 20hs -> lunes 9hs). En ese hueco, si el cliente se queda sin credito, su e-commerce NO PUEDE VENDER. Es un problema operativo critico: el cliente pierde ventas por un cuello de botella de Shipro con horario de oficina.
+
+**Solucion propuesta:** flujo semi-automatizado donde el cliente sube el comprobante a la plataforma, queda en una bandeja de verificacion para el operador de Shipro, el operador confirma contra el banco y da OK, y la plataforma acredita el saldo. Mediano plazo: integracion bancaria para verificacion automatica.
+
+**Mitigacion actual (sin construir esto):** limiteDescubierto calibrado para cubrir un fin de semana de operacion (Paso 5 onboarding) + aviso de saldo bajo (DEUDA 77). Con eso, el cliente opera en descubierto durante el hueco y no pierde ventas.
+
+**Por que no bloquea deploy:** la mitigacion (descubierto + aviso) sostiene el lanzamiento. El flujo automatizado es la solucion correcta a mediano plazo, pero es un proyecto en si mismo (upload, bandeja de verificacion, audit, eventual integracion bancaria).
+
+
+---
+
+## DEUDA 79 — Cobro del fee de operacion en el desbloqueo posterior (registrada 2026-06-25, scope chico)
+
+**Status:** ABIERTA. Identificada al cerrar DEUDA 10 (Paso 4b-ii-3). Post-launch, NO bloqueante.
+
+**Contexto:** DEUDA 10 (D-10-FEE-CHARGE) cobra el fee Modelo B (PREPAGO) SOLO cuando se emite etiqueta REAL del courier, dentro del gate de debito de envio en `lib/envios/crear.ts`. Las etiquetas genericas/bloqueadas NO debitan nada (decision de producto 2026-06-25: el cobro espera a que haya etiqueta real).
+
+**Problema:** cuando un envio bloqueado (BLOQUEADO_SALDO, BLOQUEADO_PARCIAL, etc.) se DESBLOQUEA despues — el operador o el flujo automatico genera la etiqueta real via `procesarEnviosBloqueados` (y sus variantes -deposito, -operatividad) — ese flujo HOY solo debita el costo del envio (tipo "DEBITO_ENVIO"), NO el fee de operacion. Para clientes PREPAGO, el fee deberia cobrarse en ese momento (es cuando recien se emite la etiqueta real).
+
+**Solucion:** replicar la logica de D-10-FEE-CHARGE (calcularFeeOperacion + MovimientoFinanciero "DEBITO_OPERACION_FEE") dentro de los flujos procesar-bloqueados*.ts, en el punto donde generan la etiqueta real y debitan el envio. Reusa el helper `lib/utils/operacion-fee.ts` ya existente.
+
+**Por que no bloquea deploy:** el camino directo (etiqueta real al crear el envio, courier funcionando) ya cobra el fee — cubre el caso normal mayoritario. El desbloqueo posterior es el caso secundario (courier caido al momento del alta, resuelto despues). El fee de esos casos se puede cobrar manualmente o con un ajuste hasta que se implemente. Scope chico: replicar un patron ya escrito en 3 archivos hermanos.
+

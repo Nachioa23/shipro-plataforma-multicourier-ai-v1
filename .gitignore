@@ -56,8 +56,9 @@ envios.csv
 # (sin esto, prisma migrate deploy no funciona en producción)
 !prisma/migrations/**/*.sql
 
-# Backups de BD locales NO se commitean (DEUDA 5 generó dev.db.backup.*)
-prisma/dev.db.backup.*
+# Backups de BD locales NO se commitean. Cubre ambos formatos: dev.db.backup.* (DEUDA 5)
+# y dev.db.backup-<deuda>-<fecha> (convencion desde DEUDA 17, con guion).
+prisma/dev.db.backup*
 
 # Carpeta de Claude Code / Cursor IDE — no es del proyecto
 .claude/

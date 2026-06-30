@@ -44,6 +44,9 @@ export async function POST(request: Request) {
       modeloAHabilitado,
       gerente,
       notasInternas,
+      tarifaPlanaRespaldo,
+      operacionFeeTipo,
+      operacionFeeValor,
     } = body;
 
     // DEUDA 17: validacion de campos obligatorios Fase A.
@@ -82,11 +85,46 @@ export async function POST(request: Request) {
     }
 
     const modalidadFinal = modalidadPago === "POSTPAGO" ? "POSTPAGO" : "PREPAGO";
-    const limiteFinal = modalidadFinal === "POSTPAGO" ? (parseFloat(limiteDescubierto) || 0) : 0;
+
+    // DEUDA 10 Paso 5a (D-10-ONBOARDING-DESCUBIERTO): descubierto minimo estandar
+    // para PREPAGO ($50.000, colchon de fin de semana mientras se verifica la
+    // recarga manual — ver DEUDA 78). POSTPAGO usa el valor que ingresa el admin.
+    const MIN_DESCUBIERTO_PREPAGO = 50000;
+    const limiteIngresado = parseFloat(limiteDescubierto) || 0;
+    const limiteFinal = modalidadFinal === "POSTPAGO"
+      ? limiteIngresado
+      : Math.max(limiteIngresado, MIN_DESCUBIERTO_PREPAGO);
 
     if (modalidadFinal === "POSTPAGO" && limiteFinal <= 0) {
       return NextResponse.json(
         { error: "POSTPAGO requiere limite descubierto > 0" },
+        { status: 400 }
+      );
+    }
+
+    // DEUDA 10 Paso 5a (D-10-ONBOARDING-RESPALDO): tarifaPlanaRespaldo OBLIGATORIA.
+    // Es el ultimo recurso de precio del fallback (la venta nunca se cae). Nullable
+    // en BD por compat, pero obligatoria aca (mismo patron que direccion fiscal).
+    const tarifaRespaldoNum = parseFloat(tarifaPlanaRespaldo);
+    if (!tarifaRespaldoNum || tarifaRespaldoNum <= 0) {
+      return NextResponse.json(
+        { error: "Tarifa plana de respaldo obligatoria (mayor a cero). Es el precio de ultimo recurso si el courier falla." },
+        { status: 400 }
+      );
+    }
+
+    // DEUDA 10 Paso 5a (D-10-ONBOARDING-FEE): OperacionFee del cliente.
+    // tipo FIJO (default) o PORCENTAJE. valor PRE-IVA (el sistema suma 21% al debitar).
+    // Default 1600 (estandar); el admin lo baja a 800 por convenio de descuento.
+    // El motor de actualizacion global y descuentos con vencimiento son DEUDA 72.
+    const FEE_OPERACION_DEFAULT = 1600;
+    const feeTipoFinal = operacionFeeTipo === "PORCENTAJE" ? "PORCENTAJE" : "FIJO";
+    const feeValorNum = operacionFeeValor != null && operacionFeeValor !== ""
+      ? parseFloat(operacionFeeValor)
+      : FEE_OPERACION_DEFAULT;
+    if (!feeValorNum || feeValorNum <= 0) {
+      return NextResponse.json(
+        { error: "Fee de operacion invalido (sin IVA, mayor a cero)." },
         { status: 400 }
       );
     }
@@ -108,6 +146,7 @@ export async function POST(request: Request) {
         limiteDescubierto: limiteFinal,
         modeloAHabilitado: modeloAHabilitado === true,
         notasInternas: notasInternas || null,
+        tarifaPlanaRespaldo: tarifaRespaldoNum,
         usuarios: {
           create: {
             nombre: gerente.nombre,
@@ -116,6 +155,13 @@ export async function POST(request: Request) {
             password: passwordHasheado,
             passwordTemporal: true,
             rol: "gerente_cliente"
+          }
+        },
+        operacionFees: {
+          create: {
+            tipo: feeTipoFinal,
+            valor: feeValorNum,
+            activo: true
           }
         }
       },

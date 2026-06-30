@@ -30,6 +30,10 @@ export default function GestionClientes() {
   const [modalidadPago, setModalidadPago] = useState<"PREPAGO" | "POSTPAGO">("PREPAGO");
   const [limiteDescubierto, setLimiteDescubierto] = useState("");
   const [modeloAHabilitado, setModeloAHabilitado] = useState(false);
+  // DEUDA 10 Paso 5b: tarifa plana de respaldo (obligatoria) + OperacionFee.
+  const [tarifaPlanaRespaldo, setTarifaPlanaRespaldo] = useState("");
+  const [operacionFeeTipo, setOperacionFeeTipo] = useState<"FIJO" | "PORCENTAJE">("FIJO");
+  const [operacionFeeValor, setOperacionFeeValor] = useState("1600");
   // Datos gerente
   const [gerenteNombre, setGerenteNombre] = useState("");
   const [gerenteEmail, setGerenteEmail] = useState("");
@@ -86,6 +90,16 @@ export default function GestionClientes() {
         setGuardando(false);
         return;
       }
+      if ((parseFloat(tarifaPlanaRespaldo) || 0) <= 0) {
+        setError("Tarifa plana de respaldo obligatoria (mayor a cero). Es el precio de último recurso si el courier falla.");
+        setGuardando(false);
+        return;
+      }
+      if ((parseFloat(operacionFeeValor) || 0) <= 0) {
+        setError("Fee de operación inválido (sin IVA, mayor a cero).");
+        setGuardando(false);
+        return;
+      }
 
       const res = await fetch("/api/clientes", {
         method: "POST",
@@ -99,8 +113,11 @@ export default function GestionClientes() {
           direccionFiscalLocalidad: direccionLocalidad,
           direccionFiscalProvincia: direccionProvincia,
           modalidadPago,
-          limiteDescubierto: modalidadPago === "POSTPAGO" ? parseFloat(limiteDescubierto) : 0,
+          limiteDescubierto: parseFloat(limiteDescubierto) || 0,
           modeloAHabilitado,
+          tarifaPlanaRespaldo: parseFloat(tarifaPlanaRespaldo),
+          operacionFeeTipo,
+          operacionFeeValor: operacionFeeValor.trim() === "" ? undefined : parseFloat(operacionFeeValor),
           gerente: {
             nombre: gerenteNombre,
             email: gerenteEmail,
@@ -128,6 +145,9 @@ export default function GestionClientes() {
         setModalidadPago("PREPAGO");
         setLimiteDescubierto("");
         setModeloAHabilitado(false);
+        setTarifaPlanaRespaldo("");
+        setOperacionFeeTipo("FIJO");
+        setOperacionFeeValor("1600");
         setGerenteNombre("");
         setGerenteEmail("");
         setGerenteTelefono("");
@@ -284,12 +304,37 @@ export default function GestionClientes() {
                       <option value="POSTPAGO">POSTPAGO (cuenta corriente)</option>
                     </select>
                   </div>
-                  {modalidadPago === "POSTPAGO" && (
-                    <div>
-                      <label className="block text-xs font-bold text-gray-500 mb-1">Límite descubierto autorizado * <span className="text-gray-400 font-normal">(en pesos)</span></label>
-                      <input type="number" value={limiteDescubierto} onChange={(e) => setLimiteDescubierto(e.target.value)} placeholder="100000" required min="1" className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-[#233b6b] outline-none" />
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 mb-1">
+                      {modalidadPago === "POSTPAGO"
+                        ? <>Límite descubierto autorizado * <span className="text-gray-400 font-normal">(en pesos)</span></>
+                        : <>Colchón de descubierto <span className="text-gray-400 font-normal">(en pesos, mínimo $50.000)</span></>}
+                    </label>
+                    <input type="number" value={limiteDescubierto} onChange={(e) => setLimiteDescubierto(e.target.value)} placeholder={modalidadPago === "POSTPAGO" ? "100000" : "50000"} required={modalidadPago === "POSTPAGO"} min={modalidadPago === "POSTPAGO" ? "1" : "0"} className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-[#233b6b] outline-none" />
+                    {modalidadPago === "PREPAGO" && (
+                      <p className="text-[10px] text-gray-500 mt-1">Si lo dejás vacío o menor, se aplica el mínimo de $50.000 (colchón para sostener ventas mientras se verifica la recarga).</p>
+                    )}
+                  </div>
+
+                  {/* DEUDA 10 Paso 5b: tarifa plana de respaldo (obligatoria) */}
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 mb-1">Tarifa plana de respaldo * <span className="text-gray-400 font-normal">(en pesos)</span></label>
+                    <input type="number" value={tarifaPlanaRespaldo} onChange={(e) => setTarifaPlanaRespaldo(e.target.value)} placeholder="11858" required min="1" className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-[#233b6b] outline-none" />
+                    <p className="text-[10px] text-gray-500 mt-1">Precio de último recurso si el courier falla y no hay histórico. Es un precio final completo (incluye courier + fee + impuestos). La venta nunca se cae.</p>
+                  </div>
+
+                  {/* DEUDA 10 Paso 5b: OperacionFee (fee + IVA al emitir etiqueta, Modelo B) */}
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 mb-1">Fee de operación Shipro * <span className="text-gray-400 font-normal">(sin IVA)</span></label>
+                    <div className="flex gap-2">
+                      <select value={operacionFeeTipo} onChange={(e) => setOperacionFeeTipo(e.target.value as "FIJO" | "PORCENTAJE")} className="px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-[#233b6b] outline-none bg-white">
+                        <option value="FIJO">Fijo ($)</option>
+                        <option value="PORCENTAJE">Porcentaje (%)</option>
+                      </select>
+                      <input type="number" value={operacionFeeValor} onChange={(e) => setOperacionFeeValor(e.target.value)} placeholder="1600" required min="1" className="flex-1 px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-[#233b6b] outline-none" />
                     </div>
-                  )}
+                    <p className="text-[10px] text-gray-500 mt-1">Estándar $1.600 sin IVA (el sistema suma 21% al debitar). Bajalo a $800 si aplica el descuento del 50% por 6 meses. {operacionFeeTipo === "PORCENTAJE" && "En porcentaje, aplica sobre la tarifa del courier."}</p>
+                  </div>
                   <label className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl cursor-pointer">
                     <input type="checkbox" checked={modeloAHabilitado} onChange={(e) => setModeloAHabilitado(e.target.checked)} className="w-4 h-4 rounded text-[#233b6b] focus:ring-[#233b6b]" />
                     <div>

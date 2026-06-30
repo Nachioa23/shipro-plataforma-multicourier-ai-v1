@@ -1,0 +1,31 @@
+# SHIPRO 2.0 — Postgres local para desarrollo (DEUDA 66 Pieza 1).
+# Paridad con produccion (Linode) y base para staging.
+# Levantar:   docker compose up -d
+# Apagar:     docker compose down
+# Apagar + borrar datos: docker compose down -v
+# La data persiste en el volumen nombrado shipro_pgdata entre reinicios.
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: shipro_postgres_local
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: shipro
+      POSTGRES_PASSWORD: shipro_local_dev
+      POSTGRES_DB: shipro_dev
+    ports:
+      # host:container — 5433 en el host para no chocar con un Postgres
+      # del sistema si existiera (el default 5432). Conectarse a localhost:5433.
+      - "5433:5432"
+    volumes:
+      - shipro_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shipro -d shipro_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  shipro_pgdata:
+    name: shipro_pgdata

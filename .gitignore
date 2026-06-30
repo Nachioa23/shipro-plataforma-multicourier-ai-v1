@@ -32,6 +32,8 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# Excepcion: .env.example SI se commitea (plantilla sin secretos, documenta el formato).
+!.env.example
 
 # vercel
 .vercel

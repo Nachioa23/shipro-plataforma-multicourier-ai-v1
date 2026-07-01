@@ -1311,22 +1311,22 @@ Los 3 campos estan en `CAMPOS_AUDITABLES` (lib/auditoria-configuracion.ts) listo
 
 ---
 
-## DEUDA 66 — Postgres migration para produccion (BLOCK 1.1, registrada 2026-06-24, hard-block FASE 3)
+## DEUDA 66 — Postgres migration para produccion (BLOCK 1.1, registrada 2026-06-24, PARCIAL 2026-07-01: infra local + schema + Decimal RESUELTOS, falta Pieza 5 Linode)
 
-**Status:** ABIERTA. Numerada en este sync (previo no tenia entry dedicada; el checklist la mencionaba como "Registrar como DEUDA 66").
+**Status:** PARCIAL. Piezas 1-3 + conversion Decimal RESUELTAS en commits 8bb80ee (Pieza 1: Postgres local docker-compose), 3fca0ac (Piezas 2-3: schema `provider = "postgresql"` + baseline nueva), 72836c4 (Decimal: 17 campos monetarios `@db.Decimal(12,2)` + 20 archivos convertidos). Pendiente: Pieza 5 (provisioning Linode + DATABASE_URL productivo). Pieza 4 (data migration) N/A: BD local greenfield, prod arrancara greenfield tambien.
 
 **Por que bloquea deploy:** SQLite no soporta produccion concurrente. Cualquier cliente real con uso simultaneo lo rompe.
 
 **Trabajo:**
-- Provisioning Linode + base Postgres.
-- Cambio `provider = "postgresql"` en `prisma/schema.prisma`.
-- Migracion data existente (seed productivo).
-- Update DATABASE_URL en `.env.local` + secrets.
-- Smoke test E2E en Postgres (cotizar + crear envio + rastreo).
+- ✅ Postgres local via docker-compose (puerto host 5433). Commit 8bb80ee.
+- ✅ Cambio `provider = "postgresql"` en `prisma/schema.prisma` + `migration_lock.toml`. Commit 3fca0ac.
+- ✅ Baseline Postgres nueva `20260630190446_baseline_postgres_deuda66` (28 migraciones SQLite archivadas via el historial de git). Commit 3fca0ac.
+- ✅ Conversion Float → Decimal(12,2) de 17 campos monetarios (`Empresa.saldoActivo/limiteDescubierto/tarifaPlanaRespaldo`, `CredencialCourier.markupFijo`, `FinanzasEnvio.precio*/costo*/valorDeclarado/fugaFinanciera`, `MovimientoFinanciero.monto/saldoPosterior`, `LiquidacionMensual.montoTotal`, `HistoricoCotizaciones.precio`, `OperacionFee.valor`) + refactor de ~20 archivos de codigo (helpers de dinero, envios, api routes, mailer, analytics) usando metodos Decimal (`.add`/`.sub`/`.mul`/`.div`/`.gt`/`.lt`/`.eq`). Campos NO monetarios (peso, lat/lng, porcentajes, dimensiones) siguen Float. Verificado end-to-end con smoke test contra Postgres local (script throwaway, borrado post-commit): `$100.000,00 − $12.500,00 envio − $1.936,00 fee c/IVA = $85.564,00` EXACTO al centavo, cero drift de float. Commit 72836c4.
+- ⏳ Provisioning Linode + DATABASE_URL productivo + smoke test E2E en produccion.
 
-**Estimado:** 1 dia.
+**Estimado restante:** 4-6 horas (Linode provision + smoke E2E en produccion).
 
-**Riesgo de saltar:** ALTO. Operacion inestable bajo carga real.
+**Riesgo de saltar:** ALTO. Operacion inestable bajo carga real (aplica a la Pieza 5 pendiente).
 
 **Vinculo checklist:** docs/COMERCIALIZACION-CHECKLIST.md — TIER 1 BLOCK 1.1.
 
@@ -1534,4 +1534,42 @@ Los 3 campos estan en `CAMPOS_AUDITABLES` (lib/auditoria-configuracion.ts) listo
 **Solucion:** replicar la logica de D-10-FEE-CHARGE (calcularFeeOperacion + MovimientoFinanciero "DEBITO_OPERACION_FEE") dentro de los flujos procesar-bloqueados*.ts, en el punto donde generan la etiqueta real y debitan el envio. Reusa el helper `lib/utils/operacion-fee.ts` ya existente.
 
 **Por que no bloquea deploy:** el camino directo (etiqueta real al crear el envio, courier funcionando) ya cobra el fee — cubre el caso normal mayoritario. El desbloqueo posterior es el caso secundario (courier caido al momento del alta, resuelto despues). El fee de esos casos se puede cobrar manualmente o con un ajuste hasta que se implemente. Scope chico: replicar un patron ya escrito en 3 archivos hermanos.
+
+
+---
+
+## DEUDA 80 — Que el gerente_cliente cargue su propia tarifaPlanaRespaldo (registrada 2026-06-25, scope chico-medio)
+
+**Status:** ABIERTA. Identificada al cerrar DEUDA 10 (Paso 5). Post-launch, NO bloqueante.
+
+**Contexto:** En DEUDA 10 (D-10-ONBOARDING-RESPALDO, Opcion A) la tarifaPlanaRespaldo la carga el admin de Shipro en el alta del cliente (`app/(dashboard)/clientes/page.tsx`). Responsabilidad del numero: Shipro.
+
+**Propuesta (Opcion B diferida):** que el gerente_cliente cargue/edite su propia tarifaPlanaRespaldo desde su wizard de onboarding (`app/onboarding/page.tsx`) o su panel, para que ASUMA la responsabilidad del numero (si la tarifa de respaldo resulta baja cuando se usa, es decision del cliente).
+
+**A resolver en el diseño:** (1) que la tarifa exista desde el alta igual (el admin pone una inicial, el cliente la ajusta despues); (2) que pasa mientras el cliente no la actualizo — se usa la del admin; (3) validacion en el wizard del cliente. Se cruza con DEUDA 74 (refresco obligatorio periodico).
+
+**Por que no bloquea deploy:** la carga por admin (Opcion A) ya garantiza que la tarifa exista desde el dia uno. Que el cliente la maneje es una mejora de responsabilidad/autonomia, no un requisito de lanzamiento.
+
+
+---
+
+## DEUDA 81 — Fix seed command: alias `@/` no resuelve con ts-node crudo (registrada 2026-07-01, scope chico, dev-only)
+
+**Status:** ABIERTA. Detectada durante DEUDA 66 smoke test (2026-07-01).
+
+**Origen:** `package.json` declara `"prisma": { "seed": "npx ts-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed.ts" }`. Al correr `npx prisma db seed` falla con `Cannot find module '@/lib/prisma'`. `prisma/seed.ts` importa `../lib/couriers/serviciosSoportados` que a su vez importa `@/lib/prisma` (alias de Next.js). ts-node crudo NO resuelve el alias `@/` porque `tsconfig.json` define `"paths"` pero NO `"baseUrl"`.
+
+**Workaround conocido (para correr scripts ad-hoc con imports `@/*`):**
+
+```
+TS_NODE_BASEURL=./ npx ts-node -r tsconfig-paths/register --compiler-options '{"module":"commonjs","baseUrl":"./"}' <script>.ts
+```
+
+`tsconfig-paths` resuelve `@/lib/prisma` correctamente con esa combinacion. `tsconfig-paths` ya esta en `node_modules` (transitive dep) — no requiere install adicional en el corto plazo.
+
+**Fix propuesto:**
+- Actualizar el seed command en `package.json` a: `npx ts-node -r tsconfig-paths/register --compiler-options '{"module":"CommonJS","baseUrl":"./"}' prisma/seed.ts`.
+- Agregar `tsconfig-paths` como `devDependency` explicita en `package.json` (evita que `npm prune` lo saque como transitive).
+
+**Por que no bloquea deploy:** el seed es exclusivamente dev/local. En produccion el populate se hace via onboarding admin (no via seed script). Prioridad: baja, dev-only. Mientras tanto el workaround permite correr scripts que dependan de `@/` desde CLI.
 

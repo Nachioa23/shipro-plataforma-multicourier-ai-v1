@@ -130,7 +130,7 @@ export async function POST(request: Request) {
       email: envio.destino.email || "",
       telefono: envio.destino.telefono || "",
       pesoReal: envio.pesoReal,
-      valorDeclarado: envio.finanzas?.valorDeclarado || 0,
+      valorDeclarado: envio.finanzas?.valorDeclarado?.toNumber() ?? 0,
       modalidad: envio.modalidad,
       numeroOrden: envio.numeroOrden,
       origen: origenDespacho,

@@ -72,7 +72,7 @@ export async function POST(request: Request) {
         largoCm: 10,
         anchoCm: 10,
         altoCm: 10,
-        valorDeclarado: envioOriginal.finanzas?.precioFactura || 0,
+        valorDeclarado: envioOriginal.finanzas?.precioFactura?.toNumber() ?? 0,
         requiereSeguro: false
       }],
       referencia: `INVERSA-${trackingOriginal}`,

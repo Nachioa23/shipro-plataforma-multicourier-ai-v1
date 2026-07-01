@@ -26,6 +26,7 @@
 // ============================================================================
 
 import prisma from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { registrarCambioConfiguracion } from "@/lib/auditoria-configuracion";
 import { enviarMailEmpresaSuspendida } from "@/lib/mailer";
 import { getAppUrl } from "@/lib/utils/app-url";
@@ -43,15 +44,15 @@ export const MULTIPLICADOR_REACTIVACION = 0.5;
  * @returns { debeSuspender, debeReactivar } - acciones a tomar
  */
 export function evaluarSuspension(
-  saldoActivo: number,
-  limiteDescubierto: number,
+  saldoActivo: Prisma.Decimal,
+  limiteDescubierto: Prisma.Decimal,
   suspendidaActual: boolean
 ): { debeSuspender: boolean; debeReactivar: boolean } {
-  const umbralSuspension = -(limiteDescubierto * MULTIPLICADOR_SUSPENSION);
-  const umbralReactivacion = -(limiteDescubierto * MULTIPLICADOR_REACTIVACION);
+  const umbralSuspension = limiteDescubierto.mul(MULTIPLICADOR_SUSPENSION).neg();
+  const umbralReactivacion = limiteDescubierto.mul(MULTIPLICADOR_REACTIVACION).neg();
 
-  const debeSuspender = !suspendidaActual && saldoActivo <= umbralSuspension;
-  const debeReactivar = suspendidaActual && saldoActivo >= umbralReactivacion;
+  const debeSuspender = !suspendidaActual && saldoActivo.lte(umbralSuspension);
+  const debeReactivar = suspendidaActual && saldoActivo.gte(umbralReactivacion);
 
   return { debeSuspender, debeReactivar };
 }
@@ -67,8 +68,8 @@ export function evaluarSuspension(
 export async function suspenderEmpresa(
   empresaId: number,
   request: Request | null,
-  saldoActual: number,
-  limiteDescubierto: number
+  saldoActual: Prisma.Decimal,
+  limiteDescubierto: Prisma.Decimal
 ): Promise<void> {
   // 1. Update Empresa.
   await prisma.empresa.update({
@@ -163,8 +164,8 @@ export async function suspenderEmpresa(
 export async function reactivarEmpresa(
   empresaId: number,
   request: Request | null,
-  saldoActual: number,
-  limiteDescubierto: number
+  saldoActual: Prisma.Decimal,
+  limiteDescubierto: Prisma.Decimal
 ): Promise<void> {
   // 1. Update Empresa.
   await prisma.empresa.update({

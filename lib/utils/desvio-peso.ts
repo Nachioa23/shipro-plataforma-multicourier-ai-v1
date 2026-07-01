@@ -303,8 +303,8 @@ export async function calcularDesvioPeso(
       auditoria: auditarDesvio({
         pesoCobrado: e.finanzas!.pesoCobrado,
         pesoAforado: e.finanzas!.pesoAforado,
-        precioMostrado: e.finanzas!.precioMostrado,
-        precioFactura: e.finanzas!.precioFactura,
+        precioMostrado: e.finanzas!.precioMostrado?.toNumber() ?? null,
+        precioFactura: e.finanzas!.precioFactura?.toNumber() ?? null,
       }),
     }));
 

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { procesarEnviosBloqueados } from "@/lib/envios/procesar-bloqueados";
 
 // GET: Trae a todas las empresas y sus saldos
@@ -36,7 +37,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Datos inválidos" }, { status: 400 });
     }
 
-    const montoFloat = parseFloat(monto);
+    const montoDecimal = new Prisma.Decimal(parseFloat(monto));
 
     // Transacción segura para evitar desfasajes
     const resultado = await prisma.$transaction(async (tx) => {
@@ -47,7 +48,7 @@ export async function POST(request: Request) {
       if (!empresa) throw new Error("Empresa no encontrada");
 
       // Sumamos el pago al saldo actual (Si debía -5000 y paga 5000, queda en 0)
-      const nuevoSaldo = empresa.saldoActivo + montoFloat;
+      const nuevoSaldo = empresa.saldoActivo.add(montoDecimal);
 
       // 1. Actualizamos el saldo de la empresa
       await tx.empresa.update({
@@ -59,8 +60,8 @@ export async function POST(request: Request) {
       const movimiento = await tx.movimientoFinanciero.create({
         data: {
           empresaId: parseInt(empresaId),
-          tipo: montoFloat >= 0 ? "INGRESO_MANUAL" : "AJUSTE_ADMIN",
-          monto: montoFloat,
+          tipo: montoDecimal.gte(0) ? "INGRESO_MANUAL" : "AJUSTE_ADMIN",
+          monto: montoDecimal,
           saldoPosterior: nuevoSaldo,
           referencia: referencia || "S/R",
           descripcion: notas || "Acreditación de saldo / Pago de liquidación",

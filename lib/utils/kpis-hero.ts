@@ -43,6 +43,7 @@
 // ============================================================================
 
 import prisma from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import type { AuthContext } from "@/lib/auth-context";
 
 const VENTANA_EXITO_DIAS = 180;
@@ -124,10 +125,11 @@ export async function calcularKPIsHeroAnalitica(
     : 0;
 
   // gastoTotal: reduce sobre finanzas (in-memory).
-  const gastoTotal = enviosData.reduce(
-    (acc, e) => acc + (e.finanzas?.precioFactura || e.finanzas?.precioMostrado || 0),
-    0
+  const gastoTotalDecimal = enviosData.reduce(
+    (acc, e) => acc.add(e.finanzas?.precioFactura ?? e.finanzas?.precioMostrado ?? new Prisma.Decimal(0)),
+    new Prisma.Decimal(0)
   );
+  const gastoTotal = gastoTotalDecimal.toNumber();
 
   // Query D: tickets activos sin date filter (agnostic a enum drift).
   const ticketsWhere: any = {

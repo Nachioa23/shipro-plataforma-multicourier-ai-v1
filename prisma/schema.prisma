@@ -26,9 +26,9 @@ model Empresa {
   apiKeyCreadaEn DateTime?
 
   // --- FINANZAS Y BILLETERA ---
-  saldoActivo       Float  @default(0.0)
+  saldoActivo       Decimal @default(0) @db.Decimal(12, 2)
   modalidadPago     String @default("POSTPAGO") // PREPAGO (Billetera) o POSTPAGO (Crédito)
-  limiteDescubierto Float  @default(0.0) // Cuánto le permitimos adeudar
+  limiteDescubierto Decimal @default(0) @db.Decimal(12, 2) // Cuánto le permitimos adeudar
 
   ordenamientoDefault String @default("PRECIO_ASC") // PRECIO_ASC, SLA, HISTORICO
 
@@ -76,7 +76,7 @@ model Empresa {
   // courier falla Y no hay historico de precio para el trayecto. La fija el
   // admin Shipro en el alta del cliente. Nullable: si null, no hay respaldo
   // configurado (cae a comportamiento por defecto). Float -> Decimal en DEUDA 66.
-  tarifaPlanaRespaldo Float?
+  tarifaPlanaRespaldo Decimal? @db.Decimal(12, 2)
 
   createdAt               DateTime                 @default(now())
   reglasRuteo             ReglaRuteo[]
@@ -322,7 +322,7 @@ model CredencialCourier {
   // --- REGLAS DE PRICING PARTICULAR ---
   tarifaIncluyeIva       Boolean   @default(true)
   ajusteTarifaPorcentaje Float     @default(0.0) // Markup en %
-  markupFijo             Float     @default(0.0) // Fee fijo por paquete (Ej: +$500)
+  markupFijo             Decimal   @default(0) @db.Decimal(12, 2) // Fee fijo por paquete (Ej: +$500)
   fechaCaducidadPromo    DateTime? // Fecha límite de esta condición comercial
 
   ordenamientoDefault String @default("PRECIO_ASC")
@@ -386,25 +386,25 @@ model FinanzasEnvio {
   id Int @id @default(autoincrement())
 
   // 1. Lo que mostramos / cobramos
-  precioMostrado          Float? // Lo que el comprador vio en el checkout
-  precioFactura           Float? // Lo que Shipro le debita a la empresa
+  precioMostrado          Decimal? @db.Decimal(12, 2) // Lo que el comprador vio en el checkout
+  precioFactura           Decimal? @db.Decimal(12, 2) // Lo que Shipro le debita a la empresa
   porcentajePrecioFactura Float?
-  valorDeclarado          Float? // Seguro de la mercadería (Terceros)
+  valorDeclarado          Decimal? @db.Decimal(12, 2) // Seguro de la mercadería (Terceros)
 
   // 2. Auditoría del Courier (Escudo Tarifario)
-  precioProveedor       Float? // Costo cotizado al crear la etiqueta
-  costoCourierEsperado  Float? // NUEVO: Lo que DEBERÍA cobrar el courier según el aforo final
-  costoCourierFacturado Float? // NUEVO: Lo que REALMENTE vino en el Excel del courier
+  precioProveedor       Decimal? @db.Decimal(12, 2) // Costo cotizado al crear la etiqueta
+  costoCourierEsperado  Decimal? @db.Decimal(12, 2) // NUEVO: Lo que DEBERÍA cobrar el courier según el aforo final
+  costoCourierFacturado Decimal? @db.Decimal(12, 2) // NUEVO: Lo que REALMENTE vino en el Excel del courier
   estadoAuditoria       String  @default("PENDIENTE") // OK, DOBLE_COBRO, SOBREPRECIO_RECLAMAR
   facturaCourierRef     String? // NUEVO: Escudo anti-UPS (Ej: "FC-0001-9992")
 
   // 3. Auditoría de Peso Físico
   pesoCobrado Float? // Peso cotizado inicialmente (Ej: 1kg)
   pesoAforado Float? // Peso real facturado a fin de mes (Ej: 5kg)
-  costoAforo  Float? // Diferencia monetaria del desvío cobrada al cliente
+  costoAforo  Decimal? @db.Decimal(12, 2) // Diferencia monetaria del desvío cobrada al cliente
 
   // 4. Auditoría de Ruteo Inteligente (Costo de Oportunidad)
-  fugaFinanciera   Float?  @default(0.0) // Diferencia $ vs la mejor opción
+  fugaFinanciera   Decimal? @default(0) @db.Decimal(12, 2) // Diferencia $ vs la mejor opción
   courierSugerido  String? // Quién era el más barato para esta modalidad
   servicioSugerido String? // Qué servicio era el más barato
 
@@ -420,8 +420,8 @@ model MovimientoFinanciero {
   empresa   Empresa @relation(fields: [empresaId], references: [id])
 
   tipo           String // Ej: "DEBITO_ENVIO", "CREDITO_RECARGA", "AJUSTE_AFORO"
-  monto          Float // Negativo (débito) o Positivo (crédito)
-  saldoPosterior Float // Foto del saldo después del movimiento
+  monto          Decimal @db.Decimal(12, 2) // Negativo (débito) o Positivo (crédito)
+  saldoPosterior Decimal @db.Decimal(12, 2) // Foto del saldo después del movimiento
 
   referencia  String? // Ej: "Tracking #12345" o "Transf. MP #999"
   descripcion String? // Ej: "Ajuste por aforo de 1kg a 5kg"
@@ -441,7 +441,7 @@ model LiquidacionMensual {
   empresa   Empresa @relation(fields: [empresaId], references: [id])
 
   periodo    String // Ej: "2026-04" o "Abril 2026"
-  montoTotal Float // La suma de todos los envíos y aforos del mes
+  montoTotal Decimal @db.Decimal(12, 2) // La suma de todos los envíos y aforos del mes
   estado     String @default("EMITIDA") // EMITIDA, PAGADA
 
   excelProformaUrl String? // El link al Excel consolidado con el detalle
@@ -1080,7 +1080,7 @@ model HistoricoCotizaciones {
   cpOrigen  String
   cpDestino String
   pesoKg    Float
-  precio    Float
+  precio    Decimal @db.Decimal(12, 2)
   // DEUDA 10 (D-10-PRICE-STORE): precio CRUDO del courier (costoSecoCourier),
   // sin markup ni IVA. El markup del cliente se re-aplica al leer en el fallback.
   servicio  String? // texto crudo del courier ("Estándar", "Same Day"). Para lectura humana, NO criterio de busqueda.
@@ -1110,7 +1110,7 @@ model OperacionFee {
   empresa   Empresa @relation(fields: [empresaId], references: [id])
 
   tipo  String @default("FIJO") // "FIJO" | "PORCENTAJE"
-  valor Float
+  valor Decimal @db.Decimal(12, 2)
 
   vigenteDesde DateTime  @default(now())
   vigenteHasta DateTime? // null = indefinido

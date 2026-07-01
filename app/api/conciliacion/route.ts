@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 
 export async function POST(request: Request) {
   try {
@@ -14,7 +15,7 @@ export async function POST(request: Request) {
       aprobadosParaCliente: 0,
       alertasDobleCobro: 0,
       alertasSobreprecio: 0,
-      montoARecuperar: 0
+      montoARecuperar: new Prisma.Decimal(0)
     };
 
     for (const fila of filasExcel) {
@@ -42,7 +43,7 @@ export async function POST(request: Request) {
         });
         
         resultados.alertasDobleCobro++;
-        resultados.montoARecuperar += fila.costo; // Exigimos la nota de crédito por el total
+        resultados.montoARecuperar = resultados.montoARecuperar.add(new Prisma.Decimal(fila.costo)); // Exigimos la nota de crédito por el total
         resultados.procesados++;
         continue; // Cortamos acá, el cliente no se entera de nada
       }
@@ -50,33 +51,35 @@ export async function POST(request: Request) {
       // ==========================================
       // ESCUDO 2: AUDITORÍA DE TARIFARIO
       // ==========================================
-      const costoEsperado = envio.finanzas.precioProveedor || 0; // Lo que dijo la cotización inicial
-      const difCosto = fila.costo - costoEsperado;
+      const costoEsperado: Prisma.Decimal = envio.finanzas.precioProveedor ?? new Prisma.Decimal(0); // Lo que dijo la cotización inicial
+      const difCosto = new Prisma.Decimal(fila.costo).sub(costoEsperado);
 
       let estadoAud = "OK";
-      let costoBaseParaCliente = costoEsperado;
+      let costoBaseParaCliente: Prisma.Decimal = costoEsperado;
 
-      if (difCosto > 0.1) {
+      if (difCosto.gt("0.1")) {
         // SOBREPRECIO: El courier nos cobra $1200 pero el tarifario decía $1000
         estadoAud = "SOBREPRECIO_RECLAMAR";
         costoBaseParaCliente = costoEsperado; // Protegemos al cliente: le cobramos sobre la base de $1000
-        
+
         resultados.alertasSobreprecio++;
-        resultados.montoARecuperar += difCosto; // Exigimos nota de crédito por los $200 de diferencia
+        resultados.montoARecuperar = resultados.montoARecuperar.add(difCosto); // Exigimos nota de crédito por los $200 de diferencia
       } else {
         // MATCH PERFECTO O A FAVOR NUESTRO: El courier cobró lo mismo o menos.
         estadoAud = "OK";
-        costoBaseParaCliente = fila.costo; // Cobramos sobre lo real
+        costoBaseParaCliente = new Prisma.Decimal(fila.costo); // Cobramos sobre lo real
       }
 
       // ==========================================
       // GUARDADO FINAL (Preparando la Bolsa 1)
       // ==========================================
-      
+
       // Recalculamos cuánto le cobraremos al cliente al momento de generar su Proforma
       const credencial = envio.empresa.credenciales.find(c => c.nombreCourier === envio.courier.nombre);
       const porcentajeMarkup = credencial?.ajusteTarifaPorcentaje || 0;
-      const nuevoPrecioFacturaCliente = costoBaseParaCliente * (1 + (porcentajeMarkup / 100)) + (credencial?.markupFijo || 0);
+      const nuevoPrecioFacturaCliente = costoBaseParaCliente
+        .add(costoBaseParaCliente.mul(porcentajeMarkup).div(100))
+        .add(credencial?.markupFijo ?? new Prisma.Decimal(0));
 
       await prisma.finanzasEnvio.update({
         where: { id: envio.finanzas!.id },
@@ -94,7 +97,11 @@ export async function POST(request: Request) {
       resultados.procesados++;
     }
 
-    return NextResponse.json({ success: true, ...resultados });
+    return NextResponse.json({
+      success: true,
+      ...resultados,
+      montoARecuperar: resultados.montoARecuperar.toNumber()
+    });
 
   } catch (error) {
     console.error("Error en API Conciliación:", error);

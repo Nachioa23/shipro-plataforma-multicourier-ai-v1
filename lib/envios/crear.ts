@@ -13,7 +13,7 @@ import { validarOperatividadPar } from "@/lib/depositos/operatividad";
 import { getAppUrl } from "@/lib/utils/app-url";
 import { resolverPrecioFallback } from "@/lib/utils/precio-fallback";
 import { calcularFeeOperacion, type ResultadoFeeOperacion } from "@/lib/utils/operacion-fee";
-import type { DepositoCourierConfig } from "@prisma/client";
+import { Prisma, type DepositoCourierConfig } from "@prisma/client";
 
 export interface CrearEnvioInput {
   empresaId: number;
@@ -358,18 +358,18 @@ export async function crearEnvio(input: CrearEnvioInput) {
   // no se debita saldo, no se manda mail. Se desbloquea cuando el
   // cliente recargue saldo (procesarEnviosBloqueados).
   // ==============================================================
-  let montoDebito = parseFloat(String(costoEnvio)) || 0;
+  let montoDebito: Prisma.Decimal = new Prisma.Decimal(parseFloat(String(costoEnvio)) || 0);
   const tipoCuentaEfectivo = credencialMain?.tipoCuenta || empresaConData.modalidadPago || "POSTPAGO";
   let bloqueadoPorSaldo = false;
   // DEUDA 22: si el debit cruza umbral, se programa suspension fuera de la tx.
-  let suspensionPendiente: { saldoFinal: number; limiteAfectado: number } | null = null;
+  let suspensionPendiente: { saldoFinal: Prisma.Decimal; limiteAfectado: Prisma.Decimal } | null = null;
 
   if (tipoCuentaEfectivo === "PREPAGO") {
-    if ((empresaConData.saldoActivo || 0) < montoDebito) {
+    if ((empresaConData.saldoActivo ?? new Prisma.Decimal(0)).lt(montoDebito)) {
       bloqueadoPorSaldo = true;
     }
   } else { // POSTPAGO
-    if ((empresaConData.saldoActivo || 0) + (empresaConData.limiteDescubierto || 0) < montoDebito) {
+    if ((empresaConData.saldoActivo ?? new Prisma.Decimal(0)).add(empresaConData.limiteDescubierto ?? new Prisma.Decimal(0)).lt(montoDebito)) {
       bloqueadoPorSaldo = true;
     }
   }
@@ -449,10 +449,10 @@ export async function crearEnvio(input: CrearEnvioInput) {
   }
 
   // montoDebito ya fue calculado arriba para la validación de saldo.
-  const montoProveedor = parseFloat(String(costoProveedor)) || 0;
+  const montoProveedor: Prisma.Decimal = new Prisma.Decimal(parseFloat(String(costoProveedor)) || 0);
   let empresaNombreParaMail = "la Tienda";
 
-  let fugaCalculada = 0;
+  let fugaCalculada: Prisma.Decimal = new Prisma.Decimal(0);
   let courierSugeridoStr: string | null = null;
   let servicioSugeridoStr: string | null = null;
 
@@ -485,9 +485,9 @@ export async function crearEnvio(input: CrearEnvioInput) {
     else if (mod.includes('domicilio') || mod.includes('estándar') || mod.includes('sameday') || mod.includes('same-day')) opcionesParaComparar = dataCotizacion.domicilio || [];
 
     if (opcionesParaComparar.length > 0) {
-      const opcionMasBarata = opcionesParaComparar.reduce((prev, curr) => prev.precioFinal < curr.precioFinal ? prev : curr);
-      if (opcionMasBarata.precioFinal < montoDebito) {
-        fugaCalculada = montoDebito - opcionMasBarata.precioFinal;
+      const opcionMasBarata = opcionesParaComparar.reduce((prev, curr) => prev.precioFinal.lt(curr.precioFinal) ? prev : curr);
+      if (opcionMasBarata.precioFinal.lt(montoDebito)) {
+        fugaCalculada = montoDebito.sub(opcionMasBarata.precioFinal);
         courierSugeridoStr = opcionMasBarata.courier;
         servicioSugeridoStr = opcionMasBarata.modalidad;
       }
@@ -507,7 +507,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
   const opcionesParaInferir = [
     ...(dataCotizacion?.domicilio || []),
     ...(dataCotizacion?.sucursal || []),
-  ];
+  ].map(o => ({ ...o, precioFinal: o.precioFinal.toNumber() }));
   const resultadoModalidad = inferirModalidad(
     opcionesParaInferir,
     nombreCourier,
@@ -521,7 +521,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
   // un costoEnvio valido, publicamos un precio de fallback para que la venta no se
   // caiga (siempre haya tarifa en el checkout). NO pisa un precio ya aceptado por
   // el comprador (solo entra si montoDebito <= 0). NO debita saldo ni fee (eso es Paso 4b).
-  if (bloqueadoPorTramoFallido && montoDebito <= 0 && deposito && credencialMain) {
+  if (bloqueadoPorTramoFallido && montoDebito.lte(0) && deposito && credencialMain) {
     // D-10-MODALIDAD-MAP: traducir modalidad canonica (8-value) -> vocabulario
     // simple del courier ("domicilio"/"sucursal") que usa HistoricoCotizaciones.
     const modalidadSimple = modalidadCanonica.toLowerCase().includes("sucursal") ||
@@ -544,7 +544,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
           tarifaIncluyeIva: credencialMain.tarifaIncluyeIva,
         },
       });
-      if (fallback.precio != null && fallback.precio > 0) {
+      if (fallback.precio != null && fallback.precio.gt(0)) {
         montoDebito = fallback.precio;
         console.log(`[DEUDA 10] Precio de fallback aplicado a envio bloqueado: $${fallback.precio} (fuente: ${fallback.fuente}). ${fallback.detalle}`);
       }
@@ -557,7 +557,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
     const empresaData = await tx.empresa.findUnique({ where: { id: empresaId } });
     if (empresaData) empresaNombreParaMail = empresaData.nombre;
 
-    let nuevoSaldo = (empresaData?.saldoActivo || 0) - montoDebito;
+    let nuevoSaldo: Prisma.Decimal = (empresaData?.saldoActivo ?? new Prisma.Decimal(0)).sub(montoDebito);
 
     // DEUDA 10 Paso 4b (D-10-FEE-CHARGE): el fee por operacion se calcula y debita
     // ABAJO, DENTRO del gate de debito de envio (solo cuando se emite etiqueta REAL
@@ -646,7 +646,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
       if (tipoCuentaEfectivo === "PREPAGO") {
         feeOperacion = await calcularFeeOperacion(empresaId, montoDebito, tx);
         if (feeOperacion) {
-          nuevoSaldo = nuevoSaldo - feeOperacion.feeConIva;
+          nuevoSaldo = nuevoSaldo.sub(feeOperacion.feeConIva);
         }
       }
 
@@ -654,8 +654,8 @@ export async function crearEnvio(input: CrearEnvioInput) {
         data: {
           empresaId,
           tipo: "DEBITO_ENVIO",
-          monto: -montoDebito,
-          saldoPosterior: feeOperacion ? nuevoSaldo + feeOperacion.feeConIva : nuevoSaldo,
+          monto: montoDebito.neg(),
+          saldoPosterior: feeOperacion ? nuevoSaldo.add(feeOperacion.feeConIva) : nuevoSaldo,
           referencia: trackingOficial,
           descripcion: `Envío ${trackingOficial} — ${courierReal.nombre}`,
           envioId: envioCreado.id
@@ -668,7 +668,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
           data: {
             empresaId,
             tipo: "DEBITO_OPERACION_FEE",
-            monto: -feeOperacion.feeConIva,
+            monto: feeOperacion.feeConIva.neg(),
             saldoPosterior: nuevoSaldo,
             referencia: trackingOficial,
             descripcion: `Fee de operación Shipro ${trackingOficial}`,
@@ -690,14 +690,14 @@ export async function crearEnvio(input: CrearEnvioInput) {
       // legitimos por fallas en notificaciones).
       const { debeSuspender } = evaluarSuspension(
         nuevoSaldo,
-        empresaConData.limiteDescubierto || 0,
+        empresaConData.limiteDescubierto ?? new Prisma.Decimal(0),
         false  // suspendidaActual = false porque si fuera true, el pre-check lo hubiera bloqueado
       );
       if (debeSuspender) {
         // Schedule post-tx (no await dentro de la tx).
         suspensionPendiente = {
           saldoFinal: nuevoSaldo,
-          limiteAfectado: empresaConData.limiteDescubierto || 0,
+          limiteAfectado: empresaConData.limiteDescubierto ?? new Prisma.Decimal(0),
         };
       }
     }
@@ -709,7 +709,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
     } else if (bloqueadoPorOperatividad) {
       await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_OPERATIVIDAD", observacion: `Par (depósito × courier) no operativo. Motivos: ${motivosOperatividad.join(", ")}. Detalle: ${detalleOperatividad.join("; ")}. Configurá el par en /configuracion/depositos.`, envioId: envioCreado.id } });
     } else if (bloqueadoPorSaldo) {
-      const saldoDisponible = (empresaData?.saldoActivo || 0) + (tipoCuentaEfectivo === "POSTPAGO" ? (empresaData?.limiteDescubierto || 0) : 0);
+      const saldoDisponible = (empresaData?.saldoActivo ?? new Prisma.Decimal(0)).add(tipoCuentaEfectivo === "POSTPAGO" ? (empresaData?.limiteDescubierto ?? new Prisma.Decimal(0)) : new Prisma.Decimal(0));
       await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_SALDO", observacion: `Bloqueado por saldo insuficiente. Costo $${montoDebito.toFixed(2)}, disponible $${saldoDisponible.toFixed(2)} (${tipoCuentaEfectivo}). Se desbloqueará al recargar saldo.`, envioId: envioCreado.id } });
     } else if (falloPorPeaje) {
       await tx.eventoTracking.create({ data: { estado: "RETENIDO", observacion: `Retenido en Peaje: ${motivoRetencion}`, envioId: envioCreado.id } });
@@ -732,7 +732,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
   // async de prisma.$transaction, por eso narrowa a `never`. Cast explicito
   // bypasea la limitacion. Patron estandar para state-via-closure.
   if (suspensionPendiente) {
-    const pending = suspensionPendiente as { saldoFinal: number; limiteAfectado: number };
+    const pending = suspensionPendiente as { saldoFinal: Prisma.Decimal; limiteAfectado: Prisma.Decimal };
     try {
       await suspenderEmpresa(
         empresaId,

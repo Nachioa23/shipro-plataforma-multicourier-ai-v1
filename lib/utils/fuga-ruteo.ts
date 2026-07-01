@@ -25,6 +25,7 @@
 // ============================================================================
 
 import prisma from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import type { AuthContext } from "@/lib/auth-context";
 
 const VENTANA_DIAS_DEFAULT = 90;
@@ -143,14 +144,14 @@ export async function calcularFugaRuteo(
   });
 
   // Acumuladores.
-  let fugaTotal = 0;
-  let fugaMax = 0;
+  let fugaTotal: Prisma.Decimal = new Prisma.Decimal(0);
+  let fugaMax: Prisma.Decimal = new Prisma.Decimal(0);
   let enviosConFuga = 0;
   let enviosOptimizados = 0;
   const enviosConFinanzas = envios.filter(e => e.finanzas !== null).length;
 
   const desviosPorZona: Record<string, {
-    totalPerdido: number;
+    totalPerdido: Prisma.Decimal;
     enviosAfectados: number;
     elegidosMap: Record<string, number>;
     sugeridosMap: Record<string, number>;
@@ -161,26 +162,26 @@ export async function calcularFugaRuteo(
     courierSugerido: string;
     servicioSugerido: string;
     cantidad: number;
-    fugaTotal: number;
+    fugaTotal: Prisma.Decimal;
   }> = {};
 
   const porEmpresaMap: Record<number, {
     empresaNombre: string;
     enviosConFuga: number;
-    fugaTotal: number;
+    fugaTotal: Prisma.Decimal;
   }> = {};
 
-  const porMesMap: Record<string, { enviosConFuga: number; fugaTotal: number }> = {};
+  const porMesMap: Record<string, { enviosConFuga: number; fugaTotal: Prisma.Decimal }> = {};
 
   const topEnvios: EnvioFuga[] = [];
 
   for (const envio of envios) {
-    const fuga = envio.finanzas?.fugaFinanciera || 0;
+    const fuga: Prisma.Decimal = envio.finanzas?.fugaFinanciera ?? new Prisma.Decimal(0);
 
-    if (fuga > 0) {
+    if (fuga.gt(0)) {
       enviosConFuga++;
-      fugaTotal += fuga;
-      if (fuga > fugaMax) fugaMax = fuga;
+      fugaTotal = fugaTotal.add(fuga);
+      if (fuga.gt(fugaMax)) fugaMax = fuga;
 
       const zona = envio.destino?.provincia || "Desconocida";
       const elegido = `${envio.courier?.nombre || 'Courier'}`.trim();
@@ -190,13 +191,13 @@ export async function calcularFugaRuteo(
       // Por zona.
       if (!desviosPorZona[zona]) {
         desviosPorZona[zona] = {
-          totalPerdido: 0,
+          totalPerdido: new Prisma.Decimal(0),
           enviosAfectados: 0,
           elegidosMap: {},
           sugeridosMap: {},
         };
       }
-      desviosPorZona[zona].totalPerdido += fuga;
+      desviosPorZona[zona].totalPerdido = desviosPorZona[zona].totalPerdido.add(fuga);
       desviosPorZona[zona].enviosAfectados += 1;
       desviosPorZona[zona].elegidosMap[elegido] = (desviosPorZona[zona].elegidosMap[elegido] || 0) + 1;
       desviosPorZona[zona].sugeridosMap[sugerido] = (desviosPorZona[zona].sugeridosMap[sugerido] || 0) + 1;
@@ -210,11 +211,11 @@ export async function calcularFugaRuteo(
             courierSugerido: sugerido,
             servicioSugerido,
             cantidad: 0,
-            fugaTotal: 0,
+            fugaTotal: new Prisma.Decimal(0),
           };
         }
         desviosPorCombo[claveCombo].cantidad++;
-        desviosPorCombo[claveCombo].fugaTotal += fuga;
+        desviosPorCombo[claveCombo].fugaTotal = desviosPorCombo[claveCombo].fugaTotal.add(fuga);
 
         // Por empresa (solo modoDios sin filtro).
         if (ctx.empresaId === null && envio.empresa) {
@@ -222,21 +223,21 @@ export async function calcularFugaRuteo(
             porEmpresaMap[envio.empresa.id] = {
               empresaNombre: envio.empresa.nombre,
               enviosConFuga: 0,
-              fugaTotal: 0,
+              fugaTotal: new Prisma.Decimal(0),
             };
           }
           porEmpresaMap[envio.empresa.id].enviosConFuga++;
-          porEmpresaMap[envio.empresa.id].fugaTotal += fuga;
+          porEmpresaMap[envio.empresa.id].fugaTotal = porEmpresaMap[envio.empresa.id].fugaTotal.add(fuga);
         }
 
         // Por mes (solo modoDios).
         if (envio.fechaImpresion) {
           const mes = envio.fechaImpresion.toISOString().substring(0, 7);
           if (!porMesMap[mes]) {
-            porMesMap[mes] = { enviosConFuga: 0, fugaTotal: 0 };
+            porMesMap[mes] = { enviosConFuga: 0, fugaTotal: new Prisma.Decimal(0) };
           }
           porMesMap[mes].enviosConFuga++;
-          porMesMap[mes].fugaTotal += fuga;
+          porMesMap[mes].fugaTotal = porMesMap[mes].fugaTotal.add(fuga);
         }
 
         // Top envios individuales (solo modoDios).
@@ -249,7 +250,7 @@ export async function calcularFugaRuteo(
             courierElegido: elegido,
             courierSugerido: sugerido,
             servicioSugerido,
-            fugaFinanciera: fuga,
+            fugaFinanciera: fuga.toNumber(),
             fechaImpresion: envio.fechaImpresion,
           });
         }
@@ -260,6 +261,8 @@ export async function calcularFugaRuteo(
   }
 
   const totalEvaluados = enviosConFuga + enviosOptimizados;
+  const fugaTotalNum = fugaTotal.toNumber();
+  const fugaMaxNum = fugaMax.toNumber();
 
   // Build resumen comun.
   const resumen: ResumenFugaRuteo = {
@@ -268,10 +271,10 @@ export async function calcularFugaRuteo(
     enviosOptimizados,
     tasaIneficiencia: totalEvaluados > 0 ? Math.round((enviosConFuga / totalEvaluados) * 1000) / 10 : 0,
     tasaOptimizacion: totalEvaluados > 0 ? Math.round((enviosOptimizados / totalEvaluados) * 1000) / 10 : 100,
-    fugaTotal: Math.round(fugaTotal),
-    fugaPromedio: enviosConFuga > 0 ? Math.round(fugaTotal / enviosConFuga) : 0,
-    fugaMax: Math.round(fugaMax),
-    ahorroProyectadoAnual: ventanaDias > 0 ? Math.round((fugaTotal / ventanaDias) * 365) : 0,
+    fugaTotal: Math.round(fugaTotalNum),
+    fugaPromedio: enviosConFuga > 0 ? Math.round(fugaTotalNum / enviosConFuga) : 0,
+    fugaMax: Math.round(fugaMaxNum),
+    ahorroProyectadoAnual: ventanaDias > 0 ? Math.round((fugaTotalNum / ventanaDias) * 365) : 0,
   };
 
   // Build topDesviosPorZona (comun a ambos scopes).
@@ -279,11 +282,12 @@ export async function calcularFugaRuteo(
     .map(([destino, z]) => {
       const elegidos = Object.entries(z.elegidosMap).sort((a, b) => b[1] - a[1]);
       const sugeridos = Object.entries(z.sugeridosMap).sort((a, b) => b[1] - a[1]);
+      const totalPerdidoNum = z.totalPerdido.toNumber();
       return {
         destino,
-        totalPerdido: Math.round(z.totalPerdido),
+        totalPerdido: Math.round(totalPerdidoNum),
         enviosAfectados: z.enviosAfectados,
-        costoPromedioExtra: Math.round(z.totalPerdido / z.enviosAfectados),
+        costoPromedioExtra: Math.round(totalPerdidoNum / z.enviosAfectados),
         courierMasElegido: elegidos[0]?.[0] || "Desconocido",
         courierMasSugerido: sugeridos[0]?.[0] || "Desconocido",
       };
@@ -310,29 +314,38 @@ export async function calcularFugaRuteo(
 
   // modoDios: shape completo Shipro.
   const topDesviosPorCombo: DesvioPorCombo[] = Object.values(desviosPorCombo)
-    .map(c => ({
-      ...c,
-      fugaTotal: Math.round(c.fugaTotal),
-      fugaPromedio: Math.round(c.fugaTotal / c.cantidad),
-    }))
+    .map(c => {
+      const fugaTotalNum = c.fugaTotal.toNumber();
+      return {
+        courierElegido: c.courierElegido,
+        courierSugerido: c.courierSugerido,
+        servicioSugerido: c.servicioSugerido,
+        cantidad: c.cantidad,
+        fugaTotal: Math.round(fugaTotalNum),
+        fugaPromedio: Math.round(fugaTotalNum / c.cantidad),
+      };
+    })
     .sort((a, b) => b.fugaTotal - a.fugaTotal)
     .slice(0, 10);
 
   const porEmpresa: PorEmpresa[] = Object.entries(porEmpresaMap)
-    .map(([id, e]) => ({
-      empresaId: parseInt(id),
-      empresaNombre: e.empresaNombre,
-      enviosConFuga: e.enviosConFuga,
-      fugaTotal: Math.round(e.fugaTotal),
-      fugaPromedio: Math.round(e.fugaTotal / e.enviosConFuga),
-    }))
+    .map(([id, e]) => {
+      const fugaTotalNum = e.fugaTotal.toNumber();
+      return {
+        empresaId: parseInt(id),
+        empresaNombre: e.empresaNombre,
+        enviosConFuga: e.enviosConFuga,
+        fugaTotal: Math.round(fugaTotalNum),
+        fugaPromedio: Math.round(fugaTotalNum / e.enviosConFuga),
+      };
+    })
     .sort((a, b) => b.fugaTotal - a.fugaTotal);
 
   const porMes: PorMes[] = Object.entries(porMesMap)
     .map(([mes, m]) => ({
       mes,
       enviosConFuga: m.enviosConFuga,
-      fugaTotal: Math.round(m.fugaTotal),
+      fugaTotal: Math.round(m.fugaTotal.toNumber()),
     }))
     .sort((a, b) => a.mes.localeCompare(b.mes));
 

@@ -270,7 +270,7 @@ export function extraerCosto(envio: { finanzas?: FinanzasEnvio | null }): {
   if (!envio.finanzas || envio.finanzas.precioFactura == null) {
     return { precioFactura: null, fuente: "sin_dato" };
   }
-  return { precioFactura: envio.finanzas.precioFactura, fuente: "facturado" };
+  return { precioFactura: envio.finanzas.precioFactura.toNumber(), fuente: "facturado" };
 }
 
 // ====================================================

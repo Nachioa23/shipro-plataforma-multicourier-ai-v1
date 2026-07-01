@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import { Prisma } from "@prisma/client";
 
 // Configuramos el "Cartero Robot"
 const transporter = nodemailer.createTransport({
@@ -447,12 +448,16 @@ export async function enviarMailEmpresaSuspendida(
   emailDestino: string,
   nombreAdmin: string,
   nombreEmpresa: string,
-  saldoActual: number,
-  limiteDescubierto: number,
+  saldoActual: Prisma.Decimal,
+  limiteDescubierto: Prisma.Decimal,
   baseUrl: string
 ) {
   const fmtMoneda = (n: number) => `$${Math.abs(n).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  const deuda = Math.abs(saldoActual);
+  // Coercion a number solo para formateo de display (toLocaleString). Los valores
+  // reales son Decimal en lib/utils/suspension-cuenta.ts; aca solo se imprimen.
+  const saldoActualNum = saldoActual.toNumber();
+  const limiteDescubiertoNum = limiteDescubierto.toNumber();
+  const deuda = Math.abs(saldoActualNum);
   const linkAdmin = `${baseUrl}/admin-finanzas`;
   const fechaSuspension = new Date().toLocaleString('es-AR', { dateStyle: 'long', timeStyle: 'short' });
 
@@ -481,17 +486,17 @@ export async function enviarMailEmpresaSuspendida(
           </tr>
           <tr>
             <td style="padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; font-weight: bold; color: #4b5563;">Limite descubierto autorizado</td>
-            <td style="padding: 12px; border: 1px solid #e5e7eb; color: #4b5563; font-family: monospace;">${fmtMoneda(limiteDescubierto)}</td>
+            <td style="padding: 12px; border: 1px solid #e5e7eb; color: #4b5563; font-family: monospace;">${fmtMoneda(limiteDescubiertoNum)}</td>
           </tr>
           <tr>
             <td style="padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; font-weight: bold; color: #4b5563;">Umbral cruzado</td>
-            <td style="padding: 12px; border: 1px solid #e5e7eb; color: #4b5563; font-family: monospace;">-${fmtMoneda(limiteDescubierto * 1.5)} (150% del limite)</td>
+            <td style="padding: 12px; border: 1px solid #e5e7eb; color: #4b5563; font-family: monospace;">-${fmtMoneda(limiteDescubiertoNum * 1.5)} (150% del limite)</td>
           </tr>
         </table>
 
         <p style="color: #333; font-size: 14px; line-height: 1.6;">
           La empresa <strong>no puede crear nuevos envios</strong> hasta que su saldo
-          vuelva a <strong>-${fmtMoneda(limiteDescubierto * 0.5)}</strong> (50% del limite).
+          vuelva a <strong>-${fmtMoneda(limiteDescubiertoNum * 0.5)}</strong> (50% del limite).
           La reactivacion es automatica cuando se acredite el pago.
         </p>
 

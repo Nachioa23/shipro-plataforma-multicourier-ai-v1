@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { resolverContext } from "@/lib/auth-context";
 
 export async function GET(request: Request) {
@@ -75,7 +76,8 @@ export async function GET(request: Request) {
 
     // <-- SOLUCIÓN AL ERROR DE TIPO NUMBER VS STRING
     const porcentajeExito = totalHistorico > 0 ? Math.round((exitososHistorico / totalHistorico) * 100) : 0;
-    const gastoTotal = finanzasData.reduce((acc, f) => acc + (f.precioFactura || 0), 0);
+    const gastoTotalDecimal = finanzasData.reduce((acc, f) => acc.add(f.precioFactura ?? new Prisma.Decimal(0)), new Prisma.Decimal(0));
+    const gastoTotal = gastoTotalDecimal.toNumber();
 
     // ====== M2: AUDITORÍA DE DIRECCIONES ======
     let countRetenidos = 0; let countAutoGestion = 0; let countSoporte = 0;
@@ -127,22 +129,22 @@ export async function GET(request: Request) {
     };
 
     // ====== M3: FUGA POR RUTEO ======
-    let fugaRuteoTotal = 0; let enviosConFugaRuteo = 0; let enviosSinFugaRuteo = 0;
+    let fugaRuteoTotal: Prisma.Decimal = new Prisma.Decimal(0); let enviosConFugaRuteo = 0; let enviosSinFugaRuteo = 0;
     const desviosPorZona: Record<string, any> = {};
 
     enviosData.forEach(envio => {
-      const fuga = envio.finanzas?.fugaFinanciera || 0;
-      if (fuga > 0) {
-        fugaRuteoTotal += fuga;
+      const fuga: Prisma.Decimal = envio.finanzas?.fugaFinanciera ?? new Prisma.Decimal(0);
+      if (fuga.gt(0)) {
+        fugaRuteoTotal = fugaRuteoTotal.add(fuga);
         enviosConFugaRuteo++;
         const zona = envio.destino?.provincia || "Desconocida";
         const elegido = `${envio.courier?.nombre || 'Courier'} ${envio.modalidad || ''}`.trim();
         const sugerido = `${envio.finanzas?.courierSugerido || 'Otro'} ${envio.finanzas?.servicioSugerido || ''}`.trim();
 
         if (!desviosPorZona[zona]) {
-          desviosPorZona[zona] = { destino: zona, totalPerdido: 0, enviosAfectados: 0, elegidosMap: {} as Record<string, number>, sugeridosMap: {} as Record<string, number> };
+          desviosPorZona[zona] = { destino: zona, totalPerdido: new Prisma.Decimal(0), enviosAfectados: 0, elegidosMap: {} as Record<string, number>, sugeridosMap: {} as Record<string, number> };
         }
-        desviosPorZona[zona].totalPerdido += fuga;
+        desviosPorZona[zona].totalPerdido = desviosPorZona[zona].totalPerdido.add(fuga);
         desviosPorZona[zona].enviosAfectados += 1;
         desviosPorZona[zona].elegidosMap[elegido] = (desviosPorZona[zona].elegidosMap[elegido] || 0) + 1;
         desviosPorZona[zona].sugeridosMap[sugerido] = (desviosPorZona[zona].sugeridosMap[sugerido] || 0) + 1;
@@ -152,20 +154,22 @@ export async function GET(request: Request) {
     });
 
     const totalEvaluadosRuteo = enviosConFugaRuteo + enviosSinFugaRuteo;
+    const fugaRuteoTotalNum = fugaRuteoTotal.toNumber();
     const ruteoStats = {
-      fugaFinancieraTotal: fugaRuteoTotal,
+      fugaFinancieraTotal: fugaRuteoTotalNum,
       enviosOptimizados: totalEvaluadosRuteo > 0 ? Math.round((enviosSinFugaRuteo / totalEvaluadosRuteo) * 100) : 100,
       enviosIneficientes: totalEvaluadosRuteo > 0 ? Math.round((enviosConFugaRuteo / totalEvaluadosRuteo) * 100) : 0,
-      costoPromedioExtra: enviosConFugaRuteo > 0 ? Math.round(fugaRuteoTotal / enviosConFugaRuteo) : 0,
+      costoPromedioExtra: enviosConFugaRuteo > 0 ? Math.round(fugaRuteoTotalNum / enviosConFugaRuteo) : 0,
       topDesvios: Object.values(desviosPorZona).map((z: any) => {
         const masElegido = Object.keys(z.elegidosMap).reduce((a, b) => z.elegidosMap[a] > z.elegidosMap[b] ? a : b);
         const masSugerido = Object.keys(z.sugeridosMap).reduce((a, b) => z.sugeridosMap[a] > z.sugeridosMap[b] ? a : b);
-        return { destino: z.destino, elegidos: masElegido, sugerido: masSugerido, costoPromedioExtra: Math.round(z.totalPerdido / z.enviosAfectados), totalPerdido: z.totalPerdido, enviosAfectados: z.enviosAfectados };
+        const totalPerdidoNum: number = z.totalPerdido.toNumber();
+        return { destino: z.destino, elegidos: masElegido, sugerido: masSugerido, costoPromedioExtra: Math.round(totalPerdidoNum / z.enviosAfectados), totalPerdido: totalPerdidoNum, enviosAfectados: z.enviosAfectados };
       }).sort((a, b) => b.totalPerdido - a.totalPerdido).slice(0, 3)
     };
 
     // ====== M4: AFORO ======
-    let aforoFugaTotal = 0; let enviosConFugaAforo = 0; let sumaDesvioKg = 0; let leveCount = 0; let moderadoCount = 0; let graveCount = 0;
+    let aforoFugaTotal: Prisma.Decimal = new Prisma.Decimal(0); let enviosConFugaAforo = 0; let sumaDesvioKg = 0; let leveCount = 0; let moderadoCount = 0; let graveCount = 0;
     const couriersAforoStats: Record<string, { total: number, conFuga: number }> = {};
 
     enviosData.forEach(e => {
@@ -182,8 +186,8 @@ export async function GET(request: Request) {
         if (pesoAforado > pesoCobrado) {
           enviosConFugaAforo++;
           couriersAforoStats[cName].conFuga++;
-          const perdidaReal = (f.precioFactura || 0) - (f.precioMostrado || 0);
-          if (perdidaReal > 0) aforoFugaTotal += perdidaReal;
+          const perdidaReal = (f.precioFactura ?? new Prisma.Decimal(0)).sub(f.precioMostrado ?? new Prisma.Decimal(0));
+          if (perdidaReal.gt(0)) aforoFugaTotal = aforoFugaTotal.add(perdidaReal);
 
           const diffKg = pesoAforado - pesoCobrado;
           sumaDesvioKg += diffKg;
@@ -193,11 +197,12 @@ export async function GET(request: Request) {
     });
 
     const baseTotalAforo = enviosData.length > 0 ? enviosData.length : 1;
+    const aforoFugaTotalNum = aforoFugaTotal.toNumber();
     const aforoStats = {
-      fugaTotal: aforoFugaTotal,
+      fugaTotal: aforoFugaTotalNum,
       porcentajeFugaPeso: Math.round((enviosConFugaAforo / baseTotalAforo) * 100),
       desvioPromedioKg: enviosConFugaAforo > 0 ? Number((sumaDesvioKg / enviosConFugaAforo).toFixed(1)) : 0,
-      costoPromedioDesvio: enviosConFugaAforo > 0 ? Math.round(aforoFugaTotal / enviosConFugaAforo) : 0,
+      costoPromedioDesvio: enviosConFugaAforo > 0 ? Math.round(aforoFugaTotalNum / enviosConFugaAforo) : 0,
       distribucionError: {
         leve: enviosConFugaAforo > 0 ? Math.round((leveCount / enviosConFugaAforo) * 100) : 0,
         moderado: enviosConFugaAforo > 0 ? Math.round((moderadoCount / enviosConFugaAforo) * 100) : 0,
@@ -207,7 +212,7 @@ export async function GET(request: Request) {
     };
 
     // ====== M5: EFECTIVIDAD ======
-    let e1raVisita = 0; let eForzada = 0; let eDevuelto = 0; let costoInversaEstimado = 0;
+    let e1raVisita = 0; let eForzada = 0; let eDevuelto = 0; let costoInversaEstimado: Prisma.Decimal = new Prisma.Decimal(0);
     const fallasCount: Record<string, number> = {}; const devMapa: Record<string, number> = {};
 
     enviosData.forEach(e => {
@@ -216,7 +221,7 @@ export async function GET(request: Request) {
         if (repartos <= 1) e1raVisita++; else eForzada++;
       } else if (e.estadoActual === "DEVUELTO" || e.estadoActual === "CANCELADO") {
         eDevuelto++;
-        costoInversaEstimado += (e.finanzas?.precioFactura || e.finanzas?.precioMostrado || 0);
+        costoInversaEstimado = costoInversaEstimado.add(e.finanzas?.precioFactura ?? e.finanzas?.precioMostrado ?? new Prisma.Decimal(0));
         const prov = e.destino?.provincia || "Desconocida";
         devMapa[prov] = (devMapa[prov] || 0) + 1;
       }
@@ -235,7 +240,7 @@ export async function GET(request: Request) {
       tasaPrimeraVisita: enviosData.length > 0 ? Math.round((e1raVisita / valEf) * 100) : (porcentajeExito !== 0 ? porcentajeExito : 82),
       tasaEntregasForzadas: Math.round((eForzada / valEf) * 100),
       tasaDevolucion: Math.round((eDevuelto / valEf) * 100),
-      costoInversaEstimado,
+      costoInversaEstimado: costoInversaEstimado.toNumber(),
       topMotivosFalla: Object.keys(fallasCount).map(k => ({ motivo: k, porcentaje: Math.round((fallasCount[k] / totalFallas) * 100) })).sort((a, b) => b.porcentaje - a.porcentaje).slice(0, 3),
       mapaDevoluciones: Object.keys(devMapa).map(k => ({ provincia: k, devoluciones: devMapa[k], porcentaje: Math.round((devMapa[k] / (eDevuelto || 1)) * 100) })).sort((a, b) => b.devoluciones - a.devoluciones).slice(0, 3)
     };

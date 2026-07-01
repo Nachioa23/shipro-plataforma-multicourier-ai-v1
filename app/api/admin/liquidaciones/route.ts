@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 
 export async function GET(request: Request) {
   try {
@@ -49,15 +50,17 @@ export async function GET(request: Request) {
     const pendientes = empresasConPendientes.map(emp => {
       const totalEnvios = emp.envios.length;
       const montoTotal = emp.envios.reduce((acc, envio) => {
-        return acc + (envio.finanzas?.precioFactura || 0) + (envio.finanzas?.costoAforo || 0);
-      }, 0);
+        return acc
+          .add(envio.finanzas?.precioFactura ?? new Prisma.Decimal(0))
+          .add(envio.finanzas?.costoAforo ?? new Prisma.Decimal(0));
+      }, new Prisma.Decimal(0));
 
       return {
         empresaId: emp.id,
         nombre: emp.nombre,
         cuit: emp.cuit,
         totalEnvios,
-        montoTotal
+        montoTotal: montoTotal.toNumber()
       };
     });
 
@@ -95,8 +98,10 @@ export async function POST(request: Request) {
       if (enviosPendientes.length === 0) throw new Error("No hay envíos habilitados por el courier para liquidar.");
 
       const montoTotal = enviosPendientes.reduce((acc, envio) => {
-        return acc + (envio.finanzas?.precioFactura || 0) + (envio.finanzas?.costoAforo || 0);
-      }, 0);
+        return acc
+          .add(envio.finanzas?.precioFactura ?? new Prisma.Decimal(0))
+          .add(envio.finanzas?.costoAforo ?? new Prisma.Decimal(0));
+      }, new Prisma.Decimal(0));
 
       const nuevaLiquidacion = await tx.liquidacionMensual.create({
         data: {

@@ -1,4 +1,5 @@
 import prisma from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { aplicarMarkup, type ConfigMarkup } from "@/lib/cotizador";
 
 // DEUDA 10 Paso 3b (D-10-PRICE-READ): helper de precio de fallback.
@@ -21,7 +22,7 @@ const MAX_DIAS_HISTORICO = 180;
 export type FuentePrecioFallback = "historico" | "tarifa_plana_respaldo" | "sin_precio";
 
 export interface ResultadoPrecioFallback {
-  precio: number | null;
+  precio: Prisma.Decimal | null;
   fuente: FuentePrecioFallback;
   modalidad: string;
   detalle: string;
@@ -33,7 +34,7 @@ export interface ParamsPrecioFallback {
   cpDestino: string;
   pesoKg: number;
   modalidad: string;
-  tarifaPlanaRespaldo: number | null;
+  tarifaPlanaRespaldo: Prisma.Decimal | null;
   configMarkup: ConfigMarkup;
 }
 
@@ -78,7 +79,7 @@ export async function resolverPrecioFallback(
   }
 
   // --- Fuente 2: tarifa plana de respaldo (ya es precio final) ---
-  if (tarifaPlanaRespaldo != null && tarifaPlanaRespaldo > 0) {
+  if (tarifaPlanaRespaldo != null && tarifaPlanaRespaldo.gt(0)) {
     return {
       precio: tarifaPlanaRespaldo,
       fuente: "tarifa_plana_respaldo",

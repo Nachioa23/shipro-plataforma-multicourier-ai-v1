@@ -1,4 +1,5 @@
 import prisma from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
@@ -27,8 +28,8 @@ export interface OpcionTarifa {
   id: string;
   courier: string;
   modalidad: string;
-  precioFinal: number;
-  precioProveedor: number;
+  precioFinal: Prisma.Decimal;
+  precioProveedor: Prisma.Decimal;
   slaHs: number;
   fechaEstimadaString: string;
   etiquetaSla: string;
@@ -101,22 +102,27 @@ async function calcularFechaEstimada(horasSla: number): Promise<string> {
 export interface ConfigMarkup {
   usaCredencialesPropias: boolean;
   ajusteTarifaPorcentaje: number | null;
-  markupFijo: number | null;
+  markupFijo: Prisma.Decimal | null;
   tarifaIncluyeIva: boolean;
 }
 
+const IVA_AR_MULTIPLIER = new Prisma.Decimal("1.21");
+
 export function aplicarMarkup(
-  costoSecoCourier: number,
+  costoSecoCourier: Prisma.Decimal | number,
   config: ConfigMarkup
-): { precioProveedor: number; precioFinal: number } {
+): { precioProveedor: Prisma.Decimal; precioFinal: Prisma.Decimal } {
+  const seco = costoSecoCourier instanceof Prisma.Decimal
+    ? costoSecoCourier
+    : new Prisma.Decimal(costoSecoCourier);
   const porcentajeMarkup = config.ajusteTarifaPorcentaje || 0;
-  const fijoMarkup = config.markupFijo || 0;
+  const fijoMarkup = config.markupFijo ?? new Prisma.Decimal(0);
   const costoConMarkup = config.usaCredencialesPropias
-    ? costoSecoCourier + fijoMarkup
-    : costoSecoCourier + costoSecoCourier * (porcentajeMarkup / 100) + fijoMarkup;
+    ? seco.add(fijoMarkup)
+    : seco.add(seco.mul(porcentajeMarkup).div(100)).add(fijoMarkup);
   return {
-    precioProveedor: costoSecoCourier,
-    precioFinal: config.tarifaIncluyeIva ? costoConMarkup : costoConMarkup * 1.21,
+    precioProveedor: seco,
+    precioFinal: config.tarifaIncluyeIva ? costoConMarkup : costoConMarkup.mul(IVA_AR_MULTIPLIER),
   };
 }
 
@@ -325,10 +331,10 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
   const aplicarEstrategia = (opciones: OpcionTarifa[]) => {
     if (reglaAplicada) {
       if (reglaAplicada.accionTipo === "PRIORIZAR_SLA") return opciones.sort((a, b) => a.slaHs - b.slaHs);
-      if (reglaAplicada.accionTipo === "PRIORIZAR_PRECIO") return opciones.sort((a, b) => a.precioFinal - b.precioFinal);
+      if (reglaAplicada.accionTipo === "PRIORIZAR_PRECIO") return opciones.sort((a, b) => a.precioFinal.cmp(b.precioFinal));
     }
     if (motorBase === "MOTOR_SLA") return opciones.sort((a, b) => a.slaHs - b.slaHs);
-    return opciones.sort((a, b) => a.precioFinal - b.precioFinal);
+    return opciones.sort((a, b) => a.precioFinal.cmp(b.precioFinal));
   };
 
   let finalDomicilio = aplicarEstrategia([...opcionesDomicilio]);

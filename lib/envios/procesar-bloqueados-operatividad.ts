@@ -1,4 +1,5 @@
 import prisma from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { despacharCourier } from "@/lib/envios/dispatch";
 import { enviarMailCreacion } from "@/lib/mailer";
 import { validarOperatividadPar } from "@/lib/depositos/operatividad";
@@ -147,13 +148,13 @@ export async function procesarEnviosBloqueadosPorOperatividad(
     }
 
     // --- 3. Validar saldo ---
-    const monto = envio.finanzas?.precioFactura || 0;
+    const monto: Prisma.Decimal = envio.finanzas?.precioFactura ?? new Prisma.Decimal(0);
     const tipoCuentaEfectivo = credencial.tipoCuenta || empresa.modalidadPago;
     const saldoDisponible = tipoCuentaEfectivo === "PREPAGO"
       ? saldoSimulado
-      : saldoSimulado + limite;
+      : saldoSimulado.add(limite);
 
-    if (saldoDisponible < monto) {
+    if (saldoDisponible.lt(monto)) {
       try {
         await prisma.$transaction(async (tx) => {
           await tx.envio.update({
@@ -210,7 +211,7 @@ export async function procesarEnviosBloqueadosPorOperatividad(
       email: envio.destino.email || "",
       telefono: envio.destino.telefono || "",
       pesoReal: envio.pesoReal,
-      valorDeclarado: envio.finanzas?.valorDeclarado || 0,
+      valorDeclarado: envio.finanzas?.valorDeclarado?.toNumber() ?? 0,
       modalidad: envio.modalidad,
       numeroOrden: envio.numeroOrden,
       origen: {
@@ -264,7 +265,7 @@ export async function procesarEnviosBloqueadosPorOperatividad(
 
     // --- 5. Dispatch exitoso → Pendiente ---
     const trackingReal = dispatchResult.tracking;
-    const nuevoSaldo = saldoSimulado - monto;
+    const nuevoSaldo = saldoSimulado.sub(monto);
 
     try {
       await prisma.$transaction(async (tx) => {
@@ -295,7 +296,7 @@ export async function procesarEnviosBloqueadosPorOperatividad(
           data: {
             empresaId: deposito.empresaId,
             tipo: "DEBITO_ENVIO",
-            monto: -monto,
+            monto: monto.neg(),
             saldoPosterior: nuevoSaldo,
             referencia: trackingReal,
             descripcion: `Generación de etiqueta ${envio.courier.nombre.toUpperCase()} (desbloqueo post-configuración de par)`,

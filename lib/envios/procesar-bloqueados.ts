@@ -1,4 +1,5 @@
 import prisma from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { despacharCourier } from "@/lib/envios/dispatch";
 import { enviarMailCreacion } from "@/lib/mailer";
 import { getAppUrl } from "@/lib/utils/app-url";
@@ -85,7 +86,7 @@ export async function procesarEnviosBloqueados(empresaId: number): Promise<Proce
   let fallados = 0;
 
   for (const envio of aProcesar) {
-    const monto = envio.finanzas?.precioFactura || 0;
+    const monto: Prisma.Decimal = envio.finanzas?.precioFactura ?? new Prisma.Decimal(0);
 
     const credencial = await prisma.credencialCourier.findUnique({
       where: { empresaId_nombreCourier: { empresaId, nombreCourier: envio.courier.nombre } }
@@ -104,9 +105,9 @@ export async function procesarEnviosBloqueados(empresaId: number): Promise<Proce
     }
 
     const tipoCuentaEfectivo = credencial.tipoCuenta || empresa.modalidadPago;
-    const saldoDisponible = tipoCuentaEfectivo === "PREPAGO" ? saldoSimulado : saldoSimulado + limite;
+    const saldoDisponible = tipoCuentaEfectivo === "PREPAGO" ? saldoSimulado : saldoSimulado.add(limite);
 
-    if (saldoDisponible < monto) {
+    if (saldoDisponible.lt(monto)) {
       // Saldo no alcanza para este. Como vamos FIFO, los siguientes tampoco
       // si tienen costo similar — pero podrían ser más baratos. Continuamos
       // por si alguno encaja (no break).
@@ -169,7 +170,7 @@ export async function procesarEnviosBloqueados(empresaId: number): Promise<Proce
       email: envio.destino.email || "",
       telefono: envio.destino.telefono || "",
       pesoReal: envio.pesoReal,
-      valorDeclarado: envio.finanzas?.valorDeclarado || 0,
+      valorDeclarado: envio.finanzas?.valorDeclarado?.toNumber() ?? 0,
       modalidad: envio.modalidad,
       numeroOrden: envio.numeroOrden,
       origen: origenDeposito,
@@ -218,7 +219,7 @@ export async function procesarEnviosBloqueados(empresaId: number): Promise<Proce
     }
 
     const trackingReal = dispatchResult.tracking;
-    const nuevoSaldo = saldoSimulado - monto;
+    const nuevoSaldo = saldoSimulado.sub(monto);
 
     try {
       await prisma.$transaction(async (tx) => {
@@ -251,7 +252,7 @@ export async function procesarEnviosBloqueados(empresaId: number): Promise<Proce
           data: {
             empresaId,
             tipo: "DEBITO_ENVIO",
-            monto: -monto,
+            monto: monto.neg(),
             saldoPosterior: nuevoSaldo,
             referencia: trackingReal,
             descripcion: `Generación de etiqueta ${envio.courier.nombre.toUpperCase()} (desbloqueo post-recarga)`,

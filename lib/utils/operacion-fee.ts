@@ -1,4 +1,5 @@
 import prisma from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 
 // DEUDA 10 Paso 4b (D-10-FEE-CHARGE): helper del fee por operacion Modelo B.
 // Lee el OperacionFee vigente de una empresa y calcula el monto a debitar de la
@@ -14,13 +15,13 @@ import prisma from "@/lib/prisma";
 
 // IVA Argentina. Hoy hardcodeado a 21% (consistente con lib/cotizador.ts).
 // DEUDA 73 formalizara el manejo de impuestos como tasa configurable.
-const IVA_AR = 0.21;
+const IVA_AR_MULTIPLIER = new Prisma.Decimal("1.21");
 
 export type TipoFee = "FIJO" | "PORCENTAJE";
 
 export interface ResultadoFeeOperacion {
-  feePreIva: number;   // el valor cargado, sin IVA
-  feeConIva: number;   // valor + 21% IVA — esto es lo que se debita de la billetera
+  feePreIva: Prisma.Decimal;   // el valor cargado, sin IVA
+  feeConIva: Prisma.Decimal;   // valor + 21% IVA — esto es lo que se debita de la billetera
   tipo: TipoFee;
   detalle: string;     // texto humano para el MovimientoFinanciero / logs
 }
@@ -36,7 +37,7 @@ export interface ResultadoFeeOperacion {
  */
 export async function calcularFeeOperacion(
   empresaId: number,
-  basePrecio: number,
+  basePrecio: Prisma.Decimal,
   client: { operacionFee: typeof prisma.operacionFee } = prisma
 ): Promise<ResultadoFeeOperacion | null> {
   const ahora = new Date();
@@ -62,13 +63,13 @@ export async function calcularFeeOperacion(
 
   // Valor base PRE-IVA segun tipo.
   const feePreIva = tipo === "PORCENTAJE"
-    ? basePrecio * (fee.valor / 100)
+    ? basePrecio.mul(fee.valor).div(100)
     : fee.valor;
 
-  const feeConIva = feePreIva * (1 + IVA_AR);
+  const feeConIva = feePreIva.mul(IVA_AR_MULTIPLIER);
 
   const detalle = tipo === "PORCENTAJE"
-    ? `Fee Modelo B ${fee.valor}% sobre $${basePrecio.toFixed(2)} = $${feePreIva.toFixed(2)} + IVA = $${feeConIva.toFixed(2)}`
+    ? `Fee Modelo B ${fee.valor.toString()}% sobre $${basePrecio.toFixed(2)} = $${feePreIva.toFixed(2)} + IVA = $${feeConIva.toFixed(2)}`
     : `Fee Modelo B fijo $${feePreIva.toFixed(2)} + IVA = $${feeConIva.toFixed(2)}`;
 
   return { feePreIva, feeConIva, tipo, detalle };

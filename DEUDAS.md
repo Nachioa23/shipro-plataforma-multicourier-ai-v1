@@ -1643,3 +1643,26 @@ TS_NODE_BASEURL=./ npx ts-node -r tsconfig-paths/register --compiler-options '{"
 **Fix propuesto:** buscar el string `90 dias` (o `ventana de` / `dias`) en los componentes de Torre de Control y corregir el acento. Trivial.
 
 **Por que no bloquea deploy:** cosmetico. Prioridad minima, buen "primer commit" de calidad.
+
+## DEUDA 87 — Auditoria transversal de aislamiento entre clientes (registrada 2026-07-03, scope grande, seguridad)
+
+**Status:** ABIERTA — auditoria en curso. Pass 1 (inventario) completo; pass 2 (verificacion por endpoint) iniciado.
+
+**Origen:** durante el diagnostico de DEUDA 84 se detecto que el modelo de permisos se construyo endpoint por endpoint con criterios distintos (3 patrones conviviendo: A=`resolverContext` scope-aware, B=lectura manual de `x-rol`/`x-empresa-id`, C=sin check en el handler). Surgio la pregunta de si el aislamiento entre clientes (que ninguna empresa vea/opere data de otra) esta garantizado transversalmente o solo en los endpoints donde alguien se acordo.
+
+**Pass 1 — inventario (2026-07-03, verificado):** 76 rutas API totales. Clasificacion automatica por patron de auth en el handler: 24 usan `resolverContext` (A), 12 lectura manual (B), 40 sin patron en handler (C). De los 40 C, ~21 son C por diseño y correctos (crons con `CRON_SECRET`, endpoints publicos/API-key, admin-only globales que necesitan gate de rol y no scoping por empresa). Quedan **~19 CANDIDATOS** a fuga entre clientes — NO confirmados, pendientes de verificacion query por query. IMPORTANTE: "candidato" = mencionar o no `empresaId` en el handler; NO prueba fuga. Solo la lectura de la query real confirma.
+
+**Candidatos por racimo (pass 1):**
+- Depositos (8): `/api/depositos/route.ts` + `/api/depositos/[id]/*` — el racimo mas grande, mismo patron (operan por id).
+- Clientes / API-key (2): `/api/clientes`, `/api/empresa/api-key`.
+- Envios session-side (3): `/api/envios/{buscar,cancelar,inversa}`.
+- Etiquetas (2): `/api/etiquetas/{masiva,mocis}`.
+- Tickets (1), Nomenclador (1), Envios/andreani/excepciones (1), admin/reglas (1 = DEUDA 84).
+
+**Pass 2 — verificacion (en curso):** abrir cada candidato y confirmar CONFIRMED-LEAK / SAFE / NEEDS-CLOSER-LOOK segun la query real. Empezado por el racimo depositos: **8/8 SAFE — todos delegan a `lib/depositos/auth.ts` (`verificarAccesoDeposito` para rutas `[id]/*`; `resolverEmpresaIdParaCrear` para la coleccion). El helper valida `x-empresa-id` de sesion + rol + ownership por `deposito.empresaId` (devuelve 404 ante mismatch, no 403 — defense-in-depth). 0 confirmed-leak, 0 needs-closer-look.**
+
+**Meta-finding (impacta metodo pass 1):** existe un **CUARTO patron D = helper de auth compartido por dominio** (ej: `lib/depositos/auth.ts`) que la clasificacion automatica de pass 1 no capto porque los reads de headers estan un nivel de indireccion abajo. Los depositos aparecieron como candidatos C solo porque el handler no lee headers directamente. Esto sesga el conteo hacia arriba: es probable que otros candidatos C tambien deleguen a helpers seguros — el numero real de fugas confirmadas sera menor a 19. NO cambia la conclusion (hay que verificar cada uno); si cambia la expectativa de cuanta remediacion se necesita.
+
+**Relacion con otras DEUDAS:** DEUDA 84 (admin/reglas sin gate) es el primer item de esta auditoria. DEUDA 83 (ruteo) se cruza. Ninguna se arregla aislada: el fix debe seguir un patron unico (idealmente `resolverContext` o un guard de ownership reutilizable — patron D bien aplicado como en depositos) aplicado consistentemente, no parches por endpoint.
+
+**Por que importa:** una fuga de datos entre clientes en produccion es irreversible en consecuencias (confidencialidad) y critica de cara a integraciones e-commerce/API. Prioridad ALTA — auditar y remediar antes de onboarding de clientes reales. NO tomar decisiones de remediacion sobre candidatos sin verificar la query.

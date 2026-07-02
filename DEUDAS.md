@@ -1573,3 +1573,73 @@ TS_NODE_BASEURL=./ npx ts-node -r tsconfig-paths/register --compiler-options '{"
 
 **Por que no bloquea deploy:** el seed es exclusivamente dev/local. En produccion el populate se hace via onboarding admin (no via seed script). Prioridad: baja, dev-only. Mientras tanto el workaround permite correr scripts que dependan de `@/` desde CLI.
 
+---
+
+## DEUDA 82 — `tipoCuenta`: default incorrecto (POSTPAGO) + falta logica direccional cliente/Shipro por valor (registrada 2026-07-01, scope medio)
+
+**Status:** ABIERTA. Detectada en QA manual post-seed (2026-07-01), logueado como `cliente@demo.com` (`gerente_cliente`).
+
+**Origen:** al activar un courier en Configuracion → Transportes, el `gerente_cliente` no puede setear el metodo de pago. Dos problemas: **(a) Default incorrecto** — `CredencialCourier.tipoCuenta` es `null` y cae a `Empresa.modalidadPago` cuyo default de schema es `POSTPAGO`; el intento de producto es que un cliente nuevo arranque en **PREPAGO** y opere ya. **(b) Permiso demasiado restrictivo** — `MATRIZ_PERMISOS.tipoCuenta = ["admin_shipro"]` (`lib/permisos.ts:53`, politica DEUDA 16) bloquea el campo por completo para el cliente; el selector se renderiza `disabled` (`components/configuracion/TransportesTab.tsx:323`).
+
+**Modelo de producto correcto (definido por el usuario 2026-07-01):** dos ejes independientes con permiso **por valor**, no por eje.
+- Eje credenciales: `propias` (cliente puede) ↔ `de Shipro` (solo admin_shipro).
+- Eje metodo de pago: `prepago` (cliente puede) ↔ `postpago` (solo admin_shipro).
+- **Inmutabilidad direccional:** el cliente siempre puede volver a los valores de default (propias / prepago); solo Shipro puede habilitar los privilegiados (Shipro / postpago). Una vez que Shipro habilita un valor privilegiado, el cliente puede bajar a default pero no volver a subir solo. 4 combinaciones resultantes (propias+prepago default; propias+postpago; Shipro+prepago; Shipro+postpago).
+
+**Nota de reuso:** el eje credenciales YA tiene esta logica (`usaCredencialesPropias @default(true)` + `Empresa.modeloAHabilitado` con inmutabilidad direccional A→B documentada en schema). La DEUDA es **replicar ese patron en el eje `tipoCuenta`** + corregir el default a PREPAGO. No inventar uno nuevo.
+
+**Por que importa:** sin esto, un cliente nuevo no puede autoactivarse y operar — requiere intervencion manual de Shipro para cada alta. Bloquea el flujo de onboarding self-service.
+
+
+---
+
+## DEUDA 83 — Ruteo: dos pantallas divergentes leyendo de fuentes distintas (registrada 2026-07-01, scope medio)
+
+**Status:** ABIERTA. Detectada en QA manual (2026-07-01).
+
+**⚠️ Prerrequisito de abordaje:** NO implementar sin diagnostico exhaustivo previo. El ruteo es logica de negocio central del cliente (motor de decision de courier) y cruza con diseno ya consolidado — DEUDA 29 (arquitectura multicourier, `docs/ARQUITECTURA-MULTICOURIER.md`), las `ReglaRuteo`, y el patron de `condicionValor1/2`. Antes de tocar: mapear ambas superficies completas, que escribe/lee cada endpoint, y confirmar que ningun cambio rompa la evaluacion de reglas en el flujo de cotizacion/creacion de envios. Sesion dedicada, read-only primero.
+
+**Origen:** existen **dos superficies de "ruteo" desconectadas entre si**. (1) El link del sidebar "Reglas de Ruteo" (`app/(dashboard)/layout.tsx:151`) apunta a `/couriers` (componente `ReglasLogisticas`), blindado solo para Shipro (`esEquipoShipro`, bloquea al cliente con "Acceso Restringido"). (2) La solapa Configuracion → Ruteo (`app/(dashboard)/configuracion/ruteo/page.tsx` → `RuteoTab`) si la ve el cliente, y lee de `/api/admin/reglas` + `/api/empresa/reglas`. Son URLs, componentes y endpoints distintos: por eso las reglas que se ven en una no aparecen en la otra.
+
+**A resolver en el diseno:** definir cual es la fuente de verdad de reglas para el cliente y cual para Shipro, y si la solapa de Configuracion debe mostrar las reglas de la empresa (scope) en vez del catalogo admin. Cruza con DEUDA 84.
+
+**Por que no bloquea deploy:** funcionalidad de configuracion avanzada, no el camino critico de crear envios. Prioridad media.
+
+
+---
+
+## DEUDA 84 — `/api/admin/reglas` sin gate de rol (SEGURIDAD) (registrada 2026-07-01, scope chico, seguridad)
+
+**Status:** ABIERTA. Detectada durante el diagnostico de DEUDA 83 (2026-07-01).
+
+**Origen:** `app/api/admin/reglas/route.ts` GET hace `prisma.reglaRuteo.findMany()` **sin `where`, sin `resolverContext`, sin chequeo de `x-rol`**. Devuelve **todas las reglas de ruteo de todas las empresas** a cualquier request que pase el check de sesion del proxy — incluido un `gerente_cliente`. Viola la politica defense-in-depth (`docs/POLITICAS-TECNICAS.md`): un endpoint bajo `/api/admin/*` debe validar `x-rol` aunque el proxy autentique la sesion. `RuteoTab` (que ve el cliente) consume este endpoint (`components/configuracion/RuteoTab.tsx:31`), o sea la fuga es alcanzable desde la UI del cliente.
+
+**Fix propuesto:** agregar gate `x-rol === "admin_shipro"` al inicio del handler (ignorar/403 segun patron), o migrar el consumo del cliente a `/api/empresa/reglas` (scope-aware) y reservar `/api/admin/reglas` para Shipro.
+
+**Por que importa:** fuga de datos entre clientes (reglas de ruteo de una empresa visibles a otra). Prioridad **alta** dentro de lo no-bloqueante — es seguridad, revisar antes de onboarding real de clientes.
+
+
+---
+
+## DEUDA 85 — Mesa de Ayuda no segmenta por cliente (a revisar) (registrada 2026-07-01, scope a definir)
+
+**Status:** ABIERTA — **a revisar** (no confirmada como bug). Observada en QA manual (2026-07-01), logueado como `admin_shipro`.
+
+**Origen:** la seccion "Mesa de Ayuda" no parece segmentar la vista por cliente/empresa. **Pendiente de confirmar si es bug o by-design** (puede que la mesa de ayuda sea global a proposito). No se inspecciono el codigo todavia.
+
+**Proximo paso:** cuando se retome, verificar en codigo si Mesa de Ayuda deberia scopear por empresa (como el resto del Panel) o si es intencionalmente global. Registrar el diseno correcto recien ahi.
+
+**Por que no bloquea deploy:** observacion sin confirmar. Prioridad baja hasta clarificar.
+
+
+---
+
+## DEUDA 86 — Typo "dias" → "dias" en Torre de Control (registrada 2026-07-01, scope trivial)
+
+**Status:** ABIERTA. Detectada en QA manual (2026-07-01).
+
+**Origen:** en un modal de Torre de Control (sin datos), el mensaje vacio dice "No hay direcciones en la ventana de 90 dias" — falta el acento en "dias" (deberia ser "dias" con tilde). String a corregir en el componente correspondiente (probablemente el modal de auditoria de direcciones / Torre de Control).
+
+**Fix propuesto:** buscar el string `90 dias` (o `ventana de` / `dias`) en los componentes de Torre de Control y corregir el acento. Trivial.
+
+**Por que no bloquea deploy:** cosmetico. Prioridad minima, buen "primer commit" de calidad.

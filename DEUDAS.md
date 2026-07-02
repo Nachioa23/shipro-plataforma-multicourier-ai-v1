@@ -1659,10 +1659,38 @@ TS_NODE_BASEURL=./ npx ts-node -r tsconfig-paths/register --compiler-options '{"
 - Etiquetas (2): `/api/etiquetas/{masiva,mocis}`.
 - Tickets (1), Nomenclador (1), Envios/andreani/excepciones (1), admin/reglas (1 = DEUDA 84).
 
-**Pass 2 — verificacion (en curso):** abrir cada candidato y confirmar CONFIRMED-LEAK / SAFE / NEEDS-CLOSER-LOOK segun la query real. Empezado por el racimo depositos: **8/8 SAFE — todos delegan a `lib/depositos/auth.ts` (`verificarAccesoDeposito` para rutas `[id]/*`; `resolverEmpresaIdParaCrear` para la coleccion). El helper valida `x-empresa-id` de sesion + rol + ownership por `deposito.empresaId` (devuelve 404 ante mismatch, no 403 — defense-in-depth). 0 confirmed-leak, 0 needs-closer-look.**
+**Pass 2 — verificacion COMPLETA (2026-07-03, 24 candidatos verificados query por query).** Resultado: de ~19 candidatos del inventario, **4 fugas de aislamiento reales confirmadas**. El inventario pass-1 sobreestimaba ~4.75x — explicado por los meta-findings (patron D + clase DEUDA-84 + public-by-design + script hardcodeado). Mapa por familias:
 
-**Meta-finding (impacta metodo pass 1):** existe un **CUARTO patron D = helper de auth compartido por dominio** (ej: `lib/depositos/auth.ts`) que la clasificacion automatica de pass 1 no capto porque los reads de headers estan un nivel de indireccion abajo. Los depositos aparecieron como candidatos C solo porque el handler no lee headers directamente. Esto sesga el conteo hacia arriba: es probable que otros candidatos C tambien deleguen a helpers seguros — el numero real de fugas confirmadas sera menor a 19. NO cambia la conclusion (hay que verificar cada uno); si cambia la expectativa de cuanta remediacion se necesita.
+**FAMILIA 1 — Fuga entre clientes (2 endpoints). GRAVE.**
+- `app/api/etiquetas/masiva/route.ts` — POST recibe `ids` del body y hace `envio.findMany({ where: { id: { in: ids } } })` sin filtrar por empresa del que pide. Cliente A pide IDs de cliente B → recibe PDFs con direccion/telefono/contenido ajenos.
+- `app/api/etiquetas/mocis/route.ts` — GET por `trackingNumber` del query, sin scope. Mismo problema.
+- Proxy: `session` (inyecta `x-empresa-id`, el handler lo ignora). Fix: filtrar por empresa del caller (guard de ownership reutilizable, patron `verificarAccesoDeposito`).
 
-**Relacion con otras DEUDAS:** DEUDA 84 (admin/reglas sin gate) es el primer item de esta auditoria. DEUDA 83 (ruteo) se cruza. Ninguna se arregla aislada: el fix debe seguir un patron unico (idealmente `resolverContext` o un guard de ownership reutilizable — patron D bien aplicado como en depositos) aplicado consistentemente, no parches por endpoint.
+**FAMILIA 2 — Mutacion publica sin login (2 endpoints). LA MAS GRAVE.**
+- `app/api/envios/cancelar/route.ts` — en `PUBLIC_API_EXACT` (proxy.ts). Sin auth. Cualquiera con un trackingNumber cancela cualquier envio + dispara cancelacion en el courier.
+- `app/api/envios/inversa/route.ts` — idem, genera logistica inversa sobre envio ajeno.
+- El trackingNumber NO es secreto (impreso en etiqueta, en mails al comprador) → usarlo como autenticador para MUTAR estado es el agujero. Para LEER (rastreo) es correcto; para mutar, no. Fix: sacar de `PUBLIC_API_EXACT`, exigir sesion + ownership.
 
-**Por que importa:** una fuga de datos entre clientes en produccion es irreversible en consecuencias (confidencialidad) y critica de cara a integraciones e-commerce/API. Prioridad ALTA — auditar y remediar antes de onboarding de clientes reales. NO tomar decisiones de remediacion sobre candidatos sin verificar la query.
+**FAMILIA 3 — Endpoint admin sin gate de rol (9 endpoints). Clase DEUDA-84.**
+- `app/api/clientes`, `app/api/admin/empresas`, `app/api/tickets`, `app/api/nomenclador`, `app/api/envios/andreani/excepciones`, `app/api/admin/feriados`, `app/api/admin/finanzas`, `app/api/admin/liquidaciones`, `app/api/conciliacion`.
+- Son herramientas shipro-ops (operar cualquier empresa es correcto PARA UN ADMIN), pero no validan `x-rol`. El proxy confirma que hay sesion, no que el rol sea admin_shipro. Un `gerente_cliente` con `curl` alcanza operaciones/datos globales.
+- Fix: gate `x-rol === "admin_shipro"` (o `operador_shipro` con matriz segun caso) al inicio del handler, patron de `admin/auditoria-configuracion/route.ts`. DEUDA 84 (admin/reglas) es el item 1 de esta familia — mismo fix x9.
+
+**FAMILIA 4 — Script legacy hardcodeado como ruta viva (1 endpoint). Clase propia.**
+- `app/api/importar/route.ts` — `const EMPRESA_ID = 1;` hardcodeado (L12). Cualquier sesion que POSTee un CSV escribe envios a la empresa 1. Script de migracion que quedo enchufado como ruta.
+- Fix: propio (parametrizar empresa + gate, o retirar la ruta). ACCION: grep del arbol por otros `EMPRESA_ID`/`empresaId = 1` hardcodeados — puede haber mas.
+
+**SEGUROS verificados (9 endpoints, no requieren accion):**
+- 8 rutas `depositos/*` — delegan a `lib/depositos/auth.ts` (`verificarAccesoDeposito` valida ownership por `deposito.empresaId`, 404 ante mismatch; `resolverEmpresaIdParaCrear` para la coleccion). Patron D bien aplicado — modelo a replicar.
+- `app/api/empresa/api-key/route.ts` — usa `getToken` (JWT firmado) + `token.empresaId`, bloquea shipro. Imposible de falsear.
+
+**PENDIENTE de verificar (fuera de los ~19 candidatos, para completar el 100%):** las 12 rutas patron B (lectura manual de headers) y confirmar que los 24 A/torre-de-control scopean bien. Prioridad menor: A y B ya tienen algun check; el riesgo mayor (clase C sin check) ya esta mapeado.
+
+**PLAN DE REMEDIACION (4 patrones, no parches):**
+1. Guard de ownership reutilizable para Familia 1 (basado en el patron depositos).
+2. Quitar Familia 2 de `PUBLIC_API_EXACT` + exigir sesion/ownership.
+3. Gate de rol x9 para Familia 3 (empezando por DEUDA 84).
+4. Fix puntual + barrido de hardcodes para Familia 4.
+Orden sugerido de ejecucion: Familia 2 (mas grave) → Familia 1 → Familia 3 → Familia 4. Cada una su propia sesion/commit. NO mezclar familias en un commit.
+
+**Por que importa:** 4 fugas reales + 2 clusters (rol-gate x9, hardcode). Ninguna explotable HOY (no hay produccion), todas remediar ANTES de onboarding real. Este mapa es el resultado verificado de la auditoria — decisiones de remediacion se toman sobre esto, no sobre el inventario crudo.

@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import fs from 'fs';
 import path from 'path';
 import csv from 'csv-parser';
@@ -108,6 +108,115 @@ async function main() {
   }
 
   console.log('✅ Empresa, Usuario Admin y Couriers listos.');
+
+
+  // ==========================================
+  // PARTE 1.5 (DEUDA 81): EMPRESA DEMO + GERENTE CLIENTE + MOVIMIENTOS DEMO
+  //
+  // Objetivo: post-DEUDA-66 la BD Postgres arranca vacia. Este bloque crea
+  // un entorno minimo login-able + con ledger visible en /facturacion.
+  //
+  // Idempotencia:
+  //   - Empresa: upsert por cuit (unico). Update {} preserva saldo si ya
+  //     existe (no pisa la data del dev que este trabajando).
+  //   - Usuario: upsert por email (unico).
+  //   - Movimientos: se insertan solo si la empresa no tiene ninguno todavia
+  //     (evita duplicar el ledger en re-runs). Si el dev quiere resetear los
+  //     movimientos: DELETE FROM "MovimientoFinanciero" WHERE "empresaId" = X.
+  // ==========================================
+  const CUIT_DEMO = '30-70000000-0';
+  const empresaDemo = await prisma.empresa.upsert({
+    where: { cuit: CUIT_DEMO },
+    update: {},
+    create: {
+      nombre: 'Comercio Demo S.A.',
+      cuit: CUIT_DEMO,
+      activo: true,
+      modalidadPago: 'PREPAGO',
+      onboardingCompletado: true,
+      saldoActivo: new Prisma.Decimal('0'),
+      limiteDescubierto: new Prisma.Decimal('50000.00'),
+      tarifaPlanaRespaldo: new Prisma.Decimal('11858.00'),
+    },
+  });
+
+  const gerentePassword = await bcrypt.hash('demo', 10);
+  await prisma.usuario.upsert({
+    where: { email: 'cliente@demo.com' },
+    update: {},
+    create: {
+      email: 'cliente@demo.com',
+      password: gerentePassword,
+      nombre: 'Gerente Comercio Demo',
+      rol: 'gerente_cliente',
+      activo: true,
+      empresaId: empresaDemo.id,
+    },
+  });
+
+  // Ledger demo: 12 movimientos cronologicos.
+  // Formula fee: monto envio, fee pre-IVA fijo $1.600, IVA = $1.600 * 0.21 = $336,
+  // fee c/IVA = $1.600 * new Prisma.Decimal("1.21") = $1.936 (mismo pattern que
+  // calcularFeeOperacion). Todas las cifras son cents exactos (Decimal(12,2)).
+  //
+  // Running saldoPosterior verificado con calculadora:
+  //   +100000 -8347.50 -1936 -9112 -1936 -10480.25 -1936 -11925.75 -1936
+  //   +50000 -12500 -1936 = 87954.50  ← saldo final positivo (PREPAGO valido).
+  const movimientosPrevios = await prisma.movimientoFinanciero.count({
+    where: { empresaId: empresaDemo.id },
+  });
+  if (movimientosPrevios === 0) {
+    const now = Date.now();
+    const diasAtras = (n: number) => new Date(now - n * 24 * 60 * 60 * 1000);
+
+    const ledger: Array<{
+      tipo: string;
+      monto: string;
+      saldoPosterior: string;
+      descripcion: string;
+      referencia: string;
+      fecha: Date;
+    }> = [
+      { tipo: 'CREDITO_RECARGA',      monto:  '100000.00', saldoPosterior: '100000.00', descripcion: 'Recarga inicial (transferencia bancaria)',              referencia: 'Transf. MP #001', fecha: diasAtras(13) },
+      { tipo: 'DEBITO_ENVIO',         monto:   '-8347.50', saldoPosterior:  '91652.50', descripcion: 'Envio SHP-100001 — Andreani',                            referencia: 'SHP-100001',      fecha: diasAtras(11) },
+      { tipo: 'DEBITO_OPERACION_FEE', monto:   '-1936.00', saldoPosterior:  '89716.50', descripcion: 'Fee de operacion Shipro — SHP-100001',                   referencia: 'SHP-100001',      fecha: diasAtras(11) },
+      { tipo: 'DEBITO_ENVIO',         monto:   '-9112.00', saldoPosterior:  '80604.50', descripcion: 'Envio SHP-100002 — Correo Argentino',                    referencia: 'SHP-100002',      fecha: diasAtras(9)  },
+      { tipo: 'DEBITO_OPERACION_FEE', monto:   '-1936.00', saldoPosterior:  '78668.50', descripcion: 'Fee de operacion Shipro — SHP-100002',                   referencia: 'SHP-100002',      fecha: diasAtras(9)  },
+      { tipo: 'DEBITO_ENVIO',         monto:  '-10480.25', saldoPosterior:  '68188.25', descripcion: 'Envio SHP-100003 — OCASA',                               referencia: 'SHP-100003',      fecha: diasAtras(7)  },
+      { tipo: 'DEBITO_OPERACION_FEE', monto:   '-1936.00', saldoPosterior:  '66252.25', descripcion: 'Fee de operacion Shipro — SHP-100003',                   referencia: 'SHP-100003',      fecha: diasAtras(7)  },
+      { tipo: 'DEBITO_ENVIO',         monto:  '-11925.75', saldoPosterior:  '54326.50', descripcion: "Envio SHP-100004 — Moci's",                              referencia: 'SHP-100004',      fecha: diasAtras(5)  },
+      { tipo: 'DEBITO_OPERACION_FEE', monto:   '-1936.00', saldoPosterior:  '52390.50', descripcion: 'Fee de operacion Shipro — SHP-100004',                   referencia: 'SHP-100004',      fecha: diasAtras(5)  },
+      { tipo: 'CREDITO_RECARGA',      monto:   '50000.00', saldoPosterior: '102390.50', descripcion: 'Recarga adicional (transferencia bancaria)',             referencia: 'Transf. MP #002', fecha: diasAtras(4)  },
+      { tipo: 'DEBITO_ENVIO',         monto:  '-12500.00', saldoPosterior:  '89890.50', descripcion: 'Envio SHP-100005 — Andreani',                            referencia: 'SHP-100005',      fecha: diasAtras(2)  },
+      { tipo: 'DEBITO_OPERACION_FEE', monto:   '-1936.00', saldoPosterior:  '87954.50', descripcion: 'Fee de operacion Shipro — SHP-100005',                   referencia: 'SHP-100005',      fecha: diasAtras(2)  },
+    ];
+
+    for (const m of ledger) {
+      await prisma.movimientoFinanciero.create({
+        data: {
+          empresaId: empresaDemo.id,
+          tipo: m.tipo,
+          monto: new Prisma.Decimal(m.monto),
+          saldoPosterior: new Prisma.Decimal(m.saldoPosterior),
+          descripcion: m.descripcion,
+          referencia: m.referencia,
+          fecha: m.fecha,
+        },
+      });
+    }
+
+    // saldoActivo de la empresa DEBE igualar el ultimo saldoPosterior del ledger.
+    await prisma.empresa.update({
+      where: { id: empresaDemo.id },
+      data: { saldoActivo: new Prisma.Decimal('87954.50') },
+    });
+
+    console.log(`✅ Ledger demo cargado: ${ledger.length} movimientos, saldo final $87.954,50.`);
+  } else {
+    console.log(`ℹ️  Empresa demo ya tiene ${movimientosPrevios} movimientos — se preserva el ledger existente.`);
+  }
+
+  console.log('✅ Empresa Demo (Comercio Demo S.A.) + gerente cliente@demo.com listos.');
 
 
   // ==========================================

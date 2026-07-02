@@ -2,28 +2,52 @@
 
 import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
-import Link from "next/link";
 import { CreditCard, FileText, Download, TrendingUp, BarChart3, Receipt, CheckCircle2, Scale, DollarSign, Loader2, AlertTriangle, ArrowUpRight, ArrowDownRight, FileSpreadsheet, Building2 } from 'lucide-react';
 
 export default function Facturacion() {
   const brandColor = '#233b6b';
   const { data: session } = useSession();
+  // DEUDA 18: shipro (admin_shipro / operador_shipro) accede a la facturacion
+  // de cualquier cliente eligiendo empresa via dropdown; misma vista que el cliente ve.
+  const rol = session?.user?.rol || '';
+  const esShipro = rol === 'admin_shipro' || rol === 'operador_shipro';
 
   // Agregamos "liquidaciones" al estado
   const [billeteraData, setBilleteraData] = useState<{saldo: number, modalidadPago: string, movimientos: any[], liquidaciones: any[]}>({ saldo: 0, modalidadPago: 'POSTPAGO', movimientos: [], liquidaciones: [] });
   const [cargando, setCargando] = useState(true);
   const [errorApi, setErrorApi] = useState(false);
 
+  // DEUDA 18: dropdown de empresa para shipro. Mismo patron que /cotizar y /nuevo-envio.
+  const [empresaSeleccionadaId, setEmpresaSeleccionadaId] = useState<string>("");
+  const [listaClientes, setListaClientes] = useState<any[]>([]);
+
+  // DEUDA 18: cargar lista de empresas activas cuando el usuario es shipro.
+  useEffect(() => {
+    if (!esShipro) return;
+    fetch('/api/clientes')
+      .then(r => r.json())
+      .then(data => setListaClientes(Array.isArray(data) ? data.filter((c: any) => c.activo) : []))
+      .catch(() => setListaClientes([]));
+  }, [esShipro]);
+
   useEffect(() => {
     const fetchCuentaCorriente = async () => {
-      if (!session?.user?.empresaId) return;
-      
+      // DEUDA 18: shipro sin seleccion -> no fetch, mostrar dropdown + gate.
+      if (esShipro && !empresaSeleccionadaId) return;
+      // Cliente sin empresaId (edge case) -> no fetch.
+      if (!esShipro && !session?.user?.empresaId) return;
+
       setCargando(true);
       setErrorApi(false);
-      
+
       try {
-        const res = await fetch(`/api/finanzas?empresaId=${session.user.empresaId}`);
-        
+        // Cliente: URL identica a la previa (empresaId query; scope real via header x-empresa-id).
+        // Shipro: filtroEmpresa consumido por resolverContext en /api/finanzas.
+        const url = esShipro
+          ? `/api/finanzas?filtroEmpresa=${empresaSeleccionadaId}`
+          : `/api/finanzas?empresaId=${session!.user!.empresaId}`;
+        const res = await fetch(url);
+
         if (res.ok) {
           const data = await res.json();
           setBilleteraData(data);
@@ -39,7 +63,7 @@ export default function Facturacion() {
     };
 
     fetchCuentaCorriente();
-  }, [session]);
+  }, [session, esShipro, empresaSeleccionadaId]);
 
   const formatearMoneda = (monto: number) => {
     return new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', minimumFractionDigits: 2 }).format(monto);
@@ -55,20 +79,8 @@ export default function Facturacion() {
 
   const esPostpago = billeteraData.modalidadPago === 'POSTPAGO';
 
-  if (session && session.user.empresaId === null) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full bg-gray-50 p-8">
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-10 max-w-md text-center">
-          <Building2 className="w-12 h-12 text-blue-500 mx-auto mb-4" />
-          <h2 className="text-xl font-black text-gray-800 mb-2">Sección para usuarios cliente</h2>
-          <p className="text-sm text-gray-600 mb-6">La facturación corresponde a la cuenta corriente de cada cliente. Como usuario Shipro no tenés una empresa propia.</p>
-          <Link href="/torre-de-control" className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#233b6b] hover:bg-blue-900 text-white text-sm font-bold rounded-lg transition-colors">
-            Ir a Torre de Control
-          </Link>
-        </div>
-      </div>
-    );
-  }
+  // DEUDA 18: gate para shipro sin seleccion. Cliente (esShipro=false) => gateShipro=false, render inalterado.
+  const gateShipro = esShipro && !empresaSeleccionadaId;
 
   return (
     <div className="flex flex-col h-full relative bg-gray-50">
@@ -86,7 +98,36 @@ export default function Facturacion() {
 
       <div className="flex-1 p-8 overflow-y-auto pb-32">
         <div className="max-w-6xl mx-auto space-y-6">
-          
+
+          {/* DEUDA 18: dropdown de empresa para shipro (siempre visible cuando el rol es shipro). */}
+          {esShipro && (
+            <div className="bg-white rounded-xl p-5 shadow-sm border border-indigo-200">
+              <label className="block text-[10px] font-bold text-indigo-600 uppercase tracking-wider mb-2 flex items-center gap-1">
+                <Building2 className="w-3 h-3" /> Facturación de la empresa:
+              </label>
+              <select
+                value={empresaSeleccionadaId}
+                onChange={(e) => setEmpresaSeleccionadaId(e.target.value)}
+                className="w-full border border-indigo-200 bg-indigo-50 text-indigo-900 rounded-lg px-3 py-2 text-sm font-bold focus:outline-none cursor-pointer"
+              >
+                <option value="" disabled>Seleccionar empresa…</option>
+                {listaClientes.map(c => (
+                  <option key={c.id} value={c.id}>{c.nombre}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {gateShipro ? (
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-10 max-w-md mx-auto text-center">
+              <Building2 className="w-12 h-12 text-blue-500 mx-auto mb-4" />
+              <h2 className="text-xl font-black text-gray-800 mb-2">Sección para usuarios cliente</h2>
+              <p className="text-sm text-gray-600 mb-2">La facturación corresponde a la cuenta corriente de cada cliente. Como usuario Shipro no tenés una empresa propia.</p>
+              <p className="text-xs font-bold text-indigo-600 mt-4">Seleccioná una empresa arriba para ver su facturación.</p>
+            </div>
+          ) : (
+            <>
+
           <div className="bg-blue-50 border border-blue-100 rounded-xl p-5 flex items-start gap-4">
             <BarChart3 className="w-6 h-6 text-blue-600 shrink-0 mt-0.5" />
             <div>
@@ -252,6 +293,9 @@ export default function Facturacion() {
               </table>
             </div>
           </div>
+
+            </>
+          )}
 
         </div>
       </div>

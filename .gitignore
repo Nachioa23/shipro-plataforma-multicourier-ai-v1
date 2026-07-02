@@ -64,3 +64,5 @@ prisma/dev.db.backup*
 
 # Carpeta de Claude Code / Cursor IDE — no es del proyecto
 .claude/
+# Session context snapshots (kept on disk, not tracked)
+docs/CONTEXTO-*.md

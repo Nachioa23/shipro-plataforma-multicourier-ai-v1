@@ -1696,3 +1696,39 @@ TS_NODE_BASEURL=./ npx ts-node -r tsconfig-paths/register --compiler-options '{"
 Orden sugerido de ejecucion: Familia 2 (mas grave) → Familia 1 → Familia 3 → Familia 4. Cada una su propia sesion/commit. NO mezclar familias en un commit.
 
 **Por que importa:** 4 fugas reales + 2 clusters (rol-gate x9, hardcode). Ninguna explotable HOY (no hay produccion), todas remediar ANTES de onboarding real. Este mapa es el resultado verificado de la auditoria — decisiones de remediacion se toman sobre esto, no sobre el inventario crudo.
+
+
+---
+
+## DEUDA 88 — Credenciales de servicios externos ausentes + verificar integraciones (registrada 2026-07-04, scope medio, entorno)
+
+**Status:** ABIERTA. Detectada en QA manual (2026-07-04): `.env.local` quedo VACIO tras la reconstruccion del entorno post-migracion Postgres. Las credenciales de servicios externos vivian ahi en el entorno viejo y se perdieron.
+
+**Sintomas observados:** Andreani falla auth ("Fallo la autenticacion con Andreani", `AndreaniAdapter.refreshToken`); Google Maps banner "API fuera de servicio" en `/envio-nuevo`; cotizacion CP 1625→1050 sin resultados (domicilio ni sucursal) pese a tener Andreani y Mocis "activos".
+
+**Causa raiz:** NO es codigo — es entorno. Mismo patron que el NEXTAUTH_SECRET faltante (DEUDA 81-adyacente): variables/credenciales que el entorno reconstruido no tiene. Confirmado: `.env.local` vacio.
+
+**Alcance del trabajo (aprovechar para hacerlo bien):**
+- Recuperar/regenerar credenciales y cargarlas en `.env.local` (NUNCA al repo — gitignored).
+- Verificar de punta a punta las 2 integraciones existentes: **Andreani** (auth + cotizacion + sucursales + creacion) y **Mocis** (idem).
+- Sumar las integraciones de couriers NUEVAS pendientes (revisar el registry unificado / DEUDA 29 multicourier para la lista).
+- Definir si las credenciales de courier van por env o por `CredencialCourier` en DB por empresa (el diagnostico mostro que la demo empresa no tiene credenciales sembradas — decidir el modelo).
+- Google Maps API key: pendiente aparte (baja prioridad, el usuario lo corrige luego).
+
+**Por que importa:** sin esto no se puede cotizar, crear ni cancelar envios reales end-to-end. Bloquea el smoke test de produccion y la verificacion de DEUDA 87 FAMILIA 2. Prioridad ALTA para poder testear el flujo operativo.
+
+
+---
+
+## DEUDA 89 — Verificacion en browser de DEUDA 87 FAMILIA 2 (cancelar/inversa) (registrada 2026-07-04, scope chico, encadenada a DEUDA 88)
+
+**Status:** ABIERTA — ENCADENADA a DEUDA 88. El fix de FAMILIA 2 (commit de ownership en cancelar/inversa) se commiteo revisado + tsc 0, pero NO se pudo verificar funcionalmente en browser: `.env.local` vacio (Andreani no autentica) + empresa demo sin envios que cancelar.
+
+**Testeo pendiente (hacer APENAS DEUDA 88 cargue credenciales + haya envios de prueba):**
+- Cliente (`cliente@demo.com`) cancela un envio PROPIO desde dashboard → debe funcionar igual que antes.
+- Cliente intenta cancelar un envio de OTRA empresa → debe dar 404 (sin filtrar existencia).
+- Shipro (`admin@shipro.pro`) cancela cualquiera → debe funcionar (scope global).
+- Idem para logistica inversa (`/inversa`).
+- Confirmar que un llamador sin sesion recibe 401 en el proxy (ya no es DUAL).
+
+**Por que importa:** cierra la verificacion del fix de seguridad. El codigo esta revisado y compila, pero "un fix que no se pudo probar no esta 100% terminado" — esta DEUDA existe para no olvidar ese ultimo paso.

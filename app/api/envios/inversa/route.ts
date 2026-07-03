@@ -3,6 +3,8 @@ import prisma from "@/lib/prisma";
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
+import { resolverContext } from "@/lib/auth-context";
+import { verificarAccesoEnvio } from "@/lib/envios/ownership";
 
 export async function POST(request: Request) {
   try {
@@ -13,10 +15,15 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Faltan datos para la logística inversa" }, { status: 400 });
     }
 
-    const envioOriginal = await prisma.envio.findFirst({
-      where: { trackingNumber: trackingOriginal },
-      include: { courier: true, destino: true, origen: true, finanzas: true }
-    });
+    // DEUDA 87 FAMILIA 2: gate de ownership (shipro=global, cliente=solo su empresa).
+    const ctx = resolverContext(request);
+    if (ctx instanceof NextResponse) return ctx;
+
+    const envioOriginal = await verificarAccesoEnvio(
+      { trackingNumber: trackingOriginal },
+      ctx,
+      { courier: true, destino: true, origen: true, finanzas: true }
+    );
 
     if (!envioOriginal || !envioOriginal.destino) {
       return NextResponse.json({ error: "Envío original no encontrado" }, { status: 404 });

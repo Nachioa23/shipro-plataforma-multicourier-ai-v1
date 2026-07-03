@@ -18,8 +18,6 @@ const API_KEY_EXACT = [
 const DUAL_EXACT = [
   "/api/cotizar",
   "/api/envios/sucursales",
-  "/api/envios/cancelar",
-  "/api/envios/inversa",
   "/api/envios/buscar",
   "/api/checkouts/evaluar",
 ];

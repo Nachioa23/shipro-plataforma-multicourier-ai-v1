@@ -16,6 +16,8 @@ Este bloque captura decisiones de principio que guian futuras decisiones de scop
 
 **PRINCIPIO 1 — Shipro es plataforma de datos (declarado 2026-06-02).** La generacion de informacion estrategica del cliente y la operacion logistica es parte del core del producto. Endpoints, queries y logica de analitica NO se borran aunque no tengan UI activa hoy — son backend listo para vistas futuras. Aplicado por primera vez en DEUDA 8 (vista de Calidad Postal) durante el BLOQUE 1 de quick wins del 2026-06-02.
 
+**PRINCIPIO 2 — Ownership canonico de Envio (declarado 2026-07-04).** La empresa duena de un Envio es la asignada en su creacion — la relacion `Envio.empresa` via el FK escalar `Envio.empresaId`, escrita en `lib/envios/crear.ts:597` (`empresa: { connect: { id: empresaId } }`). Todo endpoint que lea o mute envios con scope de cliente DEBE filtrar por este camino via `verificarAccesoEnvio` (`lib/envios/ownership.ts`). Shipro (`ctx.empresaId === null`) tiene scope global. NO inventar caminos alternativos de ownership (via Deposito/Manifiesto/Liquidacion son joins de agregacion, no ejes de propiedad). Diagnosticado en DEUDA 87 FAMILIA 2 (verificacion 3x confirma un unico camino).
+
 ---
 
 ## DEUDA 1 — Implementar estado REQUIERE_SOPORTE (REDEFINIDA — POSPUESTA a SUB-PASO 9)

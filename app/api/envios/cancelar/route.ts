@@ -3,24 +3,31 @@ import prisma from "@/lib/prisma";
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 import { obtenerCredencialCourier, normalizarParaComparacion } from "@/lib/couriers/normalizar";
+import { resolverContext } from "@/lib/auth-context";
+import { verificarAccesoEnvio } from "@/lib/envios/ownership";
 
 export async function POST(request: Request) {
   try {
     const { tracking } = await request.json();
     if (!tracking) return NextResponse.json({ error: "Falta el número de tracking" }, { status: 400 });
 
+    // DEUDA 87 FAMILIA 2: gate de ownership (shipro=global, cliente=solo su empresa).
+    const ctx = resolverContext(request);
+    if (ctx instanceof NextResponse) return ctx;
+
     // DEUDA 29 Sub-fase 1.C.2: include de tramos para iterar la cancelación
     // sobre la cadena completa (recolector + Last-Mile, o solo Last-Mile, etc.).
-    const envio = await prisma.envio.findUnique({
-      where: { trackingNumber: tracking },
-      include: {
+    const envio = await verificarAccesoEnvio(
+      { trackingNumber: tracking },
+      ctx,
+      {
         courier: true,
         tramos: {
           include: { courier: true },
           orderBy: { orden: "asc" },
         },
-      },
-    });
+      }
+    );
 
     if (!envio) return NextResponse.json({ error: "Envío no encontrado" }, { status: 404 });
     if (envio.estadoActual === "CANCELADO") return NextResponse.json({ error: "El envío ya está cancelado" }, { status: 400 });

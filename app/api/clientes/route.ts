@@ -14,13 +14,19 @@ import {
   generarPasswordTemporal,
 } from "@/lib/utils/validaciones-onboarding";
 
-export async function GET() {
+export async function GET(request: Request) {
+  // DEUDA 87 FAMILIA 3: operador solo alta (POST); resto admin.
+  const rol = request.headers.get("x-rol") || "";
+  if (rol !== "admin_shipro" && rol !== "operador_shipro") {
+    return NextResponse.json({ error: "Acceso denegado. Solo equipo Shipro." }, { status: 403 });
+  }
+
   try {
     const empresas = await prisma.empresa.findMany({
       include: {
-        usuarios: true 
+        usuarios: true
       },
-      orderBy: { createdAt: 'desc' } 
+      orderBy: { createdAt: 'desc' }
     });
     return NextResponse.json(empresas);
   } catch (error) {
@@ -29,6 +35,12 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  // DEUDA 87 FAMILIA 3: operador solo alta (POST); resto admin.
+  const rol = request.headers.get("x-rol") || "";
+  if (rol !== "admin_shipro" && rol !== "operador_shipro") {
+    return NextResponse.json({ error: "Acceso denegado. Solo equipo Shipro." }, { status: 403 });
+  }
+
   try {
     const body = await request.json();
     const {
@@ -192,6 +204,11 @@ export async function POST(request: Request) {
 }
 
 export async function PUT(request: Request) {
+  // DEUDA 87 FAMILIA 3: operador solo alta (POST); resto admin. Reject before parse.
+  const rol = request.headers.get("x-rol") || "";
+  if (rol !== "admin_shipro") {
+    return NextResponse.json({ error: "Acceso denegado. Solo admin_shipro puede editar, dar de baja o gestionar usuarios." }, { status: 403 });
+  }
   try {
     const body = await request.json();
 
@@ -272,6 +289,12 @@ export async function PUT(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  // DEUDA 87 FAMILIA 3: operador solo alta (POST); resto admin.
+  const rol = request.headers.get("x-rol") || "";
+  if (rol !== "admin_shipro") {
+    return NextResponse.json({ error: "Acceso denegado. Solo admin_shipro puede editar, dar de baja o gestionar usuarios." }, { status: 403 });
+  }
+
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');

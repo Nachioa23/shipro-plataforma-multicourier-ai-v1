@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
-export async function GET() {
+export async function GET(request: Request) {
+  // DEUDA 87 FAMILIA 3: gate de rol (defense-in-depth).
+  const rol = request.headers.get("x-rol") || "";
+  if (rol !== "admin_shipro" && rol !== "operador_shipro") {
+    return NextResponse.json({ error: "Acceso denegado. Solo equipo Shipro." }, { status: 403 });
+  }
+
   try {
     const reglas = await prisma.reglaRuteo.findMany({
       orderBy: { prioridad: 'asc' }
@@ -13,9 +19,15 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  // DEUDA 87 FAMILIA 3: gate de rol (defense-in-depth).
+  const rol = request.headers.get("x-rol") || "";
+  if (rol !== "admin_shipro" && rol !== "operador_shipro") {
+    return NextResponse.json({ error: "Acceso denegado. Solo equipo Shipro." }, { status: 403 });
+  }
+
   try {
     const body = await request.json();
-    
+
     // Calculamos la prioridad: la nueva regla va al final de la cola
     const cantidadActual = await prisma.reglaRuteo.count();
     
@@ -40,6 +52,12 @@ export async function POST(request: Request) {
 }
 
 export async function PUT(request: Request) {
+  // DEUDA 87 FAMILIA 3: gate de rol (defense-in-depth).
+  const rol = request.headers.get("x-rol") || "";
+  if (rol !== "admin_shipro" && rol !== "operador_shipro") {
+    return NextResponse.json({ error: "Acceso denegado. Solo equipo Shipro." }, { status: 403 });
+  }
+
   try {
     const body = await request.json();
     const { id, activa, prioridad } = body;
@@ -60,6 +78,12 @@ export async function PUT(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  // DEUDA 87 FAMILIA 3: gate de rol (defense-in-depth).
+  const rol = request.headers.get("x-rol") || "";
+  if (rol !== "admin_shipro" && rol !== "operador_shipro") {
+    return NextResponse.json({ error: "Acceso denegado. Solo equipo Shipro." }, { status: 403 });
+  }
+
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get("id");

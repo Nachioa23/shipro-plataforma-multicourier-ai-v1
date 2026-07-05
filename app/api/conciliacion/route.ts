@@ -3,9 +3,15 @@ import prisma from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 
 export async function POST(request: Request) {
+  // DEUDA 87 FAMILIA 3: gate de rol (defense-in-depth).
+  const rol = request.headers.get("x-rol") || "";
+  if (rol !== "admin_shipro" && rol !== "operador_shipro") {
+    return NextResponse.json({ error: "Acceso denegado. Solo equipo Shipro." }, { status: 403 });
+  }
+
   try {
     const { filasExcel, referenciaFactura } = await request.json();
-    
+
     if (!filasExcel || !Array.isArray(filasExcel) || !referenciaFactura) {
       return NextResponse.json({ error: "Faltan datos o no se indicó el Número de Factura del Courier." }, { status: 400 });
     }

@@ -3,6 +3,12 @@ import prisma from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 
 export async function GET(request: Request) {
+  // DEUDA 87 FAMILIA 3: gate de rol (defense-in-depth).
+  const rol = request.headers.get("x-rol") || "";
+  if (rol !== "admin_shipro" && rol !== "operador_shipro") {
+    return NextResponse.json({ error: "Acceso denegado. Solo equipo Shipro." }, { status: 403 });
+  }
+
   try {
     const { searchParams } = new URL(request.url);
     const tracking = searchParams.get("tracking");
@@ -79,6 +85,12 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  // DEUDA 87 FAMILIA 3: gate de rol (defense-in-depth).
+  const rol = request.headers.get("x-rol") || "";
+  if (rol !== "admin_shipro" && rol !== "operador_shipro") {
+    return NextResponse.json({ error: "Acceso denegado. Solo equipo Shipro." }, { status: 403 });
+  }
+
   try {
     const { empresaId, periodo } = await request.json();
 

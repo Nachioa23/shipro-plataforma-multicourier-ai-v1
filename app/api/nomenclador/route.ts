@@ -7,6 +7,12 @@ export const dynamic = 'force-dynamic'; // Evitamos la caché
 // GET: Buscar los estados y la lista de Couriers reales
 // =======================================================================
 export async function GET(request: Request) {
+  // DEUDA 87 FAMILIA 3: gate de rol (defense-in-depth).
+  const rol = request.headers.get("x-rol") || "";
+  if (rol !== "admin_shipro" && rol !== "operador_shipro") {
+    return NextResponse.json({ error: "Acceso denegado. Solo equipo Shipro." }, { status: 403 });
+  }
+
   const { searchParams } = new URL(request.url);
   const courierIdParam = searchParams.get("courierId");
 
@@ -40,6 +46,12 @@ export async function GET(request: Request) {
 // POST: Guardar o Actualizar la traducción
 // =======================================================================
 export async function POST(request: Request) {
+  // DEUDA 87 FAMILIA 3: gate de rol (defense-in-depth).
+  const rol = request.headers.get("x-rol") || "";
+  if (rol !== "admin_shipro" && rol !== "operador_shipro") {
+    return NextResponse.json({ error: "Acceso denegado. Solo equipo Shipro." }, { status: 403 });
+  }
+
   try {
     const body = await request.json();
     const { courierId, estadoCrudo, codigoApi, estadoShipro } = body;

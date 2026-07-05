@@ -5,6 +5,12 @@ import { procesarEnviosBloqueados } from "@/lib/envios/procesar-bloqueados";
 
 // GET: Trae a todas las empresas y sus saldos
 export async function GET(request: Request) {
+  // DEUDA 87 FAMILIA 3: gate de rol (defense-in-depth).
+  const rol = request.headers.get("x-rol") || "";
+  if (rol !== "admin_shipro" && rol !== "operador_shipro") {
+    return NextResponse.json({ error: "Acceso denegado. Solo equipo Shipro." }, { status: 403 });
+  }
+
   try {
     const empresas = await prisma.empresa.findMany({
       select: {
@@ -29,6 +35,12 @@ export async function GET(request: Request) {
 
 // POST: Acreditar un pago manual o recarga de saldo
 export async function POST(request: Request) {
+  // DEUDA 87 FAMILIA 3: gate de rol (defense-in-depth).
+  const rol = request.headers.get("x-rol") || "";
+  if (rol !== "admin_shipro" && rol !== "operador_shipro") {
+    return NextResponse.json({ error: "Acceso denegado. Solo equipo Shipro." }, { status: 403 });
+  }
+
   try {
     const body = await request.json();
     const { empresaId, monto, referencia, notas } = body;

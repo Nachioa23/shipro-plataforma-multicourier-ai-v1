@@ -1,21 +1,31 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { enviarMailEscalacionCourier, enviarMailContencionDestinatario, enviarMailCierreTicket } from "@/lib/mailer";
+import { resolverContext } from "@/lib/auth-context";
 
 // =================================================================
 // GET: EL RADAR Y LOS TICKETS (Soporta Bandeja Activa e Historial)
 // =================================================================
 export async function GET(request: Request) {
+  // DEUDA 87 FAMILIA 3 GROUP C: scoping por empresa (cliente ve los suyos).
+  // TicketSoporte no tiene empresaId directo; se filtra via la relacion envio.empresaId
+  // (mismo patron que lib/utils/tickets-mesa-ayuda.ts:158).
+  const ctx = resolverContext(request);
+  if (ctx instanceof NextResponse) return ctx;
+
   try {
     const { searchParams } = new URL(request.url);
     const verHistorial = searchParams.get("historial") === "true";
 
+    const ticketsWhere: any = {
+      estado: verHistorial
+        ? { in: ["CERRADO", "RESUELTO"] }
+        : { in: ["ABIERTO", "EN_PROCESO"] }
+    };
+    if (ctx.empresaId !== null) ticketsWhere.envio = { empresaId: ctx.empresaId };
+
     const tickets = await prisma.ticketSoporte.findMany({
-      where: {
-        estado: verHistorial 
-          ? { in: ["CERRADO", "RESUELTO"] } 
-          : { in: ["ABIERTO", "EN_PROCESO"] }
-      },
+      where: ticketsWhere,
       include: {
         envio: { include: { courier: true, destino: true } },
         auditorias: { orderBy: { fecha: 'desc' } }
@@ -23,18 +33,21 @@ export async function GET(request: Request) {
       orderBy: { fechaCreacion: 'desc' }
     });
 
-    let enviosConProblemas: any[] = []; 
-    
+    let enviosConProblemas: any[] = [];
+
     if (!verHistorial) {
+      const enviosWhere: any = {
+        OR: [
+          { estadoActual: "S_FALLIDA" },
+          { estadoActual: "S_SINIESTRO" },
+          { estadoActual: "RETENIDO" }
+        ],
+        tickets: { none: { estado: { in: ["ABIERTO", "EN_PROCESO"] } } }
+      };
+      if (ctx.empresaId !== null) enviosWhere.empresaId = ctx.empresaId;
+
       enviosConProblemas = await prisma.envio.findMany({
-        where: {
-          OR: [
-            { estadoActual: "S_FALLIDA" },
-            { estadoActual: "S_SINIESTRO" },
-            { estadoActual: "RETENIDO" }
-          ],
-          tickets: { none: { estado: { in: ["ABIERTO", "EN_PROCESO"] } } }
-        },
+        where: enviosWhere,
         include: { courier: true, destino: true }
       });
     }
@@ -54,6 +67,20 @@ export async function GET(request: Request) {
 // POST: CREAR TICKET O AGREGAR AUDITORÍA Y DISPARAR MAILS 
 // =================================================================
 export async function POST(request: Request) {
+  // DEUDA 87 FAMILIA 3 GROUP C: creacion cliente-only. Solo el dueno del envio
+  // puede abrir un ticket sobre el (TicketSoporte no tiene empresaId directo;
+  // el ownership se hereda del envio referenciado).
+  const ctx = resolverContext(request);
+  if (ctx instanceof NextResponse) return ctx;
+
+  // DEUDA 90 (preparado): hoy POST es solo del cliente. Shipro genera tickets
+  // automaticamente (sweep >36h en cron/rastreo) via prisma.ticketSoporte.create
+  // directo, no por aca. Cuando se habilite creacion manual de shipro, permitir
+  // ctx.empresaId===null + tomar empresaId del body con su gate. Por ahora se rechaza.
+  if (ctx.empresaId === null) {
+    return NextResponse.json({ error: "Solo un cliente puede crear tickets manualmente." }, { status: 403 });
+  }
+
   try {
     const body = await request.json();
     const { envioId, motivo, observacion, accionAuditoria, emailOperador } = body;
@@ -68,6 +95,12 @@ export async function POST(request: Request) {
     });
 
     if (!envioInfo) return NextResponse.json({ error: "Envío no encontrado" }, { status: 404 });
+
+    // DEUDA 87 FAMILIA 3 GROUP C: ownership check. El body.envioId es del cliente;
+    // rechazar si no le pertenece (404, no exponer existencia — patron depositos/envios).
+    if (envioInfo.empresaId !== ctx.empresaId) {
+      return NextResponse.json({ error: "Envío no encontrado" }, { status: 404 });
+    }
 
     const emailCourierOficial = (envioInfo.courier as any)?.emailSoporte; 
     

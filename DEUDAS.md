@@ -1732,3 +1732,18 @@ Orden sugerido de ejecucion: Familia 2 (mas grave) → Familia 1 → Familia 3 �
 - Confirmar que un llamador sin sesion recibe 401 en el proxy (ya no es DUAL).
 
 **Por que importa:** cierra la verificacion del fix de seguridad. El codigo esta revisado y compila, pero "un fix que no se pudo probar no esta 100% terminado" — esta DEUDA existe para no olvidar ese ultimo paso.
+
+
+---
+
+## DEUDA 90 — Creacion manual de tickets por Shipro (preparado, no habilitado) (registrada 2026-07-06, scope chico)
+
+**Status:** ABIERTA — preparado, deshabilitado a proposito. Decidido 2026-07-06.
+
+**Contexto:** los tickets nacen por 3 vias: barrido automatico (>36h sin cambio de estado), estado de problema de envio, y creacion por el cliente (POST /api/tickets). Las 2 automaticas usan `prisma.ticketSoporte.create` directo heredando `empresaId` del Envio. El POST es hoy client-only: `empresaId` se estampa desde `resolverContext` (sesion del cliente), y un usuario shipro (`ctx.empresaId === null`) es RECHAZADO con 403.
+
+**Extension futura (cuando se decida):** permitir que admin/operador_shipro creen tickets manualmente. Requeriria: quitar el rechazo de `ctx.empresaId === null` en el POST, permitir que shipro pase `empresaId` explicito en el body (con validacion de que la empresa existe), y un gate de rol. El punto exacto esta marcado con comentario en `app/api/tickets/route.ts` POST.
+
+**Por que no ahora:** evitar complejidad operativa que todavia no se necesita. La restriccion es deliberada, no un olvido — el codigo lo documenta.
+
+**Por que importa:** baja prioridad. Registrada para que la restriccion actual sea trazable y la extension sea un cambio consciente, no un descubrimiento.

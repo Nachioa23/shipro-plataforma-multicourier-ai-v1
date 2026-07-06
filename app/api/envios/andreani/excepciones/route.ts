@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import prisma from "@/lib/prisma";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 import { obtenerCredencialCourier } from "@/lib/couriers/normalizar";
+import { resolverContext } from "@/lib/auth-context";
+import { verificarAccesoEnvio } from "@/lib/envios/ownership";
 
 // =========================================================================
 // FUNCIÓN AUXILIAR: OBTENER TOKEN DE ANDREANI (DINÁMICO)
@@ -40,10 +42,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Falta la acción o el número de tracking." }, { status: 400 });
     }
 
+    // DEUDA 87 FAMILIA 3: ownership check (mismo patron que cancelar/inversa).
+    const ctx = resolverContext(request);
+    if (ctx instanceof NextResponse) return ctx;
+
     // 1. Buscamos el Envío original en la base de datos para saber de quién es
-    const envio = await prisma.envio.findUnique({
-      where: { trackingNumber: tracking }
-    });
+    const envio = await verificarAccesoEnvio({ trackingNumber: tracking }, ctx);
 
     if (!envio) {
       return NextResponse.json({ error: "Envío no encontrado en la plataforma." }, { status: 404 });

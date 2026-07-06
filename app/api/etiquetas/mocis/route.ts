@@ -4,20 +4,32 @@ import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 import QRCode from "qrcode";
 import fs from 'fs';
 import path from 'path';
+import { resolverContext } from "@/lib/auth-context";
+import { verificarAccesoEnvio } from "@/lib/envios/ownership";
 
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const tracking = searchParams.get("tracking");
-    
+
     if (!tracking) return new NextResponse("Falta el número de tracking", { status: 400 });
 
-    const envio = await prisma.envio.findUnique({
-      where: { trackingNumber: tracking },
-      include: { courier: true, origen: true, destino: true, empresa: true, ordenExterna: true }
-    });
+    // DEUDA 87 FAMILIA 1: filtrar a envio propio (cliente); shipro ve todo.
+    // Ownership anchor = envio.empresaId directo (una etiqueta = un envio =
+    // una empresa; la consolidacion de couriers vive en TramoEnvio y no cambia
+    // esta relacion).
+    const ctx = resolverContext(request);
+    if (ctx instanceof NextResponse) return ctx;
 
-    if (!envio) return new NextResponse("Envío no encontrado", { status: 404 });
+    const envio = await verificarAccesoEnvio(
+      { trackingNumber: tracking },
+      ctx,
+      { courier: true, origen: true, destino: true, empresa: true, ordenExterna: true }
+    );
+
+    if (!envio) {
+      return NextResponse.json({ error: "No hay etiquetas disponibles" }, { status: 404 });
+    }
 
     const pdfDoc = await PDFDocument.create();
     const page = pdfDoc.addPage([288, 432]); // 10x15cm

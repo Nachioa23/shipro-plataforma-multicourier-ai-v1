@@ -8,14 +8,26 @@ import fs from 'fs';
 import path from 'path';
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 import { obtenerCredencialCourier, normalizarParaComparacion } from "@/lib/couriers/normalizar";
+import { resolverContext } from "@/lib/auth-context";
 
 export async function POST(request: Request) {
   try {
     const { ids } = await request.json();
     if (!ids || !ids.length) return new NextResponse("Faltan IDs", { status: 400 });
 
+    // DEUDA 87 FAMILIA 1: filtrar a envios propios (cliente); shipro ve todo.
+    // Batch scoping via el where del findMany — envios de otras empresas se
+    // eliminan silenciosamente. La consolidacion (multi-tramo/multi-courier) NO
+    // se ve afectada: cada envio pertenece a una empresa, aunque sus tramos
+    // los operen distintos couriers.
+    const ctx = resolverContext(request);
+    if (ctx instanceof NextResponse) return ctx;
+
+    const enviosWhere: any = { id: { in: ids } };
+    if (ctx.empresaId !== null) enviosWhere.empresaId = ctx.empresaId;
+
     const envios = await prisma.envio.findMany({
-      where: { id: { in: ids } },
+      where: enviosWhere,
       include: {
         courier: true,
         empresa: true,
@@ -32,6 +44,10 @@ export async function POST(request: Request) {
         },
       }
     });
+
+    if (envios.length === 0) {
+      return NextResponse.json({ error: "No hay etiquetas disponibles" }, { status: 404 });
+    }
 
     const pdfMaestro = await PDFDocument.create();
     const fontB = await pdfMaestro.embedFont(StandardFonts.HelveticaBold);

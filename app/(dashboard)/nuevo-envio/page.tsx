@@ -83,6 +83,15 @@ export default function NuevoEnvio() {
   const [destLocalidades, setDestLocalidades] = useState<string[]>([]);
   const [destLocalidadSeleccionada, setDestLocalidadSeleccionada] = useState("");
 
+  // Coordenadas precisas del destinatario provistas por Google Places Autocomplete
+  // (piece 2 del fix de proximidad de sucursales). Se invalidan (null) en cualquier
+  // edicion manual de CP/calle/altura/localidad o al elegir un contacto agendado,
+  // porque en esos flujos las coords quedan desalineadas con los campos.
+  // Cuando ambas son no-null viajan a /cotizar por query params (paramsObj) y el
+  // endpoint de sucursales las usa directo, saltandose el geocoding.
+  const [destLat, setDestLat] = useState<number | null>(null);
+  const [destLng, setDestLng] = useState<number | null>(null);
+
   // Escenario 3 (DEUDA 4 política "el usuario manda"): si el usuario edita
   // manualmente localidad o provincia, ese campo NO se autocompleta más al
   // cambiar el CP. Si lo borra, el flag se resetea y el próximo CP válido
@@ -162,6 +171,11 @@ export default function NuevoEnvio() {
       setDestLocalidades([data.localidad]);
       setDestLocalidadSeleccionada(data.localidad);
     }
+    // Coords precisas de Google Places (opcionales — pueden faltar si el resultado
+    // no trae geometry). Cuando estan presentes viajan a /cotizar y evitan el
+    // re-geocoding server-side.
+    setDestLat(typeof data.lat === "number" && Number.isFinite(data.lat) ? data.lat : null);
+    setDestLng(typeof data.lng === "number" && Number.isFinite(data.lng) ? data.lng : null);
     // Acción explícita del usuario seleccionando dirección completa → resetear
     // flags para que un cambio futuro de CP vuelva a autocompletar (Escenario 3).
     setEditadosManualmente({ localidad: false, provincia: false });
@@ -171,6 +185,9 @@ export default function NuevoEnvio() {
   const handleChangeLocalidad = (valor: string) => {
     setDestLocalidadSeleccionada(valor);
     setEditadosManualmente(prev => ({ ...prev, localidad: valor !== "" }));
+    // Cambio manual invalida coords previas (quedaron desalineadas).
+    setDestLat(null);
+    setDestLng(null);
   };
 
   const handleChangeProvincia = (valor: string) => {
@@ -203,6 +220,9 @@ export default function NuevoEnvio() {
       setDestLocalidades([contacto.localidad]);
       setDestLocalidadSeleccionada(contacto.localidad);
     }
+    // Contactos agendados no traen coords — invalidar cualquier lat/lng previa.
+    setDestLat(null);
+    setDestLng(null);
     // Acción explícita del usuario eligiendo un contacto → resetear flags.
     setEditadosManualmente({ localidad: false, provincia: false });
 
@@ -265,6 +285,13 @@ export default function NuevoEnvio() {
     };
     if (esShipro && empresaSeleccionadaId) {
       paramsObj.filtroEmpresa = empresaSeleccionadaId;
+    }
+    // Coords precisas del destinatario (solo si Google Places las entrego y no
+    // hubo edicion manual posterior). El endpoint /api/envios/sucursales las usa
+    // directo y saltea el re-geocoding server-side.
+    if (destLat !== null && destLng !== null) {
+      paramsObj.lat = String(destLat);
+      paramsObj.lng = String(destLng);
     }
     const params = new URLSearchParams(paramsObj);
 
@@ -490,7 +517,7 @@ export default function NuevoEnvio() {
                 <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 flex justify-between">
                   Código Postal * {buscandoCP && <Loader2 className="w-3 h-3 animate-spin text-blue-500" />}
                 </label>
-                <input type="text" value={destCP} onChange={e => setDestCP(e.target.value.replace(/\D/g, ''))} className="w-full border-2 border-blue-100 rounded-lg p-3 text-sm font-black text-blue-700 outline-none focus:border-blue-500" placeholder="Ej: 1614" />
+                <input type="text" value={destCP} onChange={e => { setDestCP(e.target.value.replace(/\D/g, '')); setDestLat(null); setDestLng(null); }} className="w-full border-2 border-blue-100 rounded-lg p-3 text-sm font-black text-blue-700 outline-none focus:border-blue-500" placeholder="Ej: 1614" />
               </div>
 
               <div className="col-span-12 md:col-span-4">
@@ -522,11 +549,11 @@ export default function NuevoEnvio() {
 
               <div className="col-span-12 sm:col-span-6">
                 <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Calle *</label>
-                <input type="text" value={destCalle} onChange={e => setDestCalle(e.target.value)} className="w-full border border-gray-300 rounded-lg p-3 text-sm outline-none focus:border-blue-500" />
+                <input type="text" value={destCalle} onChange={e => { setDestCalle(e.target.value); setDestLat(null); setDestLng(null); }} className="w-full border border-gray-300 rounded-lg p-3 text-sm outline-none focus:border-blue-500" />
               </div>
               <div className="col-span-4 sm:col-span-2">
                 <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Altura *</label>
-                <input type="text" value={destAltura} onChange={e => setDestAltura(e.target.value)} className="w-full border border-gray-300 rounded-lg p-3 text-sm outline-none focus:border-blue-500" />
+                <input type="text" value={destAltura} onChange={e => { setDestAltura(e.target.value); setDestLat(null); setDestLng(null); }} className="w-full border border-gray-300 rounded-lg p-3 text-sm outline-none focus:border-blue-500" />
               </div>
               <div className="col-span-4 sm:col-span-2">
                 <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Piso</label>

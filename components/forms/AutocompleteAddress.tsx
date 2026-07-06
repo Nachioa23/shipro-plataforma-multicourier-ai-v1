@@ -18,6 +18,11 @@ export interface AddressData {
   cp: string;
   localidad: string;
   provincia: string;
+  // Coordenadas devueltas por Google Places cuando el usuario elige del dropdown.
+  // Opcionales: geometry puede estar ausente en algunos resultados o cuando la
+  // API cae y el usuario entra en modo manual (fallback amber en apiFalla).
+  lat?: number;
+  lng?: number;
 }
 
 interface Props {
@@ -91,7 +96,15 @@ export default function AutocompleteAddress({ onPlaceChanged, placeholder, disab
             }
           }
 
-          onPlaceChanged({ calle, altura, cp, localidad, provincia });
+          // Google Places SDK expone lat/lng como funciones dentro de geometry.location.
+          // Ambos pueden faltar (geometry ausente en el resultado); solo se incluyen
+          // en el payload cuando son numeros finitos.
+          const rawLat = place.geometry?.location?.lat?.();
+          const rawLng = place.geometry?.location?.lng?.();
+          const lat = typeof rawLat === "number" && Number.isFinite(rawLat) ? rawLat : undefined;
+          const lng = typeof rawLng === "number" && Number.isFinite(rawLng) ? rawLng : undefined;
+
+          onPlaceChanged({ calle, altura, cp, localidad, provincia, lat, lng });
         });
       } catch (e) {
         console.error("[AutocompleteAddress] Error inicializando Google Places:", e);

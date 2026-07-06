@@ -26,6 +26,13 @@ export async function GET(request: Request) {
     const cp = searchParams.get("cp");
     const localidad = searchParams.get("localidad") || "";
     const courier = searchParams.get("courier") || "andreani";
+    // Coords precisas provistas por el caller (Google Places en /nuevo-envio).
+    // Cuando ambas son numeros finitos, se usan directo y se saltea el geocoding.
+    const latParamRaw = searchParams.get("lat");
+    const lngParamRaw = searchParams.get("lng");
+    const latParam = latParamRaw ? parseFloat(latParamRaw) : NaN;
+    const lngParam = lngParamRaw ? parseFloat(lngParamRaw) : NaN;
+    const coordsCallerValidas = Number.isFinite(latParam) && Number.isFinite(lngParam);
 
     if (!cp) return NextResponse.json({ error: "Falta el Código Postal" }, { status: 400 });
 
@@ -70,31 +77,48 @@ export async function GET(request: Request) {
       sucursales = Array.from(mapaUnicas.values());
     }
 
-    const googleApiKey = process.env.GOOGLE_MAPS_API_KEY;
-    
-    if (googleApiKey && sucursales.length > 0) {
-      try {
-        const queryDireccion = `${cp}, ${localidad}, Argentina`;
-        const googleRes = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(queryDireccion)}&key=${googleApiKey}`);
-        const googleData = await googleRes.json();
+    // Resolucion de coords del destinatario:
+    //   1. Si el caller envio lat/lng validas (Google Places en /nuevo-envio) -> usarlas.
+    //   2. Sino, geocodificar con Google Maps. Fail-closed: si localidad viene vacia,
+    //      dropeamos "${cp}, , Argentina" y usamos solo CP + components=country:AR
+    //      (mismo patron que lib/geo/geocodificar-direccion.ts:44). Un try/catch
+    //      externo garantiza que un error de Google nunca rompa la respuesta.
+    let latCliente: number | null = null;
+    let lngCliente: number | null = null;
 
-        if (googleData.results && googleData.results.length > 0) {
-          const latCliente = googleData.results[0].geometry.location.lat;
-          const lngCliente = googleData.results[0].geometry.location.lng;
+    if (coordsCallerValidas) {
+      latCliente = latParam;
+      lngCliente = lngParam;
+    } else {
+      const googleApiKey = process.env.GOOGLE_MAPS_API_KEY;
+      if (googleApiKey && sucursales.length > 0) {
+        try {
+          const queryDireccion = localidad
+            ? `${cp}, ${localidad}, Argentina`
+            : `${cp}, Argentina`;
+          const googleRes = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(queryDireccion)}&components=country:AR&key=${googleApiKey}`);
+          const googleData = await googleRes.json();
 
-          sucursales = sucursales.map((suc: any) => {
-            if (suc.latitud && suc.longitud) {
-              const km = calcularDistancia(latCliente, lngCliente, suc.latitud, suc.longitud);
-              return { ...suc, distanciaKm: parseFloat(km.toFixed(1)) }; 
-            }
-            return { ...suc, distanciaKm: 999 }; 
-          });
-
-          sucursales.sort((a: any, b: any) => (a.distanciaKm || 999) - (b.distanciaKm || 999));
+          if (googleData.results && googleData.results.length > 0) {
+            latCliente = googleData.results[0].geometry.location.lat;
+            lngCliente = googleData.results[0].geometry.location.lng;
+          }
+        } catch (err) {
+          console.error("Error conectando con Google Maps API:", err);
         }
-      } catch (err) {
-        console.error("Error conectando con Google Maps API:", err);
       }
+    }
+
+    if (latCliente !== null && lngCliente !== null && sucursales.length > 0) {
+      sucursales = sucursales.map((suc: any) => {
+        if (suc.latitud && suc.longitud) {
+          const km = calcularDistancia(latCliente!, lngCliente!, suc.latitud, suc.longitud);
+          return { ...suc, distanciaKm: parseFloat(km.toFixed(1)) };
+        }
+        return { ...suc, distanciaKm: 999 };
+      });
+
+      sucursales.sort((a: any, b: any) => (a.distanciaKm || 999) - (b.distanciaKm || 999));
     }
 
     const top5Sucursales = sucursales.slice(0, 5);

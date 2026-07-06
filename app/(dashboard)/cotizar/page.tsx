@@ -45,7 +45,15 @@ function CotizadorContenido() {
   }, [depositoId, cpOrigen, router]);
 
   const cpDestino = searchParams.get("destino") || "0000";
-  const localidadDestino = searchParams.get("localidad") || "Destino";
+  // Fail-closed: si no llega localidad, mandar cadena vacia. El endpoint sabe
+  // caer al fallback correcto (geocoding CP+Argentina + components=country:AR)
+  // en lugar de intentar geocodificar "1614, Destino, Argentina" que no resuelve
+  // y salta la re-ordenacion por proximidad.
+  const localidadDestino = searchParams.get("localidad") || "";
+  // Coords precisas provistas por Google Places en /nuevo-envio (opcionales).
+  // Cuando existen se pasan como `&lat=&lng=` al endpoint que salta el geocoding.
+  const latDestino = searchParams.get("lat") || "";
+  const lngDestino = searchParams.get("lng") || "";
   const peso = searchParams.get("peso") || "1";
   const largo = searchParams.get("largo") || "10";
   const ancho = searchParams.get("ancho") || "10";
@@ -129,7 +137,12 @@ function CotizadorContenido() {
             ? empresaSeleccionadaId
             : session?.user?.empresaId;
           if (!empresaIdParaSucursales) return;
-          const res = await fetch(`/api/envios/sucursales?cp=${cpDestino}&localidad=${locEncoded}&courier=andreani&filtroEmpresa=${empresaIdParaSucursales}`);
+          // Coords precisas (Google Places en PASO 1) — solo se anexan si ambas
+          // vinieron del step anterior. El endpoint las prefiere sobre re-geocodear.
+          const coordsQuery = (latDestino && lngDestino)
+            ? `&lat=${encodeURIComponent(latDestino)}&lng=${encodeURIComponent(lngDestino)}`
+            : "";
+          const res = await fetch(`/api/envios/sucursales?cp=${cpDestino}&localidad=${locEncoded}&courier=andreani&filtroEmpresa=${empresaIdParaSucursales}${coordsQuery}`);
           if (res.ok) {
             const data = await res.json();
             setSucursales(data);
@@ -143,7 +156,7 @@ function CotizadorContenido() {
       };
       fetchSucursales();
     }
-  }, [tabActivo, cpDestino, localidadDestino, session, esShipro, empresaSeleccionadaId]);
+  }, [tabActivo, cpDestino, localidadDestino, latDestino, lngDestino, session, esShipro, empresaSeleccionadaId]);
 
   const generarEtiquetaFinal = async () => {
     if (!selectedOption) return;

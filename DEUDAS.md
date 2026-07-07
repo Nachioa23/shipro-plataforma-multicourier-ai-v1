@@ -1748,7 +1748,7 @@ Orden sugerido de ejecucion: Familia 2 (mas grave) → Familia 1 → Familia 3 �
 
 **Por que importa:** baja prioridad. Registrada para que la restriccion actual sea trazable y la extension sea un cambio consciente, no un descubrimiento.
 
-# DEUDA 91 - Cablear el catálogo ServicioCourier al runtime de cotización (adapter integration)
+## DEUDA 91 — Cablear el catálogo ServicioCourier al runtime de cotización (adapter integration) (registrada 2026-07-06)
 
 **Tipo:** Arquitectura — continuación de DEUDA 32+37 (NO arquitectura nueva).
 **Origen:** Detectada durante testeo post-migración (2026-07). Síntoma disparador: Moci's

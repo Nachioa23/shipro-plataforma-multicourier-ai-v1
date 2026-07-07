@@ -193,9 +193,37 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
 
   // DEUDA 10 Paso 2: resolver nombreCourier -> Courier.id real en UNA query
   // (config.id es CredencialCourier.id, NO Courier.id). Map para el upsert del historico.
+  // DEUDA 91 (FILTER): la MISMA query trae los servicios activos+mapeados por courier.
+  // Un servicio se poll'ea solo si BOTH: (1) tecnicamente soportado (capacidadTecnicaMapeada
+  // != null) AND (2) admin lo prendio (activo=true). Ademas se AND'ea con el flag
+  // per-empresa (CredencialCourier.ofrece*), que queda como tercer gate cliente-level.
   const nombresCouriers = couriersAptos.map((c: any) => c.nombreCourier);
-  const couriersReales = await prisma.courier.findMany({ where: { nombre: { in: nombresCouriers } } });
+  const couriersReales = await prisma.courier.findMany({
+    where: { nombre: { in: nombresCouriers } },
+    include: {
+      servicios: {
+        where: { activo: true, capacidadTecnicaMapeada: { not: null } },
+      },
+    },
+  });
   const mapaCourierIds = new Map<string, number>(couriersReales.map((c) => [c.nombre, c.id]));
+
+  // DEUDA 91 (FILTER): courier canonico -> set de capacidades tecnicas activas+mapeadas.
+  // Las capacidades usan el mismo vocabulario que el param tipoEntrega del adapter
+  // ("domicilio", "sucursal", "cambio", "devolucion"), asi que la lookup es directa:
+  // mapaCapacidades.get(nombreNormalizado)?.has("sucursal").
+  const mapaCapacidades = new Map<string, Set<string>>();
+  for (const courier of couriersReales) {
+    const claveNormalizada = normalizarParaComparacion(courier.nombre);
+    const capacidades = new Set<string>();
+    for (const servicio of courier.servicios) {
+      if (servicio.capacidadTecnicaMapeada) capacidades.add(servicio.capacidadTecnicaMapeada);
+    }
+    mapaCapacidades.set(claveNormalizada, capacidades);
+    if (capacidades.size === 0) {
+      console.warn(`[cotizador] Courier ${courier.nombre} sin servicios activos mapeados — no se cotiza.`);
+    }
+  }
 
   // DEUDA 10 Paso 2 (fire-and-forget): persiste el ultimo precio CRUDO conocido por
   // (courier, cpOrigen, cpDestino, pesoKg entero, modalidad). Upsert = pisa la fila si existe.
@@ -269,7 +297,13 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
 
       const textoUXLlegada = await calcularFechaEstimada(slaHorasFinal);
 
-      if (config.ofreceDomicilio !== false) {
+      // DEUDA 91 (FILTER): tres condiciones deben cumplirse — courier tiene el servicio
+      // activo+mapeado (registry/admin), Y el cliente lo tiene habilitado (per-empresa).
+      const capacidadesCourier = mapaCapacidades.get(nombreNormalizado);
+      const courierPuedeDomicilio = capacidadesCourier?.has("domicilio") ?? false;
+      const courierPuedeSucursal = capacidadesCourier?.has("sucursal") ?? false;
+
+      if (config.ofreceDomicilio !== false && courierPuedeDomicilio) {
         try {
           const opciones = await motorCourier.cotizar({ cpOrigen, cpDestino, paquetes, tipoEntrega: 'domicilio' });
           for (const op of opciones) {
@@ -289,7 +323,7 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
         } catch (e: any) { }
       }
 
-      if (config.ofreceSucursal !== false) {
+      if (config.ofreceSucursal !== false && courierPuedeSucursal) {
         try {
           const opciones = await motorCourier.cotizar({ cpOrigen, cpDestino, paquetes, tipoEntrega: 'sucursal' });
           for (const op of opciones) {

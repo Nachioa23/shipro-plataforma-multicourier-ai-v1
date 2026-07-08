@@ -682,6 +682,105 @@ Ver `docs/ARQUITECTURA-MULTICOURIER.md` para detalle.
 - **Moova y Javit en BD (data sucia)** — RESUELTA 2026-05-07 por la migracion `20260507152517_deuda_29_arquitectura_multicourier` (ETAPA 1 de limpieza). Se eliminaron las filas de Courier (Moova=id3, Javit=id4) + sus referencias en CredencialCourier (via DELETE WHERE nombreCourier IN ('Moova', 'Javit')). Estado actual verificado 2026-06-02: tabla Courier solo contiene Andreani (id=1) y Moci's (id=2). La entrada quedo sin marcar como RESUELTA hasta hoy.
 - **URLs de couriers hardcoded en adapters** (corregido 2026-06-02): ambos adapters tienen URL hardcoded — `MocisAdapter.ts` linea 4 (`https://mocis.akeron.net/api/v1`) y `AndreaniAdapter.ts` linea 24 (`https://apis.andreani.com`). La premisa original "Andreani usa env var" era falsa: la variable `ANDREANI_URL` existe en `.env.local` pero el codigo NO la consume (env var huerfana). DECISION DEL DIRECTOR (2026-06-02): postergar el refactor hasta tener 5-7 couriers integrados. Disenar el patron de URLs courier con solo 2 casos es prematuro — couriers reales pueden requerir multiples URLs (sandbox vs live), URLs por endpoint (cotizar vs tracking), o variaciones segun ambiente. Hacer la abstraccion ahora con muestra de 2 produce un patron que probablemente habria que rehacer al integrar OCA, Correo Argentino, DPD, etc. Mientras tanto: hardcoded es aceptable, las URLs de couriers no cambian frecuentemente. Cuando llegue el momento de integrar el 5to courier, revisitar y definir patron real.
 
+## DEUDA 36.E — Flujo de onboarding logístico end-to-end: activación courier↔depósito con auto-verificación de cobertura y origen dinámico (especificación detallada de DEUDA 36) — registrada 2026-07-08, actualizada 2026-07-08
+
+**Tipo:** Diseño de producto + UI — ZONA SENSIBLE (ruteo/consolidación, familia DEUDA 29/83).
+**Relación:** Especificación detallada de la DEUDA 36. La 36 describía la cascada en germen; esta la define end-to-end.
+**Estado:** EN CURSO. Fases 1, 4a y 4b CERRADAS y verificadas end-to-end (browser + DB). Quedan la grilla en el wizard de onboarding + el reordenamiento de pasos + pulido.
+**Prioridad de negocio (Nacho):** ALTA — diferencial de producto para lucir. El momento en que un cliente configura su logística es donde se demuestra la promesa "claridad, no complejidad".
+
+---
+
+## PLAN DE FASES (acordado 2026-07-08)
+
+- **Fase 1 — Endpoint de la grilla (backend). ✅ CERRADA — commit a35a3d7.**
+  `GET /api/depositos/[id]/couriers-elegibles`: enumera todos los couriers activos + su
+  estado de cobertura contra el CP efectivo. Query param opcional `recolectorProyectadoId`
+  recalcula el `cpOrigenEfectivo` de cada courier no-recolector contra el hub del recolector
+  (origen dinámico). Read-only, aditivo. Reusa `verificarAccesoDeposito` +
+  `asignarSucursalParaDeposito` sin modificarlas. Verificado en browser: sin recolector
+  Andreani cubre CP 1661 (San Miguel); con Mocis proyectado, Andreani pasa a origen 1702
+  (Caseros), Mocis queda en 1661 (no se recolecta a sí mismo).
+
+- **Fase 2 — Origen dinámico en la UI. ✅ ABSORBIDA en Fase 1 + 4a.**
+  El endpoint ya soporta el recálculo dinámico; la grilla lo consume al cambiar el recolector.
+  No requirió fase propia (el diagnóstico mostró que separarla era trabajo tirado contra una
+  UI inexistente — se fusionó con la grilla).
+
+- **Fase 3 — Bootstrap de fichas DepositoCourierConfig. ✅ ABSORBIDA en Fase 4b.**
+  La creación automática de fichas quedó integrada en el guardado atómico de la 4b (ver abajo),
+  no como fase separada.
+
+- **Fase 4a — Grilla visual (display-only). ✅ CERRADA — commits db5605c (componente) + 6d31ac9 (montaje).**
+  `components/configuracion/CoberturaGrid.tsx`: fila por courier con estado/color/icono/sucursal,
+  picker de recolector que re-evalúa en vivo. Estados: verde (cubre), rojo (sin cobertura), ámbar
+  (revisar). Píldoras Recolector/Consolidador/Sin credencial. Montada en DepositoForm reemplazando
+  el selector simple viejo. Verificada en browser.
+
+- **Fase 4b — Guardado atómico: activa recolector + crea fichas. ✅ CERRADA — commit e8a6602.**
+  Al elegir recolector y confirmar, el guardado persiste el recolector Y crea las
+  `DepositoCourierConfig(recogeViaConsolidador=true)` de los couriers que (a) cubren el CP del
+  hub del recolector Y (b) tienen credencial activa — todo en una transacción atómica. Regla de
+  Nacho ("cubre Y credencial") implementada: el modal muestra dos listas (se activarán ahora /
+  pendientes de credencial). Escritura gateada por flag opt-in `autoActivarEligibles`. Verificado
+  end-to-end (browser + DB): elegir Mocis para el Depósito Central crea recolectorId=2 +
+  ficha Andreani recoge=true en una sola transacción.
+
+- **Fase 4c/d — Grilla en el wizard de onboarding + reordenamiento. ⬜ PENDIENTE.**
+  Usar el mismo `CoberturaGrid` en el wizard (`app/onboarding/page.tsx`), insertando un paso nuevo
+  entre "depósito" (paso 3 actual) y "transporte" (paso 4 actual), para lograr la secuencia
+  Depósito → Recolector → Transporte que pidió Nacho. El componente ya es reutilizable; falta el
+  montaje + el re-slicing del wizard (PasoWizard 1|2|3|4 → 1|2|3|4|5).
+
+- **Fase 5 — Manejo de couriers huérfanos + pulido. ⬜ PENDIENTE.**
+  Cuando el cliente cambia/activa un recolector cuyo hub no cubren couriers ya activos: marcarlos
+  en conflicto para que el cliente decida (decisión Nacho: no apagar solos, no bloquear, marcar).
+  Apoyarse en la cascada existente de `PUT /api/depositos/[id]`.
+
+---
+
+## Estado de M-92 (sub-tarea de DEUDA 92 — camino recolector)
+
+**CERRADO a nivel configuración + verificado end-to-end (2026-07-08).** El camino del recolector,
+que estaba trabado por el hueco de UI (no había forma de crear la ficha depósito×courier), ahora
+funciona: la grilla configura el recolector y crea las fichas. Verificado con envío real de Comercio
+Demo — se generó la etiqueta combinada con los dos tramos (Mocis recolección tracking 0000125551 +
+Andreani entrega tracking 360003031154600), la etiqueta física lleva ambas (zócalo de Mocis al pie de
+la de Andreani, vía etiquetas/masiva). El camino de dos tramos quedó ejercitado en vivo por primera vez.
+
+---
+
+## Visión del flujo (Nacho, 2026-07-08) — referencia de diseño
+
+Secuencia de onboarding de un depósito:
+1. Cliente crea el depósito (define CP origen).
+2. Sistema consulta cobertura de cada courier contra el CP del depósito.
+3. Couriers que cubren = activables; que no cubren = apagados y BLOQUEADOS con motivo visible (no forzar).
+4. Cliente puede elegir UN recolector (couriers con puedeConsolidar).
+5. ORIGEN DINÁMICO: al elegir recolector, el CP de origen de los entregadores se DESPLAZA al hub del
+   recolector (cpDepositoConsolidador); el recolector queda en el CP del depósito. Solo quedan activables
+   los que cubren el nuevo CP. Regla de activación: cubre el nuevo CP Y tiene credencial activa.
+6. Al activar cada courier, se crea la ficha DepositoCourierConfig automáticamente.
+7. Couriers activos previos que no cubren el nuevo origen → quedan en CONFLICTO, cliente decide
+   (recomendación: apagarlos). [Fase 5]
+
+## Relación con otras DEUDAS
+
+- **DEUDA 36** (padre): esta es su especificación detallada.
+- **DEUDA 92** (M-92): cerrado a nivel config por esta DEUDA (ver arriba).
+- **DEUDA 91** (catálogo de servicios): relacionada pero distinta — la 91 es QUÉ servicios ofrece cada
+  courier; esta es DÓNDE (cobertura por CP) y el flujo de activación por depósito.
+- **Servicio de recolección tarifado** (extensión de DEUDA 91, a registrar aparte): que el recolector
+  cobre su servicio de recolección para terceros (código de servicio + costo diferenciado, cotizado y
+  facturado aparte). Eje FACTURACIÓN; esta DEUDA es el eje ACTIVACIÓN/COBERTURA. No confundir.
+
+## Nota de método
+
+Detectado durante el walkthrough de M-92, al toparse con el selector de recolector vacío. Se decidió NO
+destrabar a mano (no crear la ficha por API por la puerta de atrás) sino diseñar la solución end-to-end.
+La Fase 4b (que escribe en el corazón del sistema) se partió en 3 pasos con dry-run primero para verificar
+el cálculo antes de tocar la escritura. Zona sensible: diagnóstico read-only antes de cada cambio.
+
 ## DEUDA 39 — Torre de Control: sistema integral de metricas estrategicas (DISEÑO COMPLETO 2026-06-04 — implementacion en progreso: Metricas 1.1, 2.1, 2.3, 3.3 cerradas. 12 metricas restantes.)
 
 **Status:** Abierta 2026-06-02. Diseno profesional completo el 2026-06-04 documentado en `docs/TORRE-DE-CONTROL.md`. Implementacion pendiente, sesion dedicada por metrica.

@@ -7,6 +7,7 @@ import InputTelefono from "@/components/forms/InputTelefono";
 import AutocompleteAddress, { AddressData } from "@/components/forms/AutocompleteAddress";
 import { useCpLookup } from "@/lib/hooks/useCpLookup";
 import { PROVINCIAS_AR } from "@/lib/constants/provincias-ar";
+import CoberturaGrid from "@/components/configuracion/CoberturaGrid";
 
 interface Props {
   isOpen: boolean;
@@ -499,37 +500,12 @@ export default function DepositoForm({ isOpen, onClose, onSaved, empresaId, depo
             </section>
           )}
 
-          {/* === DEUDA 29 Sub-fase 6.D.7: selector de courier recolector ===
-              Solo en modo edicion (un deposito sin guardar no puede tener
-              consolidador). El cliente elige el recolector entre los couriers
-              que Shipro habilito con puedeConsolidar=true. */}
+          {/* === DEUDA 36.E: grilla de cobertura por courier (reemplaza el selector simple de recolector) === */}
           {depositoExistente && (
-            <section className="bg-indigo-50 border border-indigo-200 rounded-xl p-5 space-y-3">
-              <h3 className="text-sm font-bold text-indigo-900">Courier recolector (consolidador)</h3>
-              {consolidadoresDisponibles.length > 0 ? (
-                <>
-                  <select
-                    value={courierRecolectorId ?? ""}
-                    onChange={(e) => setCourierRecolectorId(e.target.value ? parseInt(e.target.value) : null)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                  >
-                    <option value="">Sin consolidador</option>
-                    {consolidadoresDisponibles.map((c: any) => (
-                      <option key={c.courier.id} value={c.courier.id}>
-                        {c.courier.nombre}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-[11px] text-indigo-700">
-                    El courier recolector pasa a buscar los paquetes a este deposito y los entrega al courier de last-mile.
-                  </p>
-                </>
-              ) : (
-                <p className="text-[11px] text-indigo-700">
-                  No hay couriers con capacidad de consolidacion habilitados para este deposito.
-                </p>
-              )}
-            </section>
+            <CoberturaGrid
+              depositoId={depositoExistente.id}
+              initialRecolectorId={courierRecolectorId}
+            />
           )}
         </div>
 

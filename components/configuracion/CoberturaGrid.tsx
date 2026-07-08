@@ -65,6 +65,7 @@ interface CoberturaResponse {
 interface Props {
   depositoId: number;
   initialRecolectorId?: number | null;
+  onRecolectorChange?: (id: number | null) => void;
 }
 
 // -----------------------------------------------------------------------------
@@ -92,6 +93,7 @@ function tipoRank(t: ResultadoAutoAsignacion["tipo"]): number {
 export default function CoberturaGrid({
   depositoId,
   initialRecolectorId = null,
+  onRecolectorChange,
 }: Props) {
   const [data, setData] = useState<CoberturaResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -200,11 +202,11 @@ export default function CoberturaGrid({
         </label>
         <select
           value={recolectorSeleccionado ?? ""}
-          onChange={(e) =>
-            setRecolectorSeleccionado(
-              e.target.value ? parseInt(e.target.value) : null
-            )
-          }
+          onChange={(e) => {
+            const nuevo = e.target.value ? parseInt(e.target.value) : null;
+            setRecolectorSeleccionado(nuevo);
+            onRecolectorChange?.(nuevo);
+          }}
           className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
         >
           <option value="">Sin recolector</option>

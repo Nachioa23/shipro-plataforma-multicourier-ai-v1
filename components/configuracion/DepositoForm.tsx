@@ -47,12 +47,10 @@ export default function DepositoForm({ isOpen, onClose, onSaved, empresaId, depo
   // === DEUDA 29 Sub-fase 6.D.7: courier recolector (consolidador) ===
   // courierRecolectorId: seleccion actual. courierRecolectorOriginal:
   // valor al abrir el form, para detectar si el usuario lo cambio.
-  // consolidadoresDisponibles: couriers con puedeConsolidar=true.
   // mostrarModalCascada + cascadaPreview: estado del modal de
   // confirmacion que muestra el preview del dry-run.
   const [courierRecolectorId, setCourierRecolectorId] = useState<number | null>(null);
   const [courierRecolectorOriginal, setCourierRecolectorOriginal] = useState<number | null>(null);
-  const [consolidadoresDisponibles, setConsolidadoresDisponibles] = useState<any[]>([]);
   const [mostrarModalCascada, setMostrarModalCascada] = useState(false);
   const [cascadaPreview, setCascadaPreview] = useState<any | null>(null);
 
@@ -114,9 +112,9 @@ export default function DepositoForm({ isOpen, onClose, onSaved, empresaId, depo
       setEsPredeterminado(!!depositoExistente.esPredeterminado);
       setActivo(depositoExistente.activo !== false);
 
-      // === DEUDA 29 Sub-fase 6.D.7: cargar courier recolector + consolidadores ===
-      // Trae el courierRecolectorId actual del deposito y la lista de couriers
-      // con capacidad de consolidacion (puedeConsolidar=true) para el selector.
+      // === DEUDA 29 Sub-fase 6.D.7: cargar courier recolector actual ===
+      // Trae el courierRecolectorId actual del deposito para inicializar el
+      // estado del form (baseline para detectar cambios y armar el body).
       // Si el fetch falla, el selector queda vacio pero el form sigue operativo.
       (async () => {
         try {
@@ -126,16 +124,10 @@ export default function DepositoForm({ isOpen, onClose, onSaved, empresaId, depo
           const recolectorActual = dataCfg.deposito?.courierRecolectorId ?? null;
           setCourierRecolectorId(recolectorActual);
           setCourierRecolectorOriginal(recolectorActual);
-          setConsolidadoresDisponibles(
-            (dataCfg.configs || []).filter(
-              (c: any) => c.courier?.puedeConsolidar && c.courier?.activo
-            )
-          );
         } catch {
-          // Falla silenciosa: el selector mostrara "no hay consolidadores".
+          // Falla silenciosa: el grid mostrara error propio via su propio fetch.
           setCourierRecolectorId(null);
           setCourierRecolectorOriginal(null);
-          setConsolidadoresDisponibles([]);
         }
       })();
     } else {
@@ -163,7 +155,6 @@ export default function DepositoForm({ isOpen, onClose, onSaved, empresaId, depo
       // de una edicion previa.
       setCourierRecolectorId(null);
       setCourierRecolectorOriginal(null);
-      setConsolidadoresDisponibles([]);
       setMostrarModalCascada(false);
       setCascadaPreview(null);
     }
@@ -324,6 +315,7 @@ export default function DepositoForm({ isOpen, onClose, onSaved, empresaId, depo
       esPredeterminado,
       activo,
       courierRecolectorId,
+      autoActivarEligibles: true,
     };
     try {
       const res = await fetch(`/api/depositos/${depositoExistente.id}`, {
@@ -505,6 +497,7 @@ export default function DepositoForm({ isOpen, onClose, onSaved, empresaId, depo
             <CoberturaGrid
               depositoId={depositoExistente.id}
               initialRecolectorId={courierRecolectorId}
+              onRecolectorChange={setCourierRecolectorId}
             />
           )}
         </div>
@@ -549,6 +542,41 @@ export default function DepositoForm({ isOpen, onClose, onSaved, empresaId, depo
                       <li key={c.courierId}>{c.courierNombre}</li>
                     ))}
                   </ul>
+                ) : (
+                  <p className="text-sm text-gray-400 italic">(ninguno)</p>
+                )}
+              </div>
+
+              <div>
+                <h3 className="text-[11px] font-black text-emerald-700 uppercase tracking-wider mb-1.5">
+                  Couriers que se activarán ahora
+                </h3>
+                {(cascadaPreview.activablesAhora?.length ?? 0) > 0 ? (
+                  <ul className="text-sm text-gray-700 list-disc list-inside space-y-0.5">
+                    {cascadaPreview.activablesAhora.map((c: any) => (
+                      <li key={c.courierId}>{c.courierNombre}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-sm text-gray-400 italic">(ninguno)</p>
+                )}
+              </div>
+
+              <div>
+                <h3 className="text-[11px] font-black text-amber-700 uppercase tracking-wider mb-1.5">
+                  Couriers pendientes de credencial
+                </h3>
+                {(cascadaPreview.pendienteCredencial?.length ?? 0) > 0 ? (
+                  <>
+                    <ul className="text-sm text-gray-700 list-disc list-inside space-y-0.5">
+                      {cascadaPreview.pendienteCredencial.map((c: any) => (
+                        <li key={c.courierId}>{c.courierNombre}</li>
+                      ))}
+                    </ul>
+                    <p className="text-[11px] text-amber-600">
+                      Activá su credencial en Transportes para que se sumen al recolector.
+                    </p>
+                  </>
                 ) : (
                   <p className="text-sm text-gray-400 italic">(ninguno)</p>
                 )}

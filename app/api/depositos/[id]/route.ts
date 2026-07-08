@@ -93,10 +93,27 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
         recogeViaConsolidadorReset: { courierId: number; courierNombre: string }[];
         recogeViaConsolidadorPreservado: { courierId: number; courierNombre: string }[];
         eligiblesParaActivar: { courierId: number; courierNombre: string }[];
+        // DEUDA 36.E Fase 4b STEP 1 (2026-07-08): reporte broadened.
+        // activablesAhora  = cubren el hub del recolector Y tienen CredencialCourier.activo.
+        // pendienteCredencial = cubren pero no tienen credencial activa (info-only para UI).
+        // Ambos son SUPER-SET del eligiblesParaActivar legado (que solo mira configs existentes).
+        // Report-only en STEP 1: no se escribe nada nuevo — se activan en STEP 2.
+        activablesAhora: { courierId: number; courierNombre: string }[];
+        pendienteCredencial: { courierId: number; courierNombre: string }[];
         skipsDeValidacion: string[];
       }
     | undefined = undefined;
   let idsConfigsAResetear: number[] = [];
+
+  // DEUDA 36.E Fase 4b STEP 2 (2026-07-08): auto-activación de eligibles.
+  // - idsActivablesAhora se puebla dentro de la loop broadened (STEP 1) con
+  //   los courierId que cubren el hub + tienen CredencialCourier.activo=true.
+  // - autoActivarEligibles es opt-in: solo si el body lo manda === true,
+  //   la transacción upserta DepositoCourierConfig con recogeViaConsolidador=true
+  //   para cada uno. Sin la flag, el endpoint se comporta EXACTO como antes.
+  let idsActivablesAhora: number[] = [];
+  const autoActivarEligibles =
+    (body as { autoActivarEligibles?: unknown }).autoActivarEligibles === true;
 
   if ("courierRecolectorId" in body) {
     const valor = (body as { courierRecolectorId: unknown }).courierRecolectorId;
@@ -207,11 +224,55 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
           }
         }
 
+        // ==========================================
+        // DEUDA 36.E Fase 4b STEP 1 (2026-07-08): loop broadened para report-only.
+        // Iteramos TODOS los couriers activos de la plataforma (no solo los que ya
+        // tienen DepositoCourierConfig) y los partimos por si tienen o no
+        // CredencialCourier.activo=true para la empresa del depósito.
+        //   activablesAhora  = cubren el hub Y tienen credencial activa → Fase 4b STEP 2
+        //                      los va a auto-upsertar con recogeViaConsolidador=true.
+        //   pendienteCredencial = cubren pero sin credencial activa → info-only en UI
+        //                      (hint "activar en Transportes primero").
+        // Sólo lecturas. Ningún write nuevo en este paso.
+        // ==========================================
+        const couriersEmpresa = await prisma.courier.findMany({ where: { activo: true } });
+        const credencialesEmpresa = await prisma.credencialCourier.findMany({
+          where: { empresaId: previo.empresaId },
+        });
+        const credencialPorNombre = new Map(
+          credencialesEmpresa.map((c) => [c.nombreCourier, c])
+        );
+        const activablesAhora: { courierId: number; courierNombre: string }[] = [];
+        const pendienteCredencial: { courierId: number; courierNombre: string }[] = [];
+        for (const courier of couriersEmpresa) {
+          if (courier.id === valor) continue; // el recolector no se recolecta a sí mismo
+          const match = await prisma.sucursalCourierCp.findFirst({
+            where: {
+              codigoPostal: cpConsolidadorNuevo,
+              sucursal: { courierId: courier.id, activa: true, eliminada: false },
+            },
+            select: { id: true },
+          });
+          if (!match) continue; // no cubre → no aplica
+          const credencial = credencialPorNombre.get(courier.nombre);
+          if (credencial?.activo === true) {
+            activablesAhora.push({ courierId: courier.id, courierNombre: courier.nombre });
+          } else {
+            pendienteCredencial.push({ courierId: courier.id, courierNombre: courier.nombre });
+          }
+        }
+
+        // DEUDA 36.E Fase 4b STEP 2: promover courierIds al scope exterior para
+        // que la transacción los pueda leer y upsertar. Report queda intacto.
+        idsActivablesAhora = activablesAhora.map((a) => a.courierId);
+
         cambiosCascada = {
           motivo,
           recogeViaConsolidadorReset: resetReport,
           recogeViaConsolidadorPreservado: preservadoReport,
           eligiblesParaActivar,
+          activablesAhora,
+          pendienteCredencial,
           skipsDeValidacion,
         };
       }
@@ -236,6 +297,10 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
         })),
         recogeViaConsolidadorPreservado: [],
         eligiblesParaActivar: [],
+        // DEUDA 36.E Fase 4b STEP 1: al remover el recolector, no hay hub contra el
+        // que evaluar cobertura — ambos arrays quedan vacíos.
+        activablesAhora: [],
+        pendienteCredencial: [],
         skipsDeValidacion: [],
       };
       idsConfigsAResetear = configsConRecoge.map((c) => c.id);
@@ -271,7 +336,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
       });
     }
 
-    return tx.deposito.update({
+    const depositoActualizado = await tx.deposito.update({
       where: { id: depositoId },
       data: {
         nombre: String(body.nombre).trim(),
@@ -295,6 +360,44 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
           : {}),
       },
     });
+
+    // ==========================================
+    // DEUDA 36.E Fase 4b STEP 2 (2026-07-08): auto-activación de eligibles.
+    // Gate estricto:
+    //   (a) autoActivarEligibles === true (opt-in del cliente — default false
+    //       preserva el comportamiento previo del endpoint).
+    //   (b) courierRecolectorIdNuevo es un id real (no null ni undefined) —
+    //       si no hay recolector, no hay contra qué activar.
+    //   (c) hay al menos un id en idsActivablesAhora — que STEP 1 puebla con
+    //       couriers que cubren el hub Y tienen CredencialCourier.activo.
+    // La invariante V3 del PUT courier-configs (recolector debe existir para
+    // recogeViaConsolidador=true) se preserva porque deposito.update recién
+    // seteó courierRecolectorId en la MISMA transacción antes de esta loop.
+    // Upsert: si ya existe DepositoCourierConfig para el par, se le prende
+    // recogeViaConsolidador=true (dropOffCliente se deja como estaba en update).
+    // Si no existe, se crea con recogeViaConsolidador=true y dropOffCliente=false
+    // (exclusión mutua respetada por diseño).
+    // ==========================================
+    if (
+      autoActivarEligibles &&
+      courierRecolectorIdNuevo != null &&
+      idsActivablesAhora.length > 0
+    ) {
+      for (const cid of idsActivablesAhora) {
+        await tx.depositoCourierConfig.upsert({
+          where: { depositoId_courierId: { depositoId, courierId: cid } },
+          update: { recogeViaConsolidador: true },
+          create: {
+            depositoId,
+            courierId: cid,
+            dropOffCliente: false,
+            recogeViaConsolidador: true,
+          },
+        });
+      }
+    }
+
+    return depositoActualizado;
   });
 
   // DEUDA 29 Sub-fase 2.B.0: re-geocodificar solo si cambió alguno de los 5

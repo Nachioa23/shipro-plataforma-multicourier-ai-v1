@@ -1873,3 +1873,68 @@ dejarlo como sub-tarea a confirmar (no adivinar el número — un ID equivocado 
 
 - "Moci's cotiza sucursal sin ofrecerla" (mismo root; ahora con urgencia: rompería el envío).
 - "No se distingue same-day de next-day" (mismo root; para Moci's depende de M-1).
+
+## DEUDA 92 — Chequeo de cobertura del courier entregador (RESUELTA — era catálogo de sucursales sin sincronizar) — actualizada 2026-07-07
+
+**Estado:** RESUELTA en su causa raíz. Queda 1 sub-tarea de verificación (camino recolector, M-92).
+
+---
+
+## Qué era en realidad (NO era un bug de la lógica de cobertura)
+
+El síntoma ("Andreani no cubre el CP 1661") NO venía de que el chequeo mirara el CP
+equivocado. La causa raíz era más simple y de entorno: **la tabla de cobertura
+`SucursalCourierCp` estaba VACÍA** (0 filas para todos los couriers) tras la migración. El
+proceso de sincronización de sucursales (DEUDA 32+37 Fase G — ya construido, con botón en
+`/admin-couriers` y cron mensual) **nunca se había ejecutado** en el entorno post-migración.
+
+Con la tabla vacía, CUALQUIER chequeo de cobertura devolvía `sin_cobertura` — daba igual qué
+CP se mirara (el del depósito del cliente o el del recolector), porque no había ni una fila
+contra la cual comparar.
+
+## Cómo se resolvió
+
+Se corrió la sincronización de Andreani desde `/admin-couriers` → botón "Sincronizar cobertura
+ahora" (admin_shipro). Resultado: **164 sucursales sincronizadas OK**, tabla
+`SucursalCourierCp` poblada con la cobertura real de Andreani. Mocis correctamente devuelve
+"no aplica" (no tiene red de sucursales — es entregador a domicilio; no está en
+`FUENTES_SUCURSALES`).
+
+**Verificado:** tras el sync, se creó una etiqueta real de Andreani (tracking
+360003029921770) para Comercio Demo S.A. (depósito CP 1661) — Andreani cubre el 1661
+directamente, así que el envío salió por el camino directo (sin recolector).
+
+## Nota operativa (importante para producción)
+
+La sincronización debe correrse periódicamente. En producción lo hace el cron mensual
+(`/api/cron/sincronizar-couriers`, gateado por CRON_SECRET). En entornos nuevos / recién
+migrados hay que **correrla una vez a mano** desde el panel admin, o la cobertura queda vacía
+y NADA se puede despachar. Considerar: (a) documentar este paso en el checklist de
+provisioning de un entorno nuevo, y (b) evaluar un healthcheck que avise si
+`SucursalCourierCp` está vacío para un courier con red de sucursales.
+
+## Sub-tarea PENDIENTE de verificación — M-92 (camino recolector/consolidador)
+
+Lo que se probó fue el **camino directo** (Andreani cubre el CP del depósito → despacha
+directo). NO se probó todavía el **camino con courier recolector**, que es el modelo de Nacho
+para cuando el entregador NO cubre el CP del depósito del cliente:
+
+- Cliente designa un courier RECOLECTOR (ej. Mocis) → `Deposito.courierRecolectorId`.
+- Cliente activa los couriers entregadores y tilda cuáles recolecta el recolector →
+  `DepositoCourierConfig.recogeViaConsolidador = true` por par.
+- El chequeo de cobertura del entregador pasa a mirar el CP del depósito del recolector
+  (`Courier.cpDepositoConsolidador`), no el del cliente.
+- La etiqueta del recolector se incluye junto con la del entregador (Mocis + Andreani).
+
+**A probar (M-92):** configurar un cliente con Mocis como recolector y un entregador que NO
+cubra el CP del depósito, y verificar que (a) el chequeo pase mirando el CP del recolector,
+(b) la etiqueta se genere con ambos couriers. Nota: durante el diagnóstico se vio que Mocis
+tiene `cpDepositoConsolidador=1702` cargado PERO `puedeConsolidar=false` — revisar esa
+inconsistencia, probablemente bloquee elegir a Mocis como recolector desde la UI del admin.
+
+## Aprendizaje de método
+
+El síntoma apuntaba a la lógica de ruteo (zona sensible), pero la causa era datos sin
+sincronizar (entorno). Bien haber diagnosticado antes de tocar: no se modificó una sola línea
+de la lógica de cobertura — se corrió un proceso que ya existía. Mismo patrón que el resto de
+los hallazgos post-migración (variables de entorno vacías, tablas sin poblar).

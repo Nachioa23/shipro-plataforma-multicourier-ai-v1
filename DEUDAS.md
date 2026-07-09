@@ -2037,3 +2037,111 @@ El síntoma apuntaba a la lógica de ruteo (zona sensible), pero la causa era da
 sincronizar (entorno). Bien haber diagnosticado antes de tocar: no se modificó una sola línea
 de la lógica de cobertura — se corrió un proceso que ya existía. Mismo patrón que el resto de
 los hallazgos post-migración (variables de entorno vacías, tablas sin poblar).
+
+## DEUDA 93 — Servicio de recolección tarifado del courier recolector (extensión de DEUDA 91) — registrada 2026-07-08
+
+**Tipo:** Diseño de producto + modelo comercial. NO implementable aún — depende de información externa (Moci's).
+**Relación:** Extensión de la DEUDA 91 (catálogo `ServicioCourier` cableado al runtime de cotización).
+Es la "Cosa 2" que se separó de M-92: M-92 era la etiqueta combinada (ya resuelta); esta es la
+**facturación** de la recolección.
+**Estado:** DISEÑO. Bloqueada por respuesta de Moci's (ver "Preguntas para Moci's").
+**Prioridad (Nacho):** Alta como diferencial comercial. No bloquea producción.
+
+---
+
+## El modelo (Nacho, 2026-07-08)
+
+Cuando Shipro negocia con un courier para que actúe como **recolector para terceros**, ese
+courier debe **crear y exponer un servicio específico de recolección**, con su propio código de
+servicio y un **costo diferenciado** de cualquier otro servicio suyo.
+
+**Definición arquitectónica clave:** el servicio de recolección **siempre opera con las
+credenciales de Shipro**, nunca con las del cliente. Shipro es quien contrata la recolección con
+el courier recolector; el cliente ni ve ni carga credenciales del recolector. (Esto es lo que
+permite que el cliente elija recolector en el onboarding sin tener credenciales propias.)
+
+## Modelo de costo y facturación (decisión: Shipro absorbe y refactura)
+
+Se evaluaron dos caminos:
+- (a) Tratar la recolección como un envío normal (con sus reglas de prepago/postpago, credenciales
+  propias o de Shipro).
+- (b) **Shipro asume el costo de la recolección y lo refactura.** ✅ ELEGIDA — menos compleja de
+  implementar y comercialmente más clara.
+
+**Ejemplo numérico (Nacho):**
+- Moci's (recolector) le cobra a Shipro: **$1.500 + IVA** por recolección.
+- Shipro refactura al cliente: **$2.000 + IVA** por recolección.
+- Más el fee de operación de Shipro: **$1.600 + IVA**.
+- (El envío del entregador y el seguro se facturan por separado, ver abajo.)
+
+## Descomposición de la tarifa publicada (cuatro conceptos)
+
+Cada operación se descompone en servicios facturables independientes:
+
+| Concepto | Quién factura | Notas |
+|---|---|---|
+| **Recolección** | El courier recolector (a Shipro) → Shipro refactura al cliente | Servicio especial, credenciales de Shipro |
+| **Entrega** | El courier entregador | Puede ir con credenciales del cliente o prestadas por Shipro |
+| **Tecnología** | Shipro | Fee de operación |
+| **Seguro** | El seguro | Cuando aplica |
+
+Todo se **publica como tarifa** al cliente: sumando IVA y restando el descuento del cliente si
+corresponde. El débito se hace de la **cuenta corriente** según el modelo y la matriz de
+prepago/postpago ya diseñados (DEUDA 16 + bloque 72-80).
+
+## Qué hay que construir (cuando Moci's responda)
+
+1. **Catálogo:** un código de servicio canónico nuevo en `lib/couriers/serviciosSoportados.ts`
+   para la recolección para terceros (ej. `recoleccion_terceros`), con su `capacidadTecnicaMapeada`
+   por courier. Extiende el registry de la DEUDA 91.
+2. **Adapter:** el `MocisAdapter` (y futuros recolectores) debe poder cotizar/despachar ese
+   servicio específico con su código, usando credenciales de Shipro (no del cliente).
+3. **Cotizador:** cuando el par (depósito × entregador) tiene `recogeViaConsolidador=true`, sumar
+   el costo de recolección del recolector a la cotización, como línea separada.
+4. **Precio:** aplicar el markup de refacturación (costo del recolector → precio al cliente),
+   respetando la fórmula de precio existente (DEUDA 73: seguro + descuento).
+5. **Facturación / cuenta corriente:** debitar la recolección como concepto propio, distinguible
+   del fee de operación y del envío. Reusar la matriz prepago/postpago.
+6. **UI:** que el cliente vea el desglose (operación + recolección + envío + seguro, todo + IVA).
+
+## Preguntas para Moci's (bloqueantes — mandarlas para destrabar)
+
+1. ¿Pueden exponer un **servicio específico de recolección para terceros** en su API? ¿Con qué
+   `service` ID numérico? (Recordar: Moci's/Akeron rutea por parámetro `service`; hoy la doc solo
+   define un genérico `service: 1`.)
+2. ¿Cuál es la **tarifa** de ese servicio? ¿Es por retiro (flat), por bulto, por peso, o mixta?
+3. ¿Se **factura por separado** del envío, o viene incluido en la liquidación general?
+4. ¿El servicio de recolección genera su **propio tracking** (como el 0000125551 del envío de
+   prueba), o se asocia al del entregador?
+5. ¿Hay mínimos, ventanas horarias o zonas donde no prestan el servicio de recolección?
+
+> Nota: también queda pendiente la sub-tarea **M-1** de la DEUDA 91 (confirmar los service IDs de
+> Same/Next Day de Moci's) y **A-1** (confirmar el contrato express de Andreani). Conviene mandar
+> todas las preguntas juntas.
+
+## Visión de negocio (contexto)
+
+El trabajo comercial de Shipro es **convencer a los couriers de transformarse también en
+"couriers recolectores" para terceros**. Cada courier que acepta ese rol amplía la red: permite que
+clientes fuera del área de cobertura directa de un entregador puedan igual usarlo, consolidando en
+el hub del recolector. Es un diferencial de la plataforma.
+
+**Del lado de Shipro (onboarding del courier):** en el alta del courier, el admin marca que también
+es "courier recolector" (`puedeConsolidar=true` + `cpDepositoConsolidador`). Por API se consume su
+tarifa de recolección.
+
+**Del lado del cliente (onboarding del cliente):** el cliente activa el servicio de recolección
+eligiendo **uno** de los "couriers recolectores" disponibles, y eso impacta en todos los couriers
+entregadores que active (les desplaza el CP de origen al hub del recolector). Ver DEUDA 36.E.
+
+## Relación con otras DEUDAS
+
+- **DEUDA 91** (padre): el catálogo `ServicioCourier`. Esta es su extensión al servicio de recolección.
+- **DEUDA 36.E**: el eje ACTIVACIÓN/COBERTURA (dónde opera cada courier). Esta es el eje FACTURACIÓN.
+  No confundir: la 36.E ya resolvió *que* el recolector recolecte; esta resuelve *cuánto cuesta y
+  quién factura qué*.
+- **DEUDA 73** (fórmula de precio: seguro + descuento) y **DEUDA 16 / 72-80** (matriz prepago/postpago,
+  cuenta corriente): la recolección debe integrarse a esa fórmula y a ese débito.
+- **DEUDA 13** (QR de Mocis en etiqueta de Andreani): resuelta en la práctica vía el zócalo de
+  `etiquetas/masiva` — verificado 2026-07-08 con la etiqueta combinada (tracking recolección
+  0000125551 + entrega 360003031154600).

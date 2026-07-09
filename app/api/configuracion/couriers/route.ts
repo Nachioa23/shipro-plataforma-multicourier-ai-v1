@@ -6,6 +6,7 @@ import {
   type CampoAuditable
 } from "@/lib/auditoria-configuracion";
 import { puedeEditarCampo, esModeloBCredenciales } from "@/lib/permisos";
+import { asignarSucursalParaDeposito } from "@/lib/sucursales/cercanas";
 
 export async function GET(request: Request) {
   try {
@@ -46,6 +47,105 @@ export async function POST(request: Request) {
     // el frontend — cualquier mutacion pasa por puedeEditarCampo(rol, campo).
     // tipoCuenta (DEUDA 16) sigue siendo solo admin_shipro per la matriz.
     const rol = request.headers.get("x-rol") || "";
+
+    // === DEUDA 36.E Diseño 2 STEP A: coverage gate ===
+    // Regla de producto (firme): un courier solo puede ACTIVARSE (transicion
+    // activo=false→true, incluida la creacion inicial con activo=true) si cubre
+    // el CP efectivo de origen de la empresa, anclado al deposito predeterminado.
+    // CP efectivo = recolector.cpDepositoConsolidador si el deposito tiene
+    // courierRecolectorId + el courier a activar no es ese recolector + el
+    // recolector tiene hub CP; sino, deposito.codigoPostal.
+    //
+    // SAFETY: gate SOLO en transiciones a activo. Un courier ya activo NO se
+    // re-chequea (evita lockout de clientes con activaciones legacy sin cobertura).
+    // Ademas: la busqueda del deposito + los checks de cobertura SOLO corren si
+    // hay >=1 transicion a activo — asi una empresa sin deposito puede seguir
+    // guardando cambios en Transportes que no toquen `activo` (markup, credenciales,
+    // seguro, etc.). Sin activaciones → gate skipped entirely.
+    // Validacion PRE-PASS: si algo falla, se rechaza el request COMPLETO antes
+    // de cualquier escritura — cero estado parcial.
+    const transicionesAActivo: any[] = [];
+    for (const courier of couriers) {
+      const credAntesPreCheck = await prisma.credencialCourier.findUnique({
+        where: {
+          empresaId_nombreCourier: {
+            empresaId: empresaIdNum,
+            nombreCourier: courier.id,
+          },
+        },
+      });
+      if (courier.activo === true && credAntesPreCheck?.activo !== true) {
+        transicionesAActivo.push(courier);
+      }
+    }
+
+    if (transicionesAActivo.length > 0) {
+      const depositoPrincipal = await prisma.deposito.findFirst({
+        where: { empresaId: empresaIdNum, esPredeterminado: true, activo: true },
+      });
+      if (!depositoPrincipal) {
+        return NextResponse.json(
+          {
+            error: "La empresa no tiene depósito predeterminado activo. Configurá un depósito antes de activar couriers.",
+            code: "SIN_DEPOSITO_PREDETERMINADO",
+          },
+          { status: 400 }
+        );
+      }
+      const recolector = depositoPrincipal.courierRecolectorId
+        ? await prisma.courier.findUnique({ where: { id: depositoPrincipal.courierRecolectorId } })
+        : null;
+
+      const rechazos: Array<{ nombre: string; motivo: string; cpOrigenEfectivo?: string }> = [];
+      for (const courier of transicionesAActivo) {
+        const courierBDCheck = await prisma.courier.findFirst({
+          where: { nombre: courier.id, activo: true },
+          include: { servicios: { where: { codigoServicio: "entrega_sucursal" } } },
+        });
+        if (!courierBDCheck) {
+          rechazos.push({ nombre: courier.id, motivo: "Courier no encontrado o inactivo" });
+          continue;
+        }
+
+        let cpOrigenEfectivo: string = depositoPrincipal.codigoPostal;
+        if (
+          recolector &&
+          courierBDCheck.id !== recolector.id &&
+          recolector.cpDepositoConsolidador
+        ) {
+          cpOrigenEfectivo = recolector.cpDepositoConsolidador;
+        }
+
+        const cobertura = await asignarSucursalParaDeposito({
+          prisma,
+          courier: courierBDCheck,
+          cpOrigenEfectivo,
+          latitudOrigen: depositoPrincipal.latitud,
+          longitudOrigen: depositoPrincipal.longitud,
+          dropOffCliente: false,
+        });
+
+        if (cobertura.tipo === "sin_cobertura" || cobertura.tipo === "sin_sucursales") {
+          rechazos.push({
+            nombre: courier.id,
+            motivo: cobertura.mensaje,
+            cpOrigenEfectivo,
+          });
+        }
+      }
+
+      if (rechazos.length > 0) {
+        return NextResponse.json(
+          {
+            error: "Algunos couriers no cubren tu CP de origen y no pueden activarse.",
+            code: "COBERTURA_INSUFICIENTE",
+            couriersRechazados: rechazos,
+          },
+          { status: 400 }
+        );
+      }
+    }
+    // === fin coverage gate — a partir de aca comienzan las escrituras ===
 
     // 1. Guardamos reglas globales (ordenamientoDefault NO es auditable — low priority).
     await prisma.empresa.update({

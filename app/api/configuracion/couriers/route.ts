@@ -64,6 +64,14 @@ export async function POST(request: Request) {
     // seguro, etc.). Sin activaciones → gate skipped entirely.
     // Validacion PRE-PASS: si algo falla, se rechaza el request COMPLETO antes
     // de cualquier escritura — cero estado parcial.
+    //
+    // DEUDA 36.E Diseño 2 STEP B: los ids que sobreviven el gate + fueron
+    // evaluados contra el hub del recolector + cubren, generan una ficha
+    // DepositoCourierConfig(recogeViaConsolidador=true) DESPUES de las
+    // escrituras principales. Se declaran en outer scope para sobrevivir al
+    // if(transicionesAActivo.length>0).
+    let depositoPrincipalId: number | null = null;
+    const fichasACrear: number[] = [];
     const transicionesAActivo: any[] = [];
     for (const courier of couriers) {
       const credAntesPreCheck = await prisma.credencialCourier.findUnique({
@@ -92,6 +100,7 @@ export async function POST(request: Request) {
           { status: 400 }
         );
       }
+      depositoPrincipalId = depositoPrincipal.id;
       const recolector = depositoPrincipal.courierRecolectorId
         ? await prisma.courier.findUnique({ where: { id: depositoPrincipal.courierRecolectorId } })
         : null;
@@ -131,6 +140,20 @@ export async function POST(request: Request) {
             motivo: cobertura.mensaje,
             cpOrigenEfectivo,
           });
+          continue;
+        }
+
+        // STEP B: si (a) fue evaluado contra el hub del recolector, (b) el
+        // courier no es el propio recolector, y (c) la cobertura es real
+        // (por_cp | sucursal_unica), corresponde crear la ficha
+        // DepositoCourierConfig(recogeViaConsolidador=true) despues de las
+        // escrituras principales. Si se evaluo contra el CP del deposito
+        // (sin recolector, o el courier ES el recolector), NO se crea ficha.
+        const evaluadoContraHub =
+          !!recolector && courierBDCheck.id !== recolector.id && !!recolector.cpDepositoConsolidador;
+        const cubre = cobertura.tipo === "por_cp" || cobertura.tipo === "sucursal_unica";
+        if (evaluadoContraHub && cubre) {
+          fichasACrear.push(courierBDCheck.id);
         }
       }
 
@@ -323,6 +346,29 @@ export async function POST(request: Request) {
         if (puedeEditarCampo(rol, "tipoCuenta")) {
           await auditarCampo("tipoCuenta", credAntes.tipoCuenta, nuevoTipoCuenta);
         }
+      }
+    }
+
+    // === DEUDA 36.E Diseño 2 STEP B: fichas del recolector al activar ===
+    // Para cada courier que (i) fue transicionado a activo, (ii) paso el gate
+    // de cobertura, y (iii) fue evaluado contra el hub del recolector (existe
+    // recolector + courier != recolector + hub CP presente), upsertea su
+    // DepositoCourierConfig con recogeViaConsolidador=true en el deposito
+    // predeterminado. El gate ya verifico la existencia del recolector, asi que
+    // la invariante V3 (recolector debe existir para recogeViaConsolidador=true)
+    // se cumple por construccion.
+    if (depositoPrincipalId !== null && fichasACrear.length > 0) {
+      for (const cid of fichasACrear) {
+        await prisma.depositoCourierConfig.upsert({
+          where: { depositoId_courierId: { depositoId: depositoPrincipalId, courierId: cid } },
+          update: { recogeViaConsolidador: true },
+          create: {
+            depositoId: depositoPrincipalId,
+            courierId: cid,
+            dropOffCliente: false,
+            recogeViaConsolidador: true,
+          },
+        });
       }
     }
 

@@ -45,6 +45,12 @@ export default function TransportesTab({ empresaActivaId, embeddedInWizard = fal
   const [cargando, setCargando] = useState(true);
   const [guardando, setGuardando] = useState(false);
   const [mensaje, setMensaje] = useState<{ texto: string, tipo: 'ok' | 'error' } | null>(null);
+  // === DEUDA 36.E Diseño 2 STEP C ===
+  // Chips por-courier con el motivo de rechazo cuando el gate de cobertura
+  // (POST /api/configuracion/couriers) devuelve 400 COBERTURA_INSUFICIENTE.
+  // Se limpian al iniciar cada guardado, al guardado exitoso, y al togglear
+  // el propio courier (asi desactivar el rechazado remueve la barra roja).
+  const [rechazosCobertura, setRechazosCobertura] = useState<Record<string, { motivo: string; cpOrigenEfectivo?: string }>>({});
   const [configsGenerales, setConfigsGenerales] = useState({ ordenamiento: "MOTOR_PRECIO" });
   const [couriers, setCouriers] = useState<any[]>([]);
   // DEUDA 19: snapshot inmutable para detectar cambios sensibles antes de submit.
@@ -107,7 +113,17 @@ export default function TransportesTab({ empresaActivaId, embeddedInWizard = fal
     onCouriersActivosChange(cantidadActivos);
   }, [couriers, onCouriersActivosChange]);
 
-  const handleToggleCourier = (id: string) => setCouriers(couriers.map(c => c.id === id ? { ...c, activo: !c.activo } : c));
+  const handleToggleCourier = (id: string) => {
+    // STEP C: si el courier tenia chip de rechazo por cobertura, limpiarlo.
+    // Desactivar un courier bloqueado remueve su barra roja inmediatamente.
+    setRechazosCobertura(prev => {
+      if (!prev[id]) return prev;
+      const nuevo = { ...prev };
+      delete nuevo[id];
+      return nuevo;
+    });
+    setCouriers(couriers.map(c => c.id === id ? { ...c, activo: !c.activo } : c));
+  };
   const handleUpdateCourier = (id: string, campo: string, valor: any) => setCouriers(couriers.map(c => c.id === id ? { ...c, [campo]: valor } : c));
   const handleUpdateCredencial = (id: string, clave: string, valor: string) => setCouriers(couriers.map(c => c.id === id ? { ...c, credenciales: { ...c.credenciales, [clave]: valor } } : c));
 
@@ -182,6 +198,9 @@ export default function TransportesTab({ empresaActivaId, embeddedInWizard = fal
 
   const guardar = async (motivoAuditoria: string | undefined) => {
     setGuardando(true);
+    // STEP C: limpiar chips al iniciar cada intento — el resultado del gate
+    // depende del estado en el backend en este instante, no del intento previo.
+    setRechazosCobertura({});
     try {
       const res = await fetch("/api/configuracion/couriers", {
         method: "POST",
@@ -198,12 +217,32 @@ export default function TransportesTab({ empresaActivaId, embeddedInWizard = fal
         // Refrescar snapshot post-save para nuevo baseline.
         setCouriersOriginal(JSON.parse(JSON.stringify(couriers)));
         setModalOpen(false);
+        // STEP C: en exito, chips ya limpios (al inicio) — no hay nada que borrar.
+        setRechazosCobertura({});
       } else {
         const errorData = await res.json().catch(() => ({}));
         if (errorData?.code === "MOTIVO_AUDITORIA_REQUERIDO") {
           throw new Error("Motivo obligatorio para cambios sensibles.");
         }
-        setMensaje({ texto: "Error al guardar la red.", tipo: 'error' });
+        // STEP C: cualquier otro 400 NO se reintenta desde el modal — cerralo
+        // para que se vean el banner + los chips por-courier que quedan debajo.
+        // Ordenado DESPUES del throw MOTIVO_AUDITORIA_REQUERIDO: el catch de
+        // guardar (~L241) sigue re-lanzando ese error para que el modal muestre
+        // el mensaje inline, porque modalOpen todavia es true en ese instante.
+        setModalOpen(false);
+        // STEP C: candado de cobertura — poblar chips por courier + banner arriba.
+        if (errorData?.code === "COBERTURA_INSUFICIENTE" && Array.isArray(errorData.couriersRechazados)) {
+          const mapa: Record<string, { motivo: string; cpOrigenEfectivo?: string }> = {};
+          for (const r of errorData.couriersRechazados) {
+            mapa[r.nombre] = { motivo: r.motivo, cpOrigenEfectivo: r.cpOrigenEfectivo };
+          }
+          setRechazosCobertura(mapa);
+          setMensaje({ texto: "Algunos couriers no cubren tu CP de origen. Mirá el detalle en cada tarjeta.", tipo: 'error' });
+        } else if (errorData?.code === "SIN_DEPOSITO_PREDETERMINADO") {
+          setMensaje({ texto: errorData.error, tipo: 'error' });
+        } else {
+          setMensaje({ texto: "Error al guardar la red.", tipo: 'error' });
+        }
       }
     } catch (error: any) {
       if (modalOpen) throw error; // re-throw para que el modal lo capture
@@ -267,6 +306,19 @@ export default function TransportesTab({ empresaActivaId, embeddedInWizard = fal
                   <div className="w-14 h-7 bg-gray-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-green-500 shadow-inner"></div>
                 </label>
               </div>
+
+              {/* === DEUDA 36.E Diseño 2 STEP C: barra roja por-courier con el motivo de rechazo === */}
+              {rechazosCobertura[courier.id] && (
+                <div className="bg-red-50 border-b border-red-200 px-5 py-3 flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                  <div className="text-[11px] text-red-700">
+                    <span className="font-black uppercase tracking-widest">Sin cobertura</span> · {rechazosCobertura[courier.id].motivo}
+                    {rechazosCobertura[courier.id].cpOrigenEfectivo && (
+                      <span className="text-red-500"> (origen efectivo CP {rechazosCobertura[courier.id].cpOrigenEfectivo})</span>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {courier.activo && (
                 <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-8 animate-in slide-in-from-top-2">

@@ -26,11 +26,13 @@ import {
   AlertCircle,
   Eye,
   EyeOff,
+  Truck,
 } from "lucide-react";
 import DepositoForm from "@/components/configuracion/DepositoForm";
 import TransportesTab from "@/components/configuracion/TransportesTab";
+import CoberturaGrid from "@/components/configuracion/CoberturaGrid";
 
-type PasoWizard = 1 | 2 | 3 | 4;
+type PasoWizard = 1 | 2 | 3 | 4 | 5;
 
 export default function OnboardingWizard() {
   const { data: session, status, update } = useSession();
@@ -52,10 +54,22 @@ export default function OnboardingWizard() {
   const [paso1Loading, setPaso1Loading] = useState(false);
   const [paso1Error, setPaso1Error] = useState("");
 
-  // --- Paso 4: primer courier + finalizar ---
+  // --- Paso 5: primer courier + finalizar (antes paso 4) ---
   const [couriersActivos, setCouriersActivos] = useState(0);
   const [paso4Loading, setPaso4Loading] = useState(false);
   const [paso4Error, setPaso4Error] = useState("");
+
+  // --- Paso 4 (nuevo, DEUDA 36.E Fase 4c/d): recolector ---
+  // depositoCreadoId: capturado del onSaved de DepositoForm al terminar paso 3.
+  // recolectorWizard: seleccion actual del <select> dentro de CoberturaGrid.
+  // La persistencia real (PUT /api/depositos/{id}) queda pendiente — se decide
+  // segun el body-shape que exige el endpoint.
+  const [depositoCreadoId, setDepositoCreadoId] = useState<number | null>(null);
+  const [recolectorWizard, setRecolectorWizard] = useState<number | null>(null);
+  // Soft warning: si el PUT del recolector falla, se muestra en el tope del
+  // paso 5. Nunca bloqueamos el avance del wizard — el cliente puede
+  // reconfigurar el recolector luego desde Configuracion → Depositos.
+  const [recolectorAviso, setRecolectorAviso] = useState<string | null>(null);
 
   // --- Paso 2: confirmar datos ---
   const [datosLoading, setDatosLoading] = useState(true);
@@ -220,7 +234,33 @@ export default function OnboardingWizard() {
   };
 
   // ============================================================================
-  // Handler paso 4 — finalizar onboarding
+  // Handler paso 4 (nuevo, DEUDA 36.E Fase 4c/d) — persistir el recolector elegido
+  // y avanzar. Non-blocking: si el fetch falla, igual avanza (el cliente puede
+  // configurar el recolector luego desde Configuracion → Depositos).
+  // Usa el endpoint dedicado /api/depositos/[id]/recolector (no-cascade, guardrail
+  // DEPOSITO_NO_VACIO): apto solo para depositos frescos, como el del wizard.
+  // ============================================================================
+  const continuarDesdeRecolector = async () => {
+    setRecolectorAviso(null);
+    if (depositoCreadoId != null && recolectorWizard != null) {
+      try {
+        const res = await fetch(`/api/depositos/${depositoCreadoId}/recolector`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ courierRecolectorId: recolectorWizard }),
+        });
+        if (!res.ok) {
+          setRecolectorAviso("No pudimos guardar el courier recolector. Podés configurarlo luego desde Configuración → Depósitos.");
+        }
+      } catch {
+        setRecolectorAviso("No pudimos guardar el courier recolector. Podés configurarlo luego desde Configuración → Depósitos.");
+      }
+    }
+    setPasoActual(5);
+  };
+
+  // ============================================================================
+  // Handler paso 5 — finalizar onboarding (antes paso 4)
   // ============================================================================
   const handleFinalizarWizard = async () => {
     setPaso4Error("");
@@ -252,7 +292,7 @@ export default function OnboardingWizard() {
   // ============================================================================
   // Render — Progress bar + paso actual
   // ============================================================================
-  const PASOS_LABELS = ["Clave nueva", "Datos empresa", "Primer depósito", "Primer courier"];
+  const PASOS_LABELS = ["Clave nueva", "Datos empresa", "Primer depósito", "Recolector", "Primer courier"];
 
   // DEUDA 17.E.4.4 BUGFIX (2026-06-23): movimos el render de paso 3
   // (DepositoForm fullscreen) a un conditional dentro del render normal,
@@ -266,7 +306,7 @@ export default function OnboardingWizard() {
         <DepositoForm
           isOpen={true}
           onClose={() => {}}
-          onSaved={() => setPasoActual(4)}
+          onSaved={(dep) => { if (dep?.id) setDepositoCreadoId(dep.id); setPasoActual(4); }}
           empresaId={session?.user?.empresaId ?? null}
           depositoExistente={null}
           puedeEditarFlags={true}
@@ -280,7 +320,7 @@ export default function OnboardingWizard() {
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-3xl font-black text-[#233b6b] mb-1">Bienvenido a Shipro, {userName}</h1>
-          <p className="text-gray-500 text-sm">Completá los 4 pasos para activar tu cuenta.</p>
+          <p className="text-gray-500 text-sm">Completá los 5 pasos para activar tu cuenta.</p>
         </div>
 
         {/* Progress bar */}
@@ -524,14 +564,55 @@ export default function OnboardingWizard() {
         )}
 
 
+        {/* Paso 4 (nuevo, DEUDA 36.E Fase 4c/d) — Recolector */}
         {pasoActual === 4 && (
           <div className="bg-white rounded-2xl shadow-lg p-6">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-12 h-12 bg-[#233b6b]/10 rounded-xl flex items-center justify-center">
+                <Truck className="w-6 h-6 text-[#233b6b]" />
+              </div>
+              <div>
+                <h2 className="text-xl font-black text-gray-800">Paso 4: Courier recolector</h2>
+                <p className="text-sm text-gray-500">Opcional. Si elegís un recolector, tus couriers de entrega retiran desde su hub. Podés dejarlo en "Sin recolector" y configurarlo más tarde.</p>
+              </div>
+            </div>
+
+            {depositoCreadoId != null ? (
+              <CoberturaGrid
+                depositoId={depositoCreadoId}
+                initialRecolectorId={null}
+                onRecolectorChange={setRecolectorWizard}
+              />
+            ) : (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800">
+                No pudimos identificar tu depósito recién creado. Podés continuar y configurar el recolector luego desde Configuración → Depósitos.
+              </div>
+            )}
+
+            <div className="mt-6 pt-4 border-t border-gray-100">
+              <button
+                onClick={continuarDesdeRecolector}
+                className="w-full py-3 bg-[#233b6b] hover:bg-blue-900 text-white font-bold rounded-xl text-sm transition-colors flex items-center justify-center gap-2"
+              >
+                Continuar
+              </button>
+            </div>
+          </div>
+        )}
+
+        {pasoActual === 5 && (
+          <div className="bg-white rounded-2xl shadow-lg p-6">
+            {recolectorAviso && (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800 flex items-start gap-2 mb-4">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" /> {recolectorAviso}
+              </div>
+            )}
             <div className="flex items-center gap-3 mb-6">
               <div className="w-12 h-12 bg-[#233b6b]/10 rounded-xl flex items-center justify-center">
                 <CheckCircle2 className="w-6 h-6 text-[#233b6b]" />
               </div>
               <div>
-                <h2 className="text-xl font-black text-gray-800">Paso 4: Activá tu primer courier</h2>
+                <h2 className="text-xl font-black text-gray-800">Paso 5: Activá tu primer courier</h2>
                 <p className="text-sm text-gray-500">Marcá al menos un courier como activo. Las credenciales podés cargarlas ahora o más tarde.</p>
               </div>
             </div>

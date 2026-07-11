@@ -12,7 +12,7 @@ import CoberturaGrid from "@/components/configuracion/CoberturaGrid";
 interface Props {
   isOpen: boolean;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (depositoGuardado?: any) => void;
   empresaId: number | null;
   depositoExistente?: any | null;
   puedeEditarFlags: boolean;
@@ -278,7 +278,7 @@ export default function DepositoForm({ isOpen, onClose, onSaved, empresaId, depo
         setGuardando(false);
         return;
       }
-      onSaved();
+      onSaved(res.data);
       onClose();
     } catch {
       setError('Error de conexión');
@@ -331,7 +331,7 @@ export default function DepositoForm({ isOpen, onClose, onSaved, empresaId, depo
         return;
       }
       setMostrarModalCascada(false);
-      onSaved();
+      onSaved(data);
       onClose();
     } catch {
       setError('Error de conexión');

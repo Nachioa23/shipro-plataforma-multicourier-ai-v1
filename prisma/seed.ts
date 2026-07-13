@@ -11,6 +11,14 @@ const prisma = new PrismaClient();
 async function main() {
   console.log('🚀 Iniciando el sembrado de la base de datos...');
 
+  // Modo del seed: por defecto PRODUCCION (solo esenciales — admin + couriers
+  // + servicios + geografia). Con SEED_MODE=staging se agrega la data demo
+  // (Empresa Demo + gerente cliente@demo.com + movimientos ficticios).
+  // Regla: la BD productiva NUNCA debe recibir la demo, por eso el default es
+  // el subset seguro. Ver docs/DEUDA-66 seed split.
+  const seedDemo = process.env.SEED_MODE === "staging";
+  console.log(seedDemo ? "  modo: STAGING (incluye datos demo)" : "  modo: PRODUCCION (solo esenciales)");
+
   // ==========================================
   // PARTE 1: USUARIO ADMIN SHIPRO Y COURIERS
   // Los usuarios shipro (admin_shipro / operador_shipro) no pertenecen a ninguna empresa.
@@ -28,7 +36,8 @@ async function main() {
       empresaId: null
     },
   });
-  
+  console.warn("⚠️  Admin sembrado con password por defecto. CAMBIALA de inmediato en produccion.");
+
   const couriersExistentes = await prisma.courier.count();
   if (couriersExistentes === 0) {
     await prisma.courier.createMany({
@@ -113,6 +122,12 @@ async function main() {
   // ==========================================
   // PARTE 1.5 (DEUDA 81): EMPRESA DEMO + GERENTE CLIENTE + MOVIMIENTOS DEMO
   //
+  // GATE: SOLO corre en modo staging (SEED_MODE=staging). En produccion se
+  // saltea entero — no queremos que la BD publica en Linode reciba una
+  // "Comercio Demo S.A." ficticia ni un usuario cliente@demo.com con password
+  // 'demo' (credencial debil hardcodeada, riesgo de seguridad si aterriza en
+  // un servidor real). Ver docs/DEUDA-66 seed split.
+  //
   // Objetivo: post-DEUDA-66 la BD Postgres arranca vacia. Este bloque crea
   // un entorno minimo login-able + con ledger visible en /facturacion.
   //
@@ -124,6 +139,7 @@ async function main() {
   //     (evita duplicar el ledger en re-runs). Si el dev quiere resetear los
   //     movimientos: DELETE FROM "MovimientoFinanciero" WHERE "empresaId" = X.
   // ==========================================
+  if (seedDemo) {
   const CUIT_DEMO = '30-70000000-0';
   const empresaDemo = await prisma.empresa.upsert({
     where: { cuit: CUIT_DEMO },
@@ -217,6 +233,7 @@ async function main() {
   }
 
   console.log('✅ Empresa Demo (Comercio Demo S.A.) + gerente cliente@demo.com listos.');
+  } // end if (seedDemo) — fin PARTE 1.5
 
 
   // ==========================================

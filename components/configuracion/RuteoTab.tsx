@@ -28,7 +28,7 @@ export default function RuteoTab({ empresaActivaId }: Props) {
 
         // Reglas Maestras + Cliente
         const [resMaestras, resCliente] = await Promise.all([
-          fetch('/api/admin/reglas'),
+          fetch('/api/empresa/reglas/maestras'),
           fetch(`/api/empresa/reglas?empresaId=${empresaActivaId}`)
         ]);
 

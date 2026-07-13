@@ -2257,3 +2257,120 @@ Google, lo que choca con el modelo actual de "Shipro da de alta al usuario". Pue
 
 **Prioridad:** baja. Primero la decisión de producto; recién después, el trabajo técnico (que depende de
 cuál sea la decisión). Mientras tanto, sacar el botón evita confundir al usuario.
+
+# FAMILIA — Calidad del sistema de Reglas de Ruteo (registradas 2026-07-13)
+
+**Contexto de descubrimiento:** Al crear la primera regla maestra de ruteo desde `/admin-couriers`
+(catálogo `ReglaRuteo`, plantillas `empresaId=null`), se detectaron cinco deudas de calidad en la
+zona del sistema de reglas — el formulario de admin, el motor de cotización (`lib/cotizador.ts`), y
+la navegación del menú. Ninguna bloquea, pero varias son "bugs esperando que un cliente las pise":
+el formulario ofrece opciones que el motor no ejecuta. Se registran juntas por pertenecer a la misma
+zona funcional.
+
+---
+
+## DEUDA 98 — Formulario de reglas pide el ID numérico del courier (UX) (scope chico, frontend)
+
+**Status:** ABIERTA. Detectada 2026-07-13.
+
+**Síntoma:** En el formulario de creación de reglas (`/admin-couriers`), cuando la acción es
+`FORZAR_COURIER`, el campo "Acción: Valor" es un input de texto libre donde hay que escribir el **ID
+numérico** del courier (`"1"` para Andreani, `"2"` para Mocis). El usuario no tiene forma de saber
+ese mapeo — es conocimiento interno.
+
+**Fix propuesto (frontend, chico):** reemplazar el input de texto por un `<select>` cargado desde la
+tabla `Courier` (`findMany({ where: { activo: true } })`), con **label = nombre** del courier
+(Andreani, Moci's) y **value = id** en string (`"1"`, `"2"`). El contrato de persistencia no cambia
+(`accionValor` sigue siendo `"1"`/`"2"`, que es lo que el motor espera hoy — ver DEUDA 101). El
+usuario elige por nombre; el sistema traduce a ID.
+
+**Prioridad:** media (UX de cara al admin). Es el arreglo más jugoso de esta familia y el más simple.
+
+---
+
+## DEUDA 99 — Condición "Provincia de Destino" está en el formulario pero el motor no la ejecuta (opción muerta) (scope chico, bug silencioso)
+
+**Status:** ABIERTA. Detectada 2026-07-13.
+
+**Síntoma:** El formulario de reglas ofrece `PROVINCIA_DESTINO` como variable de condición, pero el
+motor de cotización (`lib/cotizador.ts:355-356`) solo evalúa `VALOR_CARRITO` y `PESO_PAQUETE`. Una
+regla creada con `PROVINCIA_DESTINO` **se guarda pero nunca se dispara** — silenciosamente inerte.
+
+**Fix (dos caminos):**
+- Rápido: sacar `PROVINCIA_DESTINO` del `<select>` del formulario hasta que el motor la soporte
+  (evita prometer algo que no funciona).
+- Completo: implementar la evaluación de `PROVINCIA_DESTINO` en el motor (comparar contra la provincia
+  de destino del envío).
+
+**Prioridad:** media (bug silencioso — el peor tipo, porque no falla, simplemente no hace nada).
+
+---
+
+## DEUDA 100 — Operador "Está Entre" (ENTRE) está en el formulario pero el motor no lo ejecuta (opción muerta) (scope chico, bug silencioso)
+
+**Status:** ABIERTA. Detectada 2026-07-13.
+
+**Síntoma:** El formulario ofrece el operador `ENTRE` (con su segundo valor, `condicionValor2`), pero
+el motor (`lib/cotizador.ts:358-360`) solo evalúa `MAYOR_A`, `MENOR_A` e `IGUAL_A`. Una regla con
+`ENTRE` **nunca se cumple** — inerte.
+
+**Fix (dos caminos):**
+- Rápido: sacar `ENTRE` del `<select>` de operadores hasta soportarlo.
+- Completo: implementar `ENTRE` en el motor (`valorEval >= valor1 && valorEval <= valor2`).
+
+**Prioridad:** media (mismo patrón silencioso que DEUDA 99).
+
+---
+
+## DEUDA 101 — Motor de cotización tiene los couriers hardcodeados en FORZAR_COURIER (scope medio, deuda de diseño)
+
+**Status:** ABIERTA. Detectada 2026-07-13.
+
+**Síntoma:** En `lib/cotizador.ts:380-381`, la acción `FORZAR_COURIER` mapea el `accionValor` a un
+nombre de courier con `if` hardcodeados: `"1"` → `"ANDREANI"`, `"2"` → `"MOCI'S"`. Sumar un tercer
+courier obliga a editar el motor (y en dos puntos: el switch ID→nombre y la comparación
+`op.courier === nombreEsperado` en mayúsculas).
+
+**Fix propuesto:** en vez del mapeo hardcodeado, buscar el courier por ID en tiempo de cotización
+(`prisma.courier.findUnique({ where: { id: parseInt(accionValor) } })`) y comparar contra
+`op.courier === courierBD.nombre.toUpperCase()`. Así un courier nuevo se integra sin tocar código.
+Encaja con DEUDA 98 (el `<select>` ya manda el ID correcto).
+
+**Prioridad:** media. No urge con 2 couriers, pero es deuda de escalabilidad — se paga sola al integrar
+el tercero.
+
+---
+
+## DEUDA 102 — Botón de menú "Reglas de Ruteo" tiene nombre engañoso y lleva a una pantalla vieja (scope chico, navegación/UX)
+
+**Status:** ABIERTA. Detectada 2026-07-13.
+
+**Síntoma:** En el menú lateral (`app/(dashboard)/layout.tsx:151`), el botón **"Reglas de Ruteo"**
+apunta a `/couriers` — que es una pantalla vieja (`ReglasLogisticas`, ~279 líneas, con tabs de
+"cordones" y "reglas") que **NO** tiene nada que ver con la creación de reglas de ruteo del catálogo
+`ReglaRuteo`. Parece infraestructura previa al sistema de reglas (mapa de cobertura / cordones
+logísticos). La creación real de reglas vive en `/admin-couriers`, que en el menú figura con otro
+nombre ("Gestión de Couriers", solo admin_shipro).
+
+**Doble problema:**
+- El nombre "Reglas de Ruteo" promete una cosa y lleva a otra (confuso para el equipo Shipro).
+- Un `gerente_cliente`/`operador_cliente` que clickea "Reglas de Ruteo" es enviado a `/couriers`, que
+  le muestra un bloque "sin acceso" (la pantalla es shipro-only). Mala experiencia.
+
+**Fix propuesto (decisión de producto primero):**
+- Renombrar el botón `/couriers` a algo que refleje lo que realmente es (ej. "Mapa de Cobertura" o
+  "Cordones Logísticos"), y/o
+- Revisar si esa pantalla vieja sigue teniendo sentido o si su contenido útil debería absorberse en
+  `/admin-couriers` con tabs.
+- Aclarar los nombres del menú para que "dónde se crean las reglas" sea obvio.
+
+**Prioridad:** media-baja. Es navegación/claridad, no rompe funcionalidad. Pero conviene resolverlo
+antes del onboarding de clientes reales (un cliente no debería toparse con botones que lo mandan a
+pantallas sin acceso).
+
+---
+
+**Nota de método:** estas cinco se descubrieron explorando el sistema de reglas para crear la primera
+regla maestra. Ninguna bloquea comercialización. La más accionable de cara al usuario es la DEUDA 98
+(desplegable de couriers). Las 99 y 100 son "opciones muertas" que conviene al menos sacar del
+formulario para no prometer lo que no funciona.

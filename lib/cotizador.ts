@@ -375,13 +375,17 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
   let finalSucursal = aplicarEstrategia([...opcionesSucursal]);
 
   if (reglaAplicada && reglaAplicada.accionTipo === "FORZAR_COURIER" && reglaAplicada.accionValor) {
-    const idCourierAForzar = reglaAplicada.accionValor;
-    let nombreEsperado = "";
-    if (idCourierAForzar === "1") nombreEsperado = "ANDREANI";
-    if (idCourierAForzar === "2") nombreEsperado = "MOCI'S";
-    if (nombreEsperado) {
-      finalDomicilio = finalDomicilio.filter(op => op.courier === nombreEsperado);
-      finalSucursal = finalSucursal.filter(op => op.courier === nombreEsperado);
+    // DEUDA 101: lookup dinamico por id contra couriersReales (ya cargado en L201),
+    // en vez del mapeo hardcodeado "1"->ANDREANI/"2"->MOCI'S. Cualquier courier que
+    // la empresa tenga activo se puede forzar sin tocar este archivo.
+    const idCourierAForzar = parseInt(reglaAplicada.accionValor, 10);
+    const courierForzado = Number.isFinite(idCourierAForzar)
+      ? couriersReales.find((c) => c.id === idCourierAForzar)
+      : null;
+    if (courierForzado) {
+      const nombreEsperado = courierForzado.nombre.toUpperCase();
+      finalDomicilio = finalDomicilio.filter((op) => op.courier === nombreEsperado);
+      finalSucursal = finalSucursal.filter((op) => op.courier === nombreEsperado);
     }
   }
 

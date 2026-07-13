@@ -2145,3 +2145,115 @@ entregadores que active (les desplaza el CP de origen al hub del recolector). Ve
 - **DEUDA 13** (QR de Mocis en etiqueta de Andreani): resuelta en la práctica vía el zócalo de
   `etiquetas/masiva` — verificado 2026-07-08 con la etiqueta combinada (tracking recolección
   0000125551 + entrega 360003031154600).
+
+  ## DEUDA 94 — POST /api/configuracion/couriers no es transaccional (activación + ficha) (registrada 2026-07-12, scope medio)
+
+**Tipo:** Robustez / integridad de datos. ZONA SENSIBLE (activación de couriers + fichas).
+**Status:** ABIERTA. Detectada durante DEUDA 36.E Diseño 2 Paso B (2026-07-12).
+
+**Origen:** El endpoint de activación de couriers (`POST /api/configuracion/couriers`) hace varias
+escrituras en secuencia — `empresa.update`, luego el loop de `credencialCourier.upsert` por cada
+courier, luego (Paso B) el loop de `depositoCourierConfig.upsert` de las fichas — pero **NO están
+envueltas en una `$transaction`**. A diferencia de `PUT /api/depositos/[id]`, que sí es atómico.
+
+**Riesgo:** Si el proceso falla a mitad (ej. error de red, timeout, excepción entre el upsert de la
+credencial y el de la ficha), puede quedar un estado inconsistente: un courier activado (`activo=true`)
+pero sin su `DepositoCourierConfig` creada, o parte de los couriers procesados y parte no. El candado
+de cobertura (Paso A) sí rechaza antes de escribir, así que el riesgo no es de cobertura inválida —
+es de escritura parcial.
+
+**Impacto:** Bajo en la práctica (las escrituras son rápidas y el fallo a mitad es raro), pero es una
+grieta de integridad que conviene cerrar antes de escalar el volumen.
+
+**Trabajo:**
+- Envolver las escrituras del handler (empresa.update + upserts de credencial + upserts de ficha +
+  audit) en una sola `prisma.$transaction([...])`, replicando el patrón atómico de `PUT /api/depositos/[id]`.
+- Verificar que el audit log (DEUDA 19) siga funcionando dentro de la transacción.
+
+**Por qué no se hizo en el momento:** convertir el endpoint a transaccional es un cambio más grande y
+riesgoso que el Paso B en sí; se separó para no ampliar el alcance de un paso ya verificado. Prioridad:
+media (integridad, no bloqueante).
+
+---
+
+## DEUDA 95 — Couriers mixtos por depósito: algunos vía recolector, otros directo (registrada 2026-07-12, scope grande, a pensar bien)
+
+**Tipo:** Diseño de producto + modelo de datos. ZONA SENSIBLE (ruteo/consolidación).
+**Status:** ABIERTA — DISEÑO PENDIENTE. Marcada por Nacho como "hay que pensarla bien antes de ejecutarla".
+
+**Origen:** Durante DEUDA 36.E, Nacho identificó un caso que el modelo actual no cubre.
+
+**El caso:** Hoy, cuando un depósito tiene un courier recolector, el modelo es **todos o ninguno**: el
+CP de origen de TODOS los couriers entregadores se desplaza al hub del recolector. Nacho quiere que el
+cliente pueda decidir, **por courier**, cuáles pasan por el recolector y cuáles van directo a buscar los
+paquetes a su propio depósito.
+
+**Por qué es difícil:** implica que el **CP de origen deje de ser único por depósito** y pase a ser
+**por par (depósito × courier)**. Hoy el `cpOrigenEfectivo` se calcula una vez (depósito o hub del
+recolector); este cambio lo vuelve una decisión individual de cada courier. Toca el cálculo de cobertura,
+la creación de fichas, la cotización, y probablemente el modelo de datos (un flag por ficha que diga
+"este va por el recolector" vs "este va directo").
+
+**Trabajo (a diseñar, NO ejecutar aún):**
+- Definir el modelo: ¿un flag `usaRecolector` por `DepositoCourierConfig`? ¿Cómo se refleja en la grilla?
+- Cómo se recalcula la cobertura cuando cada courier puede tener un origen distinto.
+- Impacto en cotización (cada courier cotiza desde un CP potencialmente distinto).
+- UX: cómo el cliente elige esto sin que sea confuso (la grilla ya muestra estados; agregar un toggle
+  por fila "vía recolector / directo").
+
+**Prioridad:** media-baja. Es una mejora de flexibilidad, no un bloqueante. Requiere sesión de diseño
+dedicada antes de tocar código (por la sensibilidad de la zona de ruteo).
+
+---
+
+## DEUDA 96 — Login: link "¿La olvidaste?" no funciona + falta el flujo de recuperación de contraseña (registrada 2026-07-12, scope grande)
+
+**Tipo:** Funcionalidad faltante + UX. Puerta de entrada (login).
+**Status:** ABIERTA. Detectada durante prueba del wizard (2026-07-12).
+
+**Síntoma:** En la pantalla de login, el link "¿La olvidaste?" apunta a `/login#` (ancla muerta) — no
+hace nada al clickearlo.
+
+**Alcance real (confirmado por diagnóstico):** No es solo el link roto. **No existe NINGÚN flujo de
+recuperación de contraseña** en el sistema: no hay ruta, ni endpoint, ni mecanismo de "te mando un mail
+para resetear". El link no lleva a ningún lado porque no hay a dónde llevar.
+
+**Impacto:** Un cliente real que olvide su contraseña **no tiene forma de recuperarla solo** — dependería
+de que un admin de Shipro se la resetee a mano (como se hizo con `ventas@shipro.pro` en dev vía script).
+Para producción con clientes reales, esto es un hueco operativo importante.
+
+**Trabajo (flujo completo a construir):**
+- Endpoint "solicitar reseteo": recibe email, genera un token temporal, manda un mail con un link.
+- Endpoint "confirmar reseteo": valida el token, permite setear nueva contraseña.
+- Páginas frontend para ambos pasos.
+- El link del login apunta a la página de solicitud.
+- Reusar el mailer existente (`lib/mailer.ts`, ya usado en el alta de clientes).
+
+**Prioridad:** media-alta para producción (es autoservicio esencial), pero mitigable al inicio con reseteo
+manual por admin mientras haya pocos clientes.
+
+---
+
+## DEUDA 97 — Login: botón "Continuar con Google" es decorativo (Google OAuth no configurado) (registrada 2026-07-12, scope medio — decisión de producto primero)
+
+**Tipo:** Funcionalidad faltante + decisión de producto. Puerta de entrada (login).
+**Status:** ABIERTA. Detectada durante prueba del wizard (2026-07-12).
+
+**Síntoma:** El botón "Continuar con Google" en el login no hace nada (o no inicia sesión).
+
+**Alcance real (confirmado por diagnóstico):** Google OAuth **nunca se configuró**. NextAuth solo tiene
+el `CredentialsProvider` (email/password); no hay `GoogleProvider`. El botón es puramente decorativo.
+
+**Decisión de producto primero (antes de tocar código):** ¿Shipro **quiere** login con Google? No es
+obvio que sí — los clientes son empresas con usuarios `gerente_cliente` creados por Shipro en el alta
+(con email/password temporal). El login con Google implicaría que un usuario entre con su cuenta de
+Google, lo que choca con el modelo actual de "Shipro da de alta al usuario". Puede tener sentido, o no.
+
+**Dos caminos:**
+- **Si NO se quiere:** sacar el botón (arreglo trivial, frontend). Evita prometer algo que no existe.
+- **Si SÍ se quiere:** configurar `GoogleProvider` en NextAuth (client ID + secret de Google Cloud),
+  decidir cómo se vincula una cuenta de Google con un `Usuario`/`Empresa` existente (matching por email),
+  y qué pasa si alguien entra con un Google que no corresponde a ningún cliente dado de alta.
+
+**Prioridad:** baja. Primero la decisión de producto; recién después, el trabajo técnico (que depende de
+cuál sea la decisión). Mientras tanto, sacar el botón evita confundir al usuario.

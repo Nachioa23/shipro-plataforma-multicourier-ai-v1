@@ -332,11 +332,34 @@ export default function AdminCouriersMaestro() {
                       <div className="p-4 bg-blue-50 border border-blue-100 rounded-xl space-y-4">
                         <span className="text-[10px] font-black bg-blue-200 text-blue-800 px-2 py-1 rounded uppercase">2. Acción (Entonces...)</span>
                         <select className="w-full border border-blue-200 rounded-lg text-sm p-2 outline-none" value={accionTipo} onChange={e => setAccionTipo(e.target.value)}>
-                          <option value="FORZAR_COURIER">Asignar a Courier (ID)</option>
+                          <option value="FORZAR_COURIER">Asignar a Courier</option>
                           <option value="PRIORIZAR_SLA">Priorizar Entrega Rápida</option>
                           <option value="PRIORIZAR_PRECIO">Priorizar Entrega Barata</option>
                         </select>
-                        <input type="text" placeholder="Ej: 1 (Para ID Andreani)" className="w-full border border-blue-200 rounded-lg text-sm p-2 outline-none" value={accionValor} onChange={e => setAccionValor(e.target.value)} />
+                        {/* DEUDA 98: para FORZAR_COURIER mostramos un dropdown de couriers
+                            (name → value=id string) que consume la lista ya cargada por
+                            cargarTodo(). El motor (DEUDA 101) resuelve por id, asi que
+                            cualquier courier del ABM aparece aca sin tocar codigo. */}
+                        {accionTipo === "FORZAR_COURIER" ? (
+                          <select
+                            value={accionValor}
+                            onChange={e => setAccionValor(e.target.value)}
+                            className="w-full border border-blue-200 rounded-lg text-sm p-2 outline-none"
+                          >
+                            <option value="">Elegí un courier...</option>
+                            {couriers.map(c => (
+                              <option key={c.id} value={String(c.id)}>{c.nombre}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input
+                            type="text"
+                            placeholder="Valor de la acción"
+                            value={accionValor}
+                            onChange={e => setAccionValor(e.target.value)}
+                            className="w-full border border-blue-200 rounded-lg text-sm p-2 outline-none"
+                          />
+                        )}
                       </div>
 
                       <button onClick={crearRegla} disabled={guardando} className="w-full flex items-center justify-center gap-2 py-3 bg-[#233b6b] text-white font-bold rounded-xl hover:bg-[#1a2c52] transition-all disabled:opacity-50">

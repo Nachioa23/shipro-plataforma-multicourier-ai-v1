@@ -2374,3 +2374,88 @@ pantallas sin acceso).
 regla maestra. Ninguna bloquea comercialización. La más accionable de cara al usuario es la DEUDA 98
 (desplegable de couriers). Las 99 y 100 son "opciones muertas" que conviene al menos sacar del
 formulario para no prometer lo que no funciona.
+
+# FAMILIA — Prerequisitos de la API externa para plugins de e-commerce (registradas 2026-07-13)
+
+**Contexto de descubrimiento:** Relevamiento de readiness para documentar la API multicourier de cara a
+integraciones externas (plugins Tiendanube, WooCommerce, etc.). Resultado: 4 de 5 capacidades críticas
+ya existen y son usables por API key (auth `shipro_live_*`, cotización, creación de envío con etiqueta,
+tracking). Faltan tres piezas antes de poder documentar una API con integridad. NINGUNA bloquea el deploy
+ni la venta directa de la plataforma — bloquean el frente de PLUGINS, que Nacho decidió posponer hasta
+tener producción en pie. Se registran para no perderlas.
+
+---
+
+## DEUDA 103 — POST /api/envios no soporta multi-bulto ni dimensiones en la creación (scope medio, prerequisito plugins)
+
+**Status:** ABIERTA. Detectada 2026-07-13.
+
+**Síntoma:** El endpoint de creación de envío (`POST /api/envios`, el que usan los e-commerces vía API key)
+acepta solo `pesoReal` (un escalar) — no una lista de paquetes, no dimensiones. Dos problemas concretos:
+1. **Un solo bulto:** un plugin solo puede crear envíos de una caja. Los e-commerces reales despachan
+   pedidos multi-caja (combos, kits, pallets). Limitación dura.
+2. **Sin dimensiones en la creación:** la cotización sí usa dimensiones (largo/ancho/alto), pero la creación
+   solo pasa el peso. El adapter cae a medidas de relleno (10×10×10), así que el peso volumétrico que el
+   courier factura puede **diferir del precio cotizado** — descalce de plata silencioso.
+
+Además, faltan dos campos que el modelo `Envio` ya soporta pero el endpoint no acepta:
+3. `fragil` (boolean) — no se puede declarar frágil.
+4. `contenido` (string) — no se puede mandar declaración de contenido.
+
+**Fix propuesto:** extender `crearEnvio` para aceptar un `paquetes[]` (con `pesoKg`, `largoCm`, `anchoCm`,
+`altoCm`, `valorDeclarado`, `fragil?`, `contenido?`) además del `pesoReal` escalar (backward-compat: si viene
+`paquetes[]`, se usa; si no, se respeta el `pesoReal` actual). Threading a `dispatch.ts` → adapters (Andreani
+soporta `bultos[]` nativo; Mocis requiere unir las tuplas por paquete). Persistir el agregado en `Envio`
+(`pesoReal = suma(pesoKg)`, `pesoVolumetrico = suma(volumen/factor)`).
+
+**Prioridad:** media. Prerequisito para documentar la creación de envío en la API externa. ~1-2 días.
+
+---
+
+## DEUDA 104 — No existe sistema de webhooks salientes (Shipro → e-commerce) (scope grande, prerequisito plugins)
+
+**Status:** ABIERTA. Detectada 2026-07-13. **Es el gap más grande para plugins.**
+
+**Síntoma:** Shipro no emite eventos hacia sistemas externos. No hay modelo `Webhook`, ni despachador, ni cola
+de reintentos, ni firma de seguridad. Hoy, para saber si un envío cambió de estado (EN_TRANSITO, ENTREGADO),
+un e-commerce tendría que **preguntar en loop** (polling) a `/api/envios/buscar` — caro, lento, y quema la
+cuota de Shipro con los couriers.
+
+**Por qué importa:** todo plugin serio de marketplace (Andreani oficial, Envío Fácil, EasyPost) entrega
+eventos de cambio de estado vía webhook. Sin esto: (a) el comprador se entera tarde del estado; (b) escala
+mal; (c) los curadores de marketplaces (Tiendanube, Shopify) lo exigen para aprobar el plugin. Es un requisito,
+no un lujo.
+
+**Fix propuesto (a diseñar):**
+- Modelo `Webhook` (empresaId, url, secretHmac, eventos[], activo).
+- Despachador que corre en las transiciones de estado (en el pipeline de rastreo/dispatch).
+- Cola de reintentos con backoff exponencial.
+- Firma HMAC de cada payload (para que el consumidor verifique autenticidad).
+- UI chica para que la empresa registre su URL de webhook y rote el secreto.
+
+**Prioridad:** alta dentro del frente de plugins (es el desbloqueante del "tercer momento" — la trazabilidad
+publicada dentro del panel del e-commerce). ~1-2 días. Requiere diseño dedicado.
+
+---
+
+## DEUDA 105 — /api/envios/cancelar es solo-sesión (no usable por plugins) (scope chico, prerequisito plugins)
+
+**Status:** ABIERTA. Detectada 2026-07-13.
+
+**Síntoma:** El endpoint de cancelación (`/api/envios/cancelar`) está clasificado como `session` en `proxy.ts`
+— solo lo puede usar el dashboard humano, no un e-commerce vía API key. Un plugin no puede cancelar un envío.
+
+**Fix propuesto:** agregar `/api/envios/cancelar` a la lista `DUAL_EXACT` en `proxy.ts` (acepta sesión O API
+key), y verificar que el handler resuelva bien el `empresaId` en modo API key (mismo patrón que
+`POST /api/envios`). Revisar que un e-commerce solo pueda cancelar envíos de SU empresa (aislamiento).
+
+**Prioridad:** baja-media. Chico, pero necesario para un plugin completo. Registrar también que al abrirlo hay
+que confirmar el aislamiento per-empresa en la cancelación.
+
+---
+
+**Nota de secuencia:** el orden lógico de construcción antes de documentar la API externa es: DEUDA 103
+(multi-bulto — el hueco que más muerde), DEUDA 104 (webhooks — el desbloqueante grande), DEUDA 105 (cancelar —
+chico). Las tres, más la redacción de la especificación OpenAPI, son el trabajo del frente de plugins, POSPUESTO
+hasta tener el deploy en producción. El diseño de "qué datos pedir al e-commerce y para qué" (la normalización)
+se puede trabajar en paralelo — no depende del código.

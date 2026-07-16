@@ -2459,3 +2459,121 @@ que confirmar el aislamiento per-empresa en la cancelación.
 chico). Las tres, más la redacción de la especificación OpenAPI, son el trabajo del frente de plugins, POSPUESTO
 hasta tener el deploy en producción. El diseño de "qué datos pedir al e-commerce y para qué" (la normalización)
 se puede trabajar en paralelo — no depende del código.
+
+# Cabos sueltos — DEUDA 106 nueva + marcado de RESUELTAS
+
+---
+
+## PARTE 1 — Nueva deuda de seguridad (pegar en DEUDAS.md, al final)
+
+## DEUDA 106 — `/api/envios/corregir` es PUBLIC: el tracking es la única llave (SEGURIDAD) (registrada 2026-07-14, scope medio, seguridad)
+
+**Status:** ABIERTA. Detectada 2026-07-14 durante el relevamiento de la API externa.
+
+**Síntoma:** El endpoint `POST /api/envios/corregir` está clasificado `public` en `proxy.ts:12`
+(`PUBLIC_API_EXACT`) — **no pide ninguna credencial**. Con solo conocer un `trackingNumber` de un
+envío en estado RETENIDO, cualquiera desde internet puede **cambiar la dirección de destino** de ese
+envío.
+
+**Por qué está público (razón legítima):** existe una página pública de auto-corrección en
+`app/corregir/[tracking]/page.tsx`, linkeada desde la página pública de seguimiento
+(`app/s/[tracking]/page.tsx:336`). El flujo es bueno: al comprador le queda el paquete RETENIDO por
+un problema de dirección, entra a ver su tracking, y **corrige él mismo sus datos** — sin tener
+cuenta en Shipro (el comprador nunca es usuario de la plataforma).
+
+**El valor de negocio de la función (por qué NO se saca):** es una **carrera** entre el comprador y
+el cliente de Shipro para ver quién corrige primero. Cada corrección que hace el comprador es una
+gestión operativa menos para el cliente. La función descarga trabajo del cliente — es valor de
+producto, no solo UX.
+
+**El riesgo concreto:** el `trackingNumber` **no es un secreto** — viaja por mail al comprador, está
+impreso en la etiqueta, y es enumerable/adivinable. Usarlo como única llave es "seguridad por
+oscuridad". Un atacante que scrapee o adivine trackings de envíos RETENIDO puede **redirigir paquetes
+ajenos a su propia dirección**.
+
+**Mitigación parcial hoy (no elimina el riesgo):** mientras el envío está RETENIDO, la etiqueta real
+del courier **todavía no se creó** — es genérica de Shipro hasta que los datos se validen contra
+Google Maps. Pero si el atacante mete una dirección válida, la etiqueta se crea **con la dirección
+del atacante**. Hay una ventana, no una protección.
+
+**Solución elegida — LINK MÁGICO con token (decisión de producto, 2026-07-14):**
+- Cuando un envío pasa a RETENIDO, generar un **token único e impredecible** (firmado, no adivinable)
+  asociado a ese envío, con **vencimiento a las 48 horas**.
+- Mandar al comprador un mail con el link que ya lleva el token:
+  `/corregir/<tracking>?token=<token>`. El comprador **clickea y entra** — cero fricción, no tiene
+  que escribir ni recordar nada.
+- El endpoint `/api/envios/corregir` **valida el token** (que exista, que corresponda a ese envío,
+  que no esté vencido) antes de permitir la corrección.
+- **Ventana de 48 horas:** el comprador tiene la primera oportunidad. Si no corrige en 48hs, el token
+  vence y **el cliente de Shipro resuelve desde la plataforma**. Nadie queda trabado; es una carrera
+  sana donde el que llega primero descarga al otro.
+- El flujo del **dashboard del cliente** (`app/(dashboard)/page.tsx:336`, que hoy también pega a este
+  endpoint) sigue funcionando con sesión — no requiere token.
+
+**Por qué el link mágico y no "tracking + email":** se evaluó pedir el email como segunda llave
+(más simple de construir), pero el link mágico es mejor en las dos dimensiones: **más seguro** (el
+token no se adivina ni se scrapea; el email sí puede viajar en el mismo mail que el tracking) y
+**mejor experiencia** (el comprador no escribe nada, solo clickea). Es además el patrón estándar de
+la industria para este caso (mismo mecanismo que "recuperar contraseña" o "confirmá tu mail"). El
+mailer ya existe (`lib/mailer.ts`), así que la pieza de envío está.
+
+**Trabajo:**
+1. Modelo/campo para el token de corrección (token, envioId, vencimiento, usado).
+2. Generación + envío del mail al pasar a RETENIDO (reusar `lib/mailer.ts`).
+3. Validación del token en `POST /api/envios/corregir` (mantener el flujo de sesión del dashboard).
+4. Sacar `/api/envios/corregir` de `PUBLIC_API_EXACT` en `proxy.ts` (pasa a validar token O sesión).
+5. La página `/corregir/<tracking>` lee el token del querystring y lo manda al endpoint.
+
+**Relación con la API de plugins:** la decisión de producto "corregir es solo desde la plataforma"
+aplica a la **API de plugins** (el e-commerce NO corrige por API). Esta función —el comprador
+auto-corrigiendo— es distinta y **se mantiene**: es plataforma→comprador, no integración.
+
+**Prioridad:** media-alta. Es seguridad real (redirección de paquetes), pero mitigada por la ventana
+RETENIDO y por el volumen bajo actual. Resolver antes del onboarding de clientes reales con volumen.
+
+---
+
+## PARTE 2 — Marcar como RESUELTAS (editar los headers existentes)
+
+Buscar cada línea y **reemplazar el header** por la versión con el marcador. El cuerpo de cada deuda
+queda igual.
+
+### Línea ~1712 — DEUDA 84
+**Buscar:**
+```
+## DEUDA 84 — `/api/admin/reglas` sin gate de rol (SEGURIDAD) (registrada 2026-07-01, scope chico, seguridad)
+```
+**Reemplazar por:**
+```
+## DEUDA 84 — `/api/admin/reglas` sin gate de rol (SEGURIDAD) (registrada 2026-07-01, scope chico, seguridad) (RESUELTA 2026-07-12 — cerrada incidentalmente por DEUDA 87 FAMILIA 3; follow-up del catálogo maestro en commit 2c4a3b9)
+```
+
+### Línea ~2272 — DEUDA 98
+**Buscar:**
+```
+## DEUDA 98 — Formulario de reglas pide el ID numérico del courier (UX) (scope chico, frontend)
+```
+**Reemplazar por:**
+```
+## DEUDA 98 — Formulario de reglas pide el ID numérico del courier (UX) (scope chico, frontend) (RESUELTA 2026-07-13 en commit 3351bac)
+```
+
+### Línea ~2325 — DEUDA 101
+**Buscar:**
+```
+## DEUDA 101 — Motor de cotización tiene los couriers hardcodeados en FORZAR_COURIER (scope medio, deuda de diseño)
+```
+**Reemplazar por:**
+```
+## DEUDA 101 — Motor de cotización tiene los couriers hardcodeados en FORZAR_COURIER (scope medio, deuda de diseño) (RESUELTA 2026-07-13 en commit 53a84d8)
+```
+
+---
+
+## PARTE 3 — Commit sugerido
+
+```
+git add DEUDAS.md
+git commit -m "docs: DEUDA 106 (corregir publico, link magico) + marca 84/98/101 RESUELTAS"
+git push
+```

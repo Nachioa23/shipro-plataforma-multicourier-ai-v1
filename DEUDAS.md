@@ -2577,3 +2577,141 @@ git add DEUDAS.md
 git commit -m "docs: DEUDA 106 (corregir publico, link magico) + marca 84/98/101 RESUELTAS"
 git push
 ```
+
+## DEUDA 107 — El markup del intermediario que presta credenciales no está modelado (NEGOCIO/PRECIO) (registrada 2026-07-17, scope medio-grande)
+
+**Status:** ABIERTA. Detectada 2026-07-17 durante la validación de la tarifa publicada en producción.
+**Prioridad: ALTA.** Afecta directamente el margen de cada envío en Modelo A y rompe la conciliación.
+
+---
+
+### El modelo de negocio (contexto que faltaba en el sistema)
+
+Shipro **no puede** conseguir cuentas directas con los couriers grandes: los couriers ven a Shipro
+como competencia (Shipro les administra los clientes). La solución encontrada: **un courier
+local/chico que ya redespacha paquetería le "presta" sus credenciales a Shipro.**
+
+Hoy: **Mocis presta sus credenciales de Andreani.** Shipro cotiza contra la API de Andreani con esas
+credenciales, y esa es la "tarifa corporativa de Shipro" que usan los clientes en **Modelo A**.
+
+**El intermediario cobra por prestar.** Datos reales (2026-07):
+- Mocis factura **la tarifa de Andreani + 10%**.
+- Mocis factura **$90 + IVA de seguro por etiqueta**, cuando Andreani cobra **$10 + IVA**.
+  (Diferencia de $80/etiqueta. Sea correcto o no, es lo que factura.)
+
+**El intermediario es intercambiable.** Si mañana Intralog presta las credenciales de Andreani a
+mejor precio, Shipro cambia — con **otro markup** (ej. +5% + $150). El sistema tiene que poder
+modelarlo sin tocar código.
+
+---
+
+### El problema
+
+**La tarifa que devuelve la API NO es el costo real de Shipro.** El sistema hoy asume que sí.
+
+`lib/cotizador.ts` calcula:
+```
+precioProveedor = tarifaAPI                                  ← ¡INCOMPLETO!
+precioFinal     = tarifaAPI + markupShipro + IVA
+```
+
+Falta el término del intermediario. El costo real es:
+```
+costoReal = tarifaAPI × (1 + markupIntermediario%) + seguroIntermediarioFijo
+```
+
+**No existe NINGÚN campo, tabla ni concepto** que modele esto. Grep de
+`prestamo|intermediario|emisor|credencialesDe|redespacho` → cero resultados. El flag
+`usaCredencialesPropias` solo distingue Modelo A vs B (de quién son las credenciales), **no la cadena
+de markups sobre la tarifa cruda**.
+
+### Las dos consecuencias
+
+**1. Fuga de margen (Modelo A).** Cada envío se publica sin el markup del intermediario. Si el markup
+de Shipro no lo cubre, Shipro absorbe el 10% + $90 de su bolsillo. Hoy no duele (la plataforma nueva
+no tiene clientes), **pero muerde el día uno del primer onboarding**.
+
+**2. Conciliación rota.** `FinanzasEnvio.precioProveedor` guarda la tarifa de la API y se usa en
+`app/api/conciliacion/route.ts:60` como `costoEsperado` ("lo que dijo la cotización inicial"), para
+comparar contra la liquidación real del courier. Con credenciales prestadas, **la liquidación de
+Mocis SIEMPRE va a diferir** — y la métrica de fuga va a marcar una anomalía que **no es anomalía:
+es el markup del intermediario, esperable y contractual.** La métrica va a gritar todos los meses por
+algo estructural, enmascarando las fugas reales.
+
+---
+
+### Diseño de la solución (decisiones de producto ya tomadas, 2026-07-17)
+
+**Decisión 1 — El intermediario es de SHIPRO, por courier.** No es per-empresa. Es un acuerdo entre
+Shipro y quien presta. Un solo lugar de configuración, aplica a todos los clientes de Modelo A.
+
+**Decisión 2 — Solo aplica a Modelo A** (`usaCredencialesPropias = false`). En Modelo B el cliente usa
+sus propias credenciales y **se asume que su tarifa de API ya trae todos sus costos** — no hay
+intermediario en el medio.
+
+**Decisión 3 — El orden de los términos:**
+```
+1. tarifaAPI                          (lo que devuelve el courier)
+2. + markup del intermediario         (%y/o fijo — solo Modelo A)   ← EL COSTO REAL DE SHIPRO
+3. + markup de Shipro                 (ajusteTarifaPorcentaje + markupFijo)
+4. + IVA                              (si tarifaIncluyeIva = false)
+   = precio publicado
+```
+Y **`precioProveedor` debe pasar a ser el paso 2** (el costo real esperado), no el paso 1.
+
+**Modelo de datos sugerido (a validar):**
+```
+model CourierIntermediario {
+  id                    Int
+  courierId             Int       // Andreani — el courier que se cotiza
+  intermediarioNombre   String    // "Moci's" — quién presta las credenciales
+  markupPorcentaje      Decimal   // 10.00
+  markupFijoPorEtiqueta Decimal   // 90.00 (el "seguro" que factura el intermediario)
+  markupFijoIncluyeIva  Boolean
+  activo                Boolean
+  vigenciaDesde         DateTime
+  vigenciaHasta         DateTime?
+  notas                 String?   // "Andreani cobra $10+IVA de seguro; Mocis factura $90+IVA"
+}
+```
+Con vigencias, para poder cambiar de intermediario (Mocis → Intralog) **sin perder el histórico** de
+qué markup aplicaba cuando se cotizó cada envío.
+
+**Y en `FinanzasEnvio`, guardar el desglose** (no solo el total):
+```
+tarifaCourierBase      // lo que dijo la API
+markupIntermediario    // lo que agrega quien presta
+precioProveedor        // = base + markup = el costo real esperado
+```
+Así la conciliación puede distinguir *"el intermediario aplicó su markup esperado"* (normal) de
+*"hay una anomalía real"* (fuga a investigar).
+
+---
+
+### Visión de futuro (por qué este modelo sirve a largo plazo)
+
+Cuando Shipro tenga **volumen suficiente para acceder a tarifas directas** con los couriers, el
+intermediario desaparece — y **ese mismo espacio de la fórmula pasa a ser margen de Shipro**. El
+modelo no se tira: se reutiliza. El campo `markupIntermediario` en 0 o reasignado a Shipro.
+
+### Relación con otras deudas
+
+- **DEUDA 73** (completar fórmula: seguro + descuento del cliente) — es la deuda hermana. El SMO
+  (Seguro Mínimo Obligatorio) que propone la 73 y el markup del intermediario de esta 107 **se
+  aplican en el mismo punto de cálculo** (`aplicarMarkup`). Conviene diseñarlas juntas para no tocar
+  la fórmula de precio dos veces.
+- **DEUDA 10** guarda el precio crudo en `HistoricoCotizaciones` y re-aplica markup al leer. Cuando se
+  implemente esta deuda, el fallback debe aplicar el markup del intermediario también.
+
+### Trabajo (a diseñar, no ejecutar todavía)
+
+1. Modelo `CourierIntermediario` + migración.
+2. UI de admin para cargar/editar el intermediario por courier (quién presta, qué markup, vigencias).
+3. Extender `aplicarMarkup` en `lib/cotizador.ts` para el término del intermediario, solo cuando
+   `usaCredencialesPropias = false`.
+4. Cambiar `precioProveedor` para que refleje el costo real (base + markup intermediario).
+5. Desglose en `FinanzasEnvio` para que la conciliación distinga esperado vs anomalía.
+6. Verificar el impacto en las métricas de la Torre de Control que leen `precioProveedor`.
+
+**Nota:** el paso 3 es mecánicamente simple (la función es corta). Lo pesado es el modelo de datos,
+la UI, y no romper la conciliación ni las métricas existentes.

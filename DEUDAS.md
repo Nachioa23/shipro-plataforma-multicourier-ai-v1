@@ -2760,3 +2760,137 @@ la UI, y no romper la conciliación ni las métricas existentes.
 ## DEUDA 109 — Limpiar el pm viejo del servidor de Fran (registrada 2026-07-17, scope chico, infra)
 
 **Status:** ABIERTA. Hasta el 2026-07-17, pm.shipro.pro corría en el servidor viejo (45.33.1.16) con código desactualizado. El DNS ya apunta al server nuevo (172.233.20.199). Queda el despliegue viejo de pm en /var/www/html/pm del server de Fran, ya sin tráfico. **Acción:** cuando la plataforma nueva esté validada y estable, coordinar con Fran para desmontar el pm viejo (liberar recursos, evitar confusión). Sin apuro — no molesta mientras el DNS apunte al nuevo.
+
+## DEUDA 110 — Motor de optimización de la propuesta logística (PRODUCTO — diferencial competitivo) (registrada 2026-07-21, scope grande)
+
+**Status:** ABIERTA. Idea de producto (aporte de especialista en Marketing + Nacho, 2026-07-21).
+**Ubicación en el roadmap: DESPUÉS de Fase 1 (precio), Fase 2 (couriers) y Fase 3 (plugins).** Este
+motor se alimenta de datos reales de envíos + eventos de checkout; sin clientes operando y sin la
+captura de la DEUDA 111, no tiene con qué trabajar. Construirlo antes sería un motor sin combustible.
+**Depende de:** modelo de precio correcto (73+107 — el ahorro se mide en pesos que tienen que estar
+bien), Torre de Control (39 — ya calcula varias métricas base), y la captura de la DEUDA 111.
+
+### Objetivo
+
+Transformar los datos del Panel de Control en **recomendaciones accionables** que permitan reducir
+costos logísticos sin deteriorar conversión, SLA ni experiencia del comprador.
+
+### Problema actual
+
+Hoy Shipro puede detectar patrones ("el 78% elige domicilio aunque el punto de retiro cuesta 22%
+menos"), pero deja toda la **interpretación y ejecución** en manos del cliente. Eso exige capacidad
+analítica, tiempo y criterio logístico — recursos que el segmento de 500-5.000 envíos/mes suele
+tener limitados.
+
+### Historia de usuario
+
+Como responsable de e-commerce u operaciones, quiero que Shipro me indique qué cambio podría aplicar
+en mi propuesta logística, cuánto podría ahorrar y qué riesgos tendría, para decidir si implementarlo
+sin analizar manualmente múltiples métricas.
+
+### Funcionamiento propuesto
+
+1. **Detectar una oportunidad.** Ej: "En AMBA Norte, para pedidos < $80.000, el 74% elige domicilio.
+   El punto de retiro cuesta en promedio 19% menos."
+2. **Calcular impacto potencial** (escenarios de adopción): si migra 10%/20%/30% → ahorro mensual
+   estimado por escenario.
+3. **Controlar variables de servicio** antes de recomendar: plazo real, cumplimiento SLA, primera
+   visita, reclamos, NPS, ticket promedio, cobertura por zona, diferencia económica real.
+4. **Proponer una acción concreta.** Ej: "Destacar punto de retiro como recomendado para pedidos <
+   $80.000 en estas zonas." Otras: cambiar orden de publicación, descuento a punto de retiro, mostrar
+   "opción más económica", subsidiar parcialmente una modalidad, ocultar servicio con bajo SLA,
+   priorizar express en tickets altos, envío gratis condicionado, cambiar courier recomendado por zona.
+5. **Simular antes de publicar:** regla actual vs propuesta, ahorro estimado, impacto sobre precio
+   mostrado, alcance en cantidad de pedidos, riesgos operativos.
+6. **Aprobar y publicar:** el cliente acepta / modifica parámetros / descarta / programa por período /
+   aplica solo a ciertas zonas, tickets o productos.
+7. **Medir el resultado:** comparar comportamiento antes/después, ahorro real, cambio en el mix de
+   modalidades, variación en conversión, SLA, reclamos y NPS.
+
+### Recomendación para el MVP (del especialista)
+
+NO automatizar cambios en el checkout sin autorización. Empezar con el ciclo:
+**Detectar → Recomendar → Simular → Aprobar → Medir.**
+Más adelante, con evidencia suficiente, habilitar reglas automáticas con límites definidos por el
+cliente.
+
+### Ejemplo de recomendación en pantalla
+
+> **Oportunidad detectada.** En los últimos 30 días realizaste 620 entregas estándar a domicilio en
+> zonas con cobertura de puntos de retiro. El punto de retiro fue en promedio $1.140 más económico y
+> tuvo un SLA similar. Si el 20% de esos compradores hubiera elegido retiro, el ahorro estimado
+> habría sido de $141.360.
+> **Acción sugerida:** publicar el punto de retiro primero y aplicar un descuento de $500 por 30 días.
+> **Impacto esperado:** ahorro neto estimado de $79.360, sujeto a adopción y comportamiento del comprador.
+
+**La distinción clave:** el sistema no dice solo "había una opción más barata". Dice: "existe esta
+oportunidad, bajo estas condiciones, con este impacto económico estimado y este riesgo de servicio".
+
+### Relación con otras deudas
+- **DEUDA 111** (Capa de Inteligencia del Checkout) — es su fuente de datos. El motor interpreta lo
+  que la 111 captura. Sin la 111, el motor está ciego a la conversión.
+- **DEUDA 39** (Torre de Control) — ya calcula varias métricas base (fuga de ruteo, concentración,
+  SLA, NPS). El motor es la capa de recomendación por encima de esas métricas.
+- **DEUDA 73/107** (precio) — el ahorro estimado se mide en pesos; el modelo de precio tiene que estar
+  correcto primero.
+
+---
+
+## DEUDA 111 — Capa de Inteligencia del Checkout: captura de eventos del embudo (PRODUCTO — cimiento de datos) (registrada 2026-07-21, scope grande)
+
+**Status:** ABIERTA. Idea de producto (Nacho, 2026-07-21).
+**Ubicación en el roadmap: la CAPTURA arranca con la Fase 3 (plugins) — ver nota abajo; el análisis
+viene después.** Es el cimiento de datos sobre el que se construye la DEUDA 110.
+
+### El problema
+
+El e-commerce NO le va a pasar a Shipro sus métricas de embudo (opciones mostradas, opción elegida,
+carrito abandonado, compra completada). Sin eso, Shipro no puede entender **dónde se detuvo el
+proceso** ni por qué una cotización no terminó en compra.
+
+### La oportunidad
+
+Crear una **Capa de Inteligencia del Checkout** que capture eventos:
+- opciones y precios de envío mostrados;
+- orden en que fueron presentados;
+- modalidad seleccionada;
+- cambio de opción durante el checkout;
+- compra completada;
+- carrito abandonado.
+
+Todo vinculado por un **identificador anónimo de carrito o sesión**. Con eso, se pueden responder
+preguntas de alto valor:
+- ¿Cuánto cae la conversión cuando el envío supera cierto % del ticket?
+- ¿Qué modalidad aumenta la compra sin destruir margen?
+- ¿Qué descuento logístico genera ventas incrementales y cuál solo subsidia compras que igual se
+  habrían hecho?
+
+### Requisito de captura desde el DÍA UNO de los plugins (Fase 3)
+
+**Decisión (Nacho, 2026-07-21):** desde que exista el primer plugin, cada cotización debe **persistir
+un snapshot completo**: identificador único de carrito/sesión + TODAS las opciones y tarifas que
+Shipro devolvió (con su orden). Aunque el motor (110) y el análisis de esta deuda todavía no existan.
+
+**Por qué desde el día uno:** los datos que no se capturan hoy no se recuperan mañana. Si el plugin
+arranca sin guardar esto, el día que se construya el motor habrá meses de envíos sin historia de
+"qué se mostró y qué se eligió" — un agujero irrecuperable. Capturándolo desde el principio, el motor
+nace con meses de datos reales esperándolo.
+
+**Conecta con PRINCIPIO 1** (la plataforma es un producto de datos: la lógica/endpoints no se borran
+aunque no haya UI). Esta es la versión de captura: **guardar el dato aunque todavía no se consuma.**
+
+**El molde ya existe a medias:** `CotizacionSnapshot` está en el schema **sin consumer** (DEUDA 58).
+Esta deuda le da propósito. La captura del snapshot con ID de carrito es un **requisito de diseño de
+la Fase 3 (plugins)** — el punto donde nace el dato —, no del motor.
+
+### Fases sugeridas
+1. **Captura (con los plugins, Fase 3):** persistir CotizacionSnapshot con ID de carrito + opciones +
+   tarifas + orden. Los eventos de selección/abandono/compra los reporta el plugin cuando el
+   e-commerce los expone (varía por plataforma).
+2. **Análisis (después, junto con DEUDA 110):** construir las preguntas de embudo sobre los datos ya
+   acumulados.
+
+### Relación con otras deudas
+- **DEUDA 110** (Motor de optimización) — es el consumidor de estos datos. 111 captura, 110 interpreta.
+- **DEUDA 58** (CotizacionSnapshot sin consumer) — el molde de datos que esta deuda activa.
+- **DEUDA 103-105** (prerequisitos plugins) — la captura se implementa junto con el primer plugin.

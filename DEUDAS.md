@@ -1544,6 +1544,88 @@ Los 3 campos estan en `CAMPOS_AUDITABLES` (lib/auditoria-configuracion.ts) listo
 
 **Vinculo con DEUDA 10:** el cobro Modelo B (DEUDA 10 Paso 4b) hoy debita costo courier + fee + IVA, SIN seguro. Cuando DEUDA 73 agregue el SMO, el debito y la tarifa publicada lo incluiran automaticamente (mismo punto de calculo).
 
+---
+
+### DISEÑO FINAL FASE 1 (consolidado tras debate 2026-07-21)
+
+**Fórmula objetivo (orden de los términos):**
+
+```
+  tarifaAPI (cruda, del caché — SIEMPRE pura, nada encima)
++ markup del intermediario   → SOLO si la cuenta NO es del cliente (Modelo A)
++ seguro (según modelo del courier — ver ANEXO seguro)
++ markup de Shipro
++ IVA (donde el courier no lo trae, ej. Andreani)
+= precio que Shipro le debita al cliente (costo real Shipro→cliente)
+
++/- descuento/markup del cliente → capa cliente→comprador, SIN tope
+= precio que ve el comprador final
+```
+
+**Decisión 1 — Descuento del cliente SIN guardrail.** El cliente puede aplicar el descuento que
+quiera (monto fijo o %), incluso mayor que la tarifa, convirtiéndolo en plata que le regala a su
+comprador. Es su estrategia comercial; Shipro NO la interrumpe. Vive en la capa cliente→comprador
+(paso 6), separada del precio Shipro→cliente (paso 5). Son dos números que conviven.
+
+**Decisión 2 — Markup del intermediario SOLO si la cuenta no es del cliente.**
+- Cuenta del CLIENTE (Modelo B, usaCredencialesPropias=true): NO modelamos el markup de su
+  intermediario — su trato con su proveedor no nos importa. Solo medimos su desvío declarado-vs-real.
+- Cuenta de SHIPRO o de un courier-prestador (Modelo A, usaCredencialesPropias=false): SÍ modelamos
+  el markup del intermediario — es costo real de Shipro, con impacto fiscal (IVA de esa transacción).
+
+**Decisión 3 — El desvío declarado-vs-real se mide SIEMPRE** (sea cuenta de quien sea). Es la métrica
+de fuga (DEUDA 76): el e-commerce declara peso/dimensiones que pocas veces se cumplen, y el courier
+factura lo que efectivamente recibió. La diferencia entre lo cotizado y lo facturado es la fuga.
+
+**Decisión 4 — SMO (seguro) configurable POR COURIER**, no global. Cada courier maneja el seguro
+distinto (incluido en tarifa / porcentual sobre valor declarado / con su propio mínimo), así que la
+config del seguro vive junto al courier. Ver ANEXO seguro abajo para los dos modelos.
+
+**Decisión 5 — El caché (HistoricoCotizaciones) guarda SOLO la tarifa cruda.** Todo lo demás (markup
+intermediario, seguro, markup Shipro, IVA, descuento) se aplica AL LEER, en el proceso. Así, si cambia
+cualquier variable, el caché sigue siendo verdad y el resultado se recalcula correcto. Verdad pura
+abajo, capas arriba. (Mismo patrón que DEUDA 10 ya estableció para el markup de Shipro.)
+
+**Riesgo de implementación identificado (relevamiento 2026-07-21):** NO cambiar el significado de
+`precioProveedor` (hoy = tarifa cruda). La conciliación (app/api/conciliacion/route.ts:60) lo lee como
+costoEsperado. Si se le cambia el significado sin backfill, TODOS los envíos históricos parecerían
+anomalías (falso SOBREPRECIO_RECLAMAR masivo). Solución: agregar campo NUEVO precioProveedorReal (=
+tarifa + markup intermediario), que la conciliación prefiera cuando existe; precioProveedor legacy
+queda intacto para el histórico.
+
+**Modelo de datos que surge (a implementar en Fase 1, aún NO ejecutado):**
+- Nuevo modelo CourierIntermediario 1:many a Courier: { courierId, nombreIntermediario,
+  markupPorcentaje, seguroFijoIntermediarioConIva, tarifaIncluyeIvaIntermediario, activo,
+  vigenciaDesde, vigenciaHasta?, notas }. Intercambiable por vigencias (Mocis→Intralog sin perder
+  histórico).
+- Config de seguro POR COURIER (en Courier o tabla asociada): modelo (INCLUIDO/PORCENTUAL), y según
+  el modelo: tope de cobertura, o { porcentaje, mínimo, piso de valor declarado }.
+- FinanzasEnvio + campos de desglose: tarifaCourierBase, markupIntermediarioAplicado,
+  seguroAplicado, descuentoClienteAplicado, precioProveedorReal.
+- CredencialCourier + descuentoClienteSobreTarifa (signed, capa cliente→comprador).
+
+### ANEXO seguro — los dos modelos por courier (aporte de dominio 2026-07-21)
+
+El seguro NO es un valor fijo: depende de cada courier. Dos modelos que el sistema debe representar:
+
+**Modelo A — Seguro INCLUIDO en la tarifa (ej. Mocis):** el courier presenta la tarifa con el seguro
+adentro ("$5.000, incluye cobertura hasta $50.000 ante siniestro"). No hay línea separada, no depende
+del valor declarado. La tarifa API ya lo trae. Guardar (informativo) el tope de cobertura.
+
+**Modelo B — Seguro PORCENTUAL sobre valor declarado (ej. Andreani):** porcentaje sobre el valor
+declarado (ej. 0,7%), con mínimo obligatorio (ej. $10) y valor declarado mínimo obligatorio (ej. desde
+$2.000). Cubre el 100% del valor declarado. Ejemplos: declarás $4.500 → $10 (mínimo); declarás
+$100.000 → $700 (0,7%). Andreani NO manda IVA por API — hay que agregarlo.
+
+**La capa del intermediario (cruza con DEUDA 107):** la cuenta de Andreani es de Mocis, así que ni la
+tarifa ni el seguro que Andreani publica por API contemplan el markup de Mocis. Andreani "dice" $10 de
+seguro; Mocis factura $90; Shipro cobra $121,50. Si no se incluye el markup del intermediario (en
+tarifa Y en seguro), hay desfasaje publicado vs facturado SIEMPRE, sin importar si se factura a Shipro
+o al cliente. Y como a Shipro se lo facturan, esa transacción lleva su IVA — costo real de Shipro.
+
+**Checklist por courier antes de codear:** ¿tarifa incluye IVA? ¿seguro INCLUIDO o PORCENTUAL (%,
+mínimo, piso)? ¿pasa por intermediario (markup % + fijo + IVA)? Para Andreani vía Mocis: confirmar la
+regla exacta del mínimo y el piso de valor declarado obligatorio.
 
 ---
 

@@ -1627,6 +1627,42 @@ o al cliente. Y como a Shipro se lo facturan, esa transacción lleva su IVA — 
 mínimo, piso)? ¿pasa por intermediario (markup % + fijo + IVA)? Para Andreani vía Mocis: confirmar la
 regla exacta del mínimo y el piso de valor declarado obligatorio.
 
+### REFINAMIENTO FINAL DEL SEGURO (debate 2026-07-21) — SIMPLIFICA EL SCHEMA
+
+Conclusión clave: **Shipro NUNCA calcula el seguro porcentual. Siempre lo calcula el courier.** Shipro
+controla el seguro mandando el `valorDeclarado`, y solo agrega valores FIJOS encima.
+
+**El cliente elige (flag por credencial): ¿quiere el seguro del courier, sí o no?**
+
+**Rama 1 — Cliente QUIERE el seguro del courier:**
+- Shipro manda el `valorDeclarado` REAL → el courier calcula su seguro (cada courier con su propio %,
+  por eso lo calcula él, no Shipro).
+- Ese seguro viene SUMADO en la tarifa (ej. Andreani lo funde en el número que devuelve).
+- Si la cuenta es de otro courier (Modelo A): se suma además el markup FIJO del intermediario (el
+  $90 de Mocis — NO viene por API, lo define el dueño de la cuenta) + el markup de Shipro (nos
+  facturan a nosotros, con su costo fiscal).
+
+**Rama 2 — Cliente NO quiere el seguro:**
+- Shipro manda `valorDeclarado` en 0 o un número irrisorio → el courier devuelve su seguro mínimo.
+- Si la cuenta es de otro courier (Modelo A): igual se suma el valor FIJO que define el dueño de la
+  cuenta + el markup de Shipro.
+
+**Consecuencia para el schema (SIMPLIFICACIÓN):**
+- NO se necesitan campos {porcentaje, mínimo, piso} por courier — Shipro no calcula %.
+- Nuevo campo REAL necesario: un flag en CredencialCourier, ej. `quiereSeguroCourier` Boolean, que
+  decide si se manda valorDeclarado real o mínimo al cotizar/despachar.
+- Los valores fijos del intermediario YA están en el modelo CourierIntermediario
+  (seguroFijoIntermediarioConIva). El markup de Shipro YA existe. No hay campos de seguro nuevos más
+  allá del flag.
+- (Informativo, opcional) topeCobertura por courier, solo para mostrar al cliente "cubre hasta $X".
+
+**Riesgo de doble cobro (verificado en relevamiento 2026-07-21):** los adapters HOY no mandan
+valorDeclarado al cotizar (sí al despachar). Andreani, sin valorDeclarado, igual mete su seguro
+mínimo en el número que devuelve. Por eso el control es explícito: mandar valorDeclarado real (Rama 1)
+o mínimo (Rama 2) para que el número del courier ya traiga el seguro correcto, y Shipro NO recalcule
+sobre eso — solo suma los fijos. Nunca sumar un seguro Shipro-computado encima del que ya trae el
+courier.
+
 ---
 
 ## DEUDA 74 — Refresco obligatorio periodico de tarifaPlanaRespaldo (registrada 2026-06-25, scope medio)

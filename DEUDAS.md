@@ -1412,7 +1412,7 @@ Los 3 campos estan en `CAMPOS_AUDITABLES` (lib/auditoria-configuracion.ts) listo
 
 ---
 
-## DEUDA 66 — Postgres migration para produccion (BLOCK 1.1, registrada 2026-06-24, PARCIAL 2026-07-01: infra local + schema + Decimal RESUELTOS, falta Pieza 5 Linode)
+## DEUDA 66 — Postgres migration para produccion (BLOCK 1.1, registrada 2026-06-24, RESUELTA 2026-07-17 — deploy productivo con base administrada Linode/Akamai PostgreSQL 16 en São Paulo + servidor limpio, migraciones + seed + verificación E2E)
 
 **Status:** PARCIAL. Piezas 1-3 + conversion Decimal RESUELTAS en commits 8bb80ee (Pieza 1: Postgres local docker-compose), 3fca0ac (Piezas 2-3: schema `provider = "postgresql"` + baseline nueva), 72836c4 (Decimal: 17 campos monetarios `@db.Decimal(12,2)` + 20 archivos convertidos). Pendiente: Pieza 5 (provisioning Linode + DATABASE_URL productivo). Pieza 4 (data migration) N/A: BD local greenfield, prod arrancara greenfield tambien.
 
@@ -1709,7 +1709,7 @@ TS_NODE_BASEURL=./ npx ts-node -r tsconfig-paths/register --compiler-options '{"
 
 ---
 
-## DEUDA 84 — `/api/admin/reglas` sin gate de rol (SEGURIDAD) (registrada 2026-07-01, scope chico, seguridad)
+## DEUDA 84 — `/api/admin/reglas` sin gate de rol (SEGURIDAD) (registrada 2026-07-01, scope chico, seguridad)  (RESUELTA 2026-07-12 — cerrada incidentalmente por DEUDA 87 FAMILIA 3; follow-up del catálogo maestro en commit 2c4a3b9)
 
 **Status:** ABIERTA. Detectada durante el diagnostico de DEUDA 83 (2026-07-01).
 
@@ -1799,7 +1799,7 @@ Orden sugerido de ejecucion: Familia 2 (mas grave) → Familia 1 → Familia 3 �
 
 ---
 
-## DEUDA 88 — Credenciales de servicios externos ausentes + verificar integraciones (registrada 2026-07-04, scope medio, entorno)
+## DEUDA 88 — Credenciales de servicios externos ausentes + verificar integraciones (registrada 2026-07-04, scope medio, entorno)  (RESUELTA 2026-07-17 — 28 variables cargadas en producción + cotización real verificada contra Andreani y Mocis)
 
 **Status:** ABIERTA. Detectada en QA manual (2026-07-04): `.env.local` quedo VACIO tras la reconstruccion del entorno post-migracion Postgres. Las credenciales de servicios externos vivian ahi en el entorno viejo y se perdieron.
 
@@ -2269,7 +2269,7 @@ zona funcional.
 
 ---
 
-## DEUDA 98 — Formulario de reglas pide el ID numérico del courier (UX) (scope chico, frontend)
+## DEUDA 98 — Formulario de reglas pide el ID numérico del courier (UX) (scope chico, frontend)  (RESUELTA 2026-07-13 en commit 3351bac)
 
 **Status:** ABIERTA. Detectada 2026-07-13.
 
@@ -2322,7 +2322,7 @@ el motor (`lib/cotizador.ts:358-360`) solo evalúa `MAYOR_A`, `MENOR_A` e `IGUAL
 
 ---
 
-## DEUDA 101 — Motor de cotización tiene los couriers hardcodeados en FORZAR_COURIER (scope medio, deuda de diseño)
+## DEUDA 101 — Motor de cotización tiene los couriers hardcodeados en FORZAR_COURIER (scope medio, deuda de diseño)  (RESUELTA 2026-07-13 en commit 53a84d8)
 
 **Status:** ABIERTA. Detectada 2026-07-13.
 
@@ -2460,11 +2460,7 @@ chico). Las tres, más la redacción de la especificación OpenAPI, son el traba
 hasta tener el deploy en producción. El diseño de "qué datos pedir al e-commerce y para qué" (la normalización)
 se puede trabajar en paralelo — no depende del código.
 
-# Cabos sueltos — DEUDA 106 nueva + marcado de RESUELTAS
-
 ---
-
-## PARTE 1 — Nueva deuda de seguridad (pegar en DEUDAS.md, al final)
 
 ## DEUDA 106 — `/api/envios/corregir` es PUBLIC: el tracking es la única llave (SEGURIDAD) (registrada 2026-07-14, scope medio, seguridad)
 
@@ -2532,51 +2528,6 @@ auto-corrigiendo— es distinta y **se mantiene**: es plataforma→comprador, no
 RETENIDO y por el volumen bajo actual. Resolver antes del onboarding de clientes reales con volumen.
 
 ---
-
-## PARTE 2 — Marcar como RESUELTAS (editar los headers existentes)
-
-Buscar cada línea y **reemplazar el header** por la versión con el marcador. El cuerpo de cada deuda
-queda igual.
-
-### Línea ~1712 — DEUDA 84
-**Buscar:**
-```
-## DEUDA 84 — `/api/admin/reglas` sin gate de rol (SEGURIDAD) (registrada 2026-07-01, scope chico, seguridad)
-```
-**Reemplazar por:**
-```
-## DEUDA 84 — `/api/admin/reglas` sin gate de rol (SEGURIDAD) (registrada 2026-07-01, scope chico, seguridad) (RESUELTA 2026-07-12 — cerrada incidentalmente por DEUDA 87 FAMILIA 3; follow-up del catálogo maestro en commit 2c4a3b9)
-```
-
-### Línea ~2272 — DEUDA 98
-**Buscar:**
-```
-## DEUDA 98 — Formulario de reglas pide el ID numérico del courier (UX) (scope chico, frontend)
-```
-**Reemplazar por:**
-```
-## DEUDA 98 — Formulario de reglas pide el ID numérico del courier (UX) (scope chico, frontend) (RESUELTA 2026-07-13 en commit 3351bac)
-```
-
-### Línea ~2325 — DEUDA 101
-**Buscar:**
-```
-## DEUDA 101 — Motor de cotización tiene los couriers hardcodeados en FORZAR_COURIER (scope medio, deuda de diseño)
-```
-**Reemplazar por:**
-```
-## DEUDA 101 — Motor de cotización tiene los couriers hardcodeados en FORZAR_COURIER (scope medio, deuda de diseño) (RESUELTA 2026-07-13 en commit 53a84d8)
-```
-
----
-
-## PARTE 3 — Commit sugerido
-
-```
-git add DEUDAS.md
-git commit -m "docs: DEUDA 106 (corregir publico, link magico) + marca 84/98/101 RESUELTAS"
-git push
-```
 
 ## DEUDA 107 — El markup del intermediario que presta credenciales no está modelado (NEGOCIO/PRECIO) (registrada 2026-07-17, scope medio-grande)
 
@@ -2715,3 +2666,15 @@ modelo no se tira: se reutiliza. El campo `markupIntermediario` en 0 o reasignad
 
 **Nota:** el paso 3 es mecánicamente simple (la función es corta). Lo pesado es el modelo de datos,
 la UI, y no romper la conciliación ni las métricas existentes.
+
+---
+
+## DEUDA 108 — Servidor viejo (beta.shipro.pro, 5 clientes reales) sin firewall, bajo ataque SSH (SEGURIDAD) (registrada 2026-07-17, scope medio, seguridad — servidor de Fran)
+
+**Status:** ABIERTA. El servidor 45.33.1.16 (Dallas) aloja beta.shipro.pro (Shipro v1, 5 clientes reales operando) + proyectos de terceros + NO tiene firewall. Durante el deploy del server nuevo (2026-07-17) se confirmó en logs que estos servidores reciben ataques de fuerza bruta SSH constantes (decenas de IPs/segundo probando root). El server nuevo (pm.shipro.pro) nació con firewall Linode (SSH restringido a IP de Nacho); el viejo está expuesto. **Acción:** avisar a Fran para que aplique un Cloud Firewall al servidor viejo (inbound DROP default + reglas 22 restringido / 80 / 443). No es código de Shipro, es infra del server compartido.
+
+---
+
+## DEUDA 109 — Limpiar el pm viejo del servidor de Fran (registrada 2026-07-17, scope chico, infra)
+
+**Status:** ABIERTA. Hasta el 2026-07-17, pm.shipro.pro corría en el servidor viejo (45.33.1.16) con código desactualizado. El DNS ya apunta al server nuevo (172.233.20.199). Queda el despliegue viejo de pm en /var/www/html/pm del server de Fran, ya sin tráfico. **Acción:** cuando la plataforma nueva esté validada y estable, coordinar con Fran para desmontar el pm viejo (liberar recursos, evitar confusión). Sin apuro — no molesta mientras el DNS apunte al nuevo.

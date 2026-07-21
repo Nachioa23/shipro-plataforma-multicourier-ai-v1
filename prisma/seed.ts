@@ -67,6 +67,43 @@ async function main() {
     });
   }
 
+  // === DEUDA 73 (SMO): Seguro Mínimo de Shipro por courier ===
+  // Valor SIN IVA (criterio "todo neto, IVA al final", DEUDA 73). El nombre del campo tiene "ConIva"
+  // por historial — se corrige en una migración de renombre aparte. Aquí guardamos el valor NETO.
+  // Andreani: SMO activo $121,50 sin IVA. Mocis: apagado (default del schema, no lo tocamos).
+  const couriersConSmo = [
+    { nombre: "Andreani", smoActivo: true, smoPrecioAlClienteConIva: 121.50 },
+  ];
+  for (const c of couriersConSmo) {
+    await prisma.courier.updateMany({
+      where: { nombre: c.nombre },
+      data: { smoActivo: c.smoActivo, smoPrecioAlClienteConIva: c.smoPrecioAlClienteConIva },
+    });
+  }
+
+  // === DEUDA 107: intermediario que presta credenciales (Mocis presta Andreani) ===
+  // Valores SIN IVA (criterio "todo neto, IVA al final", DEUDA 73). El seguro fijo es dato de
+  // conciliación (lo que Mocis factura a Shipro), NO entra en la tarifa publicada — esa usa el SMO.
+  const andreani = await prisma.courier.findUnique({ where: { nombre: "Andreani" } });
+  if (andreani) {
+    const yaExiste = await prisma.courierIntermediario.findFirst({
+      where: { courierId: andreani.id, nombreIntermediario: "Moci's", activo: true },
+    });
+    const datos = {
+      markupPorcentaje: 10.0,
+      seguroFijoIntermediarioConIva: 90.0, // dato de conciliación, SIN IVA (nombre del campo a corregir en deuda aparte)
+      tarifaIncluyeIvaIntermediario: false,
+      notas: "Mocis presta credenciales de Andreani. Markup 10% sobre tarifa. Seguro que Mocis factura a Shipro: $90 (dato de conciliación, no va en tarifa publicada).",
+    };
+    if (yaExiste) {
+      await prisma.courierIntermediario.update({ where: { id: yaExiste.id }, data: datos });
+    } else {
+      await prisma.courierIntermediario.create({
+        data: { courierId: andreani.id, nombreIntermediario: "Moci's", activo: true, ...datos },
+      });
+    }
+  }
+
   // === DEUDA 73 (IVA policy): tarifaIncluyeIva por courier en TODAS las credenciales existentes ===
   // Andreani: el adapter lee tarifaSinIva.total (neto oficial), por eso flag=false → capa 2 NO divide
   // por 1.21 al intake. Evita drift de rounding vs reconstruir el neto desde tarifaConIva.total.

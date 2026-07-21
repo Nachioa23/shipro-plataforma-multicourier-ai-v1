@@ -4,6 +4,7 @@ import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
 import { calcularPromesaCalibrada } from "@/lib/utils/promesa-calibrada";
+import { calcularFeeOperacion } from "@/lib/utils/operacion-fee";
 import type { Paquete } from "@/lib/couriers/CourierInterface";
 
 export interface CotizarInput {
@@ -104,6 +105,15 @@ export interface ConfigMarkup {
   ajusteTarifaPorcentaje: number | null;
   markupFijo: Prisma.Decimal | null;
   tarifaIncluyeIva: boolean;
+  // DEUDA 107 capa 1: % del intermediario (Modelo A). null = sin intermediario.
+  // Cascada: se aplica ANTES del markup Shipro (Shipro% opera sobre el resultado del intermediario).
+  intermediarioMarkupPorcentaje: number | null;
+  // DEUDA 73 capa 2: SMO neto (SIN IVA) por courier. Se suma al costoConMarkup ANTES del IVA final.
+  // Opcional: callers legacy no lo pasan → default 0 (no cobra SMO).
+  smoNeto?: Prisma.Decimal | null;
+  // DEUDA 73 capa 2: Fee Shipro neto (SIN IVA), calculado una vez por cotización desde OperacionFee.
+  // Se suma al costoConMarkup ANTES del IVA final. Opcional: callers legacy no lo pasan → default 0.
+  feeShiproNeto?: Prisma.Decimal | null;
 }
 
 const IVA_AR_MULTIPLIER = new Prisma.Decimal("1.21");
@@ -111,18 +121,66 @@ const IVA_AR_MULTIPLIER = new Prisma.Decimal("1.21");
 export function aplicarMarkup(
   costoSecoCourier: Prisma.Decimal | number,
   config: ConfigMarkup
-): { precioProveedor: Prisma.Decimal; precioFinal: Prisma.Decimal } {
+): {
+  precioProveedor: Prisma.Decimal;
+  precioFinal: Prisma.Decimal;
+  desglose: {
+    secoNeto: Prisma.Decimal;
+    cascadaNeto: Prisma.Decimal;
+    smoNeto: Prisma.Decimal;
+    feeNeto: Prisma.Decimal;
+    netoAcumulado: Prisma.Decimal;
+  };
+} {
   const seco = costoSecoCourier instanceof Prisma.Decimal
     ? costoSecoCourier
     : new Prisma.Decimal(costoSecoCourier);
   const porcentajeMarkup = config.ajusteTarifaPorcentaje || 0;
   const fijoMarkup = config.markupFijo ?? new Prisma.Decimal(0);
-  const costoConMarkup = config.usaCredencialesPropias
-    ? seco.add(fijoMarkup)
-    : seco.add(seco.mul(porcentajeMarkup).div(100)).add(fijoMarkup);
+
+  // DEUDA 73 capa 2: STRIP DE IVA AL INTAKE.
+  // Si el número del courier viene con IVA (tarifaIncluyeIva=true, ej. Andreani API), dividimos
+  // por 1.21 en la puerta para recuperar el neto. Todo lo que sigue trabaja sobre NETOS. El IVA se
+  // aplica UNA VEZ al final. Antes (capa 1) se multiplicaba al final SOLO si tarifaIncluyeIva=false;
+  // ahora la semántica del flag se invierte: true=número con IVA a extraer, false=ya es neto.
+  const secoNeto = config.tarifaIncluyeIva ? seco.div(IVA_AR_MULTIPLIER) : seco;
+
+  let costoConMarkup: Prisma.Decimal;
+  if (config.usaCredencialesPropias) {
+    // Modelo B: sin intermediario, sin markup %, solo fijo. Se opera sobre el NETO.
+    costoConMarkup = secoNeto.add(fijoMarkup);
+  } else {
+    // Modelo A: CASCADA sobre el NETO. Primero markup del intermediario (Mocis 10%) sobre la
+    // tarifa neta cruda, después markup Shipro (%) sobre el resultado del intermediario, y
+    // finalmente markupFijo. DEUDA 107 capa 1.
+    const baseConIntermediario = config.intermediarioMarkupPorcentaje != null
+      ? secoNeto.mul(new Prisma.Decimal(1).add(new Prisma.Decimal(config.intermediarioMarkupPorcentaje).div(100)))
+      : secoNeto;
+    costoConMarkup = baseConIntermediario
+      .mul(new Prisma.Decimal(1).add(new Prisma.Decimal(porcentajeMarkup).div(100)))
+      .add(fijoMarkup);
+  }
+
+  // DEUDA 73 capa 2: acumular SMO neto + Fee neto (netos ambos, se pasan como Decimal en la config).
+  // Se aplican en AMBAS ramas (A y B) — el SMO cuando el courier lo tiene activo, el Fee siempre
+  // que la empresa tenga OperacionFee vigente.
+  const smoNeto = config.smoNeto ?? new Prisma.Decimal(0);
+  const feeNeto = config.feeShiproNeto ?? new Prisma.Decimal(0);
+  const netoAcumulado = costoConMarkup.add(smoNeto).add(feeNeto);
+
+  // IVA aplicado UNA VEZ al total neto acumulado.
+  const precioFinal = netoAcumulado.mul(IVA_AR_MULTIPLIER);
+
   return {
-    precioProveedor: seco,
-    precioFinal: config.tarifaIncluyeIva ? costoConMarkup : costoConMarkup.mul(IVA_AR_MULTIPLIER),
+    precioProveedor: seco, // raw, sin cambios: la conciliación depende de este significado.
+    precioFinal,
+    desglose: {
+      secoNeto,
+      cascadaNeto: costoConMarkup,
+      smoNeto,
+      feeNeto,
+      netoAcumulado,
+    },
   };
 }
 
@@ -198,11 +256,24 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
   // != null) AND (2) admin lo prendio (activo=true). Ademas se AND'ea con el flag
   // per-empresa (CredencialCourier.ofrece*), que queda como tercer gate cliente-level.
   const nombresCouriers = couriersAptos.map((c: any) => c.nombreCourier);
+  const ahoraCotizacion = new Date();
   const couriersReales = await prisma.courier.findMany({
     where: { nombre: { in: nombresCouriers } },
     include: {
       servicios: {
         where: { activo: true, capacidadTecnicaMapeada: { not: null } },
+      },
+      // DEUDA 107 capa 1: intermediario activo y vigente al momento de la cotizacion.
+      // Se usa en aplicarMarkup para la cascada (Modelo A). Modelo B lo ignora.
+      intermediarios: {
+        where: {
+          activo: true,
+          vigenciaDesde: { lte: ahoraCotizacion },
+          OR: [
+            { vigenciaHasta: null },
+            { vigenciaHasta: { gte: ahoraCotizacion } },
+          ],
+        },
       },
     },
   });
@@ -257,6 +328,14 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
       });
   };
 
+  // DEUDA 73 capa 2: fee Shipro (neto) resuelto UNA VEZ por cotización — es empresa-level,
+  // no varía por courier. calcularFeeOperacion es idempotente y devuelve feePreIva (SIN IVA)
+  // que aplicarMarkup acumula al netoAcumulado. Para FIJO el basePrecio se ignora, así que
+  // pasamos Decimal(0). FOLLOW-UP: si algún día se usa un fee PORCENTAJE, hay que llamarlo
+  // por courier con la tarifa neta como base (hoy no aplica — solo FIJO en producción).
+  const feeResult = await calcularFeeOperacion(empresaId, new Prisma.Decimal(0));
+  const feeShiproNeto = feeResult?.feePreIva ?? new Prisma.Decimal(0);
+
   for (const config of couriersAptos) {
     try {
       const nombreNormalizado = normalizarParaComparacion(config.nombreCourier);
@@ -270,12 +349,27 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
 
       const motorCourier = CourierFactory.crear(nombreNormalizado, credenciales);
 
+      // DEUDA 107 capa 1: intermediario activo del courier (si existe y aplicamos Modelo A).
+      const courierReal = couriersReales.find((c: any) => c.nombre === config.nombreCourier);
+      const intermediarioActivo = (!config.usaCredencialesPropias && courierReal?.intermediarios?.length)
+        ? courierReal.intermediarios[0]
+        : null;
+
+      // DEUDA 73 capa 2: SMO neto del courier (SIN IVA a pesar del nombre del campo — el rename es
+      // deuda aparte). Se acumula al costoConMarkup dentro de aplicarMarkup, ANTES del IVA final.
+      const smoNeto = courierReal?.smoActivo
+        ? new Prisma.Decimal(courierReal.smoPrecioAlClienteConIva)
+        : new Prisma.Decimal(0);
+
       const calcularPrecios = (costoSecoCourier: number) =>
         aplicarMarkup(costoSecoCourier, {
           usaCredencialesPropias: config.usaCredencialesPropias,
           ajusteTarifaPorcentaje: config.ajusteTarifaPorcentaje,
           markupFijo: config.markupFijo,
           tarifaIncluyeIva: config.tarifaIncluyeIva,
+          intermediarioMarkupPorcentaje: intermediarioActivo ? Number(intermediarioActivo.markupPorcentaje) : null,
+          smoNeto,
+          feeShiproNeto,
         });
 
       // Torre de Control Metrica 2.3 (DEUDA 39, 2026-06-05): asignacion de

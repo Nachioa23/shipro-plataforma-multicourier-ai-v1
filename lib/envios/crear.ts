@@ -542,6 +542,8 @@ export async function crearEnvio(input: CrearEnvioInput) {
           ajusteTarifaPorcentaje: credencialMain.ajusteTarifaPorcentaje,
           markupFijo: credencialMain.markupFijo,
           tarifaIncluyeIva: credencialMain.tarifaIncluyeIva,
+          // DEUDA 107 capa 1: fallback no tiene contexto de intermediario (se resuelve al cotizar en vivo, no aca).
+          intermediarioMarkupPorcentaje: null,
         },
       });
       if (fallback.precio != null && fallback.precio.gt(0)) {

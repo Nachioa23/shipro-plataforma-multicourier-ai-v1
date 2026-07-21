@@ -1663,6 +1663,74 @@ o mínimo (Rama 2) para que el número del courier ya traiga el seguro correcto,
 sobre eso — solo suma los fijos. Nunca sumar un seguro Shipro-computado encima del que ya trae el
 courier.
 
+### MODELO COMPLETO DE PRECIO — DOS RAMAS (debate 2026-07-21, FINAL)
+
+**Distinción esencial: TARIFA PUBLICADA vs DÉBITO.**
+- TARIFA PUBLICADA = lo que ve y paga el COMPRADOR en el checkout. Incluye SIEMPRE el Fee de Shipro.
+- DÉBITO = lo que Shipro le factura/cobra al CLIENTE (su usuario). Varía por rama.
+- El Fee se cobra UNA sola vez: se muestra en la tarifa publicada y se cobra vía el débito. NO hay
+  doble cobro (son flujos entre partes distintas: comprador→cliente y cliente→Shipro).
+
+**RAMA A — Credenciales de Shipro/intermediario (Modelo A, usaCredencialesPropias=false):**
+
+Tarifa publicada (la paga el comprador):
+
+```
+  Tarifa del courier (API)
++ Markup del intermediario (ej. Mocis +10% por prestar la credencial)
++ Markup de Shipro sobre la tarifa (cubre SUS costos fiscales/financieros — ver nota)
++ SMO de Shipro ($147,02 — ya con su margen del 35%)
++ Fee de Shipro ($1.600)
++ IVA de todo
++/- Descuento/markup del cliente (su herramienta, sin tope)
+= Tarifa publicada
+```
+
+Débito (lo paga el cliente a Shipro): TODO lo de arriba (tarifa+Mocis+markup+SMO+Fee+IVA),
+porque las credenciales son de Shipro: Shipro le paga al courier y le cobra todo al cliente.
+
+**RAMA B — Credenciales del cliente (Modelo B, usaCredencialesPropias=true):**
+
+Tarifa publicada (la paga el comprador):
+
+```
+  Tarifa del courier (API — ya incluye su propio SMO y costos)
++ Fee de Shipro ($1.600)
++/- Descuento/markup del cliente
+= Tarifa publicada
+```
+
+Débito (lo paga el cliente a Shipro): SOLO el Fee de Shipro ($1.600 + IVA),
+porque el courier le factura el flete directo al cliente. Shipro solo cobra su Fee por la plataforma.
+
+**Nota — el markup de Shipro cubre su estructura fiscal/financiera.** Igual que el intermediario
+(Intralog mostró que su markup del 10% se lo comen IIBB 3%, Impuesto al Cheque 1,2%, Seg. e Higiene
+0,4%, Ganancias 30%, y financiación 45 días al 28% TNA — terminando en utilidad neta NEGATIVA), Shipro
+tiene su propia estructura de costos sobre lo que factura. DECISIÓN (Opción A): NO se modela cada
+impuesto en el sistema. Nacho calcula UN porcentaje (con su contador) que cubre impuestos+financiación
+y deja el neto deseado, y lo carga como `ajusteTarifaPorcentaje` (campo YA existente). El sistema
+guarda el número final, no la estructura fiscal. Regla de oro: el sistema guarda decisiones, no
+calcula impuestos.
+
+**Prepago vs Postpago:** no cambian los montos, solo el timing. Prepago debita al crear el envío;
+Postpago factura y cobra a fin de mes. En ambos, el total facturado al cliente es el mismo por rama.
+
+**Los dos markups de Shipro (bases distintas):**
+- Sobre la tarifa del courier → `ajusteTarifaPorcentaje` (CredencialCourier), solo Rama A.
+- Sobre el SMO → el 35% ya está fijado en el número $147,02 (smoPrecioAlClienteConIva). Dato fijo.
+
+**Datos confirmados Andreani-vía-Mocis (2026-07-21):**
+- Andreani factura a Mocis: $12,10 seguro (con IVA) — referencia.
+- Mocis factura a Shipro: $108,90 seguro (con IVA) → seguroFijoIntermediarioConIva. Markup tarifa 10%.
+- Shipro factura al cliente: $147,02 SMO (con IVA, margen 35%) → smoPrecioAlClienteConIva.
+- Fee de Shipro: $1.600 + IVA (OperacionFee), en la tarifa publicada de ambas ramas.
+
+**Implementación del Fee (riesgo de doble cobro — verificado 2026-07-21):** hoy OperacionFee se cobra
+SOLO al debitar y SOLO en la rama PREPAGO/Modelo B (crear.ts:641-676), y NO aparece en la cotización.
+Al llevarlo a la tarifa publicada de ambas ramas: MOSTRARLO en la cotización (aplicarMarkup) + cobrarlo
+UNA vez vía el débito existente. Cuidado de no sumarlo dos veces. Para Modelo A: hoy no hay OperacionFee
+cargado (Modelo A paga vía markup%); hay que asegurar que exista el Fee para que la fórmula lo encuentre.
+
 ---
 
 ## DEUDA 74 — Refresco obligatorio periodico de tarifaPlanaRespaldo (registrada 2026-06-25, scope medio)

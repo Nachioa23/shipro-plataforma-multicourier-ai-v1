@@ -1731,6 +1731,48 @@ Al llevarlo a la tarifa publicada de ambas ramas: MOSTRARLO en la cotización (a
 UNA vez vía el débito existente. Cuidado de no sumarlo dos veces. Para Modelo A: hoy no hay OperacionFee
 cargado (Modelo A paga vía markup%); hay que asegurar que exista el Fee para que la fórmula lo encuentre.
 
+### CRITERIO DE IVA + CASCADA + EJEMPLO NUMÉRICO (2026-07-21) — AJUSTA EL SCHEMA
+
+**Criterio de IVA (CAMBIA un supuesto previo):** TODO se guarda y calcula SIN IVA. El IVA se aplica UNA
+sola vez al final, sobre la suma de los netos. Razón: si la tarifa de Andreani viene sin IVA y todos
+los demás costos son sin IVA, no tiene sentido mezclarlos con IVA para volver a sumar el IVA de la
+tarifa. Se acumulan bases imponibles netas y el IVA es la sumatoria final.
+
+**CONSECUENCIA — ajuste de schema pendiente:** el campo `seguroFijoIntermediarioConIva` guarda "con
+IVA" ($108,90). Con el nuevo criterio debe guardar SIN IVA ($90). El nombre del campo quedó
+engañoso. PENDIENTE (próxima sesión): renombrar a `seguroFijoIntermediario` (sin IVA) o similar +
+migración, y cargar los valores SIN IVA (Mocis $90, SMO $121,50, Fee $1.600). NO cargar datos ni
+escribir la fórmula hasta resolver esto.
+
+**Markup en CASCADA (markup sobre markup):**
+- Mocis aplica su 10% sobre la tarifa de Andreani: 10.000 → 11.000.
+- Shipro aplica su 10% sobre el resultado de Mocis (11.000), NO sobre los 10.000 originales: → 12.100.
+- Es cascada, no suma plana. Da $1.100 de margen de tarifa (no $1.000).
+
+**EJEMPLO NUMÉRICO COMPLETO (caso de prueba de la fórmula) — verificado al centavo:**
+
+```
+LO QUE SHIPRO PUBLICA AL COMPRADOR (Rama A, Andreani-vía-Mocis):
+  Tarifa: 10.000 (Andreani) +10% Mocis +10% Shipro (cascada) = 12.100,00
+  SMO Shipro:                                                 =    121,50
+  Fee Shipro:                                                 =  1.600,00
+  Neto (sin IVA):                                             = 13.821,50
+  IVA (21%):                                                  =  2.902,52
+  TARIFA PUBLICADA:                                           = 16.724,02
+
+LO QUE MOCIS LE FACTURA A SHIPRO:
+  Tarifa 11.000 + SMO 90 = neto 11.090 + IVA 2.328,90 = 13.418,90
+
+LO QUE ANDREANI LE FACTURA A MOCIS:
+  Tarifa 10.000 + SMO 10 = neto 10.010 + IVA 2.102,10 = 12.112,10
+
+MARGEN BRUTO DE SHIPRO POR ENVÍO: 2.731,50
+  (tarifa 1.100 + SMO 31,50 + fee 1.600) — antes de impuestos de Shipro
+```
+
+**Cuando la fórmula esté escrita, este es el test:** tarifa cruda 10.000 de Andreani-vía-Mocis, con
+markup Mocis 10%, markup Shipro 10%, SMO 121,50, fee 1.600 → debe dar 16.724,02 de tarifa publicada.
+
 ---
 
 ## DEUDA 74 — Refresco obligatorio periodico de tarifaPlanaRespaldo (registrada 2026-06-25, scope medio)

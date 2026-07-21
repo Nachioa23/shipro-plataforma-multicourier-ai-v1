@@ -181,11 +181,18 @@ export class AndreaniAdapter implements ICourierIntegrator {
     });
     
     const data = await res.json();
-    if (data && data.tarifaConIva && data.tarifaConIva.total) {
+    // DEUDA 73: leemos tarifaSinIva.total (el neto oficial de Andreani, ya incluye
+    // seguroDistribucion). El flag CredencialCourier.tarifaIncluyeIva debe ser false
+    // para este courier — capa 2 no divide por 1.21 al intake, evitando el drift de
+    // rounding vs reconstruir el neto desde tarifaConIva.total (sus componentes redondean
+    // a 1 centavo del total). Ademas es inmune a cambios futuros en la tasa de IVA.
+    // FAIL-LOUD: si Andreani no manda tarifaSinIva, tiramos error — NO caemos a
+    // tarifaConIva porque seria un numero con IVA con el flag en false (21% de sobrecobro).
+    if (data && data.tarifaSinIva && data.tarifaSinIva.total) {
        // Envolvemos la respuesta única de Andreani en el nuevo formato de Array
        return [{
          servicio: "Estándar",
-         precioNeto: parseFloat(data.tarifaConIva.total)
+         precioNeto: parseFloat(data.tarifaSinIva.total)
        }];
     }
     throw new Error("Andreani no devolvió tarifas para esta cotización");

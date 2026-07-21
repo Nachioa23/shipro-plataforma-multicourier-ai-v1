@@ -201,7 +201,13 @@ export class MocisAdapter implements ICourierIntegrator {
 
        return {
          // Forzamos a que siempre sea un Texto (String) y lo limpiamos
-         servicio: String(nombreServicio).trim(), 
+         servicio: String(nombreServicio).trim(),
+         // DEUDA 73: opcionAkeron.price viene SIN IVA (net). Confirmado EMPIRICAMENTE 2026-07-21:
+         // el tarifario Mocis publica CABA $5.000 +IVA, Zona1 $6.750 +IVA, Zona2 $7.850 +IVA,
+         // Zona3 $9.000 +IVA — y la API devuelve exactamente 5000/6750/7850/9000 (los pre-IVA).
+         // Los docs de la API estan SILENCIOSOS sobre IVA, asi que esto es empirico, no doc-confirmado.
+         // El flag CredencialCourier.tarifaIncluyeIva DEBE ser false para Mocis: capa 2 NO divide por
+         // 1.21 al intake. Si Mocis alguna vez cambia a mandar con-IVA, este comentario es la migaja.
          precioNeto: parseFloat(opcionAkeron.price)
        };
     });

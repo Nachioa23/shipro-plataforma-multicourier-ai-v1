@@ -200,6 +200,13 @@ model Courier {
   contactoComercial String?
   logoUrl           String?
 
+  // DEUDA 73 (SMO): Seguro Mínimo de Shipro. Precio FIJO que Shipro le cobra al cliente por courier
+  // (ej. $121,50 para Andreani). Distinto del costo que factura el intermediario
+  // (CourierIntermediario.seguroFijoIntermediarioConIva, ej. $90 de Mocis). La diferencia es el margen.
+  // Interruptor apagado por defecto: se activa por courier cuando Shipro decide cobrarlo.
+  smoActivo                Boolean @default(false)
+  smoPrecioAlClienteConIva Decimal @default(0) @db.Decimal(12, 2)
+
   // --- DEUDA 29: Capacidades de cadena ---
   // Se usan en pre-filtro al cotizar y al validar combinaciones cliente↔courier.
   // Cada courier real declara qué puede hacer; la plataforma filtra candidatos.

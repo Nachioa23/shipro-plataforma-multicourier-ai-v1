@@ -27,7 +27,7 @@ model Empresa {
 
   // --- FINANZAS Y BILLETERA ---
   saldoActivo       Decimal @default(0) @db.Decimal(12, 2)
-  modalidadPago     String @default("POSTPAGO") // PREPAGO (Billetera) o POSTPAGO (Crédito)
+  modalidadPago     String  @default("POSTPAGO") // PREPAGO (Billetera) o POSTPAGO (Crédito)
   limiteDescubierto Decimal @default(0) @db.Decimal(12, 2) // Cuánto le permitimos adeudar
 
   ordenamientoDefault String @default("PRECIO_ASC") // PRECIO_ASC, SLA, HISTORICO
@@ -253,8 +253,49 @@ model Courier {
   // DEUDA 32+37: servicios comerciales que este courier ofrece al cliente final.
   servicios ServicioCourier[]
 
+  // DEUDA 107: cadena de intermediarios que pueden prestar credenciales para este courier.
+  intermediarios CourierIntermediario[]
+
   // DEUDA 19: audit log de cambios sensibles per-courier (credencialesJson, tipoCuenta, etc).
   auditoriasConfiguracion AuditoriaConfiguracion[]
+}
+
+// ==========================================
+// DEUDA 107: CourierIntermediario
+// Quién presta las credenciales de un courier (ej. Mocis presta Andreani).
+// Modelo A solo — cuando usaCredencialesPropias=false. Vigencias permiten
+// intercambiar el intermediario (Mocis→Intralog) sin perder histórico.
+// ==========================================
+model CourierIntermediario {
+  id        Int     @id @default(autoincrement())
+  courierId Int
+  courier   Courier @relation(fields: [courierId], references: [id], onDelete: Cascade)
+
+  // Quién "presta" las credenciales de este courier (ej. Mocis presta Andreani).
+  // DEUDA 107. Solo aplica en Modelo A (usaCredencialesPropias=false).
+  nombreIntermediario String
+
+  // Markup que el intermediario agrega SOBRE la tarifa cruda del courier.
+  markupPorcentaje Float @default(0.0) // ej. 10.0 = +10%
+
+  // Seguro fijo por etiqueta que factura el intermediario (ej. Mocis $90 vs Andreani $10).
+  // Se guarda CON IVA (es lo que el intermediario nos factura).
+  seguroFijoIntermediarioConIva Decimal @default(0) @db.Decimal(12, 2)
+
+  // Si la tarifa/factura del intermediario ya incluye IVA (para no duplicarlo).
+  tarifaIncluyeIvaIntermediario Boolean @default(true)
+
+  // Vigencias: permiten cambiar de intermediario (Mocis→Intralog) sin perder histórico.
+  activo        Boolean   @default(true)
+  vigenciaDesde DateTime  @default(now())
+  vigenciaHasta DateTime?
+
+  notas String? // ej. "Andreani cobra $10+IVA de seguro; Mocis factura $90+IVA"
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([courierId, activo])
 }
 
 // ==========================================
@@ -325,6 +366,15 @@ model CredencialCourier {
   markupFijo             Decimal   @default(0) @db.Decimal(12, 2) // Fee fijo por paquete (Ej: +$500)
   fechaCaducidadPromo    DateTime? // Fecha límite de esta condición comercial
 
+  // DEUDA 73: el cliente elige si quiere el seguro del courier. Si true → se manda valorDeclarado
+  // real al courier (calcula su seguro). Si false → se manda mínimo (seguro mínimo del courier).
+  // Reemplaza semánticamente al viejo `requiereSeguro` (que queda obsoleto, se limpia en deuda aparte).
+  quiereSeguroCourier         Boolean @default(false)
+  // DEUDA 73: descuento/recargo que el CLIENTE aplica sobre la tarifa publicada a SU comprador.
+  // CON SIGNO: negativo=subvención (regala plata al comprador), positivo=recargo. SIN tope (es su
+  // estrategia comercial). Capa cliente→comprador, distinta del markup Shipro→cliente.
+  descuentoClienteSobreTarifa Decimal @default(0) @db.Decimal(12, 2)
+
   ordenamientoDefault String @default("PRECIO_ASC")
 
   serviciosActivos String?
@@ -335,6 +385,7 @@ model CredencialCourier {
   ordenamientoDomicilio String @default("PRECIO_ASC")
   ordenamientoSucursal  String @default("PRECIO_ASC")
 
+  // OBSOLETO (DEUDA 73): reemplazado por quiereSeguroCourier. Se elimina en una migración de limpieza aparte.
   requiereSeguro Boolean @default(false)
   slaPromedioHs  Int     @default(48)
 
@@ -395,7 +446,7 @@ model FinanzasEnvio {
   precioProveedor       Decimal? @db.Decimal(12, 2) // Costo cotizado al crear la etiqueta
   costoCourierEsperado  Decimal? @db.Decimal(12, 2) // NUEVO: Lo que DEBERÍA cobrar el courier según el aforo final
   costoCourierFacturado Decimal? @db.Decimal(12, 2) // NUEVO: Lo que REALMENTE vino en el Excel del courier
-  estadoAuditoria       String  @default("PENDIENTE") // OK, DOBLE_COBRO, SOBREPRECIO_RECLAMAR
+  estadoAuditoria       String   @default("PENDIENTE") // OK, DOBLE_COBRO, SOBREPRECIO_RECLAMAR
   facturaCourierRef     String? // NUEVO: Escudo anti-UPS (Ej: "FC-0001-9992")
 
   // 3. Auditoría de Peso Físico
@@ -407,6 +458,14 @@ model FinanzasEnvio {
   fugaFinanciera   Decimal? @default(0) @db.Decimal(12, 2) // Diferencia $ vs la mejor opción
   courierSugerido  String? // Quién era el más barato para esta modalidad
   servicioSugerido String? // Qué servicio era el más barato
+
+  // 5. Desglose de pricing (DEUDA 73 + 107) — nullable: los envíos históricos no lo tienen.
+  // La conciliación prefiere precioProveedorReal cuando existe; si no, cae a precioProveedor (legacy).
+  tarifaCourierBase           Decimal? @db.Decimal(12, 2) // lo que devolvió la API cruda
+  markupIntermediarioAplicado Decimal? @db.Decimal(12, 2) // el +% + fijo del intermediario (Modelo A)
+  seguroAplicado              Decimal? @db.Decimal(12, 2) // el seguro que terminó en el precio
+  descuentoClienteAplicado    Decimal? @db.Decimal(12, 2) // el descuento/recargo del cliente (con signo)
+  precioProveedorReal         Decimal? @db.Decimal(12, 2) // costo real esperado = base + markup intermediario
 
   envio Envio?
 }
@@ -442,7 +501,7 @@ model LiquidacionMensual {
 
   periodo    String // Ej: "2026-04" o "Abril 2026"
   montoTotal Decimal @db.Decimal(12, 2) // La suma de todos los envíos y aforos del mes
-  estado     String @default("EMITIDA") // EMITIDA, PAGADA
+  estado     String  @default("EMITIDA") // EMITIDA, PAGADA
 
   excelProformaUrl String? // El link al Excel consolidado con el detalle
   facturaXubioUrl  String? // El link al PDF legal de la AFIP generado por Xubio
@@ -1080,7 +1139,7 @@ model HistoricoCotizaciones {
   cpOrigen  String
   cpDestino String
   pesoKg    Float
-  precio    Decimal @db.Decimal(12, 2)
+  precio    Decimal  @db.Decimal(12, 2)
   // DEUDA 10 (D-10-PRICE-STORE): precio CRUDO del courier (costoSecoCourier),
   // sin markup ni IVA. El markup del cliente se re-aplica al leer en el fallback.
   servicio  String? // texto crudo del courier ("Estándar", "Same Day"). Para lectura humana, NO criterio de busqueda.
@@ -1109,7 +1168,7 @@ model OperacionFee {
   empresaId Int
   empresa   Empresa @relation(fields: [empresaId], references: [id])
 
-  tipo  String @default("FIJO") // "FIJO" | "PORCENTAJE"
+  tipo  String  @default("FIJO") // "FIJO" | "PORCENTAJE"
   valor Decimal @db.Decimal(12, 2)
 
   vigenteDesde DateTime  @default(now())

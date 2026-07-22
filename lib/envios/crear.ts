@@ -12,7 +12,7 @@ import { inferirModalidad } from "@/lib/utils/modalidades";
 import { validarOperatividadPar } from "@/lib/depositos/operatividad";
 import { getAppUrl } from "@/lib/utils/app-url";
 import { resolverPrecioFallback } from "@/lib/utils/precio-fallback";
-import { calcularFeeOperacion, type ResultadoFeeOperacion } from "@/lib/utils/operacion-fee";
+import { calcularFeeOperacion } from "@/lib/utils/operacion-fee";
 import { Prisma, type DepositoCourierConfig } from "@prisma/client";
 
 export interface CrearEnvioInput {
@@ -358,12 +358,203 @@ export async function crearEnvio(input: CrearEnvioInput) {
   // no se debita saldo, no se manda mail. Se desbloquea cuando el
   // cliente recargue saldo (procesarEnviosBloqueados).
   // ==============================================================
-  let montoDebito: Prisma.Decimal = new Prisma.Decimal(parseFloat(String(costoEnvio)) || 0);
+  // costoEnvio del caller es SOLO buyer-facing (lo que vio el comprador,
+  // puede incluir markup/descuento del cliente hacia su comprador).
+  // El débito autoritativo lo recomputa Shipro más abajo (montoDebito).
+  const costoEnvioComprador: Prisma.Decimal = new Prisma.Decimal(parseFloat(String(costoEnvio)) || 0);
   const tipoCuentaEfectivo = credencialMain?.tipoCuenta || empresaConData.modalidadPago || "POSTPAGO";
   let bloqueadoPorSaldo = false;
   // DEUDA 22: si el debit cruza umbral, se programa suspension fuera de la tx.
   let suspensionPendiente: { saldoFinal: Prisma.Decimal; limiteAfectado: Prisma.Decimal } | null = null;
+  const montoProveedor: Prisma.Decimal = new Prisma.Decimal(parseFloat(String(costoProveedor)) || 0);
+  let empresaNombreParaMail = "la Tienda";
 
+  // ==============================================================
+  // COTIZACIÓN INTERNA + montoDebito RAMA-AWARE (FASE 1, DEUDA 73/107)
+  // El débito autoritativo lo recomputa Shipro:
+  //   - Rama A (usaCredencialesPropias=false): tarifa publicada completa
+  //     (precioFinal de la opción del courier elegido; cascada + SMO +
+  //     Fee + IVA ya aplicados dentro de aplicarMarkup).
+  //   - Rama B (usaCredencialesPropias=true): solo el Fee de plataforma
+  //     (el flete lo factura el courier al cliente directamente).
+  // Se computa ANTES del saldo gate para que el bloqueo evalúe contra el
+  // importe real y NO contra costoEnvio (que puede llevar el markup/descuento
+  // del cliente y no representa el receivable de Shipro).
+  // Además, se persiste en FinanzasEnvio SIEMPRE (incluso si el envío arranca
+  // BLOQUEADO_*), para que los procesar-bloqueados* debiten el monto correcto
+  // al desbloquear sin necesidad de recotizar ni conocer la rama.
+  // ==============================================================
+  let dataCotizacion: Awaited<ReturnType<typeof cotizar>> | null = null;
+  try {
+    // DEUDA 4 follow-up: usar CP real del depósito. Si deposito es null
+    // (flujo BLOQUEADO_DEPOSITO), cpOrigen=undefined y cotizar usa fallback interno.
+    dataCotizacion = await cotizar({
+      empresaId,
+      cpOrigen: deposito?.codigoPostal,
+      cpDestino: String(cpDestino),
+      provinciaDestino,
+      paquetes: [{
+        pesoKg: parseFloat(String(pesoReal)) || 1,
+        largoCm: 10, anchoCm: 10, altoCm: 10,
+        valorDeclarado: parseFloat(String(valorDeclarado)) || 0,
+        requiereSeguro: false
+      }]
+    });
+  } catch (errCotizar) {
+    console.warn("[FASE1] cotizar() fallo en crear.ts:", errCotizar);
+  }
+
+  // Torre de Control Metrica 3.3 + DEUDA 47: inferir modalidad canonica.
+  // Necesario ANTES del rama-aware compute (Rama A matchea por courier +
+  // familia de modalidad). Robusto a dataCotizacion null.
+  const opcionesParaInferir = [
+    ...(dataCotizacion?.domicilio || []),
+    ...(dataCotizacion?.sucursal || []),
+  ].map(o => ({ ...o, precioFinal: o.precioFinal.toNumber() }));
+  const resultadoModalidad = inferirModalidad(
+    opcionesParaInferir,
+    nombreCourier,
+    costoEnvio,
+    modalidad
+  );
+  const modalidadCanonica = resultadoModalidad.modalidad;
+
+  // Tarifa publicada del courier elegido (cotizada). Se puebla desde el match
+  // de Rama A abajo; para Rama B se puebla despues dentro del bloque de fuga
+  // (no afecta montoDebito). Si el match no encuentra opcion (fallback o
+  // cotizacion vacia), queda null y la fuga se salta.
+  let tarifaPublicadaElegida: Prisma.Decimal | null = null;
+
+  let montoDebito: Prisma.Decimal;
+  if (credencialMain?.usaCredencialesPropias === true) {
+    // Rama B: el flete lo factura el courier directo al cliente; Shipro solo cobra Fee.
+    const feeB = await calcularFeeOperacion(empresaId, new Prisma.Decimal(0));
+    montoDebito = feeB?.feeConIva ?? new Prisma.Decimal(0);
+  } else {
+    // Rama A: tarifa publicada completa del courier elegido.
+    const canonLowerA = modalidadCanonica.toLowerCase();
+    const listaCanonicaA = (canonLowerA.includes("sucursal") || canonLowerA.includes("retiro"))
+      ? (dataCotizacion?.sucursal || [])
+      : (dataCotizacion?.domicilio || []);
+    const courierLowerA = courierReal.nombre.toLowerCase();
+    const opcionesDelCourierA = listaCanonicaA.filter(o => o.courier.toLowerCase() === courierLowerA);
+    let matchedA: typeof listaCanonicaA[number] | undefined;
+    if (opcionesDelCourierA.length === 1) {
+      matchedA = opcionesDelCourierA[0];
+    } else if (opcionesDelCourierA.length > 1) {
+      // Multiples servicios del mismo courier: precio mas cercano a costoEnvioComprador
+      // (mismo criterio que inferirModalidad para desambiguar servicio).
+      matchedA = opcionesDelCourierA.reduce((prev, curr) =>
+        prev.precioFinal.sub(costoEnvioComprador).abs().lt(curr.precioFinal.sub(costoEnvioComprador).abs()) ? prev : curr
+      );
+    }
+
+    if (matchedA) {
+      montoDebito = matchedA.precioFinal;
+      // Propagar el match de Rama A al metric de fuga (evita re-matching / divergencia).
+      tarifaPublicadaElegida = matchedA.precioFinal;
+    } else {
+      // ============================================================
+      // FALLBACK Rama A: red de seguridad de precio cuando no hay
+      // cotización o el courier elegido no aparece en las opciones.
+      // GAP CONOCIDO (FASE 1): configMarkup.intermediarioMarkupPorcentaje=null
+      // hace que este fallback UNDERCHARGUE cuando el courier tiene
+      // intermediario vigente (Mocis→Andreani, DEUDA 107). El path de
+      // fallback NO reconstruye la cascada de intermediario. No se
+      // arregla aca; queda como deuda pendiente.
+      // ============================================================
+      montoDebito = new Prisma.Decimal(0);
+      if (deposito && credencialMain) {
+        const modalidadSimpleA = (canonLowerA.includes("sucursal") || canonLowerA.includes("retiro"))
+          ? "sucursal"
+          : "domicilio";
+        try {
+          const fallbackA = await resolverPrecioFallback({
+            courierId: courierIdReal,
+            cpOrigen: deposito.codigoPostal,
+            cpDestino: String(cpDestino),
+            pesoKg: parseFloat(String(pesoReal)) || 1,
+            modalidad: modalidadSimpleA,
+            tarifaPlanaRespaldo: empresaConData.tarifaPlanaRespaldo,
+            configMarkup: {
+              usaCredencialesPropias: credencialMain.usaCredencialesPropias,
+              ajusteTarifaPorcentaje: credencialMain.ajusteTarifaPorcentaje,
+              markupFijo: credencialMain.markupFijo,
+              tarifaIncluyeIva: credencialMain.tarifaIncluyeIva,
+              intermediarioMarkupPorcentaje: null, // GAP FASE 1: ver comentario arriba.
+            },
+          });
+          if (fallbackA.precio != null && fallbackA.precio.gt(0)) {
+            montoDebito = fallbackA.precio;
+            console.warn(`[FASE1 GAP] Rama A fallback aplicado: $${fallbackA.precio.toFixed(2)} (fuente: ${fallbackA.fuente}). UNDERCHARGE si el courier tiene intermediario vigente (missing cascade). ${fallbackA.detalle}`);
+          }
+        } catch (err) {
+          console.warn("[FASE1] No se pudo resolver precio de fallback Rama A:", err);
+        }
+      }
+    }
+  }
+
+  // FUGA financiera (AMBAS ramas): mide oportunidad de routing.
+  // Compara el TOTAL COST del envío elegido (tarifa publicada del courier
+  // elegido: para Rama A incluye cascada + SMO + Fee + IVA; para Rama B es
+  // flete-del-courier + Fee + IVA) contra el TOTAL COST más barato cotizado
+  // a esta empresa, uniendo domicilio ∪ sucursal Y AMBAS ramas.
+  // Excluye reverse (cambio, devolucion): no son comparables con un envío
+  // forward. NO usa montoDebito: en Rama B el débito es solo el Fee y la
+  // comparación sería sin sentido (fee << cualquier tarifa completa → fuga
+  // siempre 0). Fuente única del match Rama A: tarifaPublicadaElegida ya
+  // sembrada arriba desde matchedA (evita re-match / divergencia con montoDebito).
+  let fugaCalculada: Prisma.Decimal = new Prisma.Decimal(0);
+  let courierSugeridoStr: string | null = null;
+  let servicioSugeridoStr: string | null = null;
+  if (dataCotizacion) {
+    try {
+      // Rama B: matchea el courier elegido SOLO para la métrica (no afecta
+      // montoDebito, que ya es el Fee). Mismo criterio de match que Rama A:
+      // courier + familia de modalidad canonica, precio cercano si hay varios servicios.
+      if (tarifaPublicadaElegida == null && credencialMain?.usaCredencialesPropias === true) {
+        const canonLowerB = modalidadCanonica.toLowerCase();
+        const listaCanonicaB = (canonLowerB.includes("sucursal") || canonLowerB.includes("retiro"))
+          ? (dataCotizacion.sucursal || [])
+          : (dataCotizacion.domicilio || []);
+        const courierLowerB = courierReal.nombre.toLowerCase();
+        const opcionesDelCourierB = listaCanonicaB.filter(o => o.courier.toLowerCase() === courierLowerB);
+        let matchedB: typeof listaCanonicaB[number] | undefined;
+        if (opcionesDelCourierB.length === 1) {
+          matchedB = opcionesDelCourierB[0];
+        } else if (opcionesDelCourierB.length > 1) {
+          matchedB = opcionesDelCourierB.reduce((prev, curr) =>
+            prev.precioFinal.sub(costoEnvioComprador).abs().lt(curr.precioFinal.sub(costoEnvioComprador).abs()) ? prev : curr
+          );
+        }
+        if (matchedB) {
+          tarifaPublicadaElegida = matchedB.precioFinal;
+        }
+      }
+
+      const universoFuga = [
+        ...(dataCotizacion.domicilio || []),
+        ...(dataCotizacion.sucursal || []),
+      ];
+      if (tarifaPublicadaElegida != null && universoFuga.length > 0) {
+        const masBarata = universoFuga.reduce((prev, curr) => prev.precioFinal.lt(curr.precioFinal) ? prev : curr);
+        if (masBarata.precioFinal.lt(tarifaPublicadaElegida)) {
+          fugaCalculada = tarifaPublicadaElegida.sub(masBarata.precioFinal);
+          courierSugeridoStr = masBarata.courier;
+          servicioSugeridoStr = masBarata.modalidad;
+        }
+      }
+    } catch (errorFuga) {}
+  }
+
+  // ==============================================================
+  // VALIDACIÓN DE SALDO POR tipoCuenta (DEUDA 16)
+  // Reusa `empresaConData` cargada arriba. La modalidad (PREPAGO/POSTPAGO)
+  // afecta SOLO el timing, no el monto (montoDebito autoritativo ya está
+  // rama-aware). Si no alcanza, NO se rebota la creación: el envío se crea
+  // con SHP-* + BLOQUEADO_SALDO y se destraba al recargar saldo.
+  // ==============================================================
   if (tipoCuentaEfectivo === "PREPAGO") {
     if ((empresaConData.saldoActivo ?? new Prisma.Decimal(0)).lt(montoDebito)) {
       bloqueadoPorSaldo = true;
@@ -448,125 +639,17 @@ export async function crearEnvio(input: CrearEnvioInput) {
     }
   }
 
-  // montoDebito ya fue calculado arriba para la validación de saldo.
-  const montoProveedor: Prisma.Decimal = new Prisma.Decimal(parseFloat(String(costoProveedor)) || 0);
-  let empresaNombreParaMail = "la Tienda";
-
-  let fugaCalculada: Prisma.Decimal = new Prisma.Decimal(0);
-  let courierSugeridoStr: string | null = null;
-  let servicioSugeridoStr: string | null = null;
-
-  // dataCotizacion declarado en function-scope: el bloque de inferencia de
-  // modalidad (Metrica 3.3 / DEUDA 47) tambien lo consume mas abajo, fuera
-  // del try-catch de fuga financiera.
-  let dataCotizacion: Awaited<ReturnType<typeof cotizar>> | null = null;
-  try {
-    // DEUDA 4 follow-up (cierre del "1050" hardcoded latente): usar CP real del
-    // depósito de origen para el cálculo de fugaFinanciera. Si deposito es null
-    // (flujo BLOQUEADO_DEPOSITO), pasamos undefined y el cotizador interno usa
-    // su fallback al predeterminado de la empresa.
-    dataCotizacion = await cotizar({
-      empresaId,
-      cpOrigen: deposito?.codigoPostal,
-      cpDestino: String(cpDestino),
-      provinciaDestino,
-      paquetes: [{
-        pesoKg: parseFloat(String(pesoReal)) || 1,
-        largoCm: 10, anchoCm: 10, altoCm: 10,
-        valorDeclarado: parseFloat(String(valorDeclarado)) || 0,
-        requiereSeguro: false
-      }]
-    });
-
-    const mod = modalidad?.toLowerCase() || "";
-    let opcionesParaComparar: any[] = [];
-
-    if (mod.includes('sucursal')) opcionesParaComparar = dataCotizacion.sucursal || [];
-    else if (mod.includes('domicilio') || mod.includes('estándar') || mod.includes('sameday') || mod.includes('same-day')) opcionesParaComparar = dataCotizacion.domicilio || [];
-
-    if (opcionesParaComparar.length > 0) {
-      const opcionMasBarata = opcionesParaComparar.reduce((prev, curr) => prev.precioFinal.lt(curr.precioFinal) ? prev : curr);
-      if (opcionMasBarata.precioFinal.lt(montoDebito)) {
-        fugaCalculada = montoDebito.sub(opcionMasBarata.precioFinal);
-        courierSugeridoStr = opcionMasBarata.courier;
-        servicioSugeridoStr = opcionMasBarata.modalidad;
-      }
-    }
-  } catch (errorFuga) {}
-
-  // Torre de Control Metrica 3.3 + DEUDA 47 (2026-06-09):
-  // Inferir modalidad canonica usando el helper compartido. Estrategia
-  // β+δ defensa en capas:
-  // 1. Si el e-commerce mando body.modalidad y es normalizable → usar.
-  // 2. Si no, matchear contra opciones del cotizador (curr + precio).
-  // 3. Si no, fallback al primer match del courier.
-  // 4. Si nada matchea, "Entrega a Domicilio (Estandar)" default.
-  // El bloque va FUERA de la transaccion: no requiere tx ni queries
-  // adicionales, es logica pura sobre el resultado ya obtenido del
-  // cotizador (dataCotizacion).
-  const opcionesParaInferir = [
-    ...(dataCotizacion?.domicilio || []),
-    ...(dataCotizacion?.sucursal || []),
-  ].map(o => ({ ...o, precioFinal: o.precioFinal.toNumber() }));
-  const resultadoModalidad = inferirModalidad(
-    opcionesParaInferir,
-    nombreCourier,
-    costoEnvio,
-    modalidad
-  );
-  const modalidadCanonica = resultadoModalidad.modalidad;
-
-  // DEUDA 10 Paso 4a (D-10-FALLBACK-PRICE, Opcion A): red de seguridad de precio.
-  // Si el courier fallo al despachar (BLOQUEADO_PARCIAL) Y el e-commerce NO mando
-  // un costoEnvio valido, publicamos un precio de fallback para que la venta no se
-  // caiga (siempre haya tarifa en el checkout). NO pisa un precio ya aceptado por
-  // el comprador (solo entra si montoDebito <= 0). NO debita saldo ni fee (eso es Paso 4b).
-  if (bloqueadoPorTramoFallido && montoDebito.lte(0) && deposito && credencialMain) {
-    // D-10-MODALIDAD-MAP: traducir modalidad canonica (8-value) -> vocabulario
-    // simple del courier ("domicilio"/"sucursal") que usa HistoricoCotizaciones.
-    const modalidadSimple = modalidadCanonica.toLowerCase().includes("sucursal") ||
-      modalidadCanonica.toLowerCase().includes("retiro")
-      ? "sucursal"
-      : "domicilio";
-
-    try {
-      const fallback = await resolverPrecioFallback({
-        courierId: courierIdReal,
-        cpOrigen: deposito.codigoPostal,
-        cpDestino: String(cpDestino),
-        pesoKg: parseFloat(String(pesoReal)) || 1,
-        modalidad: modalidadSimple,
-        tarifaPlanaRespaldo: empresaConData.tarifaPlanaRespaldo,
-        configMarkup: {
-          usaCredencialesPropias: credencialMain.usaCredencialesPropias,
-          ajusteTarifaPorcentaje: credencialMain.ajusteTarifaPorcentaje,
-          markupFijo: credencialMain.markupFijo,
-          tarifaIncluyeIva: credencialMain.tarifaIncluyeIva,
-          // DEUDA 107 capa 1: fallback no tiene contexto de intermediario (se resuelve al cotizar en vivo, no aca).
-          intermediarioMarkupPorcentaje: null,
-        },
-      });
-      if (fallback.precio != null && fallback.precio.gt(0)) {
-        montoDebito = fallback.precio;
-        console.log(`[DEUDA 10] Precio de fallback aplicado a envio bloqueado: $${fallback.precio} (fuente: ${fallback.fuente}). ${fallback.detalle}`);
-      }
-    } catch (err) {
-      console.warn("[DEUDA 10] No se pudo resolver precio de fallback:", err);
-    }
-  }
-
   const resultadoTransaccion = await prisma.$transaction(async (tx) => {
     const empresaData = await tx.empresa.findUnique({ where: { id: empresaId } });
     if (empresaData) empresaNombreParaMail = empresaData.nombre;
 
     let nuevoSaldo: Prisma.Decimal = (empresaData?.saldoActivo ?? new Prisma.Decimal(0)).sub(montoDebito);
 
-    // DEUDA 10 Paso 4b (D-10-FEE-CHARGE): el fee por operacion se calcula y debita
-    // ABAJO, DENTRO del gate de debito de envio (solo cuando se emite etiqueta REAL
-    // del courier, es decir cuando el envio NO esta bloqueado). Decision de producto:
-    // las etiquetas genericas/bloqueadas NO debitan nada; el cobro espera a que haya
-    // etiqueta real (en el alta, o en el desbloqueo posterior — ese ultimo es DEUDA 79).
-    let feeOperacion: ResultadoFeeOperacion | null = null;
+    // Decision de producto: las etiquetas genericas/bloqueadas NO debitan
+    // nada; el cobro espera a que haya etiqueta real (en el alta, o en el
+    // desbloqueo posterior via procesar-bloqueados*). El monto autoritativo
+    // ya se persiste en FinanzasEnvio.precioFactura mas abajo, para que los
+    // desbloqueos debiten el importe correcto sin recotizar.
 
     // Torre de Control Metrica 2.3 (DEUDA 39, 2026-06-05):
     // Calcular promesa calibrada al crear envio para medir cumplimiento
@@ -606,8 +689,8 @@ export async function crearEnvio(input: CrearEnvioInput) {
         finanzas: {
           create: {
             precioProveedor: montoProveedor,
-            precioFactura: montoDebito,
-            precioMostrado: montoDebito,
+            precioFactura: montoDebito,          // FASE 1: autoritativo (recomputado, rama-aware)
+            precioMostrado: costoEnvioComprador, // FASE 1: buyer-facing (puede tener markup/descuento del cliente)
             valorDeclarado: parseFloat(String(valorDeclarado)) || 0,
             pesoCobrado: parseFloat(String(pesoReal)) || 1.0,
             fugaFinanciera: fugaCalculada,
@@ -636,48 +719,30 @@ export async function crearEnvio(input: CrearEnvioInput) {
       });
     }
 
-    // Si BLOQUEADO_SALDO, BLOQUEADO_DEPOSITO o BLOQUEADO_PARCIAL: NO crear
-    // MovimientoFinanciero ni actualizar saldo. El débito se aplica recién
-    // cuando se desbloquee.
+    // Si BLOQUEADO_SALDO, BLOQUEADO_DEPOSITO, BLOQUEADO_OPERATIVIDAD o
+    // BLOQUEADO_PARCIAL: NO crear MovimientoFinanciero ni actualizar saldo.
+    // El débito se aplica al desbloquear (procesar-bloqueados*), que lee
+    // FinanzasEnvio.precioFactura (autoritativo, rama-aware, ya persistido arriba).
     if (!bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorOperatividad && !bloqueadoPorTramoFallido) {
-      // DEUDA 10 Paso 4b (D-10-FEE-CHARGE): fee por operacion para PREPAGO (Modelo B).
-      // Se cobra SOLO aca (etiqueta real, envio no bloqueado). Detector: eje comercial
-      // tipoCuentaEfectivo === "PREPAGO", NO el eje credenciales. Lectura atomica via tx.
-      // El costo courier (montoDebito) ya esta restado de nuevoSaldo arriba; aca se le
-      // resta ademas el fee, y se persiste un movimiento separado por claridad.
-      if (tipoCuentaEfectivo === "PREPAGO") {
-        feeOperacion = await calcularFeeOperacion(empresaId, montoDebito, tx);
-        if (feeOperacion) {
-          nuevoSaldo = nuevoSaldo.sub(feeOperacion.feeConIva);
-        }
-      }
+      // FASE 1 (DEUDA 73/107): montoDebito ya incluye Fee (Rama B: solo Fee;
+      // Rama A: tarifa completa con Fee ya adentro via aplicarMarkup). Un solo
+      // MovimientoFinanciero cubre todo. Rama-aware descripcion para que el
+      // extracto del cliente sea legible.
+      const descripcionRama = credencialMain?.usaCredencialesPropias === true
+        ? `Fee Shipro ${trackingOficial} — ${courierReal.nombre} (flete facturado por el courier al cliente)`
+        : `Envío ${trackingOficial} — ${courierReal.nombre}`;
 
       await tx.movimientoFinanciero.create({
         data: {
           empresaId,
           tipo: "DEBITO_ENVIO",
           monto: montoDebito.neg(),
-          saldoPosterior: feeOperacion ? nuevoSaldo.add(feeOperacion.feeConIva) : nuevoSaldo,
+          saldoPosterior: nuevoSaldo,
           referencia: trackingOficial,
-          descripcion: `Envío ${trackingOficial} — ${courierReal.nombre}`,
+          descripcion: descripcionRama,
           envioId: envioCreado.id
         }
       });
-
-      // Movimiento separado para el fee (solo PREPAGO con fee vigente).
-      if (feeOperacion) {
-        await tx.movimientoFinanciero.create({
-          data: {
-            empresaId,
-            tipo: "DEBITO_OPERACION_FEE",
-            monto: feeOperacion.feeConIva.neg(),
-            saldoPosterior: nuevoSaldo,
-            referencia: trackingOficial,
-            descripcion: `Fee de operación Shipro ${trackingOficial}`,
-            envioId: envioCreado.id
-          }
-        });
-      }
 
       await tx.empresa.update({
         where: { id: empresaId },

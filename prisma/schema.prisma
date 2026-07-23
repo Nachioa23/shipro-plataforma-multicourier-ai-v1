@@ -1231,3 +1231,31 @@ model RegistroCoberturaVacia {
   @@index([fecha])
   @@index([cpDestino])
 }
+
+// =============================================================================
+// ConciliacionRun — bitácora + snapshot para UNDO de una corrida de conciliación
+// =============================================================================
+// Cada POST /api/conciliacion crea una fila con:
+//  - la referencia de factura del courier
+//  - el ivaDeclarado por el usuario ("SIN_IVA" o "CON_IVA") — Nacho decidió que
+//    la convención IVA del Excel NO se asume, la declara el usuario al subir
+//  - el snapshot de los valores PREVIOS de FinanzasEnvio para cada envío tocado,
+//    para poder revertir. La reversión (POST /api/conciliacion/revertir) restaura
+//    los valores y marca revertida=true. Se bloquea la reversión si algún envío
+//    del snapshot ya está en LiquidacionMensual (el mes ya cerró; hay que corregir
+//    con ajuste, no con reversión).
+// =============================================================================
+model ConciliacionRun {
+  id                Int       @id @default(autoincrement())
+  referenciaFactura String
+  ivaDeclarado      String // "SIN_IVA" | "CON_IVA"
+  cantidadEnvios    Int
+  usuarioEmail      String?
+  snapshot          Json // [{ finanzasEnvioId, prior: { pesoAforado, costoCourierEsperado, costoCourierFacturado, estadoAuditoria, facturaCourierRef, costoAforo } }]
+  revertida         Boolean   @default(false)
+  fechaReversion    DateTime?
+  createdAt         DateTime  @default(now())
+
+  @@index([referenciaFactura])
+  @@index([createdAt])
+}

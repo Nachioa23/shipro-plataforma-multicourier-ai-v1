@@ -2,14 +2,22 @@
 
 import { useState } from "react";
 import * as XLSX from "xlsx";
-import { UploadCloud, ShieldCheck, Scale, AlertTriangle, Loader2, FileSpreadsheet, CheckCircle2, DollarSign } from "lucide-react";
+import { UploadCloud, ShieldCheck, Scale, AlertTriangle, Loader2, FileSpreadsheet, CheckCircle2, DollarSign, Undo2, ShieldAlert, Info } from "lucide-react";
 
 export default function ConciliacionAforos() {
   const [cargando, setCargando] = useState(false);
   const [datosExcel, setDatosExcel] = useState<any[]>([]);
   const [referenciaFactura, setReferenciaFactura] = useState("");
+  // Nacho: la convención IVA del Excel se declara explícita, no se asume.
+  // Sin default. El backend rechaza con 400 si no viene "SIN_IVA" o "CON_IVA".
+  const [ivaDeclarado, setIvaDeclarado] = useState<"" | "SIN_IVA" | "CON_IVA">("");
   const [resultado, setResultado] = useState<any>(null);
   const [errorTexto, setErrorTexto] = useState<string | null>(null);
+  // Undo state
+  const [confirmandoUndo, setConfirmandoUndo] = useState(false);
+  const [ejecutandoUndo, setEjecutandoUndo] = useState(false);
+  const [undoResultado, setUndoResultado] = useState<{ restauradas: number } | null>(null);
+  const [undoError, setUndoError] = useState<string | null>(null);
 
   const brandColor = '#233b6b';
 
@@ -72,22 +80,32 @@ export default function ConciliacionAforos() {
       setErrorTexto("Debes ingresar el Nro. de Factura del Courier para poder auditar.");
       return;
     }
-    
+    if (!ivaDeclarado) {
+      setErrorTexto("Tenés que declarar si los costos del archivo incluyen IVA o no antes de auditar.");
+      return;
+    }
+
     setCargando(true);
     setResultado(null);
+    setErrorTexto(null);
 
     try {
       const res = await fetch("/api/conciliacion", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filasExcel: datosExcel, referenciaFactura: referenciaFactura.trim() })
+        body: JSON.stringify({
+          filasExcel: datosExcel,
+          referenciaFactura: referenciaFactura.trim(),
+          ivaDeclarado,
+        })
       });
 
       const data = await res.json();
       if (res.ok) {
         setResultado(data);
-        setDatosExcel([]); 
+        setDatosExcel([]);
         setReferenciaFactura("");
+        setIvaDeclarado("");
       } else {
         setErrorTexto(data.error || "Error al procesar la conciliación.");
       }
@@ -96,6 +114,43 @@ export default function ConciliacionAforos() {
     } finally {
       setCargando(false);
     }
+  };
+
+  const ejecutarUndo = async () => {
+    if (!resultado?.runId) return;
+    setEjecutandoUndo(true);
+    setUndoError(null);
+    try {
+      const res = await fetch("/api/conciliacion/revertir", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ runId: resultado.runId }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setUndoResultado({ restauradas: data.restauradas });
+        setConfirmandoUndo(false);
+      } else {
+        // Surface exactly what el server dice — para el 409 de mes cerrado y
+        // el 409 de "ya fue revertida" el mensaje ya viene explicativo.
+        setUndoError(data.error || "No se pudo revertir la conciliación.");
+      }
+    } catch (err) {
+      setUndoError("Error de conexión al intentar revertir.");
+    } finally {
+      setEjecutandoUndo(false);
+    }
+  };
+
+  const reiniciar = () => {
+    setResultado(null);
+    setDatosExcel([]);
+    setReferenciaFactura("");
+    setIvaDeclarado("");
+    setConfirmandoUndo(false);
+    setUndoResultado(null);
+    setUndoError(null);
+    setErrorTexto(null);
   };
 
   const formatMoneda = (valor: number) => {
@@ -128,8 +183,8 @@ export default function ConciliacionAforos() {
               
               <div className="mb-6 text-left">
                 <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Nro de Factura del Courier (Obligatorio) *</label>
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   value={referenciaFactura}
                   onChange={(e) => setReferenciaFactura(e.target.value)}
                   placeholder="Ej: FC-0004-00001234"
@@ -137,11 +192,64 @@ export default function ConciliacionAforos() {
                 />
                 <p className="text-[10px] text-gray-400 mt-1">Este dato es clave para que el sistema bloquee cobros duplicados en el futuro.</p>
               </div>
-              
-              <label className={`relative cursor-pointer text-white font-bold py-3 px-6 rounded-xl transition-colors inline-flex items-center gap-2 shadow-sm ${!referenciaFactura.trim() ? 'bg-gray-400 pointer-events-none' : 'bg-[#233b6b] hover:bg-blue-900'}`}>
-                <UploadCloud className="w-5 h-5" /> Seleccionar Archivo Excel/CSV
-                <input type="file" accept=".xlsx, .xls, .csv" onChange={handleFileUpload} disabled={!referenciaFactura.trim()} className="hidden" />
-              </label>
+
+              {/* IVA declarado (Obligatorio) — sin default: el usuario elige a conciencia. */}
+              <div className="mb-6 text-left">
+                <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Convención IVA del archivo (Obligatorio) *</label>
+                <div className="space-y-2">
+                  <label className={`flex items-start gap-3 border-2 rounded-lg p-3 cursor-pointer transition-colors ${ivaDeclarado === "SIN_IVA" ? "border-[#233b6b] bg-blue-50" : "border-gray-200 hover:border-gray-300"}`}>
+                    <input
+                      type="radio"
+                      name="ivaDeclarado"
+                      value="SIN_IVA"
+                      checked={ivaDeclarado === "SIN_IVA"}
+                      onChange={() => setIvaDeclarado("SIN_IVA")}
+                      className="mt-0.5"
+                    />
+                    <span className="text-sm">
+                      <span className="font-bold text-gray-800">Los costos del archivo NO incluyen IVA (neto)</span>
+                    </span>
+                  </label>
+                  <label className={`flex items-start gap-3 border-2 rounded-lg p-3 cursor-pointer transition-colors ${ivaDeclarado === "CON_IVA" ? "border-[#233b6b] bg-blue-50" : "border-gray-200 hover:border-gray-300"}`}>
+                    <input
+                      type="radio"
+                      name="ivaDeclarado"
+                      value="CON_IVA"
+                      checked={ivaDeclarado === "CON_IVA"}
+                      onChange={() => setIvaDeclarado("CON_IVA")}
+                      className="mt-0.5"
+                    />
+                    <span className="text-sm">
+                      <span className="font-bold text-gray-800">Los costos del archivo YA incluyen IVA</span>
+                    </span>
+                  </label>
+                </div>
+                <p className="text-[10px] text-gray-500 mt-2 flex items-start gap-1">
+                  <Info className="w-3 h-3 mt-0.5 shrink-0" />
+                  <span>La factura del courier suele mostrar ambas columnas; elegí la que corresponde a la columna de costo que subiste.</span>
+                </p>
+              </div>
+
+              {(() => {
+                const listo = referenciaFactura.trim() && ivaDeclarado;
+                return (
+                  <>
+                    <label className={`relative cursor-pointer text-white font-bold py-3 px-6 rounded-xl transition-colors inline-flex items-center gap-2 shadow-sm ${!listo ? 'bg-gray-400 pointer-events-none' : 'bg-[#233b6b] hover:bg-blue-900'}`}>
+                      <UploadCloud className="w-5 h-5" /> Seleccionar Archivo Excel/CSV
+                      <input type="file" accept=".xlsx, .xls, .csv" onChange={handleFileUpload} disabled={!listo} className="hidden" />
+                    </label>
+                    {!listo && (
+                      <p className="text-xs text-gray-500 mt-2">
+                        {!referenciaFactura.trim() && !ivaDeclarado
+                          ? "Completá el Nro. de Factura y elegí la convención IVA para poder subir el archivo."
+                          : !referenciaFactura.trim()
+                          ? "Completá el Nro. de Factura para poder subir el archivo."
+                          : "Elegí la convención IVA del archivo para poder subir."}
+                      </p>
+                    )}
+                  </>
+                );
+              })()}
             </div>
             
             {errorTexto && (
@@ -161,14 +269,25 @@ export default function ConciliacionAforos() {
                 </h3>
                 <p className="text-sm text-gray-500">Se detectaron <strong>{datosExcel.length}</strong> envíos a auditar en la Factura {referenciaFactura}.</p>
               </div>
-              <button 
-                onClick={ejecutarConciliacion}
-                disabled={cargando}
-                className="bg-amber-500 hover:bg-amber-600 text-white font-bold py-3 px-6 rounded-xl transition-colors inline-flex items-center gap-2 shadow-md disabled:opacity-50"
-              >
-                {cargando ? <Loader2 className="w-5 h-5 animate-spin" /> : <ShieldCheck className="w-5 h-5" />}
-                {cargando ? "Ejecutando escudos..." : "Ejecutar Escudo Tarifario"}
-              </button>
+              <div className="flex flex-col items-end gap-1">
+                <button
+                  onClick={ejecutarConciliacion}
+                  disabled={cargando || !ivaDeclarado || !referenciaFactura.trim()}
+                  className="bg-amber-500 hover:bg-amber-600 text-white font-bold py-3 px-6 rounded-xl transition-colors inline-flex items-center gap-2 shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {cargando ? <Loader2 className="w-5 h-5 animate-spin" /> : <ShieldCheck className="w-5 h-5" />}
+                  {cargando ? "Ejecutando escudos..." : "Ejecutar Escudo Tarifario"}
+                </button>
+                {!cargando && (!ivaDeclarado || !referenciaFactura.trim()) && (
+                  <p className="text-[11px] text-amber-700 font-medium">
+                    {!referenciaFactura.trim() && !ivaDeclarado
+                      ? "Falta Nro. de Factura y convención IVA."
+                      : !referenciaFactura.trim()
+                      ? "Falta Nro. de Factura."
+                      : "Falta declarar la convención IVA del archivo."}
+                  </p>
+                )}
+              </div>
             </div>
 
             <div className="bg-slate-50 border border-gray-200 rounded-xl overflow-hidden max-h-64 overflow-y-auto">
@@ -197,9 +316,48 @@ export default function ConciliacionAforos() {
           </div>
         )}
 
-        {resultado && (
+        {resultado && undoResultado && (
+          <div className="animate-in zoom-in-95">
+            <div className="bg-emerald-50 border-2 border-emerald-300 p-8 rounded-2xl text-center">
+              <CheckCircle2 className="w-14 h-14 text-emerald-600 mx-auto mb-3" />
+              <h2 className="text-2xl font-black text-emerald-900 mb-2">Reversión exitosa</h2>
+              <p className="text-emerald-800 font-medium">
+                Se restauraron <strong>{undoResultado.restauradas}</strong> envío(s) a su estado previo.
+                La marca de factura quedó liberada — ya podés subir un archivo corregido.
+              </p>
+              <button
+                onClick={reiniciar}
+                className="mt-6 bg-[#233b6b] hover:bg-blue-900 text-white font-bold py-3 px-6 rounded-xl inline-flex items-center gap-2 shadow-md"
+              >
+                <UploadCloud className="w-5 h-5" /> Subir un archivo corregido
+              </button>
+            </div>
+          </div>
+        )}
+
+        {resultado && !undoResultado && (
           <div className="animate-in zoom-in-95 space-y-6">
-            
+
+            {/* WARNING: posible IVA no declarado (Nacho: no bloquea, pero es prominente). */}
+            {resultado.advertenciaPosibleIva && (
+              <div className="bg-amber-50 border-2 border-amber-400 p-5 rounded-2xl flex items-start gap-4 shadow-sm">
+                <ShieldAlert className="w-8 h-8 text-amber-600 shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <h3 className="font-black text-amber-900 text-base mb-1">
+                    ¿El archivo incluía IVA?
+                  </h3>
+                  <p className="text-sm text-amber-900">
+                    Declaraste que los costos venían SIN IVA, pero <strong>{resultado.rowsSospechosasIva} de {resultado.rowsEnMainBranch}</strong> filas
+                    muestran un costo que supera en más de 15% al esperado, sin que haya subido el peso.
+                    Es un patrón típico de un archivo que en realidad viene CON IVA.
+                  </p>
+                  <p className="text-sm text-amber-900 mt-2 font-medium">
+                    Revisá el archivo. Si te equivocaste al declarar, usá <strong>"Deshacer"</strong> abajo y volvé a subirlo con la convención correcta.
+                  </p>
+                </div>
+              </div>
+            )}
+
             <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-l-blue-500">
               <h2 className="text-xl font-black text-gray-800 flex items-center gap-2 mb-1">
                 <CheckCircle2 className="w-6 h-6 text-blue-500" /> Resultados del Procesamiento
@@ -257,13 +415,81 @@ export default function ConciliacionAforos() {
 
             </div>
 
+            {/* runId + botón Deshacer — siempre que la corrida haya persistido un ConciliacionRun. */}
+            {resultado.runId && (
+              <div className="bg-white p-5 rounded-2xl border-2 border-gray-200 shadow-sm flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                <div className="text-sm">
+                  <p className="text-gray-500">Corrida registrada</p>
+                  <p className="font-mono text-lg font-black text-gray-800">RUN-{String(resultado.runId).padStart(6, "0")}</p>
+                  <p className="text-[11px] text-gray-500 mt-1">Si detectaste un error (IVA equivocado, archivo cambiado, etc.), podés deshacer esta corrida y volver a subir.</p>
+                </div>
+                <button
+                  onClick={() => { setConfirmandoUndo(true); setUndoError(null); }}
+                  disabled={ejecutandoUndo}
+                  className="bg-red-100 hover:bg-red-200 text-red-800 font-bold py-2 px-4 rounded-xl inline-flex items-center gap-2 border-2 border-red-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Undo2 className="w-4 h-4" /> Deshacer esta conciliación
+                </button>
+              </div>
+            )}
+
             <div className="text-center pt-4">
-              <button 
-                onClick={() => { setResultado(null); setDatosExcel([]); }}
+              <button
+                onClick={reiniciar}
                 className="text-[#233b6b] font-bold hover:underline"
               >
                 Volver al inicio
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* Modal de confirmación del Undo (overlay). */}
+        {confirmandoUndo && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl">
+              <div className="flex items-start gap-4 mb-4">
+                <div className="bg-red-100 p-2 rounded-xl">
+                  <Undo2 className="w-6 h-6 text-red-700" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-gray-800">¿Deshacer la conciliación?</h3>
+                  <p className="text-sm text-gray-600 mt-1">
+                    Esta acción restaura los valores previos de los envíos de esta corrida
+                    (peso aforado, costo esperado, costo facturado, estado de auditoría, referencia de factura
+                    y costo de aforo) y libera la marca de factura para poder reimportar el archivo corregido.
+                  </p>
+                  <p className="text-xs text-gray-500 mt-2">
+                    No se puede deshacer si algún envío de esta corrida ya fue cerrado en una liquidación mensual.
+                    En ese caso, el servidor devuelve un aviso y hay que corregir con un ajuste, no con reversión.
+                  </p>
+                </div>
+              </div>
+
+              {undoError && (
+                <div className="bg-red-50 border-2 border-red-300 text-red-800 p-4 rounded-xl text-sm font-medium mb-4 flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                  <span>{undoError}</span>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => { setConfirmandoUndo(false); setUndoError(null); }}
+                  disabled={ejecutandoUndo}
+                  className="px-4 py-2 rounded-xl border border-gray-300 text-gray-700 font-bold hover:bg-gray-50 disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={ejecutarUndo}
+                  disabled={ejecutandoUndo}
+                  className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-xl inline-flex items-center gap-2 disabled:opacity-50"
+                >
+                  {ejecutandoUndo ? <Loader2 className="w-4 h-4 animate-spin" /> : <Undo2 className="w-4 h-4" />}
+                  {ejecutandoUndo ? "Deshaciendo..." : "Sí, deshacer"}
+                </button>
+              </div>
             </div>
           </div>
         )}

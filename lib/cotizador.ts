@@ -34,6 +34,17 @@ export interface OpcionTarifa {
   slaHs: number;
   fechaEstimadaString: string;
   etiquetaSla: string;
+  // Desglose del precio computado por aplicarMarkup — se propaga hasta el
+  // consumidor para que crear.ts persista el breakdown (feeNeto / cascadaNeto
+  // / smoNeto / netoAcumulado) sin recomputar. Opcional para no romper
+  // consumidores legacy; los productores del cotizador siempre lo pueblan.
+  // Omitimos secoNeto — no lo necesita ningún consumidor downstream.
+  desglose?: {
+    cascadaNeto: Prisma.Decimal;
+    smoNeto: Prisma.Decimal;
+    feeNeto: Prisma.Decimal;
+    netoAcumulado: Prisma.Decimal;
+  };
 }
 
 export interface CotizarResult {
@@ -411,7 +422,16 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
               precioProveedor: precios.precioProveedor,
               slaHs: slaHorasFinal,
               fechaEstimadaString: textoUXLlegada,
-              etiquetaSla: esSlaReal ? 'Basado en datos reales' : 'Tiempo estimado'
+              etiquetaSla: esSlaReal ? 'Basado en datos reales' : 'Tiempo estimado',
+              // Propagar el desglose que ya computó aplicarMarkup — crear.ts
+              // lo consume para persistir el breakdown (fee/logistica/IVA)
+              // sin recomputar. Único source of truth.
+              desglose: {
+                cascadaNeto: precios.desglose.cascadaNeto,
+                smoNeto: precios.desglose.smoNeto,
+                feeNeto: precios.desglose.feeNeto,
+                netoAcumulado: precios.desglose.netoAcumulado,
+              },
             });
           }
         } catch (e: any) { }
@@ -431,7 +451,14 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
               precioProveedor: precios.precioProveedor,
               slaHs: slaHorasFinal,
               fechaEstimadaString: textoUXLlegada,
-              etiquetaSla: esSlaReal ? 'Basado en datos reales' : 'Tiempo estimado'
+              etiquetaSla: esSlaReal ? 'Basado en datos reales' : 'Tiempo estimado',
+              // Propagar el desglose (idem push de domicilio arriba).
+              desglose: {
+                cascadaNeto: precios.desglose.cascadaNeto,
+                smoNeto: precios.desglose.smoNeto,
+                feeNeto: precios.desglose.feeNeto,
+                netoAcumulado: precios.desglose.netoAcumulado,
+              },
             });
           }
         } catch (e) { }

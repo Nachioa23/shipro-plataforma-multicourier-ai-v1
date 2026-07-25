@@ -1,8 +1,14 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { Prisma } from "@prisma/client";
+import { Prisma, EstadoLiquidacion } from "@prisma/client";
 import { aplicarMarkup, type ConfigMarkup } from "@/lib/cotizador";
 import { calcularFeeOperacion } from "@/lib/utils/operacion-fee";
+
+// STEP 1 (dos-vías-liquidación): validador del período de la factura del courier.
+// Formato requerido YYYY-MM (ej. "2026-04"). Es el mes al que corresponde la
+// factura del courier (no la fecha de importación). Se persiste en
+// FinanzasEnvio.periodoLogistica para agrupar la proforma LOGISTICA por mes.
+const PERIODO_FACTURA_REGEX = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 export async function POST(request: Request) {
   // DEUDA 87 FAMILIA 3: gate de rol (defense-in-depth).
@@ -12,7 +18,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { filasExcel, referenciaFactura, ivaDeclarado } = await request.json();
+    const { filasExcel, referenciaFactura, ivaDeclarado, periodoFacturaCourier } = await request.json();
 
     if (!filasExcel || !Array.isArray(filasExcel) || !referenciaFactura) {
       return NextResponse.json({ error: "Faltan datos o no se indicó el Número de Factura del Courier." }, { status: 400 });
@@ -30,6 +36,18 @@ export async function POST(request: Request) {
     }
     const tarifaExcelIncluyeIva = ivaDeclarado === "CON_IVA";
 
+    // STEP 1: período de la factura del courier (YYYY-MM). Mismo patrón que
+    // ivaDeclarado — obligatorio, sin default. Es el mes al que corresponde la
+    // factura (marzo puede llegar el 3 de abril; el período es "2026-03").
+    // Se persiste en FinanzasEnvio.periodoLogistica para agrupar la proforma
+    // LOGISTICA por período correcto.
+    if (typeof periodoFacturaCourier !== "string" || !PERIODO_FACTURA_REGEX.test(periodoFacturaCourier)) {
+      return NextResponse.json(
+        { error: "Falta o es inválido 'periodoFacturaCourier'. Requerido formato YYYY-MM (ej. '2026-04'). Es el mes al que corresponde la factura del courier, no la fecha en que la subís." },
+        { status: 400 }
+      );
+    }
+
     // proxy.ts inyecta x-usuario-email cuando la sesión está autenticada.
     // Si no viene, guardamos null en la bitácora (no inventamos auth).
     const usuarioEmail = request.headers.get("x-usuario-email");
@@ -43,11 +61,13 @@ export async function POST(request: Request) {
     };
 
     // Snapshot para UNDO: por cada FinanzasEnvio que este endpoint modifica,
-    // guardamos { finanzasEnvioId, prior: { 6 campos antes del update } }.
+    // guardamos { finanzasEnvioId, prior: { 8 campos antes del update } }.
     // Al final de la corrida creamos UN ConciliacionRun con este array;
     // POST /api/conciliacion/revertir lo restaura si nada del snapshot cayó
     // dentro de una LiquidacionMensual (mes ya cerrado → corregir con ajuste,
     // no con reversión).
+    // STEP 1: agregamos periodoLogistica y estadoLiquidacionLogistica al snapshot
+    // porque esta corrida los modifica en Rama A.
     type SnapshotEntry = {
       finanzasEnvioId: number;
       prior: {
@@ -57,6 +77,8 @@ export async function POST(request: Request) {
         estadoAuditoria: string | null;
         facturaCourierRef: string | null;
         costoAforo: string | null;
+        periodoLogistica: string | null;
+        estadoLiquidacionLogistica: EstadoLiquidacion;
       };
     };
     const snapshot: SnapshotEntry[] = [];
@@ -115,10 +137,18 @@ export async function POST(request: Request) {
       // ESCUDO 1: ANTI-DOBLE COBRO (Caso UPS)
       // ==========================================
       // Si el envío ya fue facturado al cliente en el pasado, o si ya tiene un número de factura de courier asignado
-      if (envio.estadoLiquidacion === "LIQUIDADO" || envio.finanzas.facturaCourierRef !== null) {
+      // STEP 1 (dos-vías-liquidación): un envío ya fue liquidado si cualquiera
+      // de las dos vías (Fee/Logistica) está en LIQUIDADO, o si ya tiene la
+      // marca de factura del courier (anti-doble-cobro clásico).
+      if (
+        envio.finanzas.estadoLiquidacionFee === EstadoLiquidacion.LIQUIDADO ||
+        envio.finanzas.estadoLiquidacionLogistica === EstadoLiquidacion.LIQUIDADO ||
+        envio.finanzas.facturaCourierRef !== null
+      ) {
 
-        // Snapshot los 6 campos ANTES del update (aunque este branch solo toca
-        // estadoAuditoria, snapshoteamos todos para restaurar coherentemente).
+        // Snapshot los 8 campos ANTES del update (aunque este branch solo toca
+        // estadoAuditoria, snapshoteamos todos para restaurar coherentemente
+        // — el revertir espeja los mismos campos).
         snapshot.push({
           finanzasEnvioId: envio.finanzas.id,
           prior: {
@@ -128,6 +158,8 @@ export async function POST(request: Request) {
             estadoAuditoria: envio.finanzas.estadoAuditoria ?? null,
             facturaCourierRef: envio.finanzas.facturaCourierRef ?? null,
             costoAforo: envio.finanzas.costoAforo ? envio.finanzas.costoAforo.toString() : null,
+            periodoLogistica: envio.finanzas.periodoLogistica ?? null,
+            estadoLiquidacionLogistica: envio.finanzas.estadoLiquidacionLogistica,
           },
         });
 
@@ -299,8 +331,16 @@ export async function POST(request: Request) {
           estadoAuditoria: envio.finanzas.estadoAuditoria ?? null,
           facturaCourierRef: envio.finanzas.facturaCourierRef ?? null,
           costoAforo: envio.finanzas.costoAforo ? envio.finanzas.costoAforo.toString() : null,
+          periodoLogistica: envio.finanzas.periodoLogistica ?? null,
+          estadoLiquidacionLogistica: envio.finanzas.estadoLiquidacionLogistica,
         },
       });
+
+      // STEP 1 (dos-vías-liquidación): Rama A avanza la vía LOGISTICA a EN_PROCESO
+      // y se sella el período de la factura del courier. Rama B: NO se toca
+      // (queda NO_APLICA — Shipro nunca recibe factura del courier en Rama B).
+      // Los envíos sin credencial reconocible tampoco se tocan (defensivo).
+      const enPipelineLogistica = credencial != null && credencial.usaCredencialesPropias === false;
 
       await prisma.finanzasEnvio.update({
         where: { id: envio.finanzas!.id },
@@ -311,6 +351,10 @@ export async function POST(request: Request) {
           estadoAuditoria: estadoAud,
           facturaCourierRef: referenciaFactura, // Marca para evitar futuros dobles cobros.
           costoAforo,                            // FASE 1: escribimos el delta; NO tocamos precioFactura.
+          ...(enPipelineLogistica ? {
+            periodoLogistica: periodoFacturaCourier,
+            estadoLiquidacionLogistica: EstadoLiquidacion.EN_PROCESO,
+          } : {}),
         }
       });
 
@@ -342,6 +386,7 @@ export async function POST(request: Request) {
       data: {
         referenciaFactura,
         ivaDeclarado,
+        periodoFacturaCourier, // STEP 1: se guarda para trazabilidad de la corrida.
         cantidadEnvios: snapshot.length,
         usuarioEmail: usuarioEmail || null,
         snapshot: snapshot as unknown as Prisma.InputJsonValue,

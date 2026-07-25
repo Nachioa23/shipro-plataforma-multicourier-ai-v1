@@ -440,6 +440,27 @@ model OrdenExterna {
 // ==========================================
 // 2.3 FINANZAS DE ENVÍO (El Escudo Contable)
 // ==========================================
+// ============================================================================
+// STEP 1 (dos-vías-liquidación): enums para el estado por track + el tipo
+// de proforma. NO existían enums en el schema; se introducen ahora.
+// EstadoLiquidacion.NO_APLICA solo aplica a la vía LOGISTICA de Rama B
+// (Shipro nunca recibe factura del courier en Rama B, así que la vía
+// logística no tiene sentido para esos envíos).
+// ============================================================================
+enum EstadoLiquidacion {
+  PENDIENTE
+  EN_PROCESO
+  LIQUIDADO
+  OBSERVADO
+  ANULADO
+  NO_APLICA
+}
+
+enum TipoLiquidacion {
+  FEE
+  LOGISTICA
+}
+
 model FinanzasEnvio {
   id Int @id @default(autoincrement())
 
@@ -474,7 +495,29 @@ model FinanzasEnvio {
   descuentoClienteAplicado    Decimal? @db.Decimal(12, 2) // el descuento/recargo del cliente (con signo)
   precioProveedorReal         Decimal? @db.Decimal(12, 2) // costo real esperado = base + markup intermediario
 
+  // 6. STEP 1 (dos-vías-liquidación) — congelamos la rama al alta y persistimos
+  // el breakdown (fee neto / logística neta / IVA), para poder emitir dos proformas
+  // (FEE y LOGISTICA) sin recomputar y sin depender de OperacionFee vigente al cierre.
+  // Invariante (rows no-fallback): feeNetoFacturado + logisticaNetaFacturada + ivaFacturado == precioFactura.
+  ramaCongelada              Boolean            @default(false) // true=Rama B (creds propias), false=Rama A. Snapshot de usaCredencialesPropias al alta.
+  feeNetoFacturado           Decimal?           @db.Decimal(12, 2) // Fee Shipro NETO (sin IVA). NULL si Rama A cayó en fallback (breakdown irrecuperable).
+  logisticaNetaFacturada     Decimal?           @db.Decimal(12, 2) // Cascada + SMO, NETO. Rama B = 0. NULL en fallback.
+  ivaFacturado               Decimal?           @db.Decimal(12, 2) // IVA 21% sobre (feeNeto + logisticaNeta). NULL en fallback.
+  estadoLiquidacionFee       EstadoLiquidacion  @default(PENDIENTE)
+  estadoLiquidacionLogistica EstadoLiquidacion  @default(PENDIENTE) // Rama B → NO_APLICA. Fallback → OBSERVADO.
+  liquidacionFeeId           Int?
+  liquidacionFee             LiquidacionMensual? @relation("FinanzasLiqFee", fields: [liquidacionFeeId], references: [id])
+  liquidacionLogisticaId     Int?
+  liquidacionLogistica       LiquidacionMensual? @relation("FinanzasLiqLogistica", fields: [liquidacionLogisticaId], references: [id])
+  periodoLogistica           String? // YYYY-MM declarado en conciliación (mes del período de la factura del courier). NULL hasta que llega la factura.
+  logisticaDevuelta          Boolean            @default(false) // Se pone true en el sweep 6-meses (STEP 2+).
+  fechaDevolucionLogistica   DateTime?
+
   envio Envio?
+
+  @@index([estadoLiquidacionLogistica, logisticaDevuelta]) // 6-month sweep (STEP 2+)
+  @@index([periodoLogistica]) // logistics proforma lookup
+  @@index([facturaCourierRef]) // conciliación DOBLE_COBRO lookup
 }
 
 // ==========================================
@@ -496,6 +539,10 @@ model MovimientoFinanciero {
   envio   Envio? @relation(fields: [envioId], references: [id])
 
   fecha DateTime @default(now())
+
+  // STEP 1: la wallet-page ordena por fecha desc y filtra por empresa.
+  // El campo cronológico de este modelo es `fecha` (no `createdAt`).
+  @@index([empresaId, fecha])
 }
 
 // ==========================================
@@ -506,16 +553,25 @@ model LiquidacionMensual {
   empresaId Int
   empresa   Empresa @relation(fields: [empresaId], references: [id])
 
-  periodo    String // Ej: "2026-04" o "Abril 2026"
+  periodo    String // STEP 1: YYYY-MM (validado por admin/liquidaciones). Formatos legacy (ej. "JULIO 2026") solo en rows viejas.
   montoTotal Decimal @db.Decimal(12, 2) // La suma de todos los envíos y aforos del mes
   estado     String  @default("EMITIDA") // EMITIDA, PAGADA
+
+  // STEP 1: discriminador de proforma. Default LOGISTICA (compatibilidad con rows previas
+  // — el comportamiento pre-STEP-1 era efectivamente una proforma combinada, más cercana
+  // a la vía LOGISTICA porque su gate era pesoAforado != null).
+  tipo TipoLiquidacion @default(LOGISTICA)
 
   excelProformaUrl String? // El link al Excel consolidado con el detalle
   facturaXubioUrl  String? // El link al PDF legal de la AFIP generado por Xubio
 
   fechaCreacion DateTime @default(now())
 
-  envios Envio[] // Todos los envíos que entraron en esta liquidación
+  // STEP 1 (dos-vías-liquidación): las FKs desde envío vienen ahora por
+  // FinanzasEnvio (finanzasFee / finanzasLogistica). La legacy `envios Envio[]`
+  // fue dropeada junto con Envio.liquidacionId.
+  finanzasFee       FinanzasEnvio[] @relation("FinanzasLiqFee")       // proformas tipo=FEE
+  finanzasLogistica FinanzasEnvio[] @relation("FinanzasLiqLogistica") // proformas tipo=LOGISTICA
 }
 
 // ==========================================
@@ -548,10 +604,10 @@ model Envio {
 
   estadoActual String @default("IMPRESO")
 
-  // NUEVO: Control de Liquidación (Evita facturar dos veces)
-  estadoLiquidacion String              @default("PENDIENTE") // PENDIENTE, LIQUIDADO
-  liquidacionId     Int?
-  liquidacion       LiquidacionMensual? @relation(fields: [liquidacionId], references: [id])
+  // STEP 1 (dos-vías-liquidación): la vía única legacy fue reemplazada por
+  // FinanzasEnvio.estadoLiquidacionFee/estadoLiquidacionLogistica +
+  // FinanzasEnvio.liquidacionFeeId/liquidacionLogisticaId. Los tres campos
+  // viejos (estadoLiquidacion, liquidacionId, liquidacion) fueron dropeados.
 
   fechaImpresion     DateTime  @default(now())
   fechaColecta       DateTime? // Cuándo el courier hizo la recolección física
@@ -599,6 +655,10 @@ model Envio {
   // DEUDA 29: cadena de tramos (recolección, entrega, ciclo_completo).
   // Cada tramo tiene su propio courier responsable y trackingExterno.
   tramos TramoEnvio[]
+
+  // STEP 1: la app usa fechaImpresion como "created at" del envío (no hay createdAt).
+  // Este índice sirve al 6-month sweep + al wallet-por-empresa por fecha.
+  @@index([empresaId, fechaImpresion])
 }
 
 // ==========================================
@@ -1246,15 +1306,20 @@ model RegistroCoberturaVacia {
 //    con ajuste, no con reversión).
 // =============================================================================
 model ConciliacionRun {
-  id                Int       @id @default(autoincrement())
-  referenciaFactura String
-  ivaDeclarado      String // "SIN_IVA" | "CON_IVA"
-  cantidadEnvios    Int
-  usuarioEmail      String?
-  snapshot          Json // [{ finanzasEnvioId, prior: { pesoAforado, costoCourierEsperado, costoCourierFacturado, estadoAuditoria, facturaCourierRef, costoAforo } }]
-  revertida         Boolean   @default(false)
-  fechaReversion    DateTime?
-  createdAt         DateTime  @default(now())
+  id                     Int       @id @default(autoincrement())
+  referenciaFactura      String
+  ivaDeclarado           String // "SIN_IVA" | "CON_IVA"
+  // STEP 1 (dos-vías-liquidación): período YYYY-MM al que corresponde la
+  // factura del courier (no la fecha de importación). Se propaga a
+  // FinanzasEnvio.periodoLogistica para agrupar la proforma LOGISTICA.
+  // Nullable para retro-compatibilidad con ConciliacionRun previos.
+  periodoFacturaCourier  String?
+  cantidadEnvios         Int
+  usuarioEmail           String?
+  snapshot               Json // [{ finanzasEnvioId, prior: { pesoAforado, costoCourierEsperado, costoCourierFacturado, estadoAuditoria, facturaCourierRef, costoAforo, periodoLogistica, estadoLiquidacionLogistica } }]
+  revertida              Boolean   @default(false)
+  fechaReversion         DateTime?
+  createdAt              DateTime  @default(now())
 
   @@index([referenciaFactura])
   @@index([createdAt])

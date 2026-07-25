@@ -4,13 +4,86 @@ import { useState, useEffect } from "react";
 import * as XLSX from "xlsx";
 import { Calculator, FileSpreadsheet, CheckCircle2, Loader2, AlertTriangle, CalendarDays, Receipt, Download, Search, X } from "lucide-react";
 
+// STEP 1 (dos-vías-liquidación): sección reutilizable para pendientes Fee/Logistica.
+// Cada item de `items` viene con { empresaId, empresaNombre, cuit, periodo, totalEnvios, montoTotal }.
+function PendientesSection({
+  titulo, descripcion, items, tipo, cargando, procesandoKey, onCerrar, formatMoneda,
+}: {
+  titulo: string;
+  descripcion: string;
+  items: any[];
+  tipo: "FEE" | "LOGISTICA";
+  cargando: boolean;
+  procesandoKey: string | null;
+  onCerrar: (empresaId: number, nombreEmpresa: string, tipo: "FEE" | "LOGISTICA", periodo: string) => void;
+  formatMoneda: (v: number) => string;
+}) {
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+      <div className="p-6 border-b border-gray-100 bg-cyan-50/30">
+        <h3 className="text-lg font-bold text-[#233b6b] flex items-center gap-2">
+          <CalendarDays className="w-5 h-5" /> {titulo}
+        </h3>
+        <p className="text-xs text-gray-500 mt-1">{descripcion}</p>
+      </div>
+      <div className="p-6">
+        {cargando ? (
+          <div className="py-8 text-center text-gray-400"><Loader2 className="w-8 h-8 animate-spin mx-auto mb-2" /> Analizando base de datos...</div>
+        ) : items.length === 0 ? (
+          <div className="py-8 text-center text-gray-500 bg-gray-50 rounded-xl border border-dashed border-gray-200">
+            <CheckCircle2 className="w-10 h-10 text-green-400 mx-auto mb-2" />
+            <p className="text-sm">Sin pendientes en esta vía.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {items.map((emp: any) => {
+              const key = `${emp.empresaId}:${tipo}:${emp.periodo}`;
+              const enCurso = procesandoKey === key;
+              return (
+                <div key={key} className="border border-gray-200 rounded-xl p-5 hover:border-[#233b6b] transition-colors flex flex-col justify-between">
+                  <div className="flex justify-between items-start mb-4">
+                    <div>
+                      <h4 className="font-black text-gray-800 text-lg">{emp.empresaNombre}</h4>
+                      <p className="text-xs font-bold text-gray-400">CUIT: {emp.cuit || "—"} · Período: <span className="text-[#233b6b]">{emp.periodo}</span></p>
+                    </div>
+                    <div className="bg-amber-50 text-amber-700 px-3 py-1 rounded-lg border border-amber-200 text-xs font-bold flex items-center gap-1">
+                      <AlertTriangle className="w-3.5 h-3.5" /> {emp.totalEnvios} envíos
+                    </div>
+                  </div>
+                  <div className="flex items-end justify-between mt-4 pt-4 border-t border-gray-100">
+                    <div>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Monto a Liquidar</p>
+                      <p className="text-2xl font-black text-[#233b6b]">{formatMoneda(emp.montoTotal)}</p>
+                    </div>
+                    <button
+                      onClick={() => onCerrar(emp.empresaId, emp.empresaNombre, tipo, emp.periodo)}
+                      disabled={enCurso}
+                      className="bg-[#233b6b] hover:bg-blue-900 text-white font-bold py-2.5 px-5 rounded-lg transition-colors text-sm flex items-center gap-2 shadow-sm disabled:opacity-50"
+                    >
+                      {enCurso ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+                      Generar Proforma {tipo === "FEE" ? "FEE" : "LOGÍSTICA"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function CierreMensual() {
   const brandColor = '#233b6b';
-  
-  const [pendientes, setPendientes] = useState<any[]>([]);
+
+  // STEP 1 (dos-vías-liquidación): dos listas de pendientes (Fee / Logistica).
+  const [pendientesFee, setPendientesFee] = useState<any[]>([]);
+  const [pendientesLogistica, setPendientesLogistica] = useState<any[]>([]);
   const [historial, setHistorial] = useState<any[]>([]);
   const [cargando, setCargando] = useState(true);
-  const [procesandoId, setProcesandoId] = useState<number | null>(null);
+  // Clave de row en curso: `${empresaId}:${tipo}:${periodo}` para no bloquear rows distintas.
+  const [procesandoKey, setProcesandoKey] = useState<string | null>(null);
 
   // Súper Buscador
   const [busquedaTracking, setBusquedaTracking] = useState("");
@@ -23,7 +96,8 @@ export default function CierreMensual() {
       const res = await fetch("/api/admin/liquidaciones");
       if (res.ok) {
         const data = await res.json();
-        setPendientes(data.pendientes || []);
+        setPendientesFee(data.pendientesFee || []);
+        setPendientesLogistica(data.pendientesLogistica || []);
         setHistorial(data.historial || []);
       }
     } catch (error) {
@@ -60,57 +134,80 @@ export default function CierreMensual() {
     }
   };
 
-  const ejecutarCierre = async (empresaId: number, nombreEmpresa: string) => {
-    const mesActual = new Date().toLocaleString('es-ES', { month: 'long', year: 'numeric' });
-    const confirmar = confirm(`¿Estás seguro de generar la liquidación de ${nombreEmpresa}? (Solo se incluirán los envíos ya aforados/facturados por el courier).`);
+  const ejecutarCierre = async (empresaId: number, nombreEmpresa: string, tipo: "FEE" | "LOGISTICA", periodo: string) => {
+    const rotulo = tipo === "FEE" ? "Fee de plataforma" : "Logística (courier)";
+    const confirmar = confirm(`¿Generar proforma ${rotulo} de ${nombreEmpresa} para el período ${periodo}?`);
     if (!confirmar) return;
 
-    setProcesandoId(empresaId);
+    const key = `${empresaId}:${tipo}:${periodo}`;
+    setProcesandoKey(key);
     try {
       const res = await fetch("/api/admin/liquidaciones", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ empresaId, periodo: mesActual.toUpperCase() })
+        body: JSON.stringify({ empresaId, periodo, tipo }),
       });
 
       const data = await res.json();
-      
+
       if (res.ok) {
-        generarExcelProforma(data.envios, data.liquidacion, nombreEmpresa);
-        alert(`Liquidación generada con éxito. Los envíos fueron marcados como FACTURADOS.`);
-        cargarDatos(); 
+        generarExcelProforma(data.envios, data.liquidacion, nombreEmpresa, tipo);
+        alert(`Proforma ${rotulo} generada. Los envíos fueron marcados como LIQUIDADO en esa vía.`);
+        cargarDatos();
       } else {
         alert(data.error || "Error al generar la liquidación");
       }
     } catch (error) {
       alert("Error de conexión");
     } finally {
-      setProcesandoId(null);
+      setProcesandoKey(null);
     }
   };
 
-  const generarExcelProforma = (envios: any[], liquidacion: any, nombreEmpresa: string) => {
-    const filasExcel = envios.map(e => ({
-      "Fecha Creado": new Date(e.fechaImpresion).toLocaleDateString(),
-      "Tracking": e.trackingNumber,
-      "Courier": e.courier?.nombre?.toUpperCase() || "",
-      "Modalidad": e.modalidad,
-      "Provincia Destino": e.destino?.provincia || "",
-      "CP Destino": e.destino?.cp || "",
-      "Peso Cotizado (Kg)": e.finanzas?.pesoCobrado || e.pesoReal,
-      "Peso Aforado (Kg)": e.finanzas?.pesoAforado || "-",
-      "Costo Envío (Courier)": e.finanzas?.precioProveedor || 0,
-      "Costo Seguro": e.finanzas?.valorDeclarado ? (e.finanzas.valorDeclarado * 0.01) : 0, 
-      "Fee Shipro": (e.finanzas?.precioFactura || 0) - (e.finanzas?.precioProveedor || 0),
-      "Ajuste por Aforo": e.finanzas?.costoAforo || 0,
-      "TOTAL FINAL CLIENTE": (e.finanzas?.precioFactura || 0) + (e.finanzas?.costoAforo || 0)
-    }));
+  const generarExcelProforma = (envios: any[], liquidacion: any, nombreEmpresa: string, tipo: "FEE" | "LOGISTICA") => {
+    // STEP 1: dos formatos de Excel, uno por vía. Los importes vienen del
+    // breakdown persistido (feeNetoFacturado / logisticaNetaFacturada / ivaFacturado)
+    // — NO recalculamos precioFactura − precioProveedor (heurística vieja errada).
+    const IVA = 1.21;
+    const filasExcel = envios.map(e => {
+      const f = e.finanzas || {};
+      const feeNeto = Number(f.feeNetoFacturado ?? 0);
+      const logNeto = Number(f.logisticaNetaFacturada ?? 0);
+      const aforo = Number(f.costoAforo ?? 0);
+      if (tipo === "FEE") {
+        return {
+          "Fecha Creado": new Date(e.fechaImpresion).toLocaleDateString(),
+          "Tracking": e.trackingNumber,
+          "Courier": e.courier?.nombre?.toUpperCase() || "",
+          "Modalidad": e.modalidad,
+          "Fee Shipro (Neto)": feeNeto,
+          "IVA 21%": +(feeNeto * (IVA - 1)).toFixed(2),
+          "TOTAL FEE": +(feeNeto * IVA).toFixed(2),
+        };
+      }
+      // LOGISTICA
+      const netoTotal = logNeto + aforo;
+      return {
+        "Fecha Creado": new Date(e.fechaImpresion).toLocaleDateString(),
+        "Tracking": e.trackingNumber,
+        "Courier": e.courier?.nombre?.toUpperCase() || "",
+        "Modalidad": e.modalidad,
+        "Provincia Destino": e.destino?.provincia || "",
+        "CP Destino": e.destino?.cp || "",
+        "Peso Cotizado (Kg)": f.pesoCobrado || e.pesoReal,
+        "Peso Aforado (Kg)": f.pesoAforado || "-",
+        "Logística Neta (Cascada + SMO)": logNeto,
+        "Ajuste por Aforo": aforo,
+        "IVA 21%": +(netoTotal * (IVA - 1)).toFixed(2),
+        "TOTAL LOGÍSTICA": +(netoTotal * IVA).toFixed(2),
+      };
+    });
 
     const worksheet = XLSX.utils.json_to_sheet(filasExcel);
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Liquidacion_Detalle");
-    
-    XLSX.writeFile(workbook, `PROFORMA_${nombreEmpresa.replace(/\s/g, '_')}_${liquidacion.periodo.replace(/\s/g, '_')}.xlsx`);
+    XLSX.utils.book_append_sheet(workbook, worksheet, tipo === "FEE" ? "Fee_Detalle" : "Logistica_Detalle");
+
+    XLSX.writeFile(workbook, `PROFORMA_${tipo}_${nombreEmpresa.replace(/\s/g, '_')}_${liquidacion.periodo.replace(/\s/g, '_')}.xlsx`);
   };
 
   return (
@@ -152,7 +249,7 @@ export default function CierreMensual() {
             <button onClick={() => setResultadoBuscador(null)} className="absolute top-4 right-4 text-blue-300 hover:text-white"><X className="w-5 h-5" /></button>
             <h3 className="text-xs font-black text-blue-300 uppercase tracking-widest mb-4 flex items-center gap-2"><Search className="w-4 h-4" /> Resultado Forense</h3>
             
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
               <div>
                 <p className="text-xs text-blue-300 font-bold mb-1">Tracking Nro</p>
                 <p className="text-lg font-mono font-black">{resultadoBuscador.trackingNumber}</p>
@@ -162,70 +259,60 @@ export default function CierreMensual() {
                 <p className="text-lg font-bold">{resultadoBuscador.empresa?.nombre}</p>
               </div>
               <div>
-                <p className="text-xs text-blue-300 font-bold mb-1">Estado de Facturación</p>
-                <span className={`px-2 py-1 text-xs font-bold rounded ${resultadoBuscador.estadoLiquidacion === 'LIQUIDADO' ? 'bg-green-500/20 text-green-300' : 'bg-amber-500/20 text-amber-300'}`}>
-                  {resultadoBuscador.estadoLiquidacion}
-                </span>
+                <p className="text-xs text-blue-300 font-bold mb-1">Rama</p>
+                <p className="text-lg font-bold">{resultadoBuscador.finanzas?.ramaCongelada ? "B (creds propias)" : "A (Shipro)"}</p>
               </div>
               <div>
-                <p className="text-xs text-blue-300 font-bold mb-1">Pertenece a la Proforma</p>
-                <p className="text-lg font-bold">{resultadoBuscador.liquidacion ? `LIQ-${String(resultadoBuscador.liquidacion.id).padStart(4, '0')}` : 'Sin cerrar'}</p>
+                <p className="text-xs text-blue-300 font-bold mb-1">Vía FEE</p>
+                <span className={`px-2 py-1 text-xs font-bold rounded ${resultadoBuscador.finanzas?.estadoLiquidacionFee === 'LIQUIDADO' ? 'bg-green-500/20 text-green-300' : resultadoBuscador.finanzas?.estadoLiquidacionFee === 'OBSERVADO' ? 'bg-red-500/20 text-red-300' : 'bg-amber-500/20 text-amber-300'}`}>
+                  {resultadoBuscador.finanzas?.estadoLiquidacionFee || '—'}
+                </span>
+                <p className="text-xs text-blue-300 mt-1">
+                  {resultadoBuscador.finanzas?.liquidacionFee ? `LIQ-${String(resultadoBuscador.finanzas.liquidacionFee.id).padStart(4, '0')}` : 'Sin cerrar'}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-blue-300 font-bold mb-1">Vía LOGÍSTICA</p>
+                <span className={`px-2 py-1 text-xs font-bold rounded ${
+                  resultadoBuscador.finanzas?.estadoLiquidacionLogistica === 'LIQUIDADO' ? 'bg-green-500/20 text-green-300'
+                  : resultadoBuscador.finanzas?.estadoLiquidacionLogistica === 'NO_APLICA' ? 'bg-gray-500/30 text-gray-300'
+                  : resultadoBuscador.finanzas?.estadoLiquidacionLogistica === 'OBSERVADO' ? 'bg-red-500/20 text-red-300'
+                  : 'bg-amber-500/20 text-amber-300'
+                }`}>
+                  {resultadoBuscador.finanzas?.estadoLiquidacionLogistica || '—'}
+                </span>
+                <p className="text-xs text-blue-300 mt-1">
+                  {resultadoBuscador.finanzas?.liquidacionLogistica ? `LIQ-${String(resultadoBuscador.finanzas.liquidacionLogistica.id).padStart(4, '0')}` : 'Sin cerrar'}
+                  {resultadoBuscador.finanzas?.periodoLogistica ? ` · ${resultadoBuscador.finanzas.periodoLogistica}` : ''}
+                </p>
               </div>
             </div>
           </div>
         )}
 
-        {/* BLOQUE 1: PENDIENTES DE CIERRE */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-          <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-cyan-50/30">
-            <h3 className="text-lg font-bold text-[#233b6b] flex items-center gap-2">
-              <CalendarDays className="w-5 h-5" /> Envíos Aptos para Facturar
-            </h3>
-          </div>
+        {/* BLOQUE 1a: PENDIENTES DE CIERRE — FEE */}
+        <PendientesSection
+          titulo="Pendientes: Fee de Plataforma"
+          descripcion="Se cobra al mes de creación del envío. Cubre AMBAS ramas."
+          items={pendientesFee}
+          tipo="FEE"
+          cargando={cargando || buscandoForense}
+          procesandoKey={procesandoKey}
+          onCerrar={ejecutarCierre}
+          formatMoneda={formatMoneda}
+        />
 
-          <div className="p-6">
-            {cargando || buscandoForense ? (
-              <div className="py-8 text-center text-gray-400"><Loader2 className="w-8 h-8 animate-spin mx-auto mb-2" /> Analizando base de datos...</div>
-            ) : pendientes.length === 0 ? (
-              <div className="py-12 text-center text-gray-500 bg-gray-50 rounded-xl border border-dashed border-gray-200">
-                <CheckCircle2 className="w-12 h-12 text-green-400 mx-auto mb-3" />
-                <p className="font-bold">No hay plata por reclamar.</p>
-                <p className="text-sm">Todos los envíos validados ya fueron facturados al cliente.</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                {pendientes.map(emp => (
-                  <div key={emp.empresaId} className="border border-gray-200 rounded-xl p-5 hover:border-[#233b6b] transition-colors flex flex-col justify-between">
-                    <div className="flex justify-between items-start mb-4">
-                      <div>
-                        <h4 className="font-black text-gray-800 text-lg">{emp.nombre}</h4>
-                        <p className="text-xs font-bold text-gray-400">CUIT: {emp.cuit}</p>
-                      </div>
-                      <div className="bg-amber-50 text-amber-700 px-3 py-1 rounded-lg border border-amber-200 text-xs font-bold flex items-center gap-1">
-                        <AlertTriangle className="w-3.5 h-3.5" /> {emp.totalEnvios} envíos listos
-                      </div>
-                    </div>
-                    
-                    <div className="flex items-end justify-between mt-4 pt-4 border-t border-gray-100">
-                      <div>
-                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Monto a Liquidar</p>
-                        <p className="text-2xl font-black text-[#233b6b]">{formatMoneda(emp.montoTotal)}</p>
-                      </div>
-                      <button 
-                        onClick={() => ejecutarCierre(emp.empresaId, emp.nombre)}
-                        disabled={procesandoId === emp.empresaId}
-                        className="bg-[#233b6b] hover:bg-blue-900 text-white font-bold py-2.5 px-5 rounded-lg transition-colors text-sm flex items-center gap-2 shadow-sm disabled:opacity-50"
-                      >
-                        {procesandoId === emp.empresaId ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
-                        Generar Proforma
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
+        {/* BLOQUE 1b: PENDIENTES DE CIERRE — LOGÍSTICA */}
+        <PendientesSection
+          titulo="Pendientes: Logística (Courier)"
+          descripcion="Se cobra al mes de la factura del courier. Rama A solamente (Rama B es NO_APLICA)."
+          items={pendientesLogistica}
+          tipo="LOGISTICA"
+          cargando={cargando || buscandoForense}
+          procesandoKey={procesandoKey}
+          onCerrar={ejecutarCierre}
+          formatMoneda={formatMoneda}
+        />
 
         {/* BLOQUE 2: HISTORIAL DE LIQUIDACIONES */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
@@ -240,6 +327,7 @@ export default function CierreMensual() {
               <thead className="bg-slate-50 border-b border-gray-200 text-xs uppercase tracking-wider text-gray-500 font-bold">
                 <tr>
                   <th className="px-6 py-4">Proforma Nro</th>
+                  <th className="px-6 py-4">Tipo</th>
                   <th className="px-6 py-4">Cliente</th>
                   <th className="px-6 py-4">Período</th>
                   <th className="px-6 py-4 text-right">Total Liquidado</th>
@@ -248,14 +336,19 @@ export default function CierreMensual() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {cargando ? (
-                  <tr><td colSpan={5} className="py-8 text-center text-gray-400">Cargando...</td></tr>
+                  <tr><td colSpan={6} className="py-8 text-center text-gray-400">Cargando...</td></tr>
                 ) : historial.length === 0 ? (
-                  <tr><td colSpan={5} className="py-8 text-center text-gray-500">Aún no hay liquidaciones históricas.</td></tr>
+                  <tr><td colSpan={6} className="py-8 text-center text-gray-500">Aún no hay liquidaciones históricas.</td></tr>
                 ) : (
                   historial.map(liq => (
                     <tr key={liq.id} className="hover:bg-gray-50">
                       <td className="px-6 py-4 font-mono font-black text-[#233b6b]">
                         LIQ-{String(liq.id).padStart(4, '0')}
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`px-2 py-1 rounded text-xs font-black ${liq.tipo === 'FEE' ? 'bg-purple-100 text-purple-800' : 'bg-blue-100 text-blue-800'}`}>
+                          {liq.tipo || 'LOGISTICA'}
+                        </span>
                       </td>
                       <td className="px-6 py-4 font-bold text-gray-800">{liq.empresa?.nombre}</td>
                       <td className="px-6 py-4">

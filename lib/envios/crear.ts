@@ -13,7 +13,7 @@ import { validarOperatividadPar } from "@/lib/depositos/operatividad";
 import { getAppUrl } from "@/lib/utils/app-url";
 import { resolverPrecioFallback } from "@/lib/utils/precio-fallback";
 import { calcularFeeOperacion } from "@/lib/utils/operacion-fee";
-import { Prisma, type DepositoCourierConfig } from "@prisma/client";
+import { Prisma, EstadoLiquidacion, type DepositoCourierConfig } from "@prisma/client";
 
 export interface CrearEnvioInput {
   empresaId: number;
@@ -425,11 +425,34 @@ export async function crearEnvio(input: CrearEnvioInput) {
   // cotizacion vacia), queda null y la fuga se salta.
   let tarifaPublicadaElegida: Prisma.Decimal | null = null;
 
+  // STEP 1 (dos-vías-liquidación): congelamos rama al alta + persistimos el
+  // breakdown fee/logística/IVA. Invariante (rows no-fallback):
+  //   feeNetoFacturado + logisticaNetaFacturada + ivaFacturado == precioFactura
+  // Fallback Rama A: los 3 quedan NULL y ambos estados van a OBSERVADO (revisión manual).
+  const ramaCongelada = credencialMain?.usaCredencialesPropias === true;
+  let feeNetoFacturado: Prisma.Decimal | null = null;
+  let logisticaNetaFacturada: Prisma.Decimal | null = null;
+  let ivaFacturado: Prisma.Decimal | null = null;
+  let estadoLiqFee: EstadoLiquidacion = EstadoLiquidacion.PENDIENTE;
+  let estadoLiqLog: EstadoLiquidacion = EstadoLiquidacion.PENDIENTE;
+
   let montoDebito: Prisma.Decimal;
   if (credencialMain?.usaCredencialesPropias === true) {
     // Rama B: el flete lo factura el courier directo al cliente; Shipro solo cobra Fee.
     const feeB = await calcularFeeOperacion(empresaId, new Prisma.Decimal(0));
     montoDebito = feeB?.feeConIva ?? new Prisma.Decimal(0);
+    // STEP 1: breakdown Rama B. Logística NO_APLICA por definición.
+    if (feeB) {
+      feeNetoFacturado = feeB.feePreIva;
+      logisticaNetaFacturada = new Prisma.Decimal(0);
+      ivaFacturado = feeB.feeConIva.sub(feeB.feePreIva);
+    } else {
+      // Sin OperacionFee vigente: montoDebito=0, breakdown todo cero (invariante 0=0).
+      feeNetoFacturado = new Prisma.Decimal(0);
+      logisticaNetaFacturada = new Prisma.Decimal(0);
+      ivaFacturado = new Prisma.Decimal(0);
+    }
+    estadoLiqLog = EstadoLiquidacion.NO_APLICA;
   } else {
     // Rama A: tarifa publicada completa del courier elegido.
     const canonLowerA = modalidadCanonica.toLowerCase();
@@ -453,6 +476,17 @@ export async function crearEnvio(input: CrearEnvioInput) {
       montoDebito = matchedA.precioFinal;
       // Propagar el match de Rama A al metric de fuga (evita re-matching / divergencia).
       tarifaPublicadaElegida = matchedA.precioFinal;
+      // STEP 1 Rama A OK: breakdown desde el desglose ya propagado por cotizador
+      // (Option A). Fuente única de verdad — no recomputamos.
+      if (matchedA.desglose) {
+        feeNetoFacturado = matchedA.desglose.feeNeto;
+        logisticaNetaFacturada = matchedA.desglose.cascadaNeto.add(matchedA.desglose.smoNeto);
+        ivaFacturado = matchedA.precioFinal.sub(matchedA.desglose.netoAcumulado);
+      } else {
+        // Defensive: post-Option A el desglose siempre viene. Si no, marcar OBSERVADO.
+        estadoLiqFee = EstadoLiquidacion.OBSERVADO;
+        estadoLiqLog = EstadoLiquidacion.OBSERVADO;
+      }
     } else {
       // ============================================================
       // FALLBACK Rama A: red de seguridad de precio cuando no hay
@@ -462,8 +496,21 @@ export async function crearEnvio(input: CrearEnvioInput) {
       // intermediario vigente (Mocis→Andreani, DEUDA 107). El path de
       // fallback NO reconstruye la cascada de intermediario. No se
       // arregla aca; queda como deuda pendiente.
+      //
+      // CONTRATO STEP 1 (dos-vías-de-liquidación): cuando este fallback
+      // dispara, resolverPrecioFallback devuelve solo {precio, fuente,
+      // detalle} — sin desglose. Por lo tanto los campos de breakdown
+      // (feeNetoFacturado / logisticaNetaFacturada / ivaFacturado) se
+      // persisten como NULL y estadoLiquidacionFee se setea en OBSERVADO
+      // para que la fila caiga a revisión manual en la proforma. La
+      // persistencia se implementa en la STAGE 4 del prompt grande;
+      // este comentario documenta el contrato.
       // ============================================================
       montoDebito = new Prisma.Decimal(0);
+      // STEP 1 Rama A FALLBACK: breakdown irrecuperable → NULLs + OBSERVADO en ambos tracks.
+      // Estos envíos quedan excluidos de las proformas hasta revisión manual.
+      estadoLiqFee = EstadoLiquidacion.OBSERVADO;
+      estadoLiqLog = EstadoLiquidacion.OBSERVADO;
       if (deposito && credencialMain) {
         const modalidadSimpleA = (canonLowerA.includes("sucursal") || canonLowerA.includes("retiro"))
           ? "sucursal"
@@ -695,7 +742,14 @@ export async function crearEnvio(input: CrearEnvioInput) {
             pesoCobrado: parseFloat(String(pesoReal)) || 1.0,
             fugaFinanciera: fugaCalculada,
             courierSugerido: courierSugeridoStr,
-            servicioSugerido: servicioSugeridoStr
+            servicioSugerido: servicioSugeridoStr,
+            // STEP 1: rama congelada + breakdown para las dos proformas.
+            ramaCongelada,
+            feeNetoFacturado,
+            logisticaNetaFacturada,
+            ivaFacturado,
+            estadoLiquidacionFee: estadoLiqFee,
+            estadoLiquidacionLogistica: estadoLiqLog,
           }
         }
       },

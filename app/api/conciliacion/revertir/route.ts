@@ -1,22 +1,23 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { Prisma } from "@prisma/client";
+import { Prisma, EstadoLiquidacion } from "@prisma/client";
 
 // ============================================================================
 // POST /api/conciliacion/revertir — undo de una corrida de conciliación.
 // Body: { runId: number }
 //
-// Restaura los 6 campos de FinanzasEnvio guardados en ConciliacionRun.snapshot
+// Restaura los 8 campos de FinanzasEnvio guardados en ConciliacionRun.snapshot
 // (pesoAforado, costoCourierEsperado, costoCourierFacturado, estadoAuditoria,
-// facturaCourierRef, costoAforo) a los valores previos a la corrida.
+// facturaCourierRef, costoAforo, periodoLogistica, estadoLiquidacionLogistica)
+// a los valores previos a la corrida.
 //
 // Guards:
 //   1. run no existe → 404
 //   2. run ya revertida → 409
-//   3. algún envío del snapshot ya está en una LiquidacionMensual
-//      (estadoLiquidacion === "LIQUIDADO") → 409. Racional: el mes ya cerró
-//      y una reversión descuadraría el total emitido al cliente. Corregir con
-//      un ajuste (nuevo movimiento contable), no con reversión de conciliación.
+//   3. algún envío del snapshot ya está en una LiquidacionMensual (vías nuevas
+//      Fee/Logistica en LIQUIDADO) → 409. Racional: el mes ya cerró y una
+//      reversión descuadraría el total emitido al cliente. Corregir con
+//      ajuste, no con reversión de conciliación.
 // ============================================================================
 
 type SnapshotPrior = {
@@ -26,6 +27,11 @@ type SnapshotPrior = {
   estadoAuditoria: string | null;
   facturaCourierRef: string | null;
   costoAforo: string | null;
+  // STEP 1 (dos-vías-liquidación): capturamos también la vía logística porque
+  // la conciliación la avanza de PENDIENTE → EN_PROCESO en Rama A. Nullable en
+  // snapshots antiguos (pre-STEP-1); el restore hace fallback defensivo.
+  periodoLogistica?: string | null;
+  estadoLiquidacionLogistica?: EstadoLiquidacion | null;
 };
 
 type SnapshotEntry = {
@@ -69,13 +75,18 @@ export async function POST(request: Request) {
       );
     }
 
-    // Guard 3: si algún envío del snapshot ya cerró en una LiquidacionMensual,
-    // no se puede revertir sin descuadrar el mes emitido.
+    // Guard 3: si algún envío del snapshot ya cerró en una LiquidacionMensual
+    // (vía Fee o Logística), no se puede revertir sin descuadrar el mes emitido.
     const finanzasEnvioIds = snapshot.map(s => s.finanzasEnvioId);
     const enviosLiquidados = await prisma.envio.findMany({
       where: {
-        finanzas: { id: { in: finanzasEnvioIds } },
-        estadoLiquidacion: "LIQUIDADO",
+        finanzas: {
+          id: { in: finanzasEnvioIds },
+          OR: [
+            { estadoLiquidacionFee: EstadoLiquidacion.LIQUIDADO },
+            { estadoLiquidacionLogistica: EstadoLiquidacion.LIQUIDADO },
+          ],
+        },
       },
       select: { id: true, trackingNumber: true },
     });
@@ -124,6 +135,15 @@ export async function POST(request: Request) {
             costoAforo: entry.prior.costoAforo != null
               ? new Prisma.Decimal(entry.prior.costoAforo)
               : null,
+            // STEP 1 (dos-vías-liquidación): restaurar la vía logística.
+            // Para snapshots antiguos (pre-STEP-1) los campos vienen undefined
+            // → mantenemos lo que la fila tenga hoy (no lo pisamos).
+            ...(entry.prior.periodoLogistica !== undefined
+              ? { periodoLogistica: entry.prior.periodoLogistica }
+              : {}),
+            ...(entry.prior.estadoLiquidacionLogistica
+              ? { estadoLiquidacionLogistica: entry.prior.estadoLiquidacionLogistica }
+              : {}),
           },
         });
         count++;

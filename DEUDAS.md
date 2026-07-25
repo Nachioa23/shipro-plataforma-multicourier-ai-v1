@@ -135,7 +135,7 @@ Mientras se decide, la lógica está protegida por el mismo `resolverContext()` 
 
 ## DEUDA 10 — Manejo de fallas de courier para clientes Modelo B (Producto — importante pre-producción)
 
-**Status:** Detectada el 2026-04-28 durante el diseño del fix de DEUDA 9. PENDIENTE — requiere modelado adicional. Estimado: medio día de trabajo dedicado. Prioridad: importante antes de onboarding de clientes Modelo B en producción.
+**Status:** NÚCLEO RESUELTO 2026-07-24. `OperacionFee` en schema + `calcularFeeOperacion` en `lib/utils/operacion-fee.ts` + Fee dentro de la tarifa publicada de ambas ramas (dentro de `montoDebito` en un solo `DEBITO_ENVIO`, vía commits 996142f + d850272 bajo la DEUDA 73). Cierra el último pendiente de FASE 2 de `docs/COMERCIALIZACION-CHECKLIST.md`. FOLLOW-UPS remanentes (no bloqueantes): cotización-por-similitud histórica para el fallback y UI para configurar el fee por-empresa en el onboarding.
 
 **Contexto:** Shipro tiene dos modelos comerciales:
 - **Modelo A** (cuenta corriente, postpago): Shipro factura al cliente al final del mes con un detalle de envíos. Bajo riesgo financiero.
@@ -1521,7 +1521,7 @@ Los 3 campos estan en `CAMPOS_AUDITABLES` (lib/auditoria-configuracion.ts) listo
 
 ## DEUDA 73 — Completar formula de precio: seguro + descuento del cliente (registrada 2026-06-25, scope medio)
 
-**Status:** ABIERTA. Identificada durante el diseño de DEUDA 10 (discovery de `lib/cotizador.ts:170-176`). Post-launch, NO bloqueante (salvo que un piloto lo requiera).
+**Status:** RESUELTA (FASE 1) 2026-07-24. Fórmula de precio completa: cascada intermediario+Shipro sobre netos, SMO por courier, Fee neto, IVA una vez al final, débito rama-aware (Rama A tarifa publicada completa / Rama B solo Fee), `precioFactura` congelado al alta + `costoAforo` separado en conciliación, dos vías de liquidación (Fee/Logística). Commits: 8d40f58 (IVA policy), 996142f (fórmula FASE 1), d850272 (débito rama-aware), d623b9d (aforo/conciliación), 0d6fd7b (dos-vías). FOLLOW-UPS menores (no bloqueantes): descuento del cliente con signo (paso 6 del modelo, capa cliente→comprador); rename cosmético `seguroFijoIntermediarioConIva` → sin-IVA; política de seguro por-courier (flag `quiereSeguroCourier` en schema pero adapters aún no lo consumen).
 
 **Problema:** Hoy `calcularPrecios()` en `lib/cotizador.ts` implementa solo: `tarifa_courier + fee_shipro (ajusteTarifaPorcentaje % + markupFijo) + IVA`. Faltan dos terminos de la formula de negocio completa:
 
@@ -1794,7 +1794,7 @@ markup Mocis 10%, markup Shipro 10%, SMO 121,50, fee 1.600 → debe dar 16.724,0
 
 ## DEUDA 75 — Conciliacion tarifa virtual vs facturada + exclusion de no-recolectadas (Modelo A) (registrada 2026-06-25, scope grande)
 
-**Status:** ABIERTA. Identificada durante el diseño de DEUDA 10 (Paso 4). Post-launch, NO bloqueante.
+**Status:** PARCIAL 2026-07-24. Mecanismo de conciliación aforo↔virtual CONSTRUIDO: `costoAforo`, `estadoAuditoria`, `pesoAforado`, `facturaCourierRef`, undo con snapshot (commit d623b9d) + dos-vías de liquidación (Fee/Logística) sobre `precioFactura` congelado + `costoAforo` (commit 0d6fd7b). PENDIENTE: el barrido de envíos NO-RECOLECTADOS a los 6 meses (sweep que devuelve la logística reteniendo el Fee y libera la vía LOGISTICA a NO_APLICA/REEMBOLSADO). Corresponde a PASO 3 del cobro mensual — ver `docs/ROADMAP-UNIFICADO.md`.
 
 **Contexto:** En Modelo A, la tarifa publicada al comprador es "virtual" (estimada al crear el envio). La tarifa REAL que Shipro factura al cliente se ajusta a fin de mes contra lo que el courier efectivamente facturo (via Excel/liquidacion del courier). Ademas, las etiquetas que el courier NUNCA recolecto NO se facturan (el courier tampoco se las facturo a Shipro).
 
@@ -1854,7 +1854,7 @@ markup Mocis 10%, markup Shipro 10%, SMO 121,50, fee 1.600 → debe dar 16.724,0
 
 ## DEUDA 79 — Cobro del fee de operacion en el desbloqueo posterior (registrada 2026-06-25, scope chico)
 
-**Status:** ABIERTA. Identificada al cerrar DEUDA 10 (Paso 4b-ii-3). Post-launch, NO bloqueante.
+**Status:** RESUELTA POR REFACTOR 2026-07-24. La premisa cambió: hoy el Fee va DENTRO de `precioFactura` en un SOLO `DEBITO_ENVIO` (rama-aware, congelado al alta, commit d850272). Los `procesar-bloqueados*` heredan ese `precioFactura` autoritativo con el Fee ya incluido, así que replicar un `DEBITO_OPERACION_FEE` separado en el desbloqueo ya no aplica — el modelo cambió y esta ruta desapareció. No hay trabajo pendiente.
 
 **Contexto:** DEUDA 10 (D-10-FEE-CHARGE) cobra el fee Modelo B (PREPAGO) SOLO cuando se emite etiqueta REAL del courier, dentro del gate de debito de envio en `lib/envios/crear.ts`. Las etiquetas genericas/bloqueadas NO debitan nada (decision de producto 2026-06-25: el cobro espera a que haya etiqueta real).
 
@@ -2759,8 +2759,8 @@ RETENIDO y por el volumen bajo actual. Resolver antes del onboarding de clientes
 
 ## DEUDA 107 — El markup del intermediario que presta credenciales no está modelado (NEGOCIO/PRECIO) (registrada 2026-07-17, scope medio-grande)
 
-**Status:** ABIERTA. Detectada 2026-07-17 durante la validación de la tarifa publicada en producción.
-**Prioridad: ALTA.** Afecta directamente el margen de cada envío en Modelo A y rompe la conciliación.
+**Status:** RESUELTA 2026-07-24. Modelo `CourierIntermediario` (markupPorcentaje + seguroFijo + vigencias) + cascada en `aplicarMarkup` (intermediario% aplicado sobre el neto ANTES del markup Shipro) + desglose `matchedA.desglose.{cascadaNeto, smoNeto, feeNeto, netoAcumulado}` propagado por `OpcionTarifa` y persistido en `FinanzasEnvio` (feeNetoFacturado / logisticaNetaFacturada / ivaFacturado) — la conciliación ya distingue esperado vs anomalía sobre estos campos. Commits: 996142f (fórmula), 0d6fd7b (desglose propagado + persistido). FOLLOW-UPS (no bloqueantes): UI admin para editar el intermediario por-courier (hoy solo seed/manual DB); el fallback `resolverPrecioFallback` aún NO reconstruye la cascada (`intermediarioMarkupPorcentaje: null`) — documentado como GAP en `lib/envios/crear.ts` con el contrato de OBSERVADO + breakdown NULL en esa rama.
+**Prioridad histórica: ALTA.** Afectaba directamente el margen de cada envío en Modelo A y rompía la conciliación — ambos cerrados.
 
 ---
 

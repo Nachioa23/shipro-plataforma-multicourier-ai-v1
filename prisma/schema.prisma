@@ -538,11 +538,33 @@ model MovimientoFinanciero {
   envioId Int? // Vinculación directa a un paquete (opcional)
   envio   Envio? @relation(fields: [envioId], references: [id])
 
+  // PASO 2a (dos-vías-liquidación): FK a la proforma que generó este movimiento.
+  // NULL para movimientos que no vienen de una proforma (DEBITO_ENVIO al alta,
+  // INGRESO_MANUAL, AJUSTE_ADMIN). Habilita el annul-endpoint (PASO 2b) para
+  // encontrar los movimientos a compensar por proforma.
+  liquidacionId Int?
+  liquidacion   LiquidacionMensual? @relation(fields: [liquidacionId], references: [id])
+
   fecha DateTime @default(now())
 
   // STEP 1: la wallet-page ordena por fecha desc y filtra por empresa.
   // El campo cronológico de este modelo es `fecha` (no `createdAt`).
   @@index([empresaId, fecha])
+
+  // PASO 2a: lookup por proforma (annul-endpoint en PASO 2b).
+  @@index([liquidacionId])
+
+  // PASO 2a IDEMPOTENCY: máximo un movimiento por (proforma, envío). El eje
+  // funcional es el par (liquidación, envío) — nunca dos aforos del mismo envío
+  // en la misma proforma. NOTA POSTGRES: NULLs son DISTINTOS en índices únicos,
+  // así que los movimientos con liquidacionId NULL (todos los DEBITO_ENVIO al
+  // alta, INGRESO_MANUAL, AJUSTE_ADMIN) NO colisionan entre sí — el índice
+  // opera únicamente sobre filas con liquidacionId NOT NULL. No "arreglar" esto
+  // con un partial index o un default: se apoya en la semántica de NULL de PG.
+  // La política de anulación (PASO 2b, Nacho) genera un CRÉDITO compensatorio
+  // con tipo distinto (no otro DEBITO_AJUSTE_AFORO), así que este @@unique nunca
+  // choca con la reversión.
+  @@unique([liquidacionId, envioId])
 }
 
 // ==========================================
@@ -555,7 +577,7 @@ model LiquidacionMensual {
 
   periodo    String // STEP 1: YYYY-MM (validado por admin/liquidaciones). Formatos legacy (ej. "JULIO 2026") solo en rows viejas.
   montoTotal Decimal @db.Decimal(12, 2) // La suma de todos los envíos y aforos del mes
-  estado     String  @default("EMITIDA") // EMITIDA, PAGADA
+  estado     String  @default("EMITIDA") // EMITIDA, PAGADA, ANULADA (ANULADA la introduce PASO 2b; PAGADA la introducirá el flow de cobranza)
 
   // STEP 1: discriminador de proforma. Default LOGISTICA (compatibilidad con rows previas
   // — el comportamiento pre-STEP-1 era efectivamente una proforma combinada, más cercana
@@ -572,6 +594,11 @@ model LiquidacionMensual {
   // fue dropeada junto con Envio.liquidacionId.
   finanzasFee       FinanzasEnvio[] @relation("FinanzasLiqFee")       // proformas tipo=FEE
   finanzasLogistica FinanzasEnvio[] @relation("FinanzasLiqLogistica") // proformas tipo=LOGISTICA
+
+  // PASO 2a: back-relation con los movimientos que generó el cierre de esta
+  // proforma (para LOGISTICA, un DEBITO_AJUSTE_AFORO por envío con costoAforo > 0).
+  // FEE no genera movimientos (documental — el Fee ya se debitó al alta).
+  movimientos MovimientoFinanciero[]
 }
 
 // ==========================================

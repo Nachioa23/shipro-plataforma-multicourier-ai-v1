@@ -282,16 +282,25 @@ export async function POST(request: Request) {
             feeShiproNeto,
           };
 
-          const tarifaConCostoReal = aplicarMarkup(costoFactRaw, config).precioFinal;
-          const precioFacturaOriginal: Prisma.Decimal = envio.finanzas.precioFactura ?? new Prisma.Decimal(0);
-          const delta = tarifaConCostoReal.sub(precioFacturaOriginal);
+          // 2026-07-27: costoAforo se persiste en NETO (regla plataforma: todo neto,
+          // IVA aplicado UNA sola vez al leer, en la proforma). Sus vecinos
+          // (logisticaNetaFacturada, feeNetoFacturado) también son NETO — invariante
+          // STEP 1: logisticaNeta + feeNeto + ivaFacturado = precioFactura →
+          // logisticaNeta + feeNeto = netoAcumulado_original. Byte-perfect via
+          // el desglose ya propagado por cotizador (Opción A). Sin ÷1.21.
+          const desgloseNuevo = aplicarMarkup(costoFactRaw, config).desglose;
+          const netoNuevo: Prisma.Decimal = desgloseNuevo.netoAcumulado;
+          const netoOriginal: Prisma.Decimal =
+            (envio.finanzas.logisticaNetaFacturada ?? new Prisma.Decimal(0))
+              .add(envio.finanzas.feeNetoFacturado ?? new Prisma.Decimal(0));
+          const deltaNeto = netoNuevo.sub(netoOriginal);
           // DECISIÓN DE NEGOCIO (Nacho, ratificada): el clamp a 0 ES la regla
           // (no hay acreditaciones al cliente). Si por la razón que fuere el
           // recálculo diera un delta negativo (por ej. una tarifa vigente más
           // barata que la del alta), el cliente NO recibe crédito: la diferencia
           // a favor queda para Shipro. NO convertir esto en un valor con signo
           // — no es un guard defensivo, es la política de negocio.
-          costoAforo = delta.gt(0) ? delta : new Prisma.Decimal(0);
+          costoAforo = deltaNeto.gt(0) ? deltaNeto : new Prisma.Decimal(0);
           estadoAud = "OK"; // costoAforo > 0 basta para señalar el aforo cobrado; mantenemos el vocabulario OK/DOBLE_COBRO/SOBREPRECIO_RECLAMAR.
         } else if (subioCosto) {
           // SOBREPRECIO: el courier facturó más pero el paquete NO subió de

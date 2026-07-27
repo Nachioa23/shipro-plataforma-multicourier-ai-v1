@@ -26,6 +26,12 @@ type SnapshotPrior = {
   costoCourierFacturado: string | null;
   estadoAuditoria: string | null;
   facturaCourierRef: string | null;
+  // costoAforo: 2026-07-27 la convención cambió de con-IVA a NETO (regla
+  // plataforma: todo neto, IVA una vez en la proforma). Los snapshots viejos
+  // que hayan capturado un costoAforo con-IVA (ninguno en test local; ver
+  // check al fixear) restaurarían el valor con-IVA — inconsistente con el
+  // nuevo writer. No hay migración porque data es de prueba y no hay corridas
+  // previas con costoAforo > 0; se documenta acá el cambio de semántica.
   costoAforo: string | null;
   // STEP 1 (dos-vías-liquidación): capturamos también la vía logística porque
   // la conciliación la avanza de PENDIENTE → EN_PROCESO en Rama A. Nullable en

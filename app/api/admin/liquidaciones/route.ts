@@ -269,7 +269,16 @@ export async function POST(request: Request) {
             logisticaNetaFacturada: { not: null },
           },
         },
-        include: { finanzas: true, courier: true, destino: true },
+        // PASO 2b (2026-07-27): incluimos empresa.credenciales para resolver
+        // tipoCuentaEfectivo por envío. PREPAGO ya cobró el aforo al conciliar
+        // (real-time), así que en la proforma NO se re-debita. POSTPAGO se
+        // debita acá al emitir (era el comportamiento único hasta ahora).
+        include: {
+          finanzas: true,
+          courier: true,
+          destino: true,
+          empresa: { include: { credenciales: true } },
+        },
       });
 
       if (envios.length === 0) throw new Error("No hay envíos con Logística pendiente para este período.");
@@ -291,14 +300,17 @@ export async function POST(request: Request) {
       });
 
       // ============================================================
-      // PASO 2a: DEBITO_AJUSTE_AFORO por envío con costoAforo > 0.
-      // Mirror exacto del pattern de crear.ts (running balance +
-      // suspensión). costoAforo está en NETO (fix 5764287) — IVA se
-      // aplica UNA vez aquí para obtener el monto real a debitar.
-      // Envíos con costoAforo == 0 o null no generan movimiento.
-      // Idempotencia: @@unique([liquidacionId, envioId]) en schema —
-      // un segundo cierre de la misma proforma tira violation en el
-      // create (además del gate de estado que ya throwea antes).
+      // PASO 2a + PASO 2b split (2026-07-27):
+      //   POSTPAGO: DEBITO_AJUSTE_AFORO por envío con costoAforo > 0 al
+      //             emitir la proforma — la logística se paga al cierre.
+      //   PREPAGO:  YA se debitó al conciliar (real-time contra saldoActivo).
+      //             En la proforma NO se re-debita — solo se documenta y se
+      //             flippa el estado (evita doble cobro).
+      // Mirror del pattern de crear.ts (running balance + suspensión).
+      // costoAforo en NETO (fix 5764287); IVA aplicado una vez acá.
+      // Idempotencia: @@unique([liquidacionId, envioId, tipo]) — un segundo
+      // cierre de la misma proforma tira violation en el create (además
+      // del gate de estado que ya throwea antes).
       // ============================================================
       const emp = await tx.empresa.findUnique({
         where: { id: empresaIdInt },
@@ -312,6 +324,11 @@ export async function POST(request: Request) {
       for (const e of envios) {
         const aforoNeto: Prisma.Decimal = e.finanzas!.costoAforo ?? new Prisma.Decimal(0);
         if (!aforoNeto.gt(0)) continue; // sin aforo → sin débito
+
+        // PASO 2b: gate por payment model — misma resolución que crear.ts:365.
+        const credencialEnvio = e.empresa.credenciales.find(c => c.nombreCourier === e.courier.nombre);
+        const tipoCuentaEfectivo = credencialEnvio?.tipoCuenta || e.empresa.modalidadPago || "POSTPAGO";
+        if (tipoCuentaEfectivo === "PREPAGO") continue; // ya se cobró al conciliar
 
         const aforoConIva = aforoNeto.mul(IVA_MULTIPLIER);
         runningBalance = runningBalance.sub(aforoConIva);

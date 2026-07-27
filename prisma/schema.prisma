@@ -545,6 +545,13 @@ model MovimientoFinanciero {
   liquidacionId Int?
   liquidacion   LiquidacionMensual? @relation(fields: [liquidacionId], references: [id])
 
+  // PASO 2b (2026-07-27): FK a la corrida de conciliación que generó este
+  // movimiento (débito prepago en real-time al importar la factura del courier,
+  // o su reversión al hacer revertir). NULL para todo lo demás. Habilita al
+  // revertir encontrar los débitos a compensar por corrida.
+  conciliacionRunId Int?
+  conciliacionRun   ConciliacionRun? @relation(fields: [conciliacionRunId], references: [id])
+
   fecha DateTime @default(now())
 
   // STEP 1: la wallet-page ordena por fecha desc y filtra por empresa.
@@ -554,17 +561,19 @@ model MovimientoFinanciero {
   // PASO 2a: lookup por proforma (annul-endpoint en PASO 2b).
   @@index([liquidacionId])
 
-  // PASO 2a IDEMPOTENCY: máximo un movimiento por (proforma, envío). El eje
-  // funcional es el par (liquidación, envío) — nunca dos aforos del mismo envío
-  // en la misma proforma. NOTA POSTGRES: NULLs son DISTINTOS en índices únicos,
-  // así que los movimientos con liquidacionId NULL (todos los DEBITO_ENVIO al
-  // alta, INGRESO_MANUAL, AJUSTE_ADMIN) NO colisionan entre sí — el índice
-  // opera únicamente sobre filas con liquidacionId NOT NULL. No "arreglar" esto
-  // con un partial index o un default: se apoya en la semántica de NULL de PG.
-  // La política de anulación (PASO 2b, Nacho) genera un CRÉDITO compensatorio
-  // con tipo distinto (no otro DEBITO_AJUSTE_AFORO), así que este @@unique nunca
-  // choca con la reversión.
-  @@unique([liquidacionId, envioId])
+  // PASO 2b: lookup por corrida de conciliación (revertir busca los débitos a compensar).
+  @@index([conciliacionRunId])
+
+  // PASO 2a/2b IDEMPOTENCY: máximo un movimiento por (proforma, envío, tipo) y
+  // máximo uno por (corrida, envío, tipo). El tipo entra en el par UNIQUE para
+  // que el DÉBITO original y su CRÉDITO reverso puedan coexistir bajo la misma
+  // (corrida, envío) — tienen distinto tipo, no colisionan. Idem proforma.
+  // NOTA POSTGRES: NULLs son DISTINTOS en índices únicos, así que los movimientos
+  // con liquidacionId/conciliacionRunId NULL (todos los DEBITO_ENVIO al alta,
+  // INGRESO_MANUAL, AJUSTE_ADMIN) NO colisionan entre sí — el índice opera
+  // únicamente sobre filas con esas FKs NOT NULL.
+  @@unique([liquidacionId, envioId, tipo])
+  @@unique([conciliacionRunId, envioId, tipo])
 }
 
 // ==========================================
@@ -1347,6 +1356,11 @@ model ConciliacionRun {
   revertida              Boolean   @default(false)
   fechaReversion         DateTime?
   createdAt              DateTime  @default(now())
+
+  // PASO 2b: los débitos prepago que crea la conciliación (y los CREDITO_REVERSO
+  // que crea revertir) se atan acá para poder deshacer el dinero cuando la
+  // corrida se revierte.
+  movimientos MovimientoFinanciero[]
 
   @@index([referenciaFactura])
   @@index([createdAt])

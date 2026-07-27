@@ -3,6 +3,10 @@ import prisma from "@/lib/prisma";
 import { Prisma, EstadoLiquidacion } from "@prisma/client";
 import { aplicarMarkup, type ConfigMarkup } from "@/lib/cotizador";
 import { calcularFeeOperacion } from "@/lib/utils/operacion-fee";
+import { evaluarSuspension, suspenderEmpresa, reactivarEmpresa } from "@/lib/utils/suspension-cuenta";
+
+// STEP 2b: IVA aplicado UNA vez sobre el aforo NETO (fix 5764287).
+const IVA_MULTIPLIER = new Prisma.Decimal("1.21");
 
 // STEP 1 (dos-vías-liquidación): validador del período de la factura del courier.
 // Formato requerido YYYY-MM (ej. "2026-04"). Es el mes al que corresponde la
@@ -79,9 +83,34 @@ export async function POST(request: Request) {
         costoAforo: string | null;
         periodoLogistica: string | null;
         estadoLiquidacionLogistica: EstadoLiquidacion;
+        // PASO 2b (2026-07-27): registro auditable de si la conciliación creó
+        // un débito prepago real-time para este envío + su monto (con IVA).
+        // La reversión primaria usa la FK conciliacionRunId; este campo es
+        // belt-and-suspenders para inspección manual del snapshot.
+        aforoDebitadoConIva?: string | null;
       };
     };
     const snapshot: SnapshotEntry[] = [];
+
+    // PASO 2b: creamos la corrida ANTES del loop para poder atar los
+    // MovimientoFinanciero al run.id. cantidadEnvios y snapshot se actualizan
+    // al final vía un update.
+    const run = await prisma.conciliacionRun.create({
+      data: {
+        referenciaFactura,
+        ivaDeclarado,
+        periodoFacturaCourier, // STEP 1: se guarda para trazabilidad de la corrida.
+        cantidadEnvios: 0,
+        usuarioEmail: usuarioEmail || null,
+        snapshot: [] as unknown as Prisma.InputJsonValue,
+      },
+    });
+    const runId = run.id;
+
+    // PASO 2b: empresas que recibieron débito prepago en este run. Al final
+    // del loop, evaluamos suspensión (o reactivación, defensivo) UNA vez por
+    // empresa sobre el saldo final.
+    const empresasTocadas = new Set<number>();
 
     // Sanity check para posible IVA mal declarado (solo warn, no bloquea).
     // Contamos rows donde costoFacturado > costoEsperado * 1.15 SIN aumento de
@@ -160,6 +189,7 @@ export async function POST(request: Request) {
             costoAforo: envio.finanzas.costoAforo ? envio.finanzas.costoAforo.toString() : null,
             periodoLogistica: envio.finanzas.periodoLogistica ?? null,
             estadoLiquidacionLogistica: envio.finanzas.estadoLiquidacionLogistica,
+            aforoDebitadoConIva: null, // DOBLE_COBRO branch nunca debita
           },
         });
 
@@ -331,6 +361,98 @@ export async function POST(request: Request) {
         }
       }
 
+      // STEP 1 (dos-vías-liquidación): Rama A avanza la vía LOGISTICA a EN_PROCESO
+      // y se sella el período de la factura del courier. Rama B: NO se toca
+      // (queda NO_APLICA — Shipro nunca recibe factura del courier en Rama B).
+      // Los envíos sin credencial reconocible tampoco se tocan (defensivo).
+      const enPipelineLogistica = credencial != null && credencial.usaCredencialesPropias === false;
+
+      // PASO 2b: gate por payment model — misma resolución que crear.ts:365.
+      // Solo Rama A con costoAforo > 0 puede desencadenar un débito prepago.
+      const tipoCuentaEfectivo = credencial?.tipoCuenta || envio.empresa.modalidadPago || "POSTPAGO";
+      const debePrepagoDebit = enPipelineLogistica
+        && costoAforo.gt(0)
+        && tipoCuentaEfectivo === "PREPAGO";
+
+      let aforoDebitadoConIvaStr: string | null = null;
+
+      // PASO 2b: cuando corresponde débito prepago, el write set (finanzas.update
+      // + movimientoFinanciero.create + empresa.saldoActivo.update) va atómico
+      // en una $transaction por envío. Cuando NO corresponde, el update es de
+      // fila única y se resuelve con la auto-tx implícita de Prisma (idéntico
+      // al comportamiento previo, sin cambio de riesgo).
+      if (debePrepagoDebit) {
+        const aforoConIva = costoAforo.mul(IVA_MULTIPLIER);
+        aforoDebitadoConIvaStr = aforoConIva.toString();
+
+        await prisma.$transaction(async (tx) => {
+          await tx.finanzasEnvio.update({
+            where: { id: envio.finanzas!.id },
+            data: {
+              pesoAforado: fila.peso,
+              costoCourierEsperado: costoEsperado,
+              costoCourierFacturado: costoFactRaw,
+              estadoAuditoria: estadoAud,
+              facturaCourierRef: referenciaFactura,
+              costoAforo,
+              periodoLogistica: periodoFacturaCourier,
+              estadoLiquidacionLogistica: EstadoLiquidacion.EN_PROCESO,
+            },
+          });
+
+          // Refetch saldoActivo dentro de la tx: el mismo Excel puede tocar N
+          // envíos de la misma empresa; siempre partimos del saldo autoritativo
+          // más actualizado (evita drift con el envio.empresa cacheado del find).
+          const empFresh = await tx.empresa.findUnique({
+            where: { id: envio.empresaId },
+            select: { saldoActivo: true },
+          });
+          if (!empFresh) throw new Error(`Empresa ${envio.empresaId} no encontrada (concurrencia).`);
+
+          const nuevoSaldo = empFresh.saldoActivo.sub(aforoConIva);
+
+          await tx.movimientoFinanciero.create({
+            data: {
+              empresaId: envio.empresaId,
+              tipo: "DEBITO_AJUSTE_AFORO",
+              monto: aforoConIva.neg(),
+              saldoPosterior: nuevoSaldo,
+              referencia: `FC-${referenciaFactura} / ${envio.trackingNumber}`,
+              descripcion: `Ajuste por aforo (conciliación ${referenciaFactura}) — envío ${envio.trackingNumber}`,
+              envioId: envio.id,
+              conciliacionRunId: runId,
+            },
+          });
+
+          await tx.empresa.update({
+            where: { id: envio.empresaId },
+            data: { saldoActivo: nuevoSaldo },
+          });
+        });
+
+        empresasTocadas.add(envio.empresaId);
+      } else {
+        // Camino POSTPAGO / Rama B / sin credencial / sin aforo: solo finanzas.update.
+        await prisma.finanzasEnvio.update({
+          where: { id: envio.finanzas!.id },
+          data: {
+            pesoAforado: fila.peso,
+            costoCourierEsperado: costoEsperado,
+            costoCourierFacturado: costoFactRaw,
+            estadoAuditoria: estadoAud,
+            facturaCourierRef: referenciaFactura, // Marca para evitar futuros dobles cobros.
+            costoAforo,                            // FASE 1: escribimos el delta; NO tocamos precioFactura.
+            ...(enPipelineLogistica ? {
+              periodoLogistica: periodoFacturaCourier,
+              estadoLiquidacionLogistica: EstadoLiquidacion.EN_PROCESO,
+            } : {}),
+          }
+        });
+      }
+
+      // Snapshot DESPUÉS del write (para reflejar el débito prepago si ocurrió).
+      // El shape "prior" sigue capturando los valores ANTES del update — el
+      // aforoDebitadoConIva es la única entrada que refleja la corrida en sí.
       snapshot.push({
         finanzasEnvioId: envio.finanzas.id,
         prior: {
@@ -342,29 +464,8 @@ export async function POST(request: Request) {
           costoAforo: envio.finanzas.costoAforo ? envio.finanzas.costoAforo.toString() : null,
           periodoLogistica: envio.finanzas.periodoLogistica ?? null,
           estadoLiquidacionLogistica: envio.finanzas.estadoLiquidacionLogistica,
+          aforoDebitadoConIva: aforoDebitadoConIvaStr,
         },
-      });
-
-      // STEP 1 (dos-vías-liquidación): Rama A avanza la vía LOGISTICA a EN_PROCESO
-      // y se sella el período de la factura del courier. Rama B: NO se toca
-      // (queda NO_APLICA — Shipro nunca recibe factura del courier en Rama B).
-      // Los envíos sin credencial reconocible tampoco se tocan (defensivo).
-      const enPipelineLogistica = credencial != null && credencial.usaCredencialesPropias === false;
-
-      await prisma.finanzasEnvio.update({
-        where: { id: envio.finanzas!.id },
-        data: {
-          pesoAforado: fila.peso,
-          costoCourierEsperado: costoEsperado,
-          costoCourierFacturado: costoFactRaw,
-          estadoAuditoria: estadoAud,
-          facturaCourierRef: referenciaFactura, // Marca para evitar futuros dobles cobros.
-          costoAforo,                            // FASE 1: escribimos el delta; NO tocamos precioFactura.
-          ...(enPipelineLogistica ? {
-            periodoLogistica: periodoFacturaCourier,
-            estadoLiquidacionLogistica: EstadoLiquidacion.EN_PROCESO,
-          } : {}),
-        }
       });
 
       resultados.aprobadosParaCliente++;
@@ -388,23 +489,46 @@ export async function POST(request: Request) {
       );
     }
 
-    // Persistir la corrida (una fila por POST). El snapshot habilita la reversión
-    // vía POST /api/conciliacion/revertir. cantidadEnvios = filas realmente
-    // modificadas (contamos snapshot.length, no filasExcel.length).
-    const run = await prisma.conciliacionRun.create({
+    // PASO 2b: cerramos la corrida creada al inicio con el snapshot final +
+    // cantidadEnvios. La corrida ya existe (creada antes del loop para atar
+    // los MovimientoFinanciero al run.id).
+    await prisma.conciliacionRun.update({
+      where: { id: runId },
       data: {
-        referenciaFactura,
-        ivaDeclarado,
-        periodoFacturaCourier, // STEP 1: se guarda para trazabilidad de la corrida.
         cantidadEnvios: snapshot.length,
-        usuarioEmail: usuarioEmail || null,
         snapshot: snapshot as unknown as Prisma.InputJsonValue,
       },
     });
 
+    // PASO 2b: evaluar suspensión (o reactivación defensiva) POST-tx por cada
+    // empresa que recibió débito prepago. Mirror del pattern crear.ts:855-865:
+    // una falla acá NO revierte los débitos ya committeados.
+    for (const empresaId of empresasTocadas) {
+      try {
+        const emp = await prisma.empresa.findUnique({
+          where: { id: empresaId },
+          select: { saldoActivo: true, limiteDescubierto: true, suspendida: true },
+        });
+        if (!emp) continue;
+        const { debeSuspender, debeReactivar } = evaluarSuspension(
+          emp.saldoActivo,
+          emp.limiteDescubierto ?? new Prisma.Decimal(0),
+          emp.suspendida
+        );
+        if (debeSuspender) {
+          await suspenderEmpresa(empresaId, null, emp.saldoActivo, emp.limiteDescubierto ?? new Prisma.Decimal(0));
+        } else if (debeReactivar) {
+          // Un débito no reactiva, pero la evaluación es simétrica y barata.
+          await reactivarEmpresa(empresaId, null, emp.saldoActivo, emp.limiteDescubierto ?? new Prisma.Decimal(0));
+        }
+      } catch (suspErr) {
+        console.error(`[PASO 2b] evaluación suspensión post-tx falló empresa=${empresaId}:`, suspErr);
+      }
+    }
+
     return NextResponse.json({
       success: true,
-      runId: run.id,
+      runId,
       ...resultados,
       montoARecuperar: resultados.montoARecuperar.toNumber(),
       advertenciaPosibleIva,

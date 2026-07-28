@@ -1,30 +1,25 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { Prisma, EstadoLiquidacion, TipoLiquidacion } from "@prisma/client";
-import { evaluarSuspension, suspenderEmpresa } from "@/lib/utils/suspension-cuenta";
 
 // ============================================================================
-// STEP 1 (dos-vías-liquidación) — rebuild.
+// STEP 1 (dos-vías-liquidación) + UNIFICACIÓN 2026-07-28.
 //
-// Antes: una sola proforma por (empresa, período libre-text). Filtro
-// pesoAforado != null (excluía Rama B por definición). Monto = precioFactura
-// + costoAforo (Fee + logística mezclados).
-//
-// Ahora: DOS proformas independientes por (empresa, período YYYY-MM):
+// DOS proformas por (empresa, período YYYY-MM), ambas DOCUMENTALES (sin plata):
 //   - FEE: rows con estadoLiquidacionFee=PENDIENTE agrupadas por el mes de
 //     fechaImpresion. Total = Σ (feeNetoFacturado + su IVA 21%). Cubre AMBAS
-//     ramas (Fee siempre se cobra). DOCUMENTAL — el Fee ya se debitó al alta
-//     dentro de DEBITO_ENVIO, no genera movimientos en el cierre.
+//     ramas (Fee siempre se cobra). El Fee ya se debitó al alta dentro de
+//     DEBITO_ENVIO — la proforma no genera movimientos, solo emite documento.
 //   - LOGISTICA: rows con estadoLiquidacionLogistica=EN_PROCESO (la conciliación
 //     ya trajo la factura del courier) AND ramaCongelada=false AND
 //     periodoLogistica=período. Total = Σ (logisticaNetaFacturada + costoAforo +
-//     su IVA). Excluye Rama B (NO_APLICA) y filas OBSERVADO (fallback rama A o
-//     desglose faltante — revisión manual).
-//     PASO 2a (2026-07-27): la logística ya se debitó al alta también, pero
-//     el AFORO (delta por mayor peso real) NO se cobró aún. En el cierre
-//     de LOGISTICA se emite UN DEBITO_AJUSTE_AFORO por envío con costoAforo > 0.
-//     Mirror exacto del pattern de crear.ts (running balance + evaluarSuspension
-//     in-tx + suspenderEmpresa post-tx). Ver decisiones de negocio en el commit.
+//     su IVA). Excluye Rama B (NO_APLICA), filas OBSERVADO (fallback) y las
+//     no-confirmadas (siguen en PENDIENTE — el filtro las omite naturalmente).
+//     UNIFICACIÓN 2026-07-28: el ajuste por aforo mueve saldo AL CONCILIAR para
+//     AMBOS modelos de pago (antes: prepago al conciliar / postpago acá). La
+//     proforma logística ahora es DOCUMENTAL — no crea MovimientoFinanciero.
+//     Solo arma el LiquidacionMensual + flipea estadoLiquidacionLogistica →
+//     LIQUIDADO y setea liquidacionLogisticaId.
 // ============================================================================
 
 const IVA_MULTIPLIER = new Prisma.Decimal("1.21");
@@ -201,12 +196,6 @@ export async function POST(request: Request) {
     const inicioMes = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0));
     const siguienteMes = new Date(Date.UTC(y, m, 1, 0, 0, 0));
 
-    // PASO 2a: si el cierre LOGISTICA hace cruzar el umbral de suspensión al
-    // saldo de la empresa, disparamos suspenderEmpresa POST-tx (mismo patrón
-    // que crear.ts:855-865: una falla de notificación NO debe rollbackear los
-    // debits legítimos). Se puebla dentro de la tx si aplica.
-    let suspensionPendiente: { saldoFinal: Prisma.Decimal; limiteAfectado: Prisma.Decimal } | null = null;
-
     const resultado = await prisma.$transaction(async (tx) => {
       if (tipo === "FEE") {
         // Universo FEE: envíos de esa empresa, alta dentro del mes, vía FEE=PENDIENTE,
@@ -269,16 +258,10 @@ export async function POST(request: Request) {
             logisticaNetaFacturada: { not: null },
           },
         },
-        // PASO 2b (2026-07-27): incluimos empresa.credenciales para resolver
-        // tipoCuentaEfectivo por envío. PREPAGO ya cobró el aforo al conciliar
-        // (real-time), así que en la proforma NO se re-debita. POSTPAGO se
-        // debita acá al emitir (era el comportamiento único hasta ahora).
-        include: {
-          finanzas: true,
-          courier: true,
-          destino: true,
-          empresa: { include: { credenciales: true } },
-        },
+        // UNIFICACIÓN 2026-07-28: al eliminar el débito en la proforma, ya no
+        // hace falta resolver tipoCuentaEfectivo por envío acá. La rama
+        // documental no lee credenciales — vuelve al include mínimo.
+        include: { finanzas: true, courier: true, destino: true },
       });
 
       if (envios.length === 0) throw new Error("No hay envíos con Logística pendiente para este período.");
@@ -300,77 +283,14 @@ export async function POST(request: Request) {
       });
 
       // ============================================================
-      // PASO 2a + PASO 2b split (2026-07-27):
-      //   POSTPAGO: DEBITO_AJUSTE_AFORO por envío con costoAforo > 0 al
-      //             emitir la proforma — la logística se paga al cierre.
-      //   PREPAGO:  YA se debitó al conciliar (real-time contra saldoActivo).
-      //             En la proforma NO se re-debita — solo se documenta y se
-      //             flippa el estado (evita doble cobro).
-      // Mirror del pattern de crear.ts (running balance + suspensión).
-      // costoAforo en NETO (fix 5764287); IVA aplicado una vez acá.
-      // Idempotencia: @@unique([liquidacionId, envioId, tipo]) — un segundo
-      // cierre de la misma proforma tira violation en el create (además
-      // del gate de estado que ya throwea antes).
+      // UNIFICACIÓN 2026-07-28: la proforma LOGÍSTICA es DOCUMENTAL.
+      // El ajuste por aforo ya movió el saldo al conciliar (para AMBOS
+      // modelos de pago). Acá solo emitimos LiquidacionMensual y flipeamos
+      // el estado a LIQUIDADO. Sin MovimientoFinanciero, sin empresa.update,
+      // sin evaluación de suspensión — nada de eso vive en esta rama ya.
+      // Idempotencia contra doble cierre: el findMany filtra por EN_PROCESO;
+      // el flip a LIQUIDADO deja el segundo intento con 0 envíos → throw.
       // ============================================================
-      const emp = await tx.empresa.findUnique({
-        where: { id: empresaIdInt },
-        select: { saldoActivo: true, limiteDescubierto: true, suspendida: true },
-      });
-      if (!emp) throw new Error(`Empresa ${empresaIdInt} no encontrada.`);
-
-      let runningBalance: Prisma.Decimal = emp.saldoActivo;
-      let debitsCreados = 0;
-
-      for (const e of envios) {
-        const aforoNeto: Prisma.Decimal = e.finanzas!.costoAforo ?? new Prisma.Decimal(0);
-        if (!aforoNeto.gt(0)) continue; // sin aforo → sin débito
-
-        // PASO 2b: gate por payment model — misma resolución que crear.ts:365.
-        const credencialEnvio = e.empresa.credenciales.find(c => c.nombreCourier === e.courier.nombre);
-        const tipoCuentaEfectivo = credencialEnvio?.tipoCuenta || e.empresa.modalidadPago || "POSTPAGO";
-        if (tipoCuentaEfectivo === "PREPAGO") continue; // ya se cobró al conciliar
-
-        const aforoConIva = aforoNeto.mul(IVA_MULTIPLIER);
-        runningBalance = runningBalance.sub(aforoConIva);
-
-        await tx.movimientoFinanciero.create({
-          data: {
-            empresaId: empresaIdInt,
-            tipo: "DEBITO_AJUSTE_AFORO",
-            monto: aforoConIva.neg(),
-            saldoPosterior: runningBalance,
-            referencia: `LIQ-${nueva.id} / ${e.trackingNumber ?? e.id}`,
-            descripcion: `Ajuste por aforo — proforma logística ${periodo} (envío ${e.trackingNumber ?? e.id})`,
-            envioId: e.id,
-            liquidacionId: nueva.id,
-          },
-        });
-        debitsCreados++;
-      }
-
-      // Un solo update de saldoActivo con el running final (evita N updates redundantes).
-      // Solo si generamos algún débito — si la proforma tiene 0 aforos, saldoActivo intacto.
-      if (debitsCreados > 0) {
-        await tx.empresa.update({
-          where: { id: empresaIdInt },
-          data: { saldoActivo: runningBalance },
-        });
-
-        // DEUDA 22 pattern (crear.ts:806-823): evaluar suspensión post-debit
-        // dentro de la tx; suspenderEmpresa corre POST-tx.
-        const { debeSuspender } = evaluarSuspension(
-          runningBalance,
-          emp.limiteDescubierto ?? new Prisma.Decimal(0),
-          emp.suspendida
-        );
-        if (debeSuspender) {
-          suspensionPendiente = {
-            saldoFinal: runningBalance,
-            limiteAfectado: emp.limiteDescubierto ?? new Prisma.Decimal(0),
-          };
-        }
-      }
-
       await tx.finanzasEnvio.updateMany({
         where: { id: { in: envios.map(e => e.finanzas!.id) } },
         data: {
@@ -379,24 +299,8 @@ export async function POST(request: Request) {
         },
       });
 
-      return { liquidacion: nueva, envios, debitsCreados };
+      return { liquidacion: nueva, envios };
     });
-
-    // POST-tx: dispara suspenderEmpresa si aplica. Mirror crear.ts:855-865 —
-    // una falla acá NO revierte los débitos (política DEUDA 22).
-    if (suspensionPendiente) {
-      const pending = suspensionPendiente as { saldoFinal: Prisma.Decimal; limiteAfectado: Prisma.Decimal };
-      try {
-        await suspenderEmpresa(
-          empresaIdInt,
-          null,
-          pending.saldoFinal,
-          pending.limiteAfectado
-        );
-      } catch (suspendErr) {
-        console.error("[PASO 2a] suspenderEmpresa fallo post-tx (débitos OK igual):", suspendErr);
-      }
-    }
 
     return NextResponse.json({ success: true, ...resultado });
   } catch (error: any) {

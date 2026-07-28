@@ -367,21 +367,24 @@ export async function POST(request: Request) {
       // Los envíos sin credencial reconocible tampoco se tocan (defensivo).
       const enPipelineLogistica = credencial != null && credencial.usaCredencialesPropias === false;
 
-      // PASO 2b: gate por payment model — misma resolución que crear.ts:365.
-      // Solo Rama A con costoAforo > 0 puede desencadenar un débito prepago.
-      const tipoCuentaEfectivo = credencial?.tipoCuenta || envio.empresa.modalidadPago || "POSTPAGO";
-      const debePrepagoDebit = enPipelineLogistica
-        && costoAforo.gt(0)
-        && tipoCuentaEfectivo === "PREPAGO";
+      // 2026-07-28: UNIFICACIÓN — el ajuste por aforo debita el saldo AL CONCILIAR
+      // para ambos modelos de pago (prepago y postpago). Antes solo prepago debitaba
+      // acá; postpago debitaba al emitir la proforma logística. Ahora la proforma es
+      // documental (no mueve plata) y el saldo se realinea en un solo lugar. Postpago
+      // simplemente se hace más negativo contra su limiteDescubierto; si cruza el
+      // umbral, evaluarSuspension al final del loop lo suspende como corresponde.
+      // Solo Rama A con costoAforo > 0 dispara débito (Rama B no aplica; sin credencial
+      // tampoco, defensivo).
+      const debeAforoDebit = enPipelineLogistica && costoAforo.gt(0);
 
       let aforoDebitadoConIvaStr: string | null = null;
 
-      // PASO 2b: cuando corresponde débito prepago, el write set (finanzas.update
+      // PASO 2b: cuando corresponde débito de aforo, el write set (finanzas.update
       // + movimientoFinanciero.create + empresa.saldoActivo.update) va atómico
       // en una $transaction por envío. Cuando NO corresponde, el update es de
       // fila única y se resuelve con la auto-tx implícita de Prisma (idéntico
       // al comportamiento previo, sin cambio de riesgo).
-      if (debePrepagoDebit) {
+      if (debeAforoDebit) {
         const aforoConIva = costoAforo.mul(IVA_MULTIPLIER);
         aforoDebitadoConIvaStr = aforoConIva.toString();
 

@@ -539,9 +539,11 @@ model MovimientoFinanciero {
   envio   Envio? @relation(fields: [envioId], references: [id])
 
   // PASO 2a (dos-vías-liquidación): FK a la proforma que generó este movimiento.
-  // NULL para movimientos que no vienen de una proforma (DEBITO_ENVIO al alta,
-  // INGRESO_MANUAL, AJUSTE_ADMIN). Habilita el annul-endpoint (PASO 2b) para
-  // encontrar los movimientos a compensar por proforma.
+  // VESTIGIAL desde la UNIFICACIÓN 2026-07-28: la proforma LOGÍSTICA se volvió
+  // documental (el aforo debita al conciliar para AMBOS modelos), así que ya
+  // NO hay writer que setee este campo. Se mantiene para evitar churn en un
+  // commit de unificación; drop del campo + su índice + su @@unique en una
+  // migración de cleanup posterior (no urgente, columna NULL forever es inocua).
   liquidacionId Int?
   liquidacion   LiquidacionMensual? @relation(fields: [liquidacionId], references: [id])
 

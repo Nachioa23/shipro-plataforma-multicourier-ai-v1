@@ -1792,9 +1792,14 @@ markup Mocis 10%, markup Shipro 10%, SMO 121,50, fee 1.600 → debe dar 16.724,0
 
 ---
 
-## DEUDA 75 — Conciliacion tarifa virtual vs facturada + exclusion de no-recolectadas (Modelo A) (registrada 2026-06-25, scope grande)
+## DEUDA 75 — Conciliacion tarifa virtual vs facturada + exclusion de no-recolectadas (Modelo A) (RESUELTA 2026-07-29 — cerrada por PASO 2/3 del cobro mensual)
 
-**Status:** PARCIAL 2026-07-24. Mecanismo de conciliación aforo↔virtual CONSTRUIDO: `costoAforo`, `estadoAuditoria`, `pesoAforado`, `facturaCourierRef`, undo con snapshot (commit d623b9d) + dos-vías de liquidación (Fee/Logística) sobre `precioFactura` congelado + `costoAforo` (commit 0d6fd7b). PENDIENTE: el barrido de envíos NO-RECOLECTADOS a los 6 meses (sweep que devuelve la logística reteniendo el Fee y libera la vía LOGISTICA a NO_APLICA/REEMBOLSADO). Corresponde a PASO 3 del cobro mensual — ver `docs/ROADMAP-UNIFICADO.md`.
+**Status:** RESUELTA 2026-07-29 — verificado contra main. Los tres problemas originales (ajuste tarifa virtual→facturada por envío, exclusión de no-recolectadas, conciliación contra la liquidación del courier) quedan cubiertos por el bloque de PASOs del cobro mensual:
+- **Mecanismo aforo↔virtual + dos-vías** — commits `d623b9d` (costoAforo/estadoAuditoria/pesoAforado/facturaCourierRef/undo) + `0d6fd7b` (dos-vías Fee/Logística sobre precioFactura congelado + costoAforo).
+- **Ajuste por aforo mueve plata para AMBOS modelos** — commit `d0a691f` (unificación: la proforma logística queda documental, el DEBITO_AJUSTE_AFORO ocurre al conciliar).
+- **Barrido 6 meses de envíos NO-RECOLECTADOS** — commit `9aafad4` (GET /api/cron/sweep-6m: filtra Rama A + PENDIENTE + logisticaDevuelta=false; devuelve el flete estimado como CREDITO_LOGISTICA_NO_FACTURADA; Fee se conserva).
+- **Factura tardía sobre etiqueta barrida** — commit `616a569` (guard netoOriginal=feeNeto cuando logisticaDevuelta=true → re-cobra el flete real completo, no solo el delta).
+- **Atomicidad de la corrida entera** — commit `3ce141a` (una sola $transaction externa; rollback total ante error mid-loop). El wiring del cron al crontab + docs/CRONS.md es paso de deploy, no de código.
 
 **Contexto:** En Modelo A, la tarifa publicada al comprador es "virtual" (estimada al crear el envio). La tarifa REAL que Shipro factura al cliente se ajusta a fin de mes contra lo que el courier efectivamente facturo (via Excel/liquidacion del courier). Ademas, las etiquetas que el courier NUNCA recolecto NO se facturan (el courier tampoco se las facturo a Shipro).
 
@@ -1973,9 +1978,13 @@ TS_NODE_BASEURL=./ npx ts-node -r tsconfig-paths/register --compiler-options '{"
 
 **Por que no bloquea deploy:** cosmetico. Prioridad minima, buen "primer commit" de calidad.
 
-## DEUDA 87 — Auditoria transversal de aislamiento entre clientes (registrada 2026-07-03, scope grande, seguridad)
+## DEUDA 87 — Auditoria transversal de aislamiento entre clientes (RESUELTA 2026-07-29 — remediación de las 4 familias mergeada en main)
 
-**Status:** ABIERTA — auditoria en curso. Pass 1 (inventario) completo; pass 2 (verificacion por endpoint) iniciado.
+**Status:** RESUELTA 2026-07-29 — verificado contra main. Las 4 fugas confirmadas en pass-2 tienen commit de cierre en main:
+- **Familia 1** (fuga cross-client en `etiquetas/masiva` + `etiquetas/mocis`) — commit `ef98029` "FAMILIA 1: scoping por empresa en etiquetas (cierra FAMILIA 1)".
+- **Familia 2** (mutación pública sin login en `envios/cancelar` + `envios/inversa`) — commit `92cf83f` "FAMILIA 2: cierra fuga cross-client en cancelar/inversa". El code-fix está mergeado; la **verificación funcional en browser sigue open como DEUDA 89** (encadenada, no bloquea el cierre del código).
+- **Familia 3** (9 endpoints admin sin gate de rol) — cerrada progresivamente en 4 commits: `bd1a878` (7 endpoints, parcial) + `aa46d1e` (grupo A+B, `/api/clientes`) + `fc7bded` (scoping `/api/tickets`) + `84b2572` "GROUP C: ownership en andreani/excepciones (cierra FAMILIA 3)". DEUDA 84 (1 de los 9) ya estaba cerrada por este mismo camino.
+- **Familia 4** (script legacy `importar/route.ts` con `EMPRESA_ID=1` hardcodeado) — commit `fe316cf` "FAMILIA 4: jubila el importador CSV legacy (cierra la auditoria DEUDA 87)".
 
 **Origen:** durante el diagnostico de DEUDA 84 se detecto que el modelo de permisos se construyo endpoint por endpoint con criterios distintos (3 patrones conviviendo: A=`resolverContext` scope-aware, B=lectura manual de `x-rol`/`x-empresa-id`, C=sin check en el handler). Surgio la pregunta de si el aislamiento entre clientes (que ninguna empresa vea/opere data de otra) esta garantizado transversalmente o solo en los endpoints donde alguien se acordo.
 

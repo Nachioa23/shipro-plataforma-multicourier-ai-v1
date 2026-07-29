@@ -307,3 +307,105 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: error.message || "Error al procesar el cierre" }, { status: 500 });
   }
 }
+
+// ============================================================================
+// PATCH /api/admin/liquidaciones — asocia el número de la factura de Xubio
+// (numeroFacturaExterna) a una LiquidacionMensual ya emitida.
+//
+// La liquidación se emite ANTES de que exista la factura en Xubio; el admin
+// vuelve acá cuando la factura ya está creada para registrar su número y
+// habilitar el matching liquidado↔facturado.
+//
+// Reglas:
+//   - Solo admin_shipro / operador_shipro (mismo gate que POST).
+//   - Idempotente si se manda el MISMO número (200 no-op).
+//   - Si ya tiene OTRO número: 409 (no se sobrescribe — corregir en Xubio y
+//     anular/reemitir la liquidación).
+//   - Auditoría: registro directo en AuditoriaConfiguracion (el helper
+//     registrarCambioConfiguracion está tipado con un union cerrado que no
+//     incluye numeroFacturaExterna, y por scope de este commit no tocamos
+//     ese archivo; se usa el mismo patrón de suspension-cuenta.ts:100 que
+//     escribe directo a la tabla).
+// ============================================================================
+export async function PATCH(request: Request) {
+  const rol = request.headers.get("x-rol") || "";
+  if (rol !== "admin_shipro" && rol !== "operador_shipro") {
+    return NextResponse.json({ error: "Acceso denegado. Solo equipo Shipro." }, { status: 403 });
+  }
+
+  try {
+    const body = await request.json();
+    const { liquidacionId, numeroFacturaExterna } = body ?? {};
+
+    if (typeof liquidacionId !== "number" || !Number.isInteger(liquidacionId) || liquidacionId <= 0) {
+      return NextResponse.json({ error: "liquidacionId inválido: se espera un entero positivo." }, { status: 400 });
+    }
+    if (typeof numeroFacturaExterna !== "string") {
+      return NextResponse.json({ error: "numeroFacturaExterna inválido: se espera un string." }, { status: 400 });
+    }
+    const nroTrim = numeroFacturaExterna.trim();
+    if (nroTrim.length === 0) {
+      return NextResponse.json({ error: "numeroFacturaExterna no puede estar vacío." }, { status: 400 });
+    }
+
+    const liq = await prisma.liquidacionMensual.findUnique({
+      where: { id: liquidacionId },
+      select: { id: true, empresaId: true, numeroFacturaExterna: true },
+    });
+    if (!liq) {
+      return NextResponse.json({ error: `Liquidación ${liquidacionId} no encontrada.` }, { status: 404 });
+    }
+
+    // Idempotencia: mismo valor → no-op.
+    if (liq.numeroFacturaExterna !== null && liq.numeroFacturaExterna === nroTrim) {
+      const actual = await prisma.liquidacionMensual.findUnique({ where: { id: liquidacionId } });
+      return NextResponse.json({ success: true, liquidacion: actual, noop: true });
+    }
+
+    // Ya tiene OTRO número → no se sobrescribe.
+    if (liq.numeroFacturaExterna !== null && liq.numeroFacturaExterna !== nroTrim) {
+      return NextResponse.json(
+        {
+          error:
+            `La liquidación ${liquidacionId} ya tiene la factura ${liq.numeroFacturaExterna} registrada; ` +
+            `no se puede reemplazar por otra. Si es un error, corregilo en Xubio y anulá/reemitá la liquidación.`,
+        },
+        { status: 409 }
+      );
+    }
+
+    // Update + audit atómicos.
+    const usuarioEmail = request.headers.get("x-usuario-email") || null;
+    const rolUsuario = request.headers.get("x-rol") || null;
+    const ipOrigen =
+      request.headers.get("x-ip-origen") ||
+      request.headers.get("x-forwarded-for") ||
+      request.headers.get("x-real-ip") ||
+      null;
+
+    const [actualizada] = await prisma.$transaction([
+      prisma.liquidacionMensual.update({
+        where: { id: liquidacionId },
+        data: { numeroFacturaExterna: nroTrim },
+      }),
+      prisma.auditoriaConfiguracion.create({
+        data: {
+          usuarioEmail,
+          rolUsuario,
+          ipOrigen,
+          empresaId: liq.empresaId,
+          courierId: null,
+          campo: "numeroFacturaExterna",
+          valorAnterior: null,
+          valorNuevo: nroTrim,
+          motivo: `Asociación de factura Xubio a LiquidacionMensual ${liquidacionId}`,
+        },
+      }),
+    ]);
+
+    return NextResponse.json({ success: true, liquidacion: actualizada });
+  } catch (error: any) {
+    console.error("Error asociando factura externa:", error);
+    return NextResponse.json({ error: error.message || "Error interno al asociar la factura." }, { status: 500 });
+  }
+}

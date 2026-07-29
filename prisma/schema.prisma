@@ -597,6 +597,11 @@ model LiquidacionMensual {
 
   excelProformaUrl String? // El link al Excel consolidado con el detalle
   facturaXubioUrl  String? // El link al PDF legal de la AFIP generado por Xubio
+  // 2026-07-28: número de la factura de Xubio (ej. "A-0004-00001234"). Se
+  // carga DESPUÉS de emitir la factura vía PATCH /api/admin/liquidaciones —
+  // la LiquidacionMensual se crea antes de que exista la factura, así que
+  // arranca en null. Permite matchear liquidado ↔ facturado.
+  numeroFacturaExterna String?
 
   fechaCreacion DateTime @default(now())
 
@@ -610,6 +615,9 @@ model LiquidacionMensual {
   // proforma (para LOGISTICA, un DEBITO_AJUSTE_AFORO por envío con costoAforo > 0).
   // FEE no genera movimientos (documental — el Fee ya se debitó al alta).
   movimientos MovimientoFinanciero[]
+
+  // 2026-07-28: lookup por número de factura de Xubio (matching liquidado↔facturado).
+  @@index([numeroFacturaExterna])
 }
 
 // ==========================================

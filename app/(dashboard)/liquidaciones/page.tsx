@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import * as XLSX from "xlsx";
-import { Calculator, FileSpreadsheet, CheckCircle2, Loader2, AlertTriangle, CalendarDays, Receipt, Download, Search, X } from "lucide-react";
+import { Calculator, FileSpreadsheet, CheckCircle2, Loader2, AlertTriangle, CalendarDays, Receipt, Search, X } from "lucide-react";
 
 // STEP 1 (dos-vías-liquidación): sección reutilizable para pendientes Fee/Logistica.
 // Cada item de `items` viene con { empresaId, empresaNombre, cuit, periodo, totalEnvios, montoTotal }.
@@ -85,6 +85,13 @@ export default function CierreMensual() {
   // Clave de row en curso: `${empresaId}:${tipo}:${periodo}` para no bloquear rows distintas.
   const [procesandoKey, setProcesandoKey] = useState<string | null>(null);
 
+  // Entrada per-row de numeroFacturaExterna en el historial. Mismo patrón que procesandoKey:
+  // patchingLiqId bloquea SOLO la row en curso; nroInputs guarda el texto controlado por row;
+  // patchError guarda el mensaje 409/400 devuelto por la API por row.
+  const [patchingLiqId, setPatchingLiqId] = useState<number | null>(null);
+  const [nroInputs, setNroInputs] = useState<Record<number, string>>({});
+  const [patchError, setPatchError] = useState<Record<number, string>>({});
+
   // Súper Buscador
   const [busquedaTracking, setBusquedaTracking] = useState("");
   const [resultadoBuscador, setResultadoBuscador] = useState<any>(null);
@@ -161,6 +168,50 @@ export default function CierreMensual() {
       alert("Error de conexión");
     } finally {
       setProcesandoKey(null);
+    }
+  };
+
+  // Guarda el N° de factura Xubio para UNA liquidación (PATCH /api/admin/liquidaciones).
+  // Mismo ciclo que ejecutarCierre: setLoadingKey → fetch → cargarDatos → clearLoadingKey.
+  const guardarNumeroFactura = async (liqId: number) => {
+    const nro = (nroInputs[liqId] ?? "").trim();
+    if (!nro) {
+      setPatchError(prev => ({ ...prev, [liqId]: "Ingresá un número de factura." }));
+      return;
+    }
+
+    setPatchingLiqId(liqId);
+    setPatchError(prev => {
+      const next = { ...prev };
+      delete next[liqId];
+      return next;
+    });
+
+    try {
+      const res = await fetch("/api/admin/liquidaciones", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ liquidacionId: liqId, numeroFacturaExterna: nro }),
+      });
+
+      if (res.ok) {
+        setNroInputs(prev => {
+          const next = { ...prev };
+          delete next[liqId];
+          return next;
+        });
+        await cargarDatos();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setPatchError(prev => ({
+          ...prev,
+          [liqId]: data?.error || `Error ${res.status} al guardar el número de factura.`,
+        }));
+      }
+    } catch (err) {
+      setPatchError(prev => ({ ...prev, [liqId]: "Error de conexión" }));
+    } finally {
+      setPatchingLiqId(null);
     }
   };
 
@@ -358,12 +409,40 @@ export default function CierreMensual() {
                         {formatMoneda(liq.montoTotal)}
                       </td>
                       <td className="px-6 py-4 text-center">
-                        {liq.facturaXubioUrl ? (
-                          <a href={liq.facturaXubioUrl} target="_blank" className="text-green-600 font-bold text-xs">Ver Factura A/B</a>
+                        {liq.numeroFacturaExterna ? (
+                          <div className="text-xs font-bold text-gray-700">
+                            Factura: <span className="font-mono text-[#233b6b]">{liq.numeroFacturaExterna}</span>
+                          </div>
                         ) : (
-                          <button className="text-gray-400 hover:text-blue-600 font-bold text-xs inline-flex items-center gap-1 border border-dashed border-gray-300 bg-gray-50 px-3 py-1.5 rounded transition-colors">
-                            <Download className="w-3.5 h-3.5" /> Vincular PDF (API)
-                          </button>
+                          <div className="flex flex-col items-center gap-1">
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="text"
+                                placeholder="N° factura Xubio"
+                                value={nroInputs[liq.id] ?? ""}
+                                onChange={(e) => setNroInputs(prev => ({ ...prev, [liq.id]: e.target.value }))}
+                                disabled={patchingLiqId === liq.id}
+                                className="border border-gray-300 rounded px-2 py-1 text-xs font-mono w-40 focus:outline-none focus:border-[#233b6b] disabled:bg-gray-100"
+                              />
+                              <button
+                                onClick={() => guardarNumeroFactura(liq.id)}
+                                disabled={patchingLiqId === liq.id}
+                                className="bg-[#233b6b] hover:bg-blue-900 text-white font-bold text-xs px-3 py-1 rounded transition-colors disabled:opacity-50 inline-flex items-center gap-1"
+                              >
+                                {patchingLiqId === liq.id ? (
+                                  <><Loader2 className="w-3 h-3 animate-spin" /> Guardando…</>
+                                ) : (
+                                  "Guardar"
+                                )}
+                              </button>
+                            </div>
+                            {patchError[liq.id] && (
+                              <div className="text-[11px] text-red-600 font-bold">{patchError[liq.id]}</div>
+                            )}
+                          </div>
+                        )}
+                        {liq.facturaXubioUrl && (
+                          <a href={liq.facturaXubioUrl} target="_blank" className="text-green-600 font-bold text-xs block mt-1">Ver Factura A/B</a>
                         )}
                       </td>
                     </tr>

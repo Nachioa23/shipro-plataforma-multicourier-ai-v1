@@ -8,6 +8,11 @@ export default function ConciliacionAforos() {
   const [cargando, setCargando] = useState(false);
   const [datosExcel, setDatosExcel] = useState<any[]>([]);
   const [referenciaFactura, setReferenciaFactura] = useState("");
+  // Nacho: el período (mes) de la factura del courier se declara explícito, no
+  // se asume. Sin default (mismo patrón que ivaDeclarado). Persistido en
+  // FinanzasEnvio.periodoLogistica; define en qué bucket cae la proforma logística.
+  // Formato YYYY-MM (input type="month" lo devuelve nativamente).
+  const [periodoFacturaCourier, setPeriodoFacturaCourier] = useState("");
   // Nacho: la convención IVA del Excel se declara explícita, no se asume.
   // Sin default. El backend rechaza con 400 si no viene "SIN_IVA" o "CON_IVA".
   const [ivaDeclarado, setIvaDeclarado] = useState<"" | "SIN_IVA" | "CON_IVA">("");
@@ -80,6 +85,10 @@ export default function ConciliacionAforos() {
       setErrorTexto("Debes ingresar el Nro. de Factura del Courier para poder auditar.");
       return;
     }
+    if (!periodoFacturaCourier || !/^\d{4}-(0[1-9]|1[0-2])$/.test(periodoFacturaCourier)) {
+      setErrorTexto("Tenés que elegir el período (mes) al que corresponde la factura del courier antes de auditar.");
+      return;
+    }
     if (!ivaDeclarado) {
       setErrorTexto("Tenés que declarar si los costos del archivo incluyen IVA o no antes de auditar.");
       return;
@@ -97,6 +106,7 @@ export default function ConciliacionAforos() {
           filasExcel: datosExcel,
           referenciaFactura: referenciaFactura.trim(),
           ivaDeclarado,
+          periodoFacturaCourier,
         })
       });
 
@@ -105,6 +115,7 @@ export default function ConciliacionAforos() {
         setResultado(data);
         setDatosExcel([]);
         setReferenciaFactura("");
+        setPeriodoFacturaCourier("");
         setIvaDeclarado("");
       } else {
         setErrorTexto(data.error || "Error al procesar la conciliación.");
@@ -146,6 +157,7 @@ export default function ConciliacionAforos() {
     setResultado(null);
     setDatosExcel([]);
     setReferenciaFactura("");
+    setPeriodoFacturaCourier("");
     setIvaDeclarado("");
     setConfirmandoUndo(false);
     setUndoResultado(null);
@@ -193,6 +205,18 @@ export default function ConciliacionAforos() {
                 <p className="text-[10px] text-gray-400 mt-1">Este dato es clave para que el sistema bloquee cobros duplicados en el futuro.</p>
               </div>
 
+              {/* Período de la factura (Obligatorio) — el mes al que corresponde la factura del courier, no la fecha de importación. */}
+              <div className="mb-6 text-left">
+                <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Período de la factura del courier (Obligatorio) *</label>
+                <input
+                  type="month"
+                  value={periodoFacturaCourier}
+                  onChange={(e) => setPeriodoFacturaCourier(e.target.value)}
+                  className="w-full border-2 border-gray-200 rounded-lg p-3 text-sm font-bold focus:border-[#233b6b] outline-none"
+                />
+                <p className="text-[10px] text-gray-400 mt-1">El mes al que corresponde la factura del courier — no la fecha en que la subís. Define en qué proforma mensual cae la logística.</p>
+              </div>
+
               {/* IVA declarado (Obligatorio) — sin default: el usuario elige a conciencia. */}
               <div className="mb-6 text-left">
                 <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Convención IVA del archivo (Obligatorio) *</label>
@@ -231,7 +255,11 @@ export default function ConciliacionAforos() {
               </div>
 
               {(() => {
-                const listo = referenciaFactura.trim() && ivaDeclarado;
+                const listo = referenciaFactura.trim() && periodoFacturaCourier && ivaDeclarado;
+                const faltantes: string[] = [];
+                if (!referenciaFactura.trim()) faltantes.push("Nro. de Factura");
+                if (!periodoFacturaCourier) faltantes.push("período de la factura");
+                if (!ivaDeclarado) faltantes.push("convención IVA");
                 return (
                   <>
                     <label className={`relative cursor-pointer text-white font-bold py-3 px-6 rounded-xl transition-colors inline-flex items-center gap-2 shadow-sm ${!listo ? 'bg-gray-400 pointer-events-none' : 'bg-[#233b6b] hover:bg-blue-900'}`}>
@@ -240,11 +268,7 @@ export default function ConciliacionAforos() {
                     </label>
                     {!listo && (
                       <p className="text-xs text-gray-500 mt-2">
-                        {!referenciaFactura.trim() && !ivaDeclarado
-                          ? "Completá el Nro. de Factura y elegí la convención IVA para poder subir el archivo."
-                          : !referenciaFactura.trim()
-                          ? "Completá el Nro. de Factura para poder subir el archivo."
-                          : "Elegí la convención IVA del archivo para poder subir."}
+                        Completá {faltantes.join(" + ")} para poder subir el archivo.
                       </p>
                     )}
                   </>
@@ -272,21 +296,23 @@ export default function ConciliacionAforos() {
               <div className="flex flex-col items-end gap-1">
                 <button
                   onClick={ejecutarConciliacion}
-                  disabled={cargando || !ivaDeclarado || !referenciaFactura.trim()}
+                  disabled={cargando || !ivaDeclarado || !referenciaFactura.trim() || !periodoFacturaCourier}
                   className="bg-amber-500 hover:bg-amber-600 text-white font-bold py-3 px-6 rounded-xl transition-colors inline-flex items-center gap-2 shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {cargando ? <Loader2 className="w-5 h-5 animate-spin" /> : <ShieldCheck className="w-5 h-5" />}
                   {cargando ? "Ejecutando escudos..." : "Ejecutar Escudo Tarifario"}
                 </button>
-                {!cargando && (!ivaDeclarado || !referenciaFactura.trim()) && (
-                  <p className="text-[11px] text-amber-700 font-medium">
-                    {!referenciaFactura.trim() && !ivaDeclarado
-                      ? "Falta Nro. de Factura y convención IVA."
-                      : !referenciaFactura.trim()
-                      ? "Falta Nro. de Factura."
-                      : "Falta declarar la convención IVA del archivo."}
-                  </p>
-                )}
+                {!cargando && (!ivaDeclarado || !referenciaFactura.trim() || !periodoFacturaCourier) && (() => {
+                  const faltantes: string[] = [];
+                  if (!referenciaFactura.trim()) faltantes.push("Nro. de Factura");
+                  if (!periodoFacturaCourier) faltantes.push("período de la factura");
+                  if (!ivaDeclarado) faltantes.push("convención IVA");
+                  return (
+                    <p className="text-[11px] text-amber-700 font-medium">
+                      Falta {faltantes.join(" + ")}.
+                    </p>
+                  );
+                })()}
               </div>
             </div>
 

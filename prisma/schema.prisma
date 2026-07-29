@@ -538,15 +538,6 @@ model MovimientoFinanciero {
   envioId Int? // Vinculación directa a un paquete (opcional)
   envio   Envio? @relation(fields: [envioId], references: [id])
 
-  // PASO 2a (dos-vías-liquidación): FK a la proforma que generó este movimiento.
-  // VESTIGIAL desde la UNIFICACIÓN 2026-07-28: la proforma LOGÍSTICA se volvió
-  // documental (el aforo debita al conciliar para AMBOS modelos), así que ya
-  // NO hay writer que setee este campo. Se mantiene para evitar churn en un
-  // commit de unificación; drop del campo + su índice + su @@unique en una
-  // migración de cleanup posterior (no urgente, columna NULL forever es inocua).
-  liquidacionId Int?
-  liquidacion   LiquidacionMensual? @relation(fields: [liquidacionId], references: [id])
-
   // PASO 2b (2026-07-27): FK a la corrida de conciliación que generó este
   // movimiento (débito prepago en real-time al importar la factura del courier,
   // o su reversión al hacer revertir). NULL para todo lo demás. Habilita al
@@ -560,21 +551,16 @@ model MovimientoFinanciero {
   // El campo cronológico de este modelo es `fecha` (no `createdAt`).
   @@index([empresaId, fecha])
 
-  // PASO 2a: lookup por proforma (annul-endpoint en PASO 2b).
-  @@index([liquidacionId])
-
   // PASO 2b: lookup por corrida de conciliación (revertir busca los débitos a compensar).
   @@index([conciliacionRunId])
 
-  // PASO 2a/2b IDEMPOTENCY: máximo un movimiento por (proforma, envío, tipo) y
-  // máximo uno por (corrida, envío, tipo). El tipo entra en el par UNIQUE para
-  // que el DÉBITO original y su CRÉDITO reverso puedan coexistir bajo la misma
-  // (corrida, envío) — tienen distinto tipo, no colisionan. Idem proforma.
+  // PASO 2b IDEMPOTENCY: máximo un movimiento por (corrida, envío, tipo). El tipo
+  // entra en el trío UNIQUE para que el DÉBITO original y su CRÉDITO reverso puedan
+  // coexistir bajo la misma (corrida, envío) — tienen distinto tipo, no colisionan.
   // NOTA POSTGRES: NULLs son DISTINTOS en índices únicos, así que los movimientos
-  // con liquidacionId/conciliacionRunId NULL (todos los DEBITO_ENVIO al alta,
-  // INGRESO_MANUAL, AJUSTE_ADMIN) NO colisionan entre sí — el índice opera
-  // únicamente sobre filas con esas FKs NOT NULL.
-  @@unique([liquidacionId, envioId, tipo])
+  // con conciliacionRunId NULL (todos los DEBITO_ENVIO al alta, INGRESO_MANUAL,
+  // AJUSTE_ADMIN) NO colisionan entre sí — el índice opera únicamente sobre filas
+  // con la FK NOT NULL.
   @@unique([conciliacionRunId, envioId, tipo])
 }
 
@@ -610,11 +596,6 @@ model LiquidacionMensual {
   // fue dropeada junto con Envio.liquidacionId.
   finanzasFee       FinanzasEnvio[] @relation("FinanzasLiqFee")       // proformas tipo=FEE
   finanzasLogistica FinanzasEnvio[] @relation("FinanzasLiqLogistica") // proformas tipo=LOGISTICA
-
-  // PASO 2a: back-relation con los movimientos que generó el cierre de esta
-  // proforma (para LOGISTICA, un DEBITO_AJUSTE_AFORO por envío con costoAforo > 0).
-  // FEE no genera movimientos (documental — el Fee ya se debitó al alta).
-  movimientos MovimientoFinanciero[]
 
   // 2026-07-28: lookup por número de factura de Xubio (matching liquidado↔facturado).
   @@index([numeroFacturaExterna])

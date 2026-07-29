@@ -327,9 +327,32 @@ export async function POST(request: Request) {
           // el desglose ya propagado por cotizador (Opción A). Sin ÷1.21.
           const desgloseNuevo = aplicarMarkup(costoFactRaw, config).desglose;
           const netoNuevo: Prisma.Decimal = desgloseNuevo.netoAcumulado;
-          const netoOriginal: Prisma.Decimal =
-            (envio.finanzas.logisticaNetaFacturada ?? new Prisma.Decimal(0))
-              .add(envio.finanzas.feeNetoFacturado ?? new Prisma.Decimal(0));
+          // PASO 3 PIECE 2 — guard de factura tardía sobre etiqueta ya barrida:
+          // Si el sweep de 6 meses ya corrió sobre esta etiqueta (logisticaDevuelta=
+          // true), el flete estimado (logisticaNetaFacturada × 1.21) YA se devolvió
+          // al saldo del cliente vía CREDITO_LOGISTICA_NO_FACTURADA. En ese momento
+          // el saldo del cliente sólo refleja el Fee cobrado. Cobrar SÓLO el delta
+          // (netoNuevo − (logisticaNeta + feeNeto)) subcobraría exactamente lo
+          // devuelto por el sweep — el flete nunca vuelve al saldo.
+          //
+          // Solución: para etiquetas barridas, netoOriginal = feeNetoFacturado SOLO,
+          // así costoAforo = netoNuevo − feeNeto = el flete REAL completo (recomputado
+          // con el costo del courier). El débito ×1.21 recupera exactamente lo que el
+          // sweep devolvió, PLUS cualquier aumento de aforo automático.
+          //
+          // Caso clave: el courier factura EXACTAMENTE el estimado (mismo peso, mismo
+          // costo). Con la fórmula normal deltaNeto=0 → no habría débito → el flete
+          // devuelto por el sweep queda regalado. Con este guard, deltaNeto = flete
+          // completo → se re-cobra correctamente.
+          //
+          // logisticaDevuelta NO se muta acá — queda en true como marca histórica
+          // ("esta etiqueta fue barrida y luego re-cobrada"). El sweep no la re-toma
+          // porque el downstream flippa estado a EN_PROCESO; el shield la bloquea de
+          // reimports vía facturaCourierRef.
+          const netoOriginal: Prisma.Decimal = envio.finanzas.logisticaDevuelta
+            ? (envio.finanzas.feeNetoFacturado ?? new Prisma.Decimal(0))
+            : (envio.finanzas.logisticaNetaFacturada ?? new Prisma.Decimal(0))
+                .add(envio.finanzas.feeNetoFacturado ?? new Prisma.Decimal(0));
           const deltaNeto = netoNuevo.sub(netoOriginal);
           // DECISIÓN DE NEGOCIO (Nacho, ratificada): el clamp a 0 ES la regla
           // (no hay acreditaciones al cliente). Si por la razón que fuere el

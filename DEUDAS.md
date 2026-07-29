@@ -3040,3 +3040,11 @@ la Fase 3 (plugins)** — el punto donde nace el dato —, no del motor.
 - **DEUDA 110** (Motor de optimización) — es el consumidor de estos datos. 111 captura, 110 interpreta.
 - **DEUDA 58** (CotizacionSnapshot sin consumer) — el molde de datos que esta deuda activa.
 - **DEUDA 103-105** (prerequisitos plugins) — la captura se implementa junto con el primer plugin.
+
+## DEUDA 112 — Escudo anti-doble-cobro incluía `estadoLiquidacionFee === LIQUIDADO` (RESUELTA en commit a0f76bc)
+
+**Status:** Detectada durante el recon del PASO 3 (sweep 6-meses) el 2026-07-29. RESUELTA en commit a0f76bc.
+
+**Bug (pérdida silenciosa de plata):** El escudo anti-doble-cobro en `app/api/conciliacion/route.ts` disparaba si `estadoLiquidacionFee === LIQUIDADO`. La proforma FEE (`admin/liquidaciones` POST tipo=FEE) flippa ese flag para TODOS los envíos del mes, independiente de la conciliación. Si el operador emitía la proforma FEE ANTES de cargar el Excel del courier (ordering B, orden no garantizado), el escudo daba falso positivo DOBLE_COBRO → hacía `continue` → el aforo NUNCA se debitaba → el cliente no pagaba el delta cuando el courier facturaba más caro. Pérdida por etiqueta: `costoAforo × 1.21`. Peor aún: la etiqueta quedaba en `estadoLiquidacionLogistica=PENDIENTE` con `facturaCourierRef=null`, así que el sweep de 6 meses (PASO 3) después la vería como "no confirmada" y le devolvería el flete de un envío que el courier SÍ facturó — segunda pérdida encadenada. Introducido en 0d6fd7b (DEUDA 73): el comentario del escudo conflaba "vía Fee cerrada" con "corrida de conciliación duplicada".
+
+**Fix:** removida la condición `estadoLiquidacionFee === LIQUIDADO`. El escudo queda con las dos señales autoritativas del lado logístico: `estadoLiquidacionLogistica === LIQUIDADO || facturaCourierRef !== null` (`facturaCourierRef` lo setea la propia conciliación, es el marker de "ya procesada"). Recon verificó 6 casos (ya conciliado, ya-conciliado-sin-Fee, ordering-B, ya-log-proforma, Rama B, sweep-6m futuro): ninguno abre double-charge; sólo el caso roto (ordering B) pasa de "pierde el aforo" a "lo cobra bien". El guard de `revertir/route.ts` que también lee `Fee=LIQUIDADO` NO se tocó — es otro propósito (protege una LiquidacionMensual ya emitida al cliente contra reversión) y su uso es legítimo.

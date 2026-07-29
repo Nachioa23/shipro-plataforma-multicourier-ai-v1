@@ -165,12 +165,19 @@ export async function POST(request: Request) {
       // ==========================================
       // ESCUDO 1: ANTI-DOBLE COBRO (Caso UPS)
       // ==========================================
-      // Si el envío ya fue facturado al cliente en el pasado, o si ya tiene un número de factura de courier asignado
-      // STEP 1 (dos-vías-liquidación): un envío ya fue liquidado si cualquiera
-      // de las dos vías (Fee/Logistica) está en LIQUIDADO, o si ya tiene la
-      // marca de factura del courier (anti-doble-cobro clásico).
+      // Un tracking ya fue conciliado si (y SOLO si) la vía LOGÍSTICA fue cerrada
+      // (LIQUIDADO) o si ya tiene la marca de factura del courier (facturaCourierRef,
+      // seteada por esta misma conciliación en L399/L446 — es el marker autoritativo
+      // de "conciliación ya ejecutada sobre este tracking").
+      //
+      // La vía FEE es un evento contable INDEPENDIENTE (proforma mensual documental)
+      // y NO gatea el débito de aforo. Anteriormente el escudo también atrapaba
+      // `estadoLiquidacionFee === LIQUIDADO`, pero la proforma FEE flippa ese flag
+      // para TODOS los envíos del mes sin depender de conciliación; si el operador
+      // emitía la proforma FEE antes de cargar el Excel del courier (ordering B, sin
+      // orden garantizado), el escudo disparaba falso positivo y el aforo se PERDÍA
+      // silenciosamente (bug agregado en 0d6fd7b DEUDA 73, corregido acá).
       if (
-        envio.finanzas.estadoLiquidacionFee === EstadoLiquidacion.LIQUIDADO ||
         envio.finanzas.estadoLiquidacionLogistica === EstadoLiquidacion.LIQUIDADO ||
         envio.finanzas.facturaCourierRef !== null
       ) {

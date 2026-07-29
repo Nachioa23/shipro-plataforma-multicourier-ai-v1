@@ -95,7 +95,33 @@ export async function POST(request: Request) {
     // PASO 2b: creamos la corrida ANTES del loop para poder atar los
     // MovimientoFinanciero al run.id. cantidadEnvios y snapshot se actualizan
     // al final vía un update.
-    const run = await prisma.conciliacionRun.create({
+    //
+    // PASO 2b: empresas que recibieron débito prepago en este run. Al final
+    // del loop, evaluamos suspensión (o reactivación, defensivo) UNA vez por
+    // empresa sobre el saldo final. Handler-scope: el post-tx suspension eval
+    // (POST commit) lo lee.
+    const empresasTocadas = new Set<number>();
+
+    // Sanity check para posible IVA mal declarado (solo warn, no bloquea).
+    // Contamos rows donde costoFacturado > costoEsperado * 1.15 SIN aumento de
+    // peso. Si esa fracción supera 50% del universo procesado por ESCUDO 2 y
+    // el usuario declaró SIN_IVA, es probable que el Excel esté CON IVA.
+    // Handler-scope: la respuesta JSON post-tx los lee.
+    let rowsEnMainBranch = 0;
+    let rowsSospechosasIva = 0;
+    let advertenciaPosibleIva = false;
+
+    // ATOMICIDAD (2026-07-29): la corrida ENTERA (ConciliacionRun.create +
+    // el loop entero + el snapshot final) corre en UN interactive tx externo.
+    // Si algo tira mid-loop, la $transaction rollbackea TODO — la
+    // ConciliacionRun no queda huérfana con snapshot vacío, los
+    // DEBITO_AJUSTE_AFORO no se committean, el saldo no se mueve. La eval de
+    // suspensión queda POST-tx (mirror crear.ts: una notificación fallida no
+    // revierte plata ya committeada). Timeout amplio: un Excel real de ~500-1000
+    // rows puede tomar 30-90s con las 2-6 queries por row; el default de Prisma
+    // (5s) sería insuficiente. maxWait 10s cubre picos de cola.
+    const runId = await prisma.$transaction(async (tx) => {
+    const run = await tx.conciliacionRun.create({
       data: {
         referenciaFactura,
         ivaDeclarado,
@@ -106,18 +132,6 @@ export async function POST(request: Request) {
       },
     });
     const runId = run.id;
-
-    // PASO 2b: empresas que recibieron débito prepago en este run. Al final
-    // del loop, evaluamos suspensión (o reactivación, defensivo) UNA vez por
-    // empresa sobre el saldo final.
-    const empresasTocadas = new Set<number>();
-
-    // Sanity check para posible IVA mal declarado (solo warn, no bloquea).
-    // Contamos rows donde costoFacturado > costoEsperado * 1.15 SIN aumento de
-    // peso. Si esa fracción supera 50% del universo procesado por ESCUDO 2 y
-    // el usuario declaró SIN_IVA, es probable que el Excel esté CON IVA.
-    let rowsEnMainBranch = 0;
-    let rowsSospechosasIva = 0;
 
     // ==========================================================================
     // FASE 1 FIX (post-DEUDA 73/107): conciliación rebuild
@@ -151,7 +165,7 @@ export async function POST(request: Request) {
 
     for (const fila of filasExcel) {
       // 1. Buscamos el envío
-      const envio = await prisma.envio.findUnique({
+      const envio = await tx.envio.findUnique({
         where: { trackingNumber: fila.tracking },
         include: {
           finanzas: true,
@@ -200,7 +214,7 @@ export async function POST(request: Request) {
           },
         });
 
-        await prisma.finanzasEnvio.update({
+        await tx.finanzasEnvio.update({
           where: { id: envio.finanzas.id },
           data: { estadoAuditoria: "DOBLE_COBRO" }
         });
@@ -278,7 +292,7 @@ export async function POST(request: Request) {
 
           let feeShiproNeto = feeShiproNetoCache.get(envio.empresaId);
           if (feeShiproNeto === undefined) {
-            const feeRes = await calcularFeeOperacion(envio.empresaId, new Prisma.Decimal(0));
+            const feeRes = await calcularFeeOperacion(envio.empresaId, new Prisma.Decimal(0), tx);
             feeShiproNeto = feeRes?.feePreIva ?? new Prisma.Decimal(0);
             feeShiproNetoCache.set(envio.empresaId, feeShiproNeto);
           }
@@ -287,7 +301,7 @@ export async function POST(request: Request) {
           if (intermediarioCache.has(envio.courierId)) {
             intermediarioMarkupPorcentaje = intermediarioCache.get(envio.courierId) ?? null;
           } else {
-            const inter = await prisma.courierIntermediario.findFirst({
+            const inter = await tx.courierIntermediario.findFirst({
               where: {
                 courierId: envio.courierId,
                 activo: true,
@@ -409,64 +423,62 @@ export async function POST(request: Request) {
 
       let aforoDebitadoConIvaStr: string | null = null;
 
-      // PASO 2b: cuando corresponde débito de aforo, el write set (finanzas.update
-      // + movimientoFinanciero.create + empresa.saldoActivo.update) va atómico
-      // en una $transaction por envío. Cuando NO corresponde, el update es de
-      // fila única y se resuelve con la auto-tx implícita de Prisma (idéntico
-      // al comportamiento previo, sin cambio de riesgo).
+      // ATOMICIDAD 2026-07-29: cuando corresponde débito de aforo, el write set
+      // (finanzas.update + movimientoFinanciero.create + empresa.saldoActivo.update)
+      // corre bajo el tx externo del handler — antes tenía su propia
+      // $transaction anidada, dissolvida porque el tx exterior ya provee
+      // atomicidad y Prisma no soporta interactive tx anidados.
       if (debeAforoDebit) {
         const aforoConIva = costoAforo.mul(IVA_MULTIPLIER);
         aforoDebitadoConIvaStr = aforoConIva.toString();
 
-        await prisma.$transaction(async (tx) => {
-          await tx.finanzasEnvio.update({
-            where: { id: envio.finanzas!.id },
-            data: {
-              pesoAforado: fila.peso,
-              costoCourierEsperado: costoEsperado,
-              costoCourierFacturado: costoFactRaw,
-              estadoAuditoria: estadoAud,
-              facturaCourierRef: referenciaFactura,
-              costoAforo,
-              periodoLogistica: periodoFacturaCourier,
-              estadoLiquidacionLogistica: EstadoLiquidacion.EN_PROCESO,
-            },
-          });
+        await tx.finanzasEnvio.update({
+          where: { id: envio.finanzas!.id },
+          data: {
+            pesoAforado: fila.peso,
+            costoCourierEsperado: costoEsperado,
+            costoCourierFacturado: costoFactRaw,
+            estadoAuditoria: estadoAud,
+            facturaCourierRef: referenciaFactura,
+            costoAforo,
+            periodoLogistica: periodoFacturaCourier,
+            estadoLiquidacionLogistica: EstadoLiquidacion.EN_PROCESO,
+          },
+        });
 
-          // Refetch saldoActivo dentro de la tx: el mismo Excel puede tocar N
-          // envíos de la misma empresa; siempre partimos del saldo autoritativo
-          // más actualizado (evita drift con el envio.empresa cacheado del find).
-          const empFresh = await tx.empresa.findUnique({
-            where: { id: envio.empresaId },
-            select: { saldoActivo: true },
-          });
-          if (!empFresh) throw new Error(`Empresa ${envio.empresaId} no encontrada (concurrencia).`);
+        // Refetch saldoActivo dentro del tx externo: el mismo Excel puede tocar N
+        // envíos de la misma empresa; siempre partimos del saldo autoritativo
+        // más actualizado (evita drift con el envio.empresa cacheado del find).
+        const empFresh = await tx.empresa.findUnique({
+          where: { id: envio.empresaId },
+          select: { saldoActivo: true },
+        });
+        if (!empFresh) throw new Error(`Empresa ${envio.empresaId} no encontrada (concurrencia).`);
 
-          const nuevoSaldo = empFresh.saldoActivo.sub(aforoConIva);
+        const nuevoSaldo = empFresh.saldoActivo.sub(aforoConIva);
 
-          await tx.movimientoFinanciero.create({
-            data: {
-              empresaId: envio.empresaId,
-              tipo: "DEBITO_AJUSTE_AFORO",
-              monto: aforoConIva.neg(),
-              saldoPosterior: nuevoSaldo,
-              referencia: `FC-${referenciaFactura} / ${envio.trackingNumber}`,
-              descripcion: `Ajuste por aforo (conciliación ${referenciaFactura}) — envío ${envio.trackingNumber}`,
-              envioId: envio.id,
-              conciliacionRunId: runId,
-            },
-          });
+        await tx.movimientoFinanciero.create({
+          data: {
+            empresaId: envio.empresaId,
+            tipo: "DEBITO_AJUSTE_AFORO",
+            monto: aforoConIva.neg(),
+            saldoPosterior: nuevoSaldo,
+            referencia: `FC-${referenciaFactura} / ${envio.trackingNumber}`,
+            descripcion: `Ajuste por aforo (conciliación ${referenciaFactura}) — envío ${envio.trackingNumber}`,
+            envioId: envio.id,
+            conciliacionRunId: runId,
+          },
+        });
 
-          await tx.empresa.update({
-            where: { id: envio.empresaId },
-            data: { saldoActivo: nuevoSaldo },
-          });
+        await tx.empresa.update({
+          where: { id: envio.empresaId },
+          data: { saldoActivo: nuevoSaldo },
         });
 
         empresasTocadas.add(envio.empresaId);
       } else {
         // Camino POSTPAGO / Rama B / sin credencial / sin aforo: solo finanzas.update.
-        await prisma.finanzasEnvio.update({
+        await tx.finanzasEnvio.update({
           where: { id: envio.finanzas!.id },
           data: {
             pesoAforado: fila.peso,
@@ -508,7 +520,7 @@ export async function POST(request: Request) {
     // Sanity IVA post-loop: si el usuario declaró SIN_IVA pero >50% de las rows
     // procesadas por ESCUDO 2 muestran costoFacturado >×1.15 esperado sin subir
     // el peso, es muy probable que el Excel esté CON IVA. Advertimos, no bloqueamos.
-    let advertenciaPosibleIva = false;
+    // advertenciaPosibleIva vive en el handler-scope (arriba); acá solo se asigna.
     if (
       ivaDeclarado === "SIN_IVA" &&
       rowsEnMainBranch > 0 &&
@@ -524,14 +536,18 @@ export async function POST(request: Request) {
 
     // PASO 2b: cerramos la corrida creada al inicio con el snapshot final +
     // cantidadEnvios. La corrida ya existe (creada antes del loop para atar
-    // los MovimientoFinanciero al run.id).
-    await prisma.conciliacionRun.update({
+    // los MovimientoFinanciero al run.id). Al ser el ÚLTIMO write del tx
+    // externo, el snapshot y las mutaciones commitean juntos o rollbackean juntos.
+    await tx.conciliacionRun.update({
       where: { id: runId },
       data: {
         cantidadEnvios: snapshot.length,
         snapshot: snapshot as unknown as Prisma.InputJsonValue,
       },
     });
+
+    return runId;
+    }, { timeout: 120_000, maxWait: 10_000 });
 
     // PASO 2b: evaluar suspensión (o reactivación defensiva) POST-tx por cada
     // empresa que recibió débito prepago. Mirror del pattern crear.ts:855-865:

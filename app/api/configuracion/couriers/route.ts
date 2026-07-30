@@ -211,6 +211,27 @@ export async function POST(request: Request) {
       const nuevoMarkup = parseFloat(courier.markupClienteFijo) || 0;
       const nuevoSeguro = courier.seguroActivado || false;
 
+      // FASE 2 pieza 1 (2026-07-30): propiedad de credenciales.
+      // Rama B (usaCredencialesPropias=true) FUERZA CLIENTE + FK null — defense
+      // in depth: ignoramos lo que mande el frontend en ese caso. Rama A acepta
+      // lo elegido por admin_shipro (SHIPRO o COURIER + id). El gate por rol se
+      // aplica más abajo vía puedeEditarCampo.
+      let nuevoPropietarioTipo: "CLIENTE" | "SHIPRO" | "COURIER" | null;
+      let nuevoPropietarioCourierId: number | null;
+      if (nuevoUsaPropias === true) {
+        nuevoPropietarioTipo = "CLIENTE";
+        nuevoPropietarioCourierId = null;
+      } else {
+        // Rama A: acepta lo que mandó el admin. null si aún no eligió (nullable
+        // en schema; sub-piece 3 agrega el guard obligatorio en creación de envío).
+        nuevoPropietarioTipo = courier.propietarioTipo === "SHIPRO" || courier.propietarioTipo === "COURIER"
+          ? courier.propietarioTipo
+          : null;
+        nuevoPropietarioCourierId = nuevoPropietarioTipo === "COURIER" && Number.isInteger(courier.propietarioCourierId)
+          ? courier.propietarioCourierId
+          : null;
+      }
+
       // DEUDA 21: build per-field patches usando matriz de permisos.
       // credencialesJson distingue Modelo A (Shipro, restricted) vs Modelo B
       // (cliente, libre): contextual gating via esModeloBCredenciales.
@@ -243,6 +264,13 @@ export async function POST(request: Request) {
       const tipoCuentaPatch = puedeEditarCampo(rol, "tipoCuenta")
         ? { tipoCuenta: nuevoTipoCuenta }
         : {};
+      // FASE 2 pieza 1: dos patches admin-only, mismo patrón que tipoCuentaPatch.
+      const propietarioTipoPatch = puedeEditarCampo(rol, "propietarioTipo")
+        ? { propietarioTipo: nuevoPropietarioTipo }
+        : {};
+      const propietarioCourierIdPatch = puedeEditarCampo(rol, "propietarioCourierId")
+        ? { propietarioCourierId: nuevoPropietarioCourierId }
+        : {};
 
       // DEUDA 21: si el rol no puede editar NINGUN campo de este item, retornar
       // 403 (deny by default). Evita upsert no-op + senal clara para el cliente.
@@ -254,7 +282,9 @@ export async function POST(request: Request) {
         Object.keys(ajustePatch).length > 0 ||
         Object.keys(markupPatch).length > 0 ||
         Object.keys(seguroPatch).length > 0 ||
-        Object.keys(tipoCuentaPatch).length > 0;
+        Object.keys(tipoCuentaPatch).length > 0 ||
+        Object.keys(propietarioTipoPatch).length > 0 ||
+        Object.keys(propietarioCourierIdPatch).length > 0;
 
       if (!tieneAlgunPermiso) {
         return NextResponse.json(
@@ -283,6 +313,8 @@ export async function POST(request: Request) {
           ...markupPatch,
           ...seguroPatch,
           ...tipoCuentaPatch,
+          ...propietarioTipoPatch,
+          ...propietarioCourierIdPatch,
         },
         create: {
           empresaId: empresaIdNum,
@@ -295,6 +327,8 @@ export async function POST(request: Request) {
           ...markupPatch,
           ...seguroPatch,
           ...tipoCuentaPatch,
+          ...propietarioTipoPatch,
+          ...propietarioCourierIdPatch,
         }
       });
 
@@ -345,6 +379,13 @@ export async function POST(request: Request) {
         }
         if (puedeEditarCampo(rol, "tipoCuenta")) {
           await auditarCampo("tipoCuenta", credAntes.tipoCuenta, nuevoTipoCuenta);
+        }
+        // FASE 2 pieza 1: audit del cambio de dueño de credenciales.
+        if (puedeEditarCampo(rol, "propietarioTipo")) {
+          await auditarCampo("propietarioTipo", credAntes.propietarioTipo, nuevoPropietarioTipo);
+        }
+        if (puedeEditarCampo(rol, "propietarioCourierId")) {
+          await auditarCampo("propietarioCourierId", credAntes.propietarioCourierId, nuevoPropietarioCourierId);
         }
       }
     }

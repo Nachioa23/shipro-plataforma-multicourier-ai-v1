@@ -32,7 +32,12 @@ export type CampoPermiso =
   | "markupFijo"
   | "requiereSeguro"
   | "tipoCuenta"
-  | "serviciosActivos";
+  | "serviciosActivos"
+  // FASE 2 pieza 1 (2026-07-30): propiedad de credenciales, ADMIN-ONLY (mirror
+  // de tipoCuenta). El cliente no elige dueño — Rama B implica CLIENTE por
+  // construcción; Rama A requiere que admin_shipro elija SHIPRO o un COURIER.
+  | "propietarioTipo"
+  | "propietarioCourierId";
 
 /**
  * Matriz de permisos: campo -> lista de roles que pueden editarlo.
@@ -52,6 +57,9 @@ const MATRIZ_PERMISOS: Record<CampoPermiso, string[]> = {
   requiereSeguro: ["admin_shipro", "gerente_cliente"],
   tipoCuenta: ["admin_shipro"],
   serviciosActivos: ["admin_shipro", "gerente_cliente"],
+  // FASE 2 pieza 1: propiedad de credenciales — admin-only, mismo criterio que tipoCuenta.
+  propietarioTipo: ["admin_shipro"],
+  propietarioCourierId: ["admin_shipro"],
 };
 
 /**

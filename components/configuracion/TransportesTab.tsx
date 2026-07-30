@@ -57,6 +57,10 @@ export default function TransportesTab({ empresaActivaId, embeddedInWizard = fal
   const [couriersOriginal, setCouriersOriginal] = useState<any[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [cambiosPreview, setCambiosPreview] = useState<CambioPreview[]>([]);
+  // FASE 2 pieza 1 (2026-07-30): lista maestra de couriers integrados para
+  // poblar el dropdown de "Dueño de las credenciales" (visible sólo admin_shipro
+  // en Rama A). Se rellena desde data.couriersGlobales del fetch inicial.
+  const [couriersGlobales, setCouriersGlobales] = useState<any[]>([]);
 
   useEffect(() => {
     if (!empresaActivaId) return;
@@ -69,6 +73,8 @@ export default function TransportesTab({ empresaActivaId, embeddedInWizard = fal
           if (data.empresa) setConfigsGenerales({ ordenamiento: data.empresa.ordenamientoDefault || "MOTOR_PRECIO" });
 
           if (data.couriersGlobales) {
+            // FASE 2 pieza 1: guardar la lista maestra para el dropdown de dueño.
+            setCouriersGlobales(data.couriersGlobales);
             const couriersDin = data.couriersGlobales.map((globalCourier: any) => {
               const configCliente = (data.credencialesCliente || []).find((c: any) => c.nombreCourier === globalCourier.nombre);
 
@@ -82,13 +88,19 @@ export default function TransportesTab({ empresaActivaId, embeddedInWizard = fal
                   id: globalCourier.nombre, activo: configCliente.activo, usaPropias: configCliente.usaCredencialesPropias,
                   credenciales: configCliente.credencialesJson ? JSON.parse(configCliente.credencialesJson) : credsPorDefecto,
                   markupClientePorcentaje: configCliente.ajusteTarifaPorcentaje || 0, markupClienteFijo: configCliente.markupFijo || 0,
-                  tipoCuenta: configCliente.tipoCuenta || ""
+                  tipoCuenta: configCliente.tipoCuenta || "",
+                  // FASE 2 pieza 1: propiedad de credenciales (mirror lectura de usaCredencialesPropias arriba).
+                  propietarioTipo: configCliente.propietarioTipo || null,
+                  propietarioCourierId: configCliente.propietarioCourierId ?? null,
                 };
               } else {
                 return {
                   id: globalCourier.nombre, activo: false, usaPropias: true, credenciales: credsPorDefecto,
                   markupClientePorcentaje: 0, markupClienteFijo: 0,
-                  tipoCuenta: ""
+                  tipoCuenta: "",
+                  // FASE 2 pieza 1: default en la fila fresca — Rama B implica CLIENTE.
+                  propietarioTipo: "CLIENTE",
+                  propietarioCourierId: null,
                 };
               }
             });
@@ -127,12 +139,41 @@ export default function TransportesTab({ empresaActivaId, embeddedInWizard = fal
   const handleUpdateCourier = (id: string, campo: string, valor: any) => setCouriers(couriers.map(c => c.id === id ? { ...c, [campo]: valor } : c));
   const handleUpdateCredencial = (id: string, clave: string, valor: string) => setCouriers(couriers.map(c => c.id === id ? { ...c, credenciales: { ...c.credenciales, [clave]: valor } } : c));
 
+  // FASE 2 pieza 1: toggle Rama A/B con coerción de propietario.
+  // Rama B → CLIENTE (implícito). Rama A → limpiar tipo hasta que admin elija
+  // (queda null; el guard de save bloquea si no eligió).
+  const setUsaPropiasConCoerción = (courierId: string, usaPropias: boolean) => {
+    setCouriers(couriers.map(c => {
+      if (c.id !== courierId) return c;
+      if (usaPropias) {
+        return { ...c, usaPropias: true, propietarioTipo: "CLIENTE", propietarioCourierId: null };
+      }
+      return { ...c, usaPropias: false, propietarioTipo: null, propietarioCourierId: null };
+    }));
+  };
+
+  // FASE 2 pieza 1: handler del dropdown de dueño (Rama A, admin_shipro only).
+  // Valores del <select>: "SHIPRO" o "COURIER:<id>".
+  const handleUpdatePropietario = (courierId: string, raw: string) => {
+    setCouriers(couriers.map(c => {
+      if (c.id !== courierId) return c;
+      if (raw === "SHIPRO") {
+        return { ...c, propietarioTipo: "SHIPRO", propietarioCourierId: null };
+      }
+      if (raw.startsWith("COURIER:")) {
+        const idNum = parseInt(raw.substring("COURIER:".length), 10);
+        return { ...c, propietarioTipo: "COURIER", propietarioCourierId: Number.isFinite(idNum) ? idNum : null };
+      }
+      return { ...c, propietarioTipo: null, propietarioCourierId: null };
+    }));
+  };
+
   const intentarUsarCuentaShipro = (e: React.MouseEvent, courierId: string, _estaUsandoPropias: boolean) => {
     if (!esEquipoShipro) {
       e.preventDefault();
       alert(`Para operar con la Tarifa Corporativa de Shipro en ${courierId}, solicitá la activación a tu Asesor Comercial.`);
     } else {
-      handleUpdateCourier(courierId, 'usaPropias', false);
+      setUsaPropiasConCoerción(courierId, false);
     }
   };
 
@@ -183,10 +224,28 @@ export default function TransportesTab({ empresaActivaId, embeddedInWizard = fal
     return cambios;
   };
 
+  // FASE 2 pieza 1: primer red — antes de save, bloquear si algún courier ACTIVO
+  // en Rama A no tiene dueño elegido. El backend igual re-valida y coerce
+  // (defense in depth); esta net es la UX cercana al usuario.
+  const detectarRamaASinDueño = (): string[] => {
+    return couriers
+      .filter(c => c.activo && !c.usaPropias && !c.propietarioTipo)
+      .map(c => c.id);
+  };
+
   // DEUDA 19: Click handler del boton "Guardar".
   // Si hay cambios sensibles → abre modal con motivo obligatorio.
   // Si no → submit directo (cambios no sensibles van al audit log sin motivo).
   const handleGuardarClick = () => {
+    // FASE 2 pieza 1: guard obligatorio antes de cualquier submit.
+    const sinDueño = detectarRamaASinDueño();
+    if (sinDueño.length > 0) {
+      setMensaje({
+        texto: `Falta elegir dueño de las credenciales para: ${sinDueño.join(", ")}. Como es Rama A (Cuenta Corriente Shipro), tenés que indicar quién presta las credenciales.`,
+        tipo: "error",
+      });
+      return;
+    }
     const cambios = detectarCambiosSensibles();
     if (cambios.length > 0) {
       setCambiosPreview(cambios);
@@ -335,10 +394,41 @@ export default function TransportesTab({ empresaActivaId, embeddedInWizard = fal
                         </div>
 
                         <label className={`flex items-center gap-3 p-4 border-2 rounded-xl cursor-pointer transition-colors ${courier.usaPropias ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:bg-gray-50'}`}>
-                          <input type="radio" readOnly checked={courier.usaPropias} onChange={() => handleUpdateCourier(courier.id, 'usaPropias', true)} className="w-5 h-5 text-indigo-600" />
+                          <input type="radio" readOnly checked={courier.usaPropias} onChange={() => setUsaPropiasConCoerción(courier.id, true)} className="w-5 h-5 text-indigo-600" />
                           <div><p className="text-sm font-black text-gray-800">Tengo contrato propio con {courier.id}</p><p className="text-[10px] text-gray-500 font-medium">Los envíos se facturan en tu cuenta. Shipro solo rutea.</p></div>
                         </label>
                       </div>
+
+                      {/* FASE 2 pieza 1: dropdown "Dueño de las credenciales" — sólo admin_shipro, sólo en Rama A. */}
+                      {esAdminShipro && !courier.usaPropias && (
+                        <div className="mt-4 p-4 bg-amber-50/70 border border-amber-200 rounded-xl">
+                          <label className="block text-xs font-black text-amber-800 uppercase tracking-wider mb-2">
+                            Dueño de las credenciales *
+                          </label>
+                          <select
+                            value={
+                              courier.propietarioTipo === "SHIPRO"
+                                ? "SHIPRO"
+                                : courier.propietarioTipo === "COURIER" && courier.propietarioCourierId != null
+                                  ? `COURIER:${courier.propietarioCourierId}`
+                                  : ""
+                            }
+                            onChange={(e) => handleUpdatePropietario(courier.id, e.target.value)}
+                            className="w-full p-3 border-2 border-amber-300 rounded-lg text-sm font-bold text-gray-700 outline-none focus:border-amber-500 bg-white"
+                          >
+                            <option value="">— Elegí un dueño —</option>
+                            <option value="SHIPRO">Shipro (sin markup de dueño)</option>
+                            {couriersGlobales.map((cg: any) => (
+                              <option key={cg.id} value={`COURIER:${cg.id}`}>
+                                {cg.nombre} (courier integrado)
+                              </option>
+                            ))}
+                          </select>
+                          <p className="text-[10px] text-amber-700 mt-2">
+                            Rama A requiere elegir dueño. Si el dueño es otro courier, su markup se cascadeará antes que el de Shipro.
+                          </p>
+                        </div>
+                      )}
 
                       {courier.usaPropias && (
                         <div className="mt-4 p-5 bg-slate-50 border border-slate-200 rounded-xl space-y-4">

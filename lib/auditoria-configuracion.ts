@@ -72,6 +72,11 @@ export const CAMPOS_AUDITABLES = {
   ajusteTarifaPorcentaje: { sensible: false, modelo: "CredencialCourier" },
   markupFijo: { sensible: false, modelo: "CredencialCourier" },
   requiereSeguro: { sensible: false, modelo: "CredencialCourier" },
+  // FASE 2 pieza 1 (2026-07-30): propiedad de credenciales — CRITICO. Cambiar
+  // el dueño de una credencial Rama A altera el cálculo del markup del motor
+  // (sub-piece 4), así que requiere motivo obligatorio como tipoCuenta.
+  propietarioTipo: { sensible: true, modelo: "CredencialCourier" },
+  propietarioCourierId: { sensible: true, modelo: "CredencialCourier" },
   // DEUDA 22: suspendida es ALTO (sensible: false) porque el cambio es
   // disparado automaticamente por el sistema (no usuario), motivo autogenerado.
   suspendida: { sensible: false, modelo: "Empresa" },

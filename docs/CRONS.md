@@ -15,6 +15,23 @@ Como la protección vive en el proxy, **no requiere ningún cambio adicional al 
 | `GET /api/cron/rastreo` | Rastrea hasta 200 envíos activos por ronda. Por cada uno: consulta el courier real, mapea estado vía `Nomenclador`, actualiza `Envio` + crea `EventoTracking`, manda mails (colecta / NPS según transición), genera `TicketSoporte` automático si el envío lleva ≥36hs sin moverse. | Cada **30 minutos** en horario operativo (8-22hs ART). Lote 200 alcanza para volúmenes altos. | Variable según número de envíos activos y latencia de los couriers. Estimado < 60 segundos en operación normal. **No declara `maxDuration` interno** — si en el futuro se nota timeout en algún hosting, ajustar. |
 | `GET /api/cron/metricas-sla` | Lee envíos `ENTREGADO` de los últimos 90 días con fechas completas (colecta + entrega). Calcula promedio de horas en tránsito agrupando por `(courierId, provinciaDestino)`. Hace upsert en tabla `MetricaSLA`. | Una vez por día, **horario nocturno** (recomendado 02:00 ART). El comentario en código lo llama "Motor Nocturno de SLA". | < 5 segundos para volúmenes esperados. Idempotente (re-ejecución no rompe nada). |
 | `GET /api/cron/sincronizar-couriers` | Sincroniza catálogos de sucursales/servicios de couriers (Andreani, Mocis, futuros) contra sus APIs externas. Mantiene actualizada la red de puntos de retiro y servicios disponibles por courier. También accesible manualmente desde la UI admin en `/api/admin/couriers/[id]/sincronizar`. | Una vez por día, **horario low-traffic** (recomendado 03:00 ART). Catálogos no cambian frecuentemente — diario es suficiente. | < 30 segundos típico. Variable según cantidad de sucursales por courier (Andreani tiene ~500 sucursales activas). Idempotente (upsert por trackingExterno + cp). |
+| `GET /api/cron/sweep-6m` | Barrido mensual de etiquetas Rama A que cumplieron 6 meses sin conciliación del courier. Devuelve el flete estimado (`logisticaNetaFacturada × 1.21`) como `CREDITO_LOGISTICA_NO_FACTURADA`; el Fee se conserva (ya se facturó su mes). Idempotente: la segunda corrida excluye por `logisticaDevuelta=true`. Una `$transaction` por empresa (una empresa fallando no bloquea al resto). | Una vez por mes, **día 1 a 04:00 ART** (después del cierre de mes). | Variable según labels elegibles del mes. Típico < 30s para volúmenes chicos; puede subir con volumen. |
+
+## 2b. Estado real de wiring en producción (pm.shipro.pro, 2026-07-30)
+
+Hoy en producción **sólo `sweep-6m` está efectivamente wireado** en el crontab del server. Los otros tres endpoints existen y están protegidos por el proxy, pero **NO están en ningún crontab todavía** — son un TODO de deploy pendiente.
+
+| Endpoint | ¿Wireado en prod? |
+|---|---|
+| `GET /api/cron/sweep-6m` | ✅ SÍ, en root crontab: `0 7 1 * * /usr/local/bin/shipro-cron.sh sweep-6m` (día 1 mensual a 07:00 UTC = 04:00 ART). Test manual devolvió `http=200 {"ok":true,"sweptCount":0}`. |
+| `GET /api/cron/rastreo` | ❌ Endpoint existe, sin crontab entry. |
+| `GET /api/cron/metricas-sla` | ❌ Endpoint existe, sin crontab entry. |
+| `GET /api/cron/sincronizar-couriers` | ❌ Endpoint existe, sin crontab entry. |
+
+**Scaffolding mounteado en el server (2026-07-30)** — vive fuera del repo, en el filesystem del server:
+- `/usr/local/bin/shipro-cron.sh` — wrapper que hace curl con `Authorization: Bearer ${CRON_SECRET}`.
+- `/etc/shipro/cron.env` — define `CRON_SECRET` + `APP_URL`, permisos `chmod 600` root:root.
+- `/var/log/shipro/` — directorio de logs, un archivo por endpoint (`cron-sweep-6m.log` ya creado).
 
 ## 3. Configuración para deploy en Linode
 
@@ -43,7 +60,7 @@ set -euo pipefail
 # Leer secrets desde un archivo fuera del repo, root:600
 source /etc/shipro/cron.env  # define CRON_SECRET y APP_URL
 
-# Argumentos: $1 = nombre del endpoint (rastreo | metricas-sla)
+# Argumentos: $1 = nombre del endpoint (rastreo | metricas-sla | sincronizar-couriers | sweep-6m)
 ENDPOINT="$1"
 
 curl -fsS \
@@ -63,11 +80,14 @@ APP_URL=https://shipro.tu-dominio.com
 **Paso 3 — agregar al crontab del usuario que corre la app** (`crontab -e`):
 
 ```cron
-# Rastreo: cada 30 min, 8-22hs (ART = UTC-3)
+# Rastreo: cada 30 min, 8-22hs (ART = UTC-3)  ← PENDIENTE de wireado en prod (2026-07-30)
 */30 8-22 * * * /usr/local/bin/shipro-cron.sh rastreo
 
-# Métricas SLA: 02:00 ART todos los días
+# Métricas SLA: 02:00 ART todos los días  ← PENDIENTE de wireado en prod
 0 5 * * * /usr/local/bin/shipro-cron.sh metricas-sla
+
+# Sweep 6 meses: día 1 del mes a 04:00 ART (07:00 UTC)  ← WIREADO en prod (2026-07-30)
+0 7 1 * * /usr/local/bin/shipro-cron.sh sweep-6m
 ```
 
 > **Nota de zona horaria:** si el server corre en UTC (default Linode), `02:00 ART` = `05:00 UTC`. Si configuraste el server en `America/Argentina/Buenos_Aires`, usar `0 2 * * *` directo.
@@ -77,7 +97,7 @@ APP_URL=https://shipro.tu-dominio.com
 ```sh
 sudo mkdir -p /var/log/shipro
 sudo chown shipro-user:shipro-user /var/log/shipro
-sudo touch /var/log/shipro/cron-rastreo.log /var/log/shipro/cron-metricas-sla.log
+sudo touch /var/log/shipro/cron-rastreo.log /var/log/shipro/cron-metricas-sla.log /var/log/shipro/cron-sweep-6m.log
 ```
 
 (Reemplazar `shipro-user` por el usuario real que corre la app.)

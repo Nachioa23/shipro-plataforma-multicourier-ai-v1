@@ -108,8 +108,12 @@ exponer la API externa.
 
 Un plugin es una compuerta de tráfico externo hacia el motor de plata. Hay que blindar la caja antes de abrirla:
 
-- **Producción corre flags viejos + fórmula vieja.** Lo committeado esta sesión no está desplegado. Cualquier
-  cotización que llegue por API externa hoy usaría la fórmula pre-FASE-1 y descoordinaría todo lo demás.
+- **FASE 1 desplegada a producción 2026-07-30 (commit `b11f7f8`).** ✅ pm.shipro.pro corre ahora la fórmula
+  rama-aware (IVA una sola vez, cascada intermediario+Shipro, SMO, Fee dentro de la tarifa) + el bloque completo
+  de conciliación atómica + barrido 6 meses + guard de factura tardía + escudo anti-doble-cobro fixed. 8
+  migraciones FASE 1 aplicadas (de `20260722213730_conciliacion_run` a `20260729190642_drop_movimiento_liquidacion_vestigial`),
+  `prisma migrate status` = "Database schema is up to date!". 8 empresas de test + 11 usuarios de test preservados
+  intactos (0 envíos, 0 finanzas); snapshot pre-deploy tomado. Cotización real verificada contra Andreani + Mocis.
 - **Purgar el histórico de Andreani (con IVA) antes de confiar en el fallback.** El fallback recompone precio con
   la política nueva SIN IVA; los datos históricos guardaron el número CON IVA (Andreani lo devolvía así). Si el
   fallback lee un histórico viejo, aplica IVA sobre un número que ya lo trae → 21% de más silencioso.

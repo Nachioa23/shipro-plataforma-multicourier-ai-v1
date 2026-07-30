@@ -260,8 +260,16 @@ model Courier {
   // DEUDA 32+37: servicios comerciales que este courier ofrece al cliente final.
   servicios ServicioCourier[]
 
-  // DEUDA 107: cadena de intermediarios que pueden prestar credenciales para este courier.
+  // DEUDA 107: cadena de intermediarios asociados a este courier como EJECUTOR
+  // (courierId apunta acá). Se conserva por compatibilidad con el include actual
+  // del motor de plata (cotizador.ts); Forma 2 (owner-axis) usa la relación de
+  // abajo.
   intermediarios CourierIntermediario[]
+
+  // FASE 2 pieza 1 (2026-07-30): back-relations del rol PROPIETARIO — este
+  // courier es el DUEÑO de credenciales o de rows de markup. Sub-piece 4 lee por acá.
+  credencialesComoPropietario     CredencialCourier[]     @relation("CredencialPropietario")
+  intermediariosComoPropietario   CourierIntermediario[]  @relation("IntermediarioPropietario")
 
   // DEUDA 19: audit log de cambios sensibles per-courier (credencialesJson, tipoCuenta, etc).
   auditoriasConfiguracion AuditoriaConfiguracion[]
@@ -275,14 +283,23 @@ model Courier {
 // ==========================================
 model CourierIntermediario {
   id        Int     @id @default(autoincrement())
+
+  // Legacy DEUDA 107: courier EJECUTOR (el courier cuyas credenciales se están
+  // prestando; ej. Andreani cuando Mocis lo presta). Se conserva para no romper
+  // el include actual en cotizador.ts (motor de plata en vivo). Sub-piece 4
+  // podrá dejar de leer por este eje una vez que la lectura pivotee al OWNER.
   courierId Int
   courier   Courier @relation(fields: [courierId], references: [id], onDelete: Cascade)
 
-  // Quién "presta" las credenciales de este courier (ej. Mocis presta Andreani).
-  // DEUDA 107. Solo aplica en Modelo A (usaCredencialesPropias=false).
-  nombreIntermediario String
+  // FASE 2 pieza 1 (2026-07-30): Forma 2 — dueño de las credenciales que se
+  // prestan (ej. Mocis en el par Mocis→Andreani). El markup del row se cascadeará
+  // como el markup del DUEÑO. Reemplaza al viejo nombreIntermediario (String)
+  // por una FK real a Courier; el string legacy nunca fue leído por lógica,
+  // sólo escrito por el seed (recon 2026-07-30).
+  propietarioCourierId  Int
+  propietarioCourier    Courier @relation("IntermediarioPropietario", fields: [propietarioCourierId], references: [id], onDelete: Cascade)
 
-  // Markup que el intermediario agrega SOBRE la tarifa cruda del courier.
+  // Markup que el DUEÑO cobra por prestar credenciales, sobre la tarifa cruda del ejecutor.
   markupPorcentaje Float @default(0.0) // ej. 10.0 = +10%
 
   // Seguro fijo por etiqueta que factura el intermediario (ej. Mocis $90 vs Andreani $10).
@@ -302,7 +319,10 @@ model CourierIntermediario {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Índice legacy — todavía usado por cotizador.ts:279 include.
   @@index([courierId, activo])
+  // FASE 2 pieza 1: Forma 2 — lookup por DUEÑO (el motor lo consumirá en sub-piece 4).
+  @@index([propietarioCourierId, activo])
 }
 
 // ==========================================
@@ -338,6 +358,24 @@ model ServicioCourier {
 }
 
 // ==========================================
+// FASE 2 pieza 1: propiedad de credenciales.
+// El TIPO de propietario de un CredencialCourier — quién es el dueño de las
+// credenciales que la empresa usa para despachar con este courier.
+//   CLIENTE  = Rama B: el cliente carga sus propias credenciales (equivalente a
+//              usaCredencialesPropias=true). Solo aplica el markup Shipro.
+//   SHIPRO   = Rama A: las credenciales son de Shipro. No hay markup de dueño
+//              (sólo la cascada Shipro + SMO + Fee).
+//   COURIER  = Rama A: las credenciales son de OTRO courier integrado (ej. Mocis
+//              presta Andreani). El markup del dueño (CourierIntermediario) se
+//              cascadeará ANTES del markup Shipro. Requiere propietarioCourierId.
+// ==========================================
+enum PropietarioTipo {
+  CLIENTE
+  SHIPRO
+  COURIER
+}
+
+// ==========================================
 // 1.5. CREDENCIALES COURIERS (El Cerebro)
 // ==========================================
 model CredencialCourier {
@@ -350,6 +388,24 @@ model CredencialCourier {
 
   usaCredencialesPropias Boolean @default(true)
   credencialesJson       String?
+
+  // FASE 2 pieza 1 (2026-07-30): propiedad de credenciales — dueño explícito.
+  // Convive con `usaCredencialesPropias` (que sigue siendo el toggle primario
+  // Rama A/B); estos campos son ADITIVOS y NULLABLE al nacer (sub-piece 3 hará
+  // que la obligatoriedad se aplique en el pipeline de creación de envío).
+  //
+  //   propietarioTipo=CLIENTE  ↔ usaCredencialesPropias=true  (Rama B)
+  //   propietarioTipo=SHIPRO   ↔ usaCredencialesPropias=false, sin markup dueño
+  //   propietarioTipo=COURIER  ↔ usaCredencialesPropias=false, propietarioCourierId REQUERIDO
+  //                              (el motor de plata en sub-piece 4 leerá el markup
+  //                              del dueño desde CourierIntermediario keyed by owner)
+  //
+  // propietarioCourierId sólo tiene sentido cuando propietarioTipo=COURIER; en los
+  // otros dos casos DEBE ser NULL. La coherencia se enforce en aplicación (schema
+  // sólo declara la relación opcional).
+  propietarioTipo       PropietarioTipo?
+  propietarioCourierId  Int?
+  propietarioCourier    Courier?         @relation("CredencialPropietario", fields: [propietarioCourierId], references: [id], onDelete: SetNull)
 
   // Tipo de cuenta para esta combinación cliente↔courier (DEUDA 16).
   // null = usar Empresa.modalidadPago como default.
@@ -400,6 +456,8 @@ model CredencialCourier {
   updatedAt DateTime @updatedAt
 
   @@unique([empresaId, nombreCourier])
+  // FASE 2 pieza 1: lookup por dueño (Forma 2 — el motor pivotea por dueño en sub-piece 4).
+  @@index([propietarioCourierId])
 }
 
 // ==========================================

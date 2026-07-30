@@ -81,13 +81,15 @@ async function main() {
     });
   }
 
-  // === DEUDA 107: intermediario que presta credenciales (Mocis presta Andreani) ===
+  // === DEUDA 107 + FASE 2 pieza 1: intermediario que presta credenciales (Mocis presta Andreani) ===
   // Valores SIN IVA (criterio "todo neto, IVA al final", DEUDA 73). El seguro fijo es dato de
   // conciliación (lo que Mocis factura a Shipro), NO entra en la tarifa publicada — esa usa el SMO.
+  // FASE 2 pieza 1: nombreIntermediario (String) fue reemplazado por propietarioCourierId (FK a Courier).
   const andreani = await prisma.courier.findUnique({ where: { nombre: "Andreani" } });
-  if (andreani) {
+  const mocis    = await prisma.courier.findUnique({ where: { nombre: "Moci's" } });
+  if (andreani && mocis) {
     const yaExiste = await prisma.courierIntermediario.findFirst({
-      where: { courierId: andreani.id, nombreIntermediario: "Moci's", activo: true },
+      where: { courierId: andreani.id, propietarioCourierId: mocis.id, activo: true },
     });
     const datos = {
       markupPorcentaje: 10.0,
@@ -99,7 +101,7 @@ async function main() {
       await prisma.courierIntermediario.update({ where: { id: yaExiste.id }, data: datos });
     } else {
       await prisma.courierIntermediario.create({
-        data: { courierId: andreani.id, nombreIntermediario: "Moci's", activo: true, ...datos },
+        data: { courierId: andreani.id, propietarioCourierId: mocis.id, activo: true, ...datos },
       });
     }
   }

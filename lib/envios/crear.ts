@@ -304,6 +304,42 @@ export async function crearEnvio(input: CrearEnvioInput) {
   });
 
   // ==============================================================
+  // FASE 2 pieza 1, sub 3 (2026-07-30): guard de PROPIEDAD de credenciales.
+  // Una credencial Rama A (usaCredencialesPropias=false) sin dueño
+  // configurado (propietarioTipo == null) no puede despacharse — el motor de
+  // plata en sub-piece 4 va a resolver el markup del dueño. Si no hay dueño,
+  // no hay markup, no hay cálculo autoritativo.
+  //
+  // Dual-mode (mirror de operatividad):
+  //   - dashboard (permitirBloqueoPorDeposito=false): throw claro.
+  //   - e-commerce (true): crear en BLOQUEADO_CREDENCIAL. Se destraba solo
+  //     cuando admin_shipro configura el dueño en /configuracion/transportes
+  //     (procesarEnviosBloqueadosPorCredencial).
+  //
+  // Precedencia: DEPOSITO > CREDENCIAL > OPERATIVIDAD > SALDO. Gateado por
+  // !bloqueadoPorDeposito para no pisar el estado más fundamental (sin
+  // depósito no importa el dueño). Rama B (usaCredencialesPropias=true)
+  // implica CLIENTE por construcción (backend coerce en configuracion/couriers
+  // POST) — nunca dispara este guard.
+  // ==============================================================
+  let bloqueadoPorCredencial = false;
+  if (
+    !bloqueadoPorDeposito &&
+    credencialMain &&
+    credencialMain.usaCredencialesPropias === false &&
+    !credencialMain.propietarioTipo
+  ) {
+    if (permitirBloqueoPorDeposito) {
+      bloqueadoPorCredencial = true;
+      estadoInicialEnvio = "BLOQUEADO_CREDENCIAL";
+    } else {
+      throw new Error(
+        `CredencialSinPropietario: la credencial de ${courierReal.nombre} es Rama A pero no tiene dueño configurado. Configuralo en /configuracion/transportes.`
+      );
+    }
+  }
+
+  // ==============================================================
   // VALIDACIÓN DE OPERATIVIDAD DEL PAR (DEUDA 29 Sub-fase 6.D.5)
   // ==============================================================
   // Lookup de DepositoCourierConfig + validación pre-despacho. Si el par
@@ -329,7 +365,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
   let motivosOperatividad: string[] = [];
   let detalleOperatividad: string[] = [];
 
-  if (deposito && credencialMain && !bloqueadoPorDeposito && !falloPorPeaje) {
+  if (deposito && credencialMain && !bloqueadoPorDeposito && !bloqueadoPorCredencial && !falloPorPeaje) {
     const operatividad = await validarOperatividadPar({
       prisma,
       deposito,
@@ -612,17 +648,18 @@ export async function crearEnvio(input: CrearEnvioInput) {
     }
   }
 
-  // Prioridad de estados: BLOQUEADO_DEPOSITO > BLOQUEADO_SALDO. Si ambos
-  // aplican, el envío arranca como BLOQUEADO_DEPOSITO; cuando se configure
-  // depósito, la función procesarEnviosBloqueadosPorDeposito() valida saldo
-  // y transiciona a BLOQUEADO_SALDO si no alcanza.
-  if (bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorOperatividad) {
+  // Prioridad de estados: DEPOSITO > CREDENCIAL > OPERATIVIDAD > SALDO.
+  // Si aplican varios, el envío arranca en el más "fundamental" y cascadea
+  // en los reintentos: cada procesar-bloqueados-* revalida saldo y transiciona
+  // a BLOQUEADO_SALDO si no alcanza. FASE 2 pieza 1 sub 3 agregó CREDENCIAL
+  // entre DEPOSITO y OPERATIVIDAD.
+  if (bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorCredencial && !bloqueadoPorOperatividad) {
     estadoInicialEnvio = "BLOQUEADO_SALDO";
   }
 
   // DESPACHO AL COURIER (solo si NO falló el peaje, NO está bloqueado por saldo
   // ni por depósito, y hay credencial + depósito disponibles).
-  if (!falloPorPeaje && !bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorOperatividad && credencialMain && credencialMain.activo && deposito) {
+  if (!falloPorPeaje && !bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorCredencial && !bloqueadoPorOperatividad && credencialMain && credencialMain.activo && deposito) {
     const dispatchResult = await despacharCourier({
       credencial: credencialMain,
       courierNombreCanonico: courierReal.nombre,
@@ -777,7 +814,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
     // BLOQUEADO_PARCIAL: NO crear MovimientoFinanciero ni actualizar saldo.
     // El débito se aplica al desbloquear (procesar-bloqueados*), que lee
     // FinanzasEnvio.precioFactura (autoritativo, rama-aware, ya persistido arriba).
-    if (!bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorOperatividad && !bloqueadoPorTramoFallido) {
+    if (!bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorCredencial && !bloqueadoPorOperatividad && !bloqueadoPorTramoFallido) {
       // FASE 1 (DEUDA 73/107): montoDebito ya incluye Fee (Rama B: solo Fee;
       // Rama A: tarifa completa con Fee ya adentro via aplicarMarkup). Un solo
       // MovimientoFinanciero cubre todo. Rama-aware descripcion para que el
@@ -827,6 +864,8 @@ export async function crearEnvio(input: CrearEnvioInput) {
       await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_PARCIAL", observacion: `Bloqueado por falla en despacho del courier: ${errorTramo}. Tramos persistidos: ${dispatchTramos.length}. El operador debe resolver la falla manualmente.`, envioId: envioCreado.id } });
     } else if (bloqueadoPorDeposito) {
       await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_DEPOSITO", observacion: `Bloqueado: la empresa no tiene depósito predeterminado configurado. Se desbloqueará automáticamente cuando se configure uno en /configuracion/depositos.`, envioId: envioCreado.id } });
+    } else if (bloqueadoPorCredencial) {
+      await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_CREDENCIAL", observacion: `Credencial de ${courierReal.nombre} es Rama A pero no tiene dueño configurado. Se desbloqueará automáticamente cuando admin_shipro asigne el dueño en /configuracion/transportes.`, envioId: envioCreado.id } });
     } else if (bloqueadoPorOperatividad) {
       await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_OPERATIVIDAD", observacion: `Par (depósito × courier) no operativo. Motivos: ${motivosOperatividad.join(", ")}. Detalle: ${detalleOperatividad.join("; ")}. Configurá el par en /configuracion/depositos.`, envioId: envioCreado.id } });
     } else if (bloqueadoPorSaldo) {
@@ -869,7 +908,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
   // Mails: NO mandar si está bloqueado por saldo, depósito o partial failure
   // (el destinatario no debe recibir notificación hasta que el envío se destrabe
   // y tenga tracking real).
-  if (email && !bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorOperatividad && !bloqueadoPorTramoFallido) {
+  if (email && !bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorCredencial && !bloqueadoPorOperatividad && !bloqueadoPorTramoFallido) {
     // DEUDA 14: si APP_URL no esta configurada, NO mandamos mail con link
     // a localhost. El envio se creo en BD — no rompemos el flujo por mail.
     // Principio operativo: que la venta no se pierda.
@@ -892,6 +931,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
     bloqueadoPorDeposito,
     bloqueadoPorTramoFallido,
     bloqueadoPorOperatividad,
+    bloqueadoPorCredencial,
     estado: estadoInicialEnvio
   };
 }

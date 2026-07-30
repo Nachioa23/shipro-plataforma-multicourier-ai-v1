@@ -162,6 +162,16 @@ export async function POST(request: Request) {
       });
     }
 
+    if (result.bloqueadoPorCredencial) {
+      // FASE 2 pieza 1 sub 3 (2026-07-30): credencial Rama A sin dueño configurado.
+      return NextResponse.json({
+        ...result,
+        status: "BLOQUEADO_CREDENCIAL",
+        bloqueadoPorCredencial: true,
+        warning: "Envío creado pero bloqueado: la credencial de este courier es Rama A pero no tiene dueño configurado. Se destrabará automáticamente cuando admin_shipro asigne el dueño en /configuracion/transportes."
+      });
+    }
+
     if (result.bloqueadoPorOperatividad) {
       return NextResponse.json({
         ...result,

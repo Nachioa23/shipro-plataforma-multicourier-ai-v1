@@ -7,6 +7,7 @@ import {
 } from "@/lib/auditoria-configuracion";
 import { puedeEditarCampo, esModeloBCredenciales } from "@/lib/permisos";
 import { asignarSucursalParaDeposito } from "@/lib/sucursales/cercanas";
+import { procesarEnviosBloqueadosPorCredencial } from "@/lib/envios/procesar-bloqueados-credencial";
 
 export async function GET(request: Request) {
   try {
@@ -413,7 +414,21 @@ export async function POST(request: Request) {
       }
     }
 
-    return NextResponse.json({ success: true });
+    // === FASE 2 pieza 1 sub 3 (2026-07-30): destrabe automático post-configuración de dueño ===
+    // Guardar/actualizar el dueño de una credencial puede destrabar envíos que quedaron
+    // en BLOQUEADO_CREDENCIAL. Falla contenida (mismo patrón que courier-configs PUT):
+    // si el reproceso lanza, no se rompe el guardado del courier.
+    let recovery;
+    try {
+      recovery = await procesarEnviosBloqueadosPorCredencial(empresaIdNum);
+    } catch (recErr) {
+      console.error("[couriers POST] procesarEnviosBloqueadosPorCredencial fallo:", recErr);
+    }
+
+    return NextResponse.json({
+      success: true,
+      ...(recovery ? { recovery } : {}),
+    });
   } catch (error: any) {
     // DEUDA 19: motivo obligatorio faltante para campo sensible.
     if (error instanceof MotivoRequeridoError) {

@@ -23,7 +23,7 @@ export async function GET(request: Request) {
         // INCIDENCIA y NO_ENTREGADO se sacaron porque son bidireccionales
         // (paquete "perdido" puede aparecer y entregarse). DEVUELTO es
         // sinonimo legacy de DEVUELTO_AL_REMITENTE, ambos terminales.
-        estadoActual: { notIn: ["ENTREGADO", "CANCELADO", "DEVUELTO", "DEVUELTO_AL_REMITENTE", "BLOQUEADO_SALDO", "BLOQUEADO_DEPOSITO", "BLOQUEADO_PARCIAL", "BLOQUEADO_OPERATIVIDAD"] },
+        estadoActual: { notIn: ["ENTREGADO", "CANCELADO", "DEVUELTO", "DEVUELTO_AL_REMITENTE", "BLOQUEADO_SALDO", "BLOQUEADO_DEPOSITO", "BLOQUEADO_PARCIAL", "BLOQUEADO_OPERATIVIDAD", "BLOQUEADO_CREDENCIAL"] },
         trackingNumber: { not: "" },
         // F3 (2026-06-09): cutoff temporal de 45 dias desde impresion.
         // Despues de este cutoff, el envio sale del loop del cron y solo

@@ -187,6 +187,11 @@ model Usuario {
 
   // Metrica 1.3 (DEUDA 39, 2026-06-11): historial de votos NPS del usuario.
   encuestasNPSEmpresa EncuestaNPSEmpresa[]
+
+  // FASE 2 sub 1 (config variables tarifa, 2026-07-31): auditor de ajustes
+  // masivos del Fee. Nullable en el evento (SetNull en el FK) para no perder
+  // el registro si el usuario admin es dado de baja.
+  ajustesMasivosFee AjusteMasivoFee[]
 }
 
 model Courier {
@@ -270,6 +275,12 @@ model Courier {
   // courier es el DUEÑO de credenciales o de rows de markup. Sub-piece 4 lee por acá.
   credencialesComoPropietario     CredencialCourier[]     @relation("CredencialPropietario")
   intermediariosComoPropietario   CourierIntermediario[]  @relation("IntermediarioPropietario")
+
+  // FASE 2 sub 1 (config variables tarifa, 2026-07-31): historial de SMO por
+  // courier (SmoCourier). Migra la fuente de verdad desde los campos legacy
+  // smoActivo / smoPrecioAlClienteConIva (que quedan como espejo hasta que el
+  // motor pivotee a esta tabla en una sub-piece posterior).
+  smos SmoCourier[]
 
   // DEUDA 19: audit log de cambios sensibles per-courier (credencialesJson, tipoCuenta, etc).
   auditoriasConfiguracion AuditoriaConfiguracion[]
@@ -1413,4 +1424,76 @@ model ConciliacionRun {
 
   @@index([referenciaFactura])
   @@index([createdAt])
+}
+
+// =============================================================================
+// FASE 2 sub 1 (2026-07-31) — CONFIG VARIABLES DE TARIFA (schema aditivo).
+// Ver docs/DISENO-MODELO-DATOS-CONFIG-VARIABLES.md.
+// Tres tablas nuevas: MarkupShiproVigencia (global), SmoCourier (por courier),
+// AjusteMasivoFee (evento auditable). Nada las lee todavía para pricing — el
+// motor se conecta en una sub-piece posterior (paso 5 del §7 del diseño).
+// Las dos primeras mirroreean el patrón de vigencias de CourierIntermediario;
+// la tercera mirroreea el patrón de evento auditable de ConciliacionRun.
+//
+// Nota nomenclatura (DEUDA 114): estas tablas usan vigenciaDesde/vigenciaHasta.
+// OperacionFee ya tiene vigencias con la ortografía legacy vigenteDesde/Hasta;
+// unificar como higiene aparte.
+// =============================================================================
+
+/// Markup Shipro GLOBAL con vigencias. UNA sola fila activa a nivel plataforma
+/// (no hay FK: es global). CredencialCourier.ajusteTarifaPorcentaje se mantiene
+/// como gancho de OVERRIDE por empresa (empty/null = hereda este global).
+/// Valor NETO en porcentaje (e.g. 10.0000 = +10%).
+model MarkupShiproVigencia {
+  id              Int     @id @default(autoincrement())
+  valorPorcentaje Decimal @db.Decimal(12, 4)
+
+  activo        Boolean   @default(true)
+  vigenciaDesde DateTime  @default(now())
+  vigenciaHasta DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([activo])
+}
+
+/// SMO (Seguro Mínimo de Shipro) por courier con vigencias. Espejo del patrón
+/// de CourierIntermediario. Migra la fuente de verdad desde los campos legacy
+/// Courier.smoActivo / Courier.smoPrecioAlClienteConIva (que quedan como
+/// espejo hasta que el motor pivotee acá). valorNeto = SIN IVA.
+model SmoCourier {
+  id        Int     @id @default(autoincrement())
+  courierId Int
+  courier   Courier @relation(fields: [courierId], references: [id], onDelete: Cascade)
+
+  valorNeto Decimal @db.Decimal(12, 2)
+
+  activo        Boolean   @default(true)
+  vigenciaDesde DateTime  @default(now())
+  vigenciaHasta DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([courierId, activo])
+}
+
+/// Registro auditable de ajustes masivos porcentuales del Fee sobre la cartera
+/// de OperacionFee. Es un EVENTO, no un valor versionado: cada corrida deja un
+/// row con quién, cuánto y cuántas empresas afectó. Estilo ConciliacionRun.
+/// porcentaje: NETO (e.g. 10.0000 = +10%).
+model AjusteMasivoFee {
+  id                        Int      @id @default(autoincrement())
+  porcentaje                Decimal  @db.Decimal(12, 4)
+  fechaAplicacion           DateTime @default(now())
+  aplicadoPorId             Int?
+  aplicadoPor               Usuario? @relation(fields: [aplicadoPorId], references: [id], onDelete: SetNull)
+  cantidadEmpresasAfectadas Int
+  notas                     String?
+
+  createdAt DateTime @default(now())
+
+  @@index([fechaAplicacion])
+  @@index([aplicadoPorId])
 }

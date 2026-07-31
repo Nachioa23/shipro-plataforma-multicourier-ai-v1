@@ -81,6 +81,53 @@ async function main() {
     });
   }
 
+  // === FASE 2 sub 1 (2026-07-31): SmoCourier — historial de SMO por courier ===
+  // Espejo del patrón de vigencias de CourierIntermediario. Nada lo lee todavía
+  // para pricing (el motor se conecta en una sub-piece posterior); se siembra
+  // ahora para que el histórico arranque desde el bootstrap. Valor NETO (SIN IVA).
+  //   Andreani: $121.50 — matches Courier.smoPrecioAlClienteConIva actual.
+  //   Moci's:   $0.00   — matches el efectivo actual (Courier.smoActivo=false).
+  // Idempotente: crea la fila solo si el courier todavía no tiene una activa.
+  const smoPorCourier: Array<{ nombre: string; valorNeto: string }> = [
+    { nombre: "Andreani", valorNeto: "121.50" },
+    { nombre: "Moci's",   valorNeto: "0.00"   },
+  ];
+  for (const s of smoPorCourier) {
+    const courier = await prisma.courier.findUnique({ where: { nombre: s.nombre } });
+    if (!courier) continue;
+    const yaExiste = await prisma.smoCourier.findFirst({
+      where: { courierId: courier.id, activo: true },
+    });
+    if (!yaExiste) {
+      await prisma.smoCourier.create({
+        data: { courierId: courier.id, valorNeto: new Prisma.Decimal(s.valorNeto), activo: true },
+      });
+    }
+  }
+
+  // === FASE 2 sub 1 (2026-07-31): MarkupShiproVigencia — markup Shipro global ===
+  // Ver docs/DISENO-MODELO-DATOS-CONFIG-VARIABLES.md §5.2. UNA sola fila activa
+  // a nivel plataforma. Valor NETO en porcentaje (e.g. 10.0000 = +10%).
+  //
+  // VALOR SEMBRADO: 0.0000 (%).
+  // RAZÓN: hoy no existe un markup Shipro global en ningún lado — el schema
+  // default de CredencialCourier.ajusteTarifaPorcentaje es 0.0, y el seed base
+  // no lo pisa. Un valor no-cero acá cambiaría el precio en el momento en que
+  // el motor pivotee a leer esta tabla en una sub-piece posterior. Se siembra
+  // 0.0000 para preservar behavior; el valor productivo (política comercial)
+  // se carga via UI cuando esté lista (paso 2 del §7 del diseño).
+  // FLAG PARA NACHO: confirmar el valor productivo cuando corresponda.
+  //
+  // Idempotente: crea la fila solo si no hay una activa.
+  const yaHayMarkupShipro = await prisma.markupShiproVigencia.findFirst({
+    where: { activo: true },
+  });
+  if (!yaHayMarkupShipro) {
+    await prisma.markupShiproVigencia.create({
+      data: { valorPorcentaje: new Prisma.Decimal("0.0000"), activo: true },
+    });
+  }
+
   // === DEUDA 107 + FASE 2 pieza 1: intermediario que presta credenciales (Mocis presta Andreani) ===
   // Valores SIN IVA (criterio "todo neto, IVA al final", DEUDA 73). El seguro fijo es dato de
   // conciliación (lo que Mocis factura a Shipro), NO entra en la tarifa publicada — esa usa el SMO.

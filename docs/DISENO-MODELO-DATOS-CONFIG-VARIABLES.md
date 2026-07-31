@@ -1,132 +1,141 @@
 # Diseño — Modelo de Datos: Configuración de Variables de Tarifa
 
 **Estado:** DISEÑO APROBADO (decisiones cerradas). Pendiente de implementación.
-**Registrado:** 2026-07-31
-**Alcance:** el modelo de datos que soporta `DISENO-CONFIG-VARIABLES-TARIFA.md`. Va después de la higiene del IVA (ya hecha, commit `2a5f9c1`) y antes de la UI y del cambio del motor.
+**Registrado:** 2026-07-31 · **Actualizado:** 2026-07-31 (v2, tras recon de implementación fino)
+**Alcance:** el modelo de datos que soporta `DISENO-CONFIG-VARIABLES-TARIFA.md`. Va después de la higiene del IVA (hecha, commits `489cea4` + `cf7e52f`) y antes de la UI y del cambio del motor.
 **Regla de oro que aplica:** el código es la verdad; nada de valores de plata hardcodeados; todo neto, IVA al final; trazabilidad (vigencias + eventos) sobre simplicidad; no se toca prod sin plan revisado.
+
+---
+
+## 0. Cambios de la v2 respecto de la v1 (para trazabilidad)
+
+El recon de implementación fino reveló dos cosas que ajustaron el diseño:
+
+1. **El IVA sale de esta pieza.** `IVA_AR_MULTIPLIER` se importa de forma SÍNCRONA en muchos lugares; hacerlo leer de la base (asíncrono) exigiría volver asíncronos todos esos sitios o construir un mecanismo de caché/bootstrap. Como el IVA es la variable que MENOS cambia (alícuota por ley, cada varios años) y ya está consolidada en fuente única, se DIFIERE como DEUDA chica (hacerlo configurable con caché cuando valga la pena). Las otras cuatro variables se hacen configurables ahora.
+2. **El markup de Shipro NO va en la tabla de config global.** Esa tabla existe pero es de UNA SOLA FILA ANCHA (se lee con findFirst, columnas fijas). Las vigencias (decididas) PELEAN con una tabla de fila única. Por eso el markup de Shipro va en su PROPIA tabla con vigencias (`MarkupShiproVigencia`), simétrica a `CourierIntermediario` y `SmoCourier`. La tabla de config ancha queda para settings sin historial.
+
+También se afinó el modelo del markup Shipro a **default global + herencia + override opcional** (ver §5.2).
 
 ---
 
 ## 1. Qué resuelve este documento
 
-Define **dónde vive en la base de datos** cada una de las cinco variables de tarifa, para que dejen de estar hardcodeadas o solo en el seed, y puedan configurarse (con historial). Es la base sobre la que se apoyan después la UI de configuración y el cambio del motor de precios.
+Define **dónde vive en la base** cada variable de tarifa, para que dejen de estar hardcodeadas o solo en el seed y puedan configurarse con historial. Base sobre la que se apoyan la UI de configuración y el cambio del motor.
 
 ---
 
 ## 2. Decisiones tomadas (firmes)
 
-1. **Versionado con vigencias (sí).** Cada variable guarda "desde cuándo rige este valor" (`vigenciaDesde` / `vigenciaHasta`). Esto permite que una conciliación de un envío viejo use el valor que regía cuando el envío se creó, no el valor actual. Red de seguridad contra que un cambio de precio a futuro ensucie la conciliación de envíos pasados.
-2. **Cada variable global en su propio registro** (no atadas artificialmente), pero **con historial** — resuelto reutilizando la tabla de config global existente (ver §3), una fila por variable.
-3. **SMO por courier, en su propia tabla con vigencias** (no un campo suelto en `Courier`) — porque las vigencias exigen historial, y un campo suelto no lo tiene. Queda simétrico con `CourierIntermediario`.
-4. **El ajuste masivo del Fee se registra como evento** (con fecha y porcentaje), no solo actualiza valores. Mismo espíritu que los asientos contables inversos: nunca pisar sin dejar rastro.
+1. **Versionado con vigencias (sí)** para las variables configurables. Permite que una conciliación de un envío viejo use el valor que regía cuando el envío se creó. Red contra que un cambio de precio a futuro ensucie conciliaciones pasadas.
+2. **IVA fuera de esta pieza** (§0.1). Queda constante en fuente única (`IVA_AR_MULTIPLIER`); DEUDA chica para hacerlo configurable con caché.
+3. **Markup Shipro en tabla propia con vigencias** (§0.2), no en la config global ancha.
+4. **Markup Shipro = default global + herencia + override opcional por empresa** (§5.2).
+5. **SMO por courier, tabla propia con vigencias** (§5.3).
+6. **Ajuste masivo del Fee = evento registrado** (con fecha y %), no solo actualiza valores.
 
 ---
 
-## 3. Hallazgo del recon que ajustó el diseño
-
-El recon encontró que **ya existe una tabla de configuración global** en el schema. En vez de crear una `ParametroGlobal` nueva (como se pensó inicialmente), **se reutiliza la tabla existente** para alojar markup de Shipro e IVA. Evita duplicar estructura.
-
-> **A confirmar en el recon de implementación:** si esa tabla existente soporta vigencias tal cual, o si hay que agregarle los campos de vigencia. Si agregárselos fuera invasivo para otros usos de esa tabla, se evalúa una tabla dedicada. La dirección es REUSAR; el detalle se cierra al implementar.
-
----
-
-## 4. El modelo de datos — las cinco variables
+## 3. El modelo de datos — las cuatro variables configurables (IVA aparte)
 
 | Variable | Dónde vive | Nuevo o existente | Vigencias |
 |---|---|---|---|
 | Markup intermediario | `CourierIntermediario` (por dueño) | existe (ya re-keyed) | ya las tiene |
-| Markup Shipro | tabla config global (fila) | existe (se reutiliza) | agregar/confirmar |
-| IVA | tabla config global (fila) | existe (se reutiliza) | agregar/confirmar |
+| Markup Shipro | `MarkupShiproVigencia` (global) + `CredencialCourier.ajusteTarifaPorcentaje` (override) | **nueva** + campo existente reusado | sí |
 | SMO | `SmoCourier` (por courier) | **nueva** | sí |
 | Fee Shipro | `OperacionFee` (por empresa) + `AjusteMasivoFee` | existe + **nueva** | agregar a OperacionFee |
+| IVA | constante `IVA_AR_MULTIPLIER` | — (DEUDA aparte) | — |
 
-Resultado: se **reutiliza** la config global existente, se **extienden** `CourierIntermediario` (ya listo) y `OperacionFee`, y se **crean** solo dos tablas (`SmoCourier`, `AjusteMasivoFee`). Menos superficie nueva = menos riesgo.
+Tablas nuevas: `MarkupShiproVigencia`, `SmoCourier`, `AjusteMasivoFee`. Se extiende `OperacionFee` (vigencias). Se reutiliza `CredencialCourier.ajusteTarifaPorcentaje` como gancho de override.
+
+Las tres tablas de "valor con vigencias" (`CourierIntermediario`, `MarkupShiproVigencia`, `SmoCourier`) comparten el mismo patrón — un solo modelo mental.
 
 ---
 
-## 5. Detalle por tabla
+## 4. Patrón de vigencias (transversal, a espejar)
+
+Todas las tablas con vigencias siguen el patrón de `CourierIntermediario`:
+- Campos: `activo` (bool), `vigenciaDesde` (DateTime), `vigenciaHasta` (DateTime?, null = vigente).
+- Query "valor activo hoy": `where activo=true AND (vigenciaHasta is null OR vigenciaHasta > now)`, order by `vigenciaDesde desc`, tomar el primero.
+- Cambiar un valor = cerrar la vigencia actual (`vigenciaHasta = now`) + crear fila nueva. Nunca pisar (asiento inverso).
+
+El recon confirmó el where-clause exacto a espejar. La implementación reusa ese patrón, no inventa uno.
+
+---
+
+## 5. Detalle por variable
 
 ### 5.1 Markup intermediario — `CourierIntermediario` (ya existe)
 
-Ya quedó modelado en la pieza de propiedad de credenciales (sub-pieza 1): keyed por el dueño (`propietarioCourierId`), con `markupPorcentaje`, un campo fijo, y vigencias. Sin cambios acá salvo confirmar que el campo fijo sirve como markup fijo general (neto), no solo "seguro" — ver `DISENO-PROPIEDAD-CREDENCIALES.md` y `DISENO-CONFIG-VARIABLES-TARIFA.md` §4.1.
+Modelado en propiedad de credenciales (sub-pieza 1): keyed por dueño (`propietarioCourierId`), con `markupPorcentaje`, campo fijo y vigencias. Sin cambios acá salvo confirmar que el campo fijo sirve como markup fijo general (neto). Ver `DISENO-PROPIEDAD-CREDENCIALES.md`.
 
-### 5.2 y 5.3 Markup Shipro + IVA — tabla config global (se reutiliza)
+### 5.2 Markup Shipro — default global + herencia + override opcional
 
-Cada uno es una **fila** en la tabla de config global existente:
-- `markup_shipro` → el porcentaje/valor global de markup de Shipro.
-- `iva` → el multiplicador de IVA (hoy 1.21), fuente única. Conecta con la constante `IVA_AR_MULTIPLIER` ya consolidada en la higiene: el objetivo final es que esa constante lea de esta fila, para que cambiar la alícuota sea editar una fila y NO tocar código.
-- Ambas con vigencias (a confirmar en implementación si la tabla ya las soporta).
-- **Neto:** los valores se guardan netos; el IVA se aplica al final (regla de la casa).
-- **Futuro (DEUDA):** override del markup de Shipro por empresa. La estructura debe dejar la puerta abierta sin implementarlo ahora.
+Modelo de **default global con herencia y override** (lo que resuelve el pedido real):
 
-### 5.4 SMO — `SmoCourier` (nueva)
+- **`MarkupShiproVigencia`** (nueva, con vigencias) → el markup de Shipro **global**, la fuente de verdad "general". Es el número que rige generalmente.
+- **Herencia en onboarding:** cuando se hace el onboarding de un courier para un cliente, el global **aparece por default** — el cliente lo hereda automáticamente, sin cargarlo a mano.
+- **`CredencialCourier.ajusteTarifaPorcentaje`** (campo existente, se MANTIENE) → **gancho de override opcional**. Vacío/null = "heredo el global vigente". Con valor = "override para este cliente-courier puntual".
+- **El motor, al cotizar, pregunta:** ¿esta credencial tiene override? Si sí, usa ese; si no, usa el global vigente.
+
+**Prioridad de implementación:** lo urgente es el **global + la herencia por default en onboarding**, que impacta en la tarifa. El override puntual (UI para pisar el global por cliente) queda como **gancho preparado pero no urgente** — estructura lista, UI del override para después. Ver DEUDA §8.
+
+**Neto:** valor neto; IVA al final.
+
+### 5.3 SMO — `SmoCourier` (nueva)
 
 Tabla nueva, una fila por courier con vigencias, espejo de `CourierIntermediario`:
-- `courierId` (FK a Courier)
-- `valor` (neto, Decimal)
-- `activo`, `vigenciaDesde`, `vigenciaHasta`
-- índice por `(courierId, activo)` — mismo patrón que la tabla del intermediario.
+- `courierId` (FK), `valor` (neto, Decimal), `activo`, `vigenciaDesde`, `vigenciaHasta`
+- índice `(courierId, activo)`.
 
-Migra el SMO desde la constante hardcodeada actual hacia esta tabla. Todos los sitios que hoy leen la constante pasan a leer de acá (ver recon: lista de read sites).
+Migra el SMO desde la constante hardcodeada actual. Todos los read sites (listados en el recon) pasan a leer de acá.
 
-> **DEUDA separada (no acá):** la regla "SMO vs seguro completo" (el cliente elige seguro por valor declarado → SMO = 0, seguro viene por API del courier). Es una regla de negocio, no config. Va a la pieza de recolección/servicios de FASE 2. Ver `DISENO-CONFIG-VARIABLES-TARIFA.md` §4.3.
+> **DEUDA separada (no acá):** regla "SMO vs seguro completo" (cliente elige seguro por valor declarado → SMO=0, seguro por API del courier). Regla de negocio, no config. Va con recolección/servicios de FASE 2. Ver `DISENO-CONFIG-VARIABLES-TARIFA.md` §4.3.
 
-### 5.5 Fee Shipro — `OperacionFee` (existe) + `AjusteMasivoFee` (nueva)
+### 5.4 Fee Shipro — `OperacionFee` (existe) + `AjusteMasivoFee` (nueva)
 
-**`OperacionFee`** (por empresa, ya existe) — se le agregan **vigencias** (no las tiene hoy). Sigue guardando el Fee base de cada empresa (neto). El genérico/default ($1.600) se mantiene como el valor que heredan las empresas nuevas.
+**`OperacionFee`** (por empresa, existe) — se le agregan **vigencias**. Guarda el Fee base de cada empresa (neto). El genérico/default ($1.600) es el valor que heredan las empresas nuevas.
 
-**`AjusteMasivoFee`** (nueva) — registra cada operación de ajuste porcentual masivo como un evento:
-- `porcentaje` (ej. +10.00)
-- `fechaAplicacion`
-- `aplicadoPor` (usuario admin que lo ejecutó)
-- `cantidadEmpresasAfectadas` (o el detalle, a definir en implementación)
-- notas opcionales
+**`AjusteMasivoFee`** (nueva) — registra cada ajuste porcentual masivo como evento: `porcentaje`, `fechaAplicacion`, `aplicadoPor` (usuario admin), `cantidadEmpresasAfectadas` (o detalle), notas. Sigue el estilo de los modelos de evento/auditoría existentes (ej. ConciliacionRun).
 
-La operación de ajuste masivo: recalcula el Fee base de todas las empresas proporcionalmente (A=1.600→1.760, B=800→880, etc.), y deja el evento registrado. Con vigencias en `OperacionFee`, cada empresa conserva el histórico de su Fee. **Este es el componente que lleva más lógica** (una operación sobre toda la cartera + su registro), no un simple campo.
+La operación de ajuste masivo recalcula el Fee base de todas las empresas proporcionalmente (A=1.600→1.760, etc.) y deja el evento registrado. Con vigencias en `OperacionFee`, cada empresa conserva su histórico. **Es el componente con más lógica** (operación sobre toda la cartera + registro), no un campo.
+
+### 5.5 IVA — constante (DEUDA aparte)
+
+Queda como `IVA_AR_MULTIPLIER` en fuente única (`lib/constants/iva.ts`, ya consolidado en la higiene). NO se hace configurable en esta pieza (§0.1). DEUDA chica: hacerlo configurable con mecanismo de caché/bootstrap para no volver asíncronos los muchos read sites síncronos.
 
 ---
 
-## 6. Patrón de vigencias (transversal, a espejar)
+## 6. Auditoría y permisos
 
-Todas las tablas con vigencias siguen el patrón que ya usa `CourierIntermediario`:
-- Campos: `activo` (bool), `vigenciaDesde` (DateTime), `vigenciaHasta` (DateTime?, null = vigente).
-- Query de "valor activo hoy": `where activo=true AND (vigenciaHasta is null OR vigenciaHasta > now)`, ordenado por `vigenciaDesde desc`, tomar el primero.
-- Cambiar un valor = cerrar la vigencia del actual (`vigenciaHasta = now`) + crear una fila nueva. Nunca pisar (asiento inverso).
-
-El recon confirmó el where-clause exacto a espejar. La implementación debe reusar ese patrón, no inventar uno nuevo.
+- Cambios de estas variables mueven plata → **auditados**, patrón de campos auditables existente (el de `tipoCuenta` / `propietarioTipo`).
+- Configuración **admin-only** (`admin_shipro`).
 
 ---
 
-## 7. Auditoría y permisos
+## 7. Sub-piezas de implementación (orden tentativo)
 
-- Todas estas variables mueven plata de la plataforma → cambios **auditados**, siguiendo el patrón de campos auditables ya existente (el mismo que usan `tipoCuenta` / `propietarioTipo`).
-- Configuración **admin-only** (`admin_shipro`) — son parámetros globales/de courier/de empresa que afectan a todos.
+Cada una su commit, verificación entre medio. Ninguna cambia números todavía (el motor se conecta al final).
+
+1. **Schema + migración:** crear `MarkupShiproVigencia`, `SmoCourier`, `AjusteMasivoFee`; agregar vigencias a `OperacionFee`; mantener `CredencialCourier.ajusteTarifaPorcentaje` como override. Migración escrita a mano, NO aplicada hasta confirmar; aplicada primero a LOCAL. Seed migra el SMO de la constante a `SmoCourier` y siembra el markup Shipro global.
+2. **UI global:** markup Shipro global (con vigencias) + su herencia por default en onboarding.
+3. **UI SMO por courier.**
+4. **UI Fee por empresa + ajuste masivo** (el componente más grande).
+5. **Recién después (pieza aparte): el cambio del motor** — lee las 4 variables desde estas fuentes Y el markup por dueño, en un solo cambio, con cotización de control.
 
 ---
 
 ## 8. Deudas registradas — NO en esta pieza
 
-1. **Regla "SMO vs seguro completo"** (§5.4). Pieza propia, con recolección/servicios.
-2. **Override del markup de Shipro por empresa** (§5.2). Hoy global; dejar la puerta abierta.
+1. **IVA configurable** (§5.5) — con mecanismo de caché. DEUDA chica.
+2. **UI del override del markup Shipro por empresa** (§5.2) — el gancho (`ajusteTarifaPorcentaje`) queda listo; la UI para pisarlo por cliente, después.
+3. **Regla "SMO vs seguro completo"** (§5.3) — pieza propia, con recolección/servicios.
 
 ---
 
-## 9. Sub-piezas de implementación (orden tentativo)
+## 9. Próximos pasos (después de aprobar este diseño)
 
-Cada una su commit, con verificación entre medio. Ninguna cambia números todavía (el motor se conecta al final).
-
-1. **Schema + migración:** reutilizar config global para markup Shipro + IVA; crear `SmoCourier`; crear `AjusteMasivoFee`; agregar vigencias a `OperacionFee`. Migración escrita a mano, NO aplicada hasta confirmar. Seed migra el SMO de la constante a `SmoCourier` y el IVA/markup a la config global.
-2. **UI global:** sección admin para markup Shipro + IVA (con vigencias).
-3. **UI SMO por courier:** en la administración de couriers.
-4. **UI Fee por empresa + ajuste masivo:** el componente más grande (base por empresa + botón de ajuste porcentual masivo con su evento).
-5. **Recién después (pieza aparte): el cambio del motor** — que pasa a leer las cinco variables desde estas fuentes Y el markup por dueño, en un solo cambio, con su cotización de control.
-
----
-
-## 10. Próximos pasos (después de aprobar este diseño)
-
-1. Recon de implementación fino: confirmar si la config global existente soporta vigencias o hay que agregárselas; confirmar el shape exacto de `OperacionFee` para las vigencias; listar todos los read sites del SMO y del IVA que la migración debe redirigir.
-2. Prompt de la sub-pieza 1 (schema + migración), aplicada primero a la base LOCAL, verificada, antes de cualquier deploy.
-3. Registrar las dos DEUDAS (§8) en DEUDAS.md.
+1. Prompt de la sub-pieza 1 (schema + migración), aplicada primero a LOCAL y verificada.
+2. Registrar las tres DEUDAS (§8) en DEUDAS.md.
+3. Recién después, las UIs y por último el cambio del motor con su cotización de control.
 
 Nada de esto toca producción hasta tener cada paso revisado.

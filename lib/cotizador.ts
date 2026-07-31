@@ -179,7 +179,16 @@ export function aplicarMarkup(
   const netoAcumulado = costoConMarkup.add(smoNeto).add(feeNeto);
 
   // IVA aplicado UNA VEZ al total neto acumulado.
-  const precioFinal = netoAcumulado.mul(IVA_AR_MULTIPLIER);
+  // Redondeo a 2 decimales (half-up) para que el precio cotizado NAZCA en
+  // precisión de moneda — coincide byte-a-byte con el valor que Postgres
+  // guarda al persistirlo en FinanzasEnvio.precioFactura (Decimal(12,2),
+  // que redondea half-away-from-zero al write). Sin este redondeo, la
+  // cotización mostraba 3 decimales (ej. 10883.015) mientras que el envío
+  // creado guardaba 10883.02 — artifact solo de display, pero confuso.
+  // Prisma.Decimal usa ROUND_HALF_UP por default (mismo criterio que PG).
+  // El desglose queda en precisión completa (auditable); solo el número
+  // publicado al cliente se lleva a precisión de moneda.
+  const precioFinal = netoAcumulado.mul(IVA_AR_MULTIPLIER).toDecimalPlaces(2);
 
   return {
     precioProveedor: seco, // raw, sin cambios: la conciliación depende de este significado.

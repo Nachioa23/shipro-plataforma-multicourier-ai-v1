@@ -4,9 +4,10 @@ import { Prisma, EstadoLiquidacion } from "@prisma/client";
 import { aplicarMarkup, type ConfigMarkup } from "@/lib/cotizador";
 import { calcularFeeOperacion } from "@/lib/utils/operacion-fee";
 import { evaluarSuspension, suspenderEmpresa, reactivarEmpresa } from "@/lib/utils/suspension-cuenta";
+import { IVA_AR_MULTIPLIER } from "@/lib/constants/iva";
 
 // STEP 2b: IVA aplicado UNA vez sobre el aforo NETO (fix 5764287).
-const IVA_MULTIPLIER = new Prisma.Decimal("1.21");
+// IVA: fuente única en lib/constants/iva.ts (consolidación 2026-07-31).
 
 // STEP 1 (dos-vías-liquidación): validador del período de la factura del courier.
 // Formato requerido YYYY-MM (ej. "2026-04"). Es el mes al que corresponde la
@@ -429,7 +430,7 @@ export async function POST(request: Request) {
       // $transaction anidada, dissolvida porque el tx exterior ya provee
       // atomicidad y Prisma no soporta interactive tx anidados.
       if (debeAforoDebit) {
-        const aforoConIva = costoAforo.mul(IVA_MULTIPLIER);
+        const aforoConIva = costoAforo.mul(IVA_AR_MULTIPLIER);
         aforoDebitadoConIvaStr = aforoConIva.toString();
 
         await tx.finanzasEnvio.update({

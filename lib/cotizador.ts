@@ -6,6 +6,7 @@ import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
 import { calcularPromesaCalibrada } from "@/lib/utils/promesa-calibrada";
 import { calcularFeeOperacion } from "@/lib/utils/operacion-fee";
 import type { Paquete } from "@/lib/couriers/CourierInterface";
+import { IVA_AR_MULTIPLIER } from "@/lib/constants/iva";
 
 export interface CotizarInput {
   empresaId: number | null;
@@ -126,8 +127,6 @@ export interface ConfigMarkup {
   // Se suma al costoConMarkup ANTES del IVA final. Opcional: callers legacy no lo pasan → default 0.
   feeShiproNeto?: Prisma.Decimal | null;
 }
-
-const IVA_AR_MULTIPLIER = new Prisma.Decimal("1.21");
 
 export function aplicarMarkup(
   costoSecoCourier: Prisma.Decimal | number,

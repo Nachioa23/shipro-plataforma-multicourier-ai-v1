@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { Prisma, EstadoLiquidacion, TipoLiquidacion } from "@prisma/client";
+import { IVA_AR_MULTIPLIER } from "@/lib/constants/iva";
 
 // ============================================================================
 // STEP 1 (dos-vías-liquidación) + UNIFICACIÓN 2026-07-28.
@@ -22,7 +23,7 @@ import { Prisma, EstadoLiquidacion, TipoLiquidacion } from "@prisma/client";
 //     LIQUIDADO y setea liquidacionLogisticaId.
 // ============================================================================
 
-const IVA_MULTIPLIER = new Prisma.Decimal("1.21");
+// IVA: fuente única en lib/constants/iva.ts (consolidación 2026-07-31).
 const PERIODO_REGEX = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 // Deriva "YYYY-MM" desde una Date usando fecha en el timezone del server.
@@ -121,7 +122,7 @@ export async function GET(request: Request) {
         montoTotal: new Prisma.Decimal(0),
       };
       const feeNeto = e.finanzas!.feeNetoFacturado ?? new Prisma.Decimal(0);
-      const feeConIva = feeNeto.mul(IVA_MULTIPLIER);
+      const feeConIva = feeNeto.mul(IVA_AR_MULTIPLIER);
       bucket.montoTotal = bucket.montoTotal.add(feeConIva);
       bucket.totalEnvios += 1;
       feeMap.set(key, bucket);
@@ -143,7 +144,7 @@ export async function GET(request: Request) {
       const logNeto = e.finanzas!.logisticaNetaFacturada ?? new Prisma.Decimal(0);
       const aforo = e.finanzas!.costoAforo ?? new Prisma.Decimal(0);
       const netoTotal = logNeto.add(aforo);
-      const conIva = netoTotal.mul(IVA_MULTIPLIER);
+      const conIva = netoTotal.mul(IVA_AR_MULTIPLIER);
       bucket.montoTotal = bucket.montoTotal.add(conIva);
       bucket.totalEnvios += 1;
       logMap.set(key, bucket);
@@ -220,7 +221,7 @@ export async function POST(request: Request) {
 
         const montoTotal = envios.reduce((acc, e) => {
           const feeNeto = e.finanzas!.feeNetoFacturado ?? new Prisma.Decimal(0);
-          return acc.add(feeNeto.mul(IVA_MULTIPLIER));
+          return acc.add(feeNeto.mul(IVA_AR_MULTIPLIER));
         }, new Prisma.Decimal(0));
 
         const nueva = await tx.liquidacionMensual.create({
@@ -269,7 +270,7 @@ export async function POST(request: Request) {
       const montoTotal = envios.reduce((acc, e) => {
         const logNeto = e.finanzas!.logisticaNetaFacturada ?? new Prisma.Decimal(0);
         const aforo = e.finanzas!.costoAforo ?? new Prisma.Decimal(0);
-        return acc.add(logNeto.add(aforo).mul(IVA_MULTIPLIER));
+        return acc.add(logNeto.add(aforo).mul(IVA_AR_MULTIPLIER));
       }, new Prisma.Decimal(0));
 
       const nueva = await tx.liquidacionMensual.create({

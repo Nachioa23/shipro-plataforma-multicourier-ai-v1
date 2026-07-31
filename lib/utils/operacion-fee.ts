@@ -1,5 +1,6 @@
 import prisma from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
+import { IVA_AR_MULTIPLIER } from "@/lib/constants/iva";
 
 // DEUDA 10 Paso 4b (D-10-FEE-CHARGE): helper del fee por operacion Modelo B.
 // Lee el OperacionFee vigente de una empresa y calcula el monto a debitar de la
@@ -12,10 +13,8 @@ import { Prisma } from "@prisma/client";
 // NO incluye logica de descuentos temporales ni vencimiento automatico: eso vive
 // en el onboarding (carga del valor) y en DEUDA 72 (motor de propagacion). Aca
 // solo se lee el valor vigente que este cargado, sea estandar o con descuento.
-
-// IVA Argentina. Hoy hardcodeado a 21% (consistente con lib/cotizador.ts).
-// DEUDA 73 formalizara el manejo de impuestos como tasa configurable.
-const IVA_AR_MULTIPLIER = new Prisma.Decimal("1.21");
+//
+// IVA: fuente única en lib/constants/iva.ts (consolidación 2026-07-31).
 
 export type TipoFee = "FIJO" | "PORCENTAJE";
 

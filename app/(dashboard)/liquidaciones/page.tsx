@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import * as XLSX from "xlsx";
 import { Calculator, FileSpreadsheet, CheckCircle2, Loader2, AlertTriangle, CalendarDays, Receipt, Search, X } from "lucide-react";
+import { IVA_AR_MULTIPLIER_NUM } from "@/lib/constants/iva";
 
 // STEP 1 (dos-vías-liquidación): sección reutilizable para pendientes Fee/Logistica.
 // Cada item de `items` viene con { empresaId, empresaNombre, cuit, periodo, totalEnvios, montoTotal }.
@@ -219,7 +220,8 @@ export default function CierreMensual() {
     // STEP 1: dos formatos de Excel, uno por vía. Los importes vienen del
     // breakdown persistido (feeNetoFacturado / logisticaNetaFacturada / ivaFacturado)
     // — NO recalculamos precioFactura − precioProveedor (heurística vieja errada).
-    const IVA = 1.21;
+    // IVA: fuente única en lib/constants/iva.ts (consolidación 2026-07-31).
+    const IVA = IVA_AR_MULTIPLIER_NUM;
     const filasExcel = envios.map(e => {
       const f = e.finanzas || {};
       const feeNeto = Number(f.feeNetoFacturado ?? 0);

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { Prisma, EstadoLiquidacion } from "@prisma/client";
 import { evaluarSuspension, suspenderEmpresa, reactivarEmpresa } from "@/lib/utils/suspension-cuenta";
+import { IVA_AR_MULTIPLIER } from "@/lib/constants/iva";
 
 // PASO 3 PIECE 1: barrido de 6 meses. Al día 1 de cada mes, para cada etiqueta
 // Rama A cuya fechaImpresion ya cumplió 6 meses sin conciliación del courier,
@@ -13,7 +14,7 @@ import { evaluarSuspension, suspenderEmpresa, reactivarEmpresa } from "@/lib/uti
 //
 // Auth: proxy.ts:99-101 valida Authorization Bearer CRON_SECRET para todo
 // /api/cron/*. El handler no re-verifica.
-const IVA_MULTIPLIER = new Prisma.Decimal("1.21");
+// IVA: fuente única en lib/constants/iva.ts (consolidación 2026-07-31).
 
 export async function GET(_request: Request) {
   try {
@@ -75,7 +76,7 @@ export async function GET(_request: Request) {
 
           for (const envio of lista) {
             const netoLog = envio.finanzas!.logisticaNetaFacturada ?? new Prisma.Decimal(0);
-            const credit = netoLog.mul(IVA_MULTIPLIER);
+            const credit = netoLog.mul(IVA_AR_MULTIPLIER);
             running = running.add(credit);
             creditadoLocal = creditadoLocal.add(credit);
 

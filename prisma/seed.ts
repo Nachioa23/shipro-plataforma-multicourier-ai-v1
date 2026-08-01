@@ -85,12 +85,15 @@ async function main() {
   // Espejo del patrón de vigencias de CourierIntermediario. Nada lo lee todavía
   // para pricing (el motor se conecta en una sub-piece posterior); se siembra
   // ahora para que el histórico arranque desde el bootstrap. Valor NETO (SIN IVA).
-  //   Andreani: $121.50 — matches Courier.smoPrecioAlClienteConIva actual.
-  //   Moci's:   $0.00   — matches el efectivo actual (Courier.smoActivo=false).
+  // Política vigente (confirmada por Nacho, 2026-08-01): SMO parejo por courier
+  // a $121.50 NETO — se le cobra al cliente el mismo SMO tenga o no el courier
+  // un seguro propio. Se mantiene la tabla por-courier (con vigencias) porque
+  // los +12 couriers en carpeta la van a necesitar (algunos con SMO distinto o
+  // incluido en tarifa). Ver DEUDA 115 (UI para editar SMO por courier).
   // Idempotente: crea la fila solo si el courier todavía no tiene una activa.
   const smoPorCourier: Array<{ nombre: string; valorNeto: string }> = [
     { nombre: "Andreani", valorNeto: "121.50" },
-    { nombre: "Moci's",   valorNeto: "0.00"   },
+    { nombre: "Moci's",   valorNeto: "121.50" },
   ];
   for (const s of smoPorCourier) {
     const courier = await prisma.courier.findUnique({ where: { nombre: s.nombre } });

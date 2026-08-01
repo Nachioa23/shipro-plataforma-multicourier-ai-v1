@@ -78,6 +78,12 @@ export default function AdminFeePorEmpresa() {
     cantidadSalteadas: number;
   }>(null);
 
+  // PASO 2: apply. Sólo se habilita si preview.porcentaje === input actual
+  // (así la simulación y el apply son sobre el MISMO número — cambiar el
+  // input sin re-preview desarma el gating). motivoMasivo es obligatorio.
+  const [motivoMasivo, setMotivoMasivo] = useState("");
+  const [aplicandoMasivo, setAplicandoMasivo] = useState(false);
+
   const cargar = async () => {
     setCargando(true);
     try {
@@ -187,6 +193,61 @@ export default function AdminFeePorEmpresa() {
     }
   };
 
+  // Gate del apply: el preview debe coincidir con el porcentaje CURRENT del
+  // input. Si el admin cambia el input después de previewar, se apaga y hay
+  // que re-previewar. Impide previewar 10% + aplicar 20% por accidente.
+  const porcInputNum = parseFloat(porcMasivo);
+  const porcInputValido =
+    Number.isFinite(porcInputNum) && porcInputNum > -100 && porcInputNum <= 1000;
+  const previewCoincide =
+    !!preview && porcInputValido && preview.porcentaje === porcInputNum;
+  const motivoMasivoValido = motivoMasivo.trim().length > 0;
+  const puedeAplicar =
+    previewCoincide &&
+    motivoMasivoValido &&
+    !!preview &&
+    preview.cantidadAfectadas > 0;
+
+  const aplicarMasivo = async () => {
+    if (!puedeAplicar || !preview) return;
+    const motivoTxt = motivoMasivo.trim();
+    const ok = confirm(
+      `⚠️ Vas a ajustar el Fee de ${preview.cantidadAfectadas} empresas en ${preview.porcentaje}% ` +
+        `(factor ${preview.factor}).\n\n` +
+        `Esto cambia el precio del PRÓXIMO envío de TODAS esas empresas, en vivo.\n\n` +
+        `Motivo: ${motivoTxt}\n\n` +
+        `Empresas sin Fee activo (${preview.cantidadSalteadas}) quedan salteadas.\n\n` +
+        `La operación es atómica: si algo falla, ninguna vigencia se aplica. ¿Confirmás?`
+    );
+    if (!ok) return;
+
+    setAplicandoMasivo(true);
+    try {
+      const res = await fetch("/api/admin/operacion-fee/aplicar-masivo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ porcentaje: preview.porcentaje, motivo: motivoTxt }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        alert(
+          `Ajuste masivo aplicado: ${data.cantidadAfectadas} empresas ajustadas, ${data.cantidadSalteadas} sin cambios. Evento #${data.ajusteMasivoFeeId}.`
+        );
+        setPreview(null);
+        setPorcMasivo("");
+        setMotivoMasivo("");
+        cargar();
+      } else {
+        const data = await res.json();
+        alert(data.error || "Error al aplicar ajuste masivo");
+      }
+    } catch (e) {
+      alert("Error de conexión");
+    } finally {
+      setAplicandoMasivo(false);
+    }
+  };
+
   const fmtFecha = (iso: string | null) =>
     iso
       ? new Date(iso).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })
@@ -270,44 +331,94 @@ export default function AdminFeePorEmpresa() {
               Simulación
             </span>
           </div>
-          <div className="p-5 flex flex-col md:flex-row gap-3 md:items-end">
-            <div className="flex-1">
-              <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">
-                Porcentaje (positivo = subir, negativo = bajar)
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                value={porcMasivo}
-                onChange={(e) => setPorcMasivo(e.target.value)}
-                placeholder="Ej: 10 (sube 10%), -5 (baja 5%)"
-                className="w-full border-2 border-gray-200 rounded-lg p-2.5 text-base font-black text-gray-800 focus:border-violet-500 outline-none"
-              />
-              <p className="text-[10px] text-gray-500 mt-1">
-                Rango permitido: estrictamente &gt; -100 (nunca a $0/negativo) y ≤ 1000.
-              </p>
+          <div className="p-5 flex flex-col gap-3">
+            <div className="flex flex-col md:flex-row gap-3 md:items-end">
+              <div className="flex-1">
+                <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">
+                  Porcentaje (positivo = subir, negativo = bajar)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={porcMasivo}
+                  onChange={(e) => {
+                    setPorcMasivo(e.target.value);
+                    // Cambiar el input desarma el gate: hay que re-previewar
+                    // antes de poder aplicar el nuevo valor.
+                  }}
+                  placeholder="Ej: 10 (sube 10%), -5 (baja 5%)"
+                  className="w-full border-2 border-gray-200 rounded-lg p-2.5 text-base font-black text-gray-800 focus:border-violet-500 outline-none"
+                />
+                <p className="text-[10px] text-gray-500 mt-1">
+                  Rango permitido: estrictamente &gt; -100 (nunca a $0/negativo) y ≤ 1000.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={verPreview}
+                disabled={previewCargando || !porcInputValido}
+                className="py-2.5 px-4 bg-violet-700 text-white font-bold rounded-xl hover:bg-violet-800 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 text-sm"
+              >
+                {previewCargando ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Eye className="w-4 h-4" />
+                )}
+                Ver vista previa
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={verPreview}
-              disabled={previewCargando}
-              className="py-2.5 px-4 bg-violet-700 text-white font-bold rounded-xl hover:bg-violet-800 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 text-sm"
-            >
-              {previewCargando ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Eye className="w-4 h-4" />
-              )}
-              Ver vista previa
-            </button>
-            <button
-              type="button"
-              disabled
-              title="El apply real se implementa en el siguiente paso."
-              className="py-2.5 px-4 bg-gray-200 text-gray-500 font-bold rounded-xl text-sm cursor-not-allowed"
-            >
-              Aplicar — próximo paso
-            </button>
+
+            {/* Motivo + Aplicar — se muestran junto al preview. Aplicar sólo se
+                habilita si (preview.porcentaje === input actual) y motivo no vacío. */}
+            {preview && (
+              <div className="border-t border-gray-100 pt-3 flex flex-col gap-2">
+                <label className="text-[10px] font-bold text-gray-500 uppercase">
+                  Motivo (obligatorio para aplicar)
+                </label>
+                <textarea
+                  required
+                  value={motivoMasivo}
+                  onChange={(e) => setMotivoMasivo(e.target.value)}
+                  placeholder="Ej: 'suba general 10% Julio 2026 — aumento anual de precios'"
+                  className="w-full border-2 border-gray-200 rounded-lg p-2 text-xs text-gray-800 focus:border-violet-500 outline-none min-h-[60px]"
+                />
+                {!previewCoincide && (
+                  <p className="text-[10px] text-rose-600 font-bold">
+                    El porcentaje del input cambió — re-generá la vista previa antes de aplicar.
+                  </p>
+                )}
+                {previewCoincide && !motivoMasivoValido && (
+                  <p className="text-[10px] text-rose-600 font-bold">
+                    El motivo es obligatorio.
+                  </p>
+                )}
+                {previewCoincide &&
+                  motivoMasivoValido &&
+                  preview.cantidadAfectadas === 0 && (
+                    <p className="text-[10px] text-gray-600">
+                      La vista previa no tiene empresas afectadas — nada que aplicar.
+                    </p>
+                  )}
+                <button
+                  type="button"
+                  onClick={aplicarMasivo}
+                  disabled={!puedeAplicar || aplicandoMasivo}
+                  title={
+                    puedeAplicar
+                      ? "Aplica el ajuste a TODAS las empresas afectadas de forma atómica."
+                      : "Requiere: preview vigente para el % actual, motivo no vacío, y al menos 1 empresa afectada."
+                  }
+                  className="py-2.5 px-4 bg-rose-700 text-white font-bold rounded-xl hover:bg-rose-800 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                >
+                  {aplicandoMasivo ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <AlertTriangle className="w-4 h-4" />
+                  )}
+                  Aplicar ajuste masivo (mueve plata en vivo)
+                </button>
+              </div>
+            )}
           </div>
 
           {preview && (

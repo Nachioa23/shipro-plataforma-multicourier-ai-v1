@@ -3129,3 +3129,11 @@ la Fase 3 (plugins)** — el punto donde nace el dato —, no del motor.
 **Alcance:** test manual (curl o e-commerce sandbox) que dispare el POST sin dueño → verifica estado `BLOQUEADO_CREDENCIAL` en BD → setea propietario vía panel → verifica que la etiqueta pase de bloqueada a procesada. No requiere código nuevo, sólo verificación. Riesgo si no se hace: la vía API podría fallar silenciosa distinto al panel y quedar etiquetas colgadas.
 
 ---
+
+## DEUDA 122 — Promociones de Fee con vencimiento automático (distinguir promo-0 de legacy-0) (registrada 2026-08-01, scope chico-medio, producto/pricing)
+
+**Status:** ABIERTA. Hoy un Fee=0 (empresa sin `OperacionFee` activa) puede ser (a) una **promoción intencional temporal** (ej. "3 meses de bonificación para arrancar") o (b) **legacy / sin configurar** (empresa vieja pre-DEUDA-10 Paso 5a, o alta manual que se saltó el onboarding). El sistema NO los distingue — ambos caen bajo la misma rama "sin row → $0" en `calcularFeeOperacion` (`lib/utils/operacion-fee.ts:57-59`). La vista previa del ajuste masivo de Fee (FASE 2 sub 4 parte B PASO 1, commit `da27bcf`, 2026-08-01) hoy saltea todos los $0 por igual — un proporcional de 0 es 0 y no vale la pena forzar la creación de vigencias iniciales durante un ajuste masivo. Al implementar promociones, hay que **distinguir** promo-0 de legacy-0 para que las promos se ajusten (o al menos se marquen como necesitadas de revisión), y para que la promo termine sola cuando vence.
+
+**Alcance del fix:** marcar un Fee=0 (o un valor bonificado en general) como PROMOCIÓN con `fechaVencimiento`. Al vencer, el Fee pasa solo al valor default post-promo — probablemente un cron que revise vigencias con promo vencida y genere la nueva vigencia con el valor "post-promo" (o simplemente jubile la promo y deje al motor caer en el default configurado). La fecha límite se setearía en el onboarding (`app/api/clientes/route.ts:172`) o vía el editor de sub-piece 4 parte A. Consecuencia sobre el ajuste masivo: promo-0 se ajusta (o al menos se lista aparte); legacy-0 sigue skippeado. Requiere schema (nuevo campo `fechaVencimiento` en `OperacionFee` o tabla lateral de promos) + cron + UI del gancho.
+
+---

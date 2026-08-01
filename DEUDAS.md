@@ -3073,3 +3073,11 @@ la Fase 3 (plugins)** — el punto donde nace el dato —, no del motor.
 **Alcance del fix:** renombrar `OperacionFee.vigenteDesde` → `vigenciaDesde` y `OperacionFee.vigenteHasta` → `vigenciaHasta`. Requiere: migración de RENAME de columnas (no-op de datos) + actualizar `lib/utils/operacion-fee.ts` (líneas 48, 50, 54). Se dejó fuera de sub-piece 1 (config variables schema) para evitar cruzar el borde del motor de plata (fee reader) en un cambio que era puramente aditivo. Higiene chica, cerrar en una sesión dedicada.
 
 ---
+
+## DEUDA 115 — UI para editar el SMO por courier (tabla ya existe, falta pantalla) (registrada 2026-08-01, scope chico-medio, producto/admin)
+
+**Status:** ABIERTA. La tabla `SmoCourier` fue creada en sub-piece 1 de config-variables (commit `3a0ce72`, 2026-07-31) y es configurable por courier con vigencias — el esquema soporta cerrar la vigencia actual + abrir una nueva por courier sin pisar datos (asiento inverso). Hoy el valor se siembra vía `prisma/seed.ts` (SMO parejo $121.50 por courier, confirmado 2026-08-01). Falta la pantalla admin para editarlo desde la app: crear vigencia nueva por courier, ver histórico, cerrar la vigente. Necesaria en el corto plazo para los **+12 couriers en carpeta**, que tratarán el SMO distinto (incluido en tarifa, o valores distintos): sin UI cada alta forzaría un edit del seed + reseed, y encima no permite cambios en caliente sobre una BD viva.
+
+**Alcance del fix:** pantalla admin (`admin_shipro`) con listado por courier del SMO vigente + acción "editar" (crea `SmoCourier` nueva y cierra la vigente con `vigenciaHasta=now`, mismo patrón que va a usar la UI del markup Shipro global — paso 2 del §7 de `docs/DISENO-MODELO-DATOS-CONFIG-VARIABLES.md`). Nada de motor: la lectura del SMO desde `SmoCourier` la hace la sub-piece posterior del motor (paso 5 del mismo §7); esta DEUDA es sólo la pantalla de edición.
+
+---

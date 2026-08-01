@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { Sora } from "next/font/google";
 import Link from "next/link";
-import { Inbox, Tags, Package, LayoutDashboard, Truck, ShieldAlert, Users, CreditCard, ArrowRightLeft, Activity, LogOut, Building2, Calculator, Landmark, Scale, FileSpreadsheet, Settings2, Settings, ScrollText, Percent, Shield } from 'lucide-react';
+import { Inbox, Tags, Package, LayoutDashboard, Truck, ShieldAlert, Users, CreditCard, ArrowRightLeft, Activity, LogOut, Building2, Calculator, Landmark, Scale, FileSpreadsheet, Settings2, Settings, ScrollText, Percent, Shield, Receipt } from 'lucide-react';
 import { useSession, signOut } from "next-auth/react";
 import CotizadorModal from '@/components/CotizadorModal';
 import "../globals.css";
@@ -168,6 +168,11 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
                   {/* FASE 2 sub 3: SMO por courier con vigencias (DEUDA 115). */}
                   <Link href="/admin-smo" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-amber-50 hover:text-amber-800 rounded-lg font-medium text-sm transition-all mt-2 bg-amber-50/50 border border-amber-100">
                     <Shield className="w-5 h-5 text-amber-600" /><span className="font-bold text-amber-800">SMO por Courier</span>
+                  </Link>
+
+                  {/* FASE 2 sub 4 parte A: Fee por empresa con vigencias — plata en vivo, motivo obligatorio. */}
+                  <Link href="/admin-fee" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-emerald-50 hover:text-emerald-800 rounded-lg font-medium text-sm transition-all mt-2 bg-emerald-50/50 border border-emerald-100">
+                    <Receipt className="w-5 h-5 text-emerald-600" /><span className="font-bold text-emerald-800">Fee por Empresa</span>
                   </Link>
 
                   <Link href="/admin-finanzas" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-green-50 hover:text-green-800 rounded-lg font-medium text-sm transition-all mt-2 bg-green-50/50 border border-green-100">

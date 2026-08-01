@@ -80,6 +80,12 @@ export const CAMPOS_AUDITABLES = {
   // DEUDA 22: suspendida es ALTO (sensible: false) porque el cambio es
   // disparado automaticamente por el sistema (no usuario), motivo autogenerado.
   suspendida: { sensible: false, modelo: "Empresa" },
+  // FASE 2 sub 4 parte A (2026-08-01): OperacionFee por empresa — CRITICO.
+  // Cambia el precio del PRÓXIMO envío de la empresa en vivo (FASE 1). El
+  // motivo es obligatorio y se persiste acá; la traza del valor queda además
+  // en las propias filas de OperacionFee (vigenteDesde/Hasta, valor, tipo).
+  operacionFeeValor: { sensible: true, modelo: "OperacionFee" },
+  operacionFeeTipo: { sensible: true, modelo: "OperacionFee" },
 } as const;
 
 export type CampoAuditable = keyof typeof CAMPOS_AUDITABLES;

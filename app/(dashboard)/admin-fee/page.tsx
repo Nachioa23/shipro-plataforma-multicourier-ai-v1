@@ -22,6 +22,8 @@ import {
   AlertTriangle,
   ChevronDown,
   ChevronRight,
+  FlaskConical,
+  Eye,
 } from "lucide-react";
 
 type Vigencia = {
@@ -54,6 +56,27 @@ export default function AdminFeePorEmpresa() {
   const [nuevoValor, setNuevoValor] = useState<Record<number, string>>({});
   const [motivo, setMotivo] = useState<Record<number, string>>({});
   const [guardando, setGuardando] = useState<Record<number, boolean>>({});
+
+  // FASE 2 sub 4 parte B PASO 1: vista previa del ajuste masivo (SIMULACIÓN).
+  // Ninguna acción de esta sección escribe a la BD — sólo compute.
+  const [porcMasivo, setPorcMasivo] = useState("");
+  const [previewCargando, setPreviewCargando] = useState(false);
+  const [preview, setPreview] = useState<null | {
+    porcentaje: number;
+    factor: string;
+    afectadas: Array<{
+      empresaId: number;
+      nombre: string;
+      cuit: string;
+      tipo: string;
+      valorActual: string;
+      valorNuevo: string;
+      delta: string;
+    }>;
+    cantidadAfectadas: number;
+    salteadas: Array<{ empresaId: number; nombre: string }>;
+    cantidadSalteadas: number;
+  }>(null);
 
   const cargar = async () => {
     setCargando(true);
@@ -135,6 +158,35 @@ export default function AdminFeePorEmpresa() {
     }
   };
 
+  const verPreview = async () => {
+    const p = parseFloat(porcMasivo);
+    if (!Number.isFinite(p) || p <= -100 || p > 1000) {
+      alert(
+        "Ingresá un porcentaje válido: estrictamente mayor a -100 y menor o igual a 1000."
+      );
+      return;
+    }
+    setPreviewCargando(true);
+    try {
+      const res = await fetch("/api/admin/operacion-fee/preview-masivo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ porcentaje: p }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setPreview(data);
+      } else {
+        const data = await res.json();
+        alert(data.error || "Error calculando vista previa");
+      }
+    } catch (e) {
+      alert("Error de conexión");
+    } finally {
+      setPreviewCargando(false);
+    }
+  };
+
   const fmtFecha = (iso: string | null) =>
     iso
       ? new Date(iso).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })
@@ -197,6 +249,143 @@ export default function AdminFeePorEmpresa() {
               queda registrado en la auditoría.
             </p>
           </div>
+        </div>
+
+        {/* FASE 2 sub 4 parte B PASO 1: vista previa del ajuste masivo — SIMULACIÓN. */}
+        <div className="bg-white rounded-2xl shadow-sm border border-violet-200 overflow-hidden">
+          <div className="p-5 bg-violet-50 border-b border-violet-100 flex items-start gap-3">
+            <FlaskConical className="w-5 h-5 text-violet-700 shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="font-bold text-violet-900 text-sm">
+                Ajuste masivo — vista previa (simulación)
+              </p>
+              <p className="text-xs text-violet-800 mt-1">
+                Calcula, para todas las empresas con Fee activo, cuánto quedaría cada uno
+                si aplicaras el porcentaje ingresado. <strong>NO escribe nada</strong> a
+                la base — es sólo compute. El botón "Aplicar" (siguiente paso) queda
+                deshabilitado hasta que esté implementado.
+              </p>
+            </div>
+            <span className="text-[10px] font-bold px-2 py-1 rounded bg-violet-200 text-violet-900 uppercase whitespace-nowrap">
+              Simulación
+            </span>
+          </div>
+          <div className="p-5 flex flex-col md:flex-row gap-3 md:items-end">
+            <div className="flex-1">
+              <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">
+                Porcentaje (positivo = subir, negativo = bajar)
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                value={porcMasivo}
+                onChange={(e) => setPorcMasivo(e.target.value)}
+                placeholder="Ej: 10 (sube 10%), -5 (baja 5%)"
+                className="w-full border-2 border-gray-200 rounded-lg p-2.5 text-base font-black text-gray-800 focus:border-violet-500 outline-none"
+              />
+              <p className="text-[10px] text-gray-500 mt-1">
+                Rango permitido: estrictamente &gt; -100 (nunca a $0/negativo) y ≤ 1000.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={verPreview}
+              disabled={previewCargando}
+              className="py-2.5 px-4 bg-violet-700 text-white font-bold rounded-xl hover:bg-violet-800 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 text-sm"
+            >
+              {previewCargando ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Eye className="w-4 h-4" />
+              )}
+              Ver vista previa
+            </button>
+            <button
+              type="button"
+              disabled
+              title="El apply real se implementa en el siguiente paso."
+              className="py-2.5 px-4 bg-gray-200 text-gray-500 font-bold rounded-xl text-sm cursor-not-allowed"
+            >
+              Aplicar — próximo paso
+            </button>
+          </div>
+
+          {preview && (
+            <div className="border-t border-gray-100">
+              <div className="p-4 bg-slate-50 border-b border-gray-100 text-sm text-gray-700">
+                <strong>{preview.cantidadAfectadas}</strong> empresas afectadas ·{" "}
+                <strong>{preview.cantidadSalteadas}</strong> sin Fee salteadas (factor{" "}
+                {preview.factor}). <span className="text-violet-700 font-bold">Simulación — no se escribió nada.</span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left whitespace-nowrap">
+                  <thead className="bg-slate-50 border-b border-gray-200 text-xs uppercase tracking-wider text-gray-500 font-bold">
+                    <tr>
+                      <th className="px-6 py-3">Empresa</th>
+                      <th className="px-6 py-3">Tipo</th>
+                      <th className="px-6 py-3 text-right">Fee actual</th>
+                      <th className="px-6 py-3 text-right">Fee nuevo</th>
+                      <th className="px-6 py-3 text-right">Δ</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 text-sm">
+                    {preview.afectadas.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="py-8 text-center text-gray-400">
+                          No hay empresas con Fee activo — nada que ajustar.
+                        </td>
+                      </tr>
+                    ) : (
+                      preview.afectadas.map((a) => {
+                        const delta = Number(a.delta);
+                        const suffix = a.tipo === "PORCENTAJE" ? "%" : "";
+                        return (
+                          <tr key={a.empresaId} className="hover:bg-gray-50">
+                            <td className="px-6 py-2">
+                              <p className="font-bold text-gray-800">{a.nombre}</p>
+                              <p className="text-xs text-gray-500">CUIT: {a.cuit}</p>
+                            </td>
+                            <td className="px-6 py-2 text-gray-700">{a.tipo}</td>
+                            <td className="px-6 py-2 text-right text-gray-700 font-mono">
+                              {a.valorActual}
+                              {suffix}
+                            </td>
+                            <td className="px-6 py-2 text-right text-gray-900 font-black font-mono">
+                              {a.valorNuevo}
+                              {suffix}
+                            </td>
+                            <td
+                              className={`px-6 py-2 text-right font-bold font-mono ${
+                                delta > 0
+                                  ? "text-emerald-700"
+                                  : delta < 0
+                                    ? "text-rose-700"
+                                    : "text-gray-500"
+                              }`}
+                            >
+                              {delta > 0 ? "+" : ""}
+                              {a.delta}
+                              {suffix}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              {preview.salteadas.length > 0 && (
+                <div className="p-4 border-t border-gray-100 bg-gray-50">
+                  <p className="text-xs font-bold text-gray-500 uppercase mb-1">
+                    Empresas salteadas (sin Fee activo — $0)
+                  </p>
+                  <p className="text-xs text-gray-600">
+                    {preview.salteadas.map((s) => s.nombre).join(", ")}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Buscador */}

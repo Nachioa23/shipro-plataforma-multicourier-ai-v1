@@ -3081,3 +3081,51 @@ la Fase 3 (plugins)** — el punto donde nace el dato —, no del motor.
 **Alcance del fix:** pantalla admin (`admin_shipro`) con listado por courier del SMO vigente + acción "editar" (crea `SmoCourier` nueva y cierra la vigente con `vigenciaHasta=now`, mismo patrón que va a usar la UI del markup Shipro global — paso 2 del §7 de `docs/DISENO-MODELO-DATOS-CONFIG-VARIABLES.md`). Nada de motor: la lectura del SMO desde `SmoCourier` la hace la sub-piece posterior del motor (paso 5 del mismo §7); esta DEUDA es sólo la pantalla de edición.
 
 ---
+
+## DEUDA 116 — Herencia del markup Shipro global en el onboarding de courier (sub-pieza 2b) (registrada 2026-08-01, scope chico-medio, producto/pricing)
+
+**Status:** ABIERTA. La sub-pieza 2a de config-variables (commit `9b6aa1d`, 2026-08-01) creó la pantalla admin para ver/editar el markup Shipro global (`MarkupShiproVigencia`, hoy 10%). Falta la pieza siguiente (sub-pieza 2b): que ese valor global aparezca como **default automático** en el flujo de onboarding cuando se da de alta un courier para un cliente (Rama A) — sin que el gerente tenga que copiar el número a mano al `CredencialCourier.ajusteTarifaPorcentaje`. Vacío/null en la credencial = "hereda el global vigente"; con valor = override puntual (ver DEUDA 117).
+
+**Alcance del fix:** en el onboarding de courier (Fase I / wizard onboarding), leer la fila activa de `MarkupShiproVigencia` (`where activo=true order by vigenciaDesde desc`) y prellenar el campo de markup en el UI. La lectura desde `MarkupShiproVigencia` en el motor de plata se hace **junto con el cambio del motor** (paso 5 del §7 de `docs/DISENO-MODELO-DATOS-CONFIG-VARIABLES.md`); antes de eso el motor todavía consume `CredencialCourier.ajusteTarifaPorcentaje` directamente, así que la herencia en el onboarding no cambia precios hasta que el motor pivotee. No requiere schema — `MarkupShiproVigencia` y el campo destino ya existen.
+
+---
+
+## DEUDA 117 — UI para el override del markup Shipro por empresa (gancho ya existe) (registrada 2026-08-01, scope chico, producto/admin)
+
+**Status:** ABIERTA. El campo `CredencialCourier.ajusteTarifaPorcentaje` (schema `prisma/schema.prisma:428`) queda como **gancho de override opcional**: vacío/null = la credencial hereda el markup Shipro global (`MarkupShiproVigencia`, ver DEUDA 116); con valor = override puntual para ese par cliente↔courier. Sub-pieza 2a (commit `9b6aa1d`) shippeó la UI del global; falta la UI para pisar el global por cliente-courier puntual. Ver `docs/DISENO-MODELO-DATOS-CONFIG-VARIABLES.md` §5.2.
+
+**Alcance del fix:** en la pantalla de configuración de credenciales por empresa (o en admin-couriers per-empresa), permitir setear/limpiar `ajusteTarifaPorcentaje` con visualización explícita del "heredado del global vigente" cuando está vacío. El permiso ya está gated (`ajusteTarifaPorcentaje: ["admin_shipro", "gerente_cliente"]` en `lib/permisos.ts:55`) y auditado (`CAMPOS_AUDITABLES.ajusteTarifaPorcentaje` en `lib/auditoria-configuracion.ts:72`). Prioridad: no urgente — el gancho está listo; la UI del override viene después del cambio del motor (paso 5 del §7 del diseño).
+
+---
+
+## DEUDA 118 — IVA configurable (hoy constante, requiere caché para no romper imports síncronos) (registrada 2026-08-01, scope chico, config/pricing)
+
+**Status:** ABIERTA — DEFERRED. Hoy el IVA argentino vive como constante en fuente única (`IVA_AR_MULTIPLIER` en `lib/constants/iva.ts`, consolidada en el commit `489cea4` del 2026-07-31). Se importa **síncronamente** en muchos sitios del motor de plata (`lib/cotizador.ts`, `lib/utils/operacion-fee.ts`, `app/api/conciliacion/route.ts`, `app/api/cron/sweep-6m/route.ts`, `app/api/admin/liquidaciones/route.ts`, `app/(dashboard)/liquidaciones/page.tsx`), así que hacerlo editable desde la config exigiría uno de: **(a)** volver asíncronas todas esas lecturas (cambio grande de firma, cruza el motor de plata en muchos sitios), o **(b)** cargar el valor una vez al bootstrap y cachear en memoria (más chico, pero requiere hook de invalidación cuando cambia). Ver `docs/DISENO-MODELO-DATOS-CONFIG-VARIABLES.md` §5.5.
+
+**Alcance del fix:** probable (b) — nueva tabla `IvaVigencia` (patrón de vigencias) + módulo de bootstrap que la lee al arranque y expone la constante actual + invalidación cuando se edita desde la UI admin. Prioridad **baja**: el IVA es la variable que MENOS cambia (alícuota por ley argentina, cada varios años); se mantiene como constante hasta que valga la pena hacer el mecanismo de caché.
+
+---
+
+## DEUDA 119 — Regla de negocio "SMO vs seguro completo" (cliente elige seguro por valor declarado) (registrada 2026-08-01, scope chico-medio, producto/pricing)
+
+**Status:** ABIERTA. Regla de negocio identificada durante el diseño de config-variables (2026-07-31): cuando el cliente elige contratar **seguro por valor declarado** (bandera `quiereSeguroCourier=true` en `CredencialCourier`, ya en schema), el **SMO no se cobra** (SMO=0 para esa etiqueta) y el seguro real viene por la API del courier incluido en la tarifa cruda. La convivencia es toma-una-de-las-dos: SMO parejo por courier ($121.50, sembrado por seed) O seguro courier por valor declarado — no ambos. Hoy el flag `quiereSeguroCourier` existe pero los adapters no lo consumen y el motor tampoco lo lee.
+
+**Alcance del fix:** al conectar el motor con `SmoCourier` (paso 5 del §7 de `docs/DISENO-MODELO-DATOS-CONFIG-VARIABLES.md`), añadir el gate: `SMO = quiereSeguroCourier ? 0 : SmoCourier.valorNeto vigente`. Los adapters de courier (Andreani, Moci's y futuros) deben leer `quiereSeguroCourier` para propagarlo a la API. Es **regla de negocio**, no config — no vive en tabla de vigencias, vive en la lectura del motor + la selección del cliente en el UI. Va con la pieza de **recolección/servicios** de FASE 2 (que reorganiza la elección del cliente sobre entrega + seguro + otros servicios). Ver `docs/DISENO-CONFIG-VARIABLES-TARIFA.md` §4.3.
+
+---
+
+## DEUDA 120 — Error genérico al bloquear un envío Rama A sin dueño de credencial (mensaje real no se propaga al frontend) (registrada 2026-08-01, scope chico, UX)
+
+**Status:** ABIERTA. Detectada durante FASE 2 pieza 1 sub 3 (bloqueo `BLOQUEADO_CREDENCIAL`, commit `c85269d`, 2026-07-30). Cuando el flujo de creación de envío rechaza una credencial Rama A sin `propietarioTipo` seteado, el backend arma un mensaje claro (`CredencialSinPropietario: configurá el dueño en /configuracion/transportes`), pero el frontend muestra al operador un cartel genérico ("Error interno al crear el envío") — el mensaje real se pierde en el catch de la UI. El operador queda sin pista sobre qué configurar.
+
+**Alcance del fix:** propagar el `error` real del response 4xx al toast/cartel de error en la UI de creación de envío (dashboard + wizard). Es un cambio local en el handler del catch (probablemente en `app/(dashboard)/pedidos/*` o el componente de creación de envíos). No toca la lógica del guard ni el estado bloqueado — sólo la superficie del mensaje. Scope chico.
+
+---
+
+## DEUDA 121 — Verificación pendiente: destrabe automático de BLOQUEADO_CREDENCIAL por vía e-commerce/API (registrada 2026-08-01, scope chico, verificación)
+
+**Status:** ABIERTA. FASE 2 pieza 1 sub 3 (commit `c85269d`, 2026-07-30) introdujo el bloqueo `BLOQUEADO_CREDENCIAL` cuando se intenta crear un envío Rama A con credencial sin dueño, y el auto-unblock (`lib/envios/procesar-bloqueados-credencial.ts`, gatillado desde `app/api/configuracion/couriers/route.ts` tras setear el propietario — mirror del patrón de `operatividad`). Se verificó el **rechazo desde el panel** (dashboard) y el auto-unblock desde ahí. Falta probar EN VIVO el **rechazo por vía e-commerce/API** (POST directo a `/api/envios` con credencial sin dueño, sin sesión de dashboard) y su destrabe automático cuando `admin_shipro` completa el propietario — la vía dual-auth debe generar el mismo `BLOQUEADO_CREDENCIAL` y el retry debe reprocesarlo igual.
+
+**Alcance:** test manual (curl o e-commerce sandbox) que dispare el POST sin dueño → verifica estado `BLOQUEADO_CREDENCIAL` en BD → setea propietario vía panel → verifica que la etiqueta pase de bloqueada a procesada. No requiere código nuevo, sólo verificación. Riesgo si no se hace: la vía API podría fallar silenciosa distinto al panel y quedar etiquetas colgadas.
+
+---

@@ -109,14 +109,9 @@ async function main() {
   // Ver docs/DISENO-MODELO-DATOS-CONFIG-VARIABLES.md §5.2. UNA sola fila activa
   // a nivel plataforma. Valor NETO en porcentaje (e.g. 10.0000 = +10%).
   //
-  // VALOR SEMBRADO: 0.0000 (%).
-  // RAZÓN: hoy no existe un markup Shipro global en ningún lado — el schema
-  // default de CredencialCourier.ajusteTarifaPorcentaje es 0.0, y el seed base
-  // no lo pisa. Un valor no-cero acá cambiaría el precio en el momento en que
-  // el motor pivotee a leer esta tabla en una sub-piece posterior. Se siembra
-  // 0.0000 para preservar behavior; el valor productivo (política comercial)
-  // se carga via UI cuando esté lista (paso 2 del §7 del diseño).
-  // FLAG PARA NACHO: confirmar el valor productivo cuando corresponda.
+  // VALOR SEMBRADO: 10.0000 (%) — markup Shipro global inicial confirmado por Nacho.
+  // Editable a futuro vía la UI de vigencias (paso 2 del §7 del diseño): cerrar
+  // la vigencia actual + abrir una nueva, nunca pisar (asiento inverso).
   //
   // Idempotente: crea la fila solo si no hay una activa.
   const yaHayMarkupShipro = await prisma.markupShiproVigencia.findFirst({
@@ -124,7 +119,7 @@ async function main() {
   });
   if (!yaHayMarkupShipro) {
     await prisma.markupShiproVigencia.create({
-      data: { valorPorcentaje: new Prisma.Decimal("0.0000"), activo: true },
+      data: { valorPorcentaje: new Prisma.Decimal("10.0000"), activo: true },
     });
   }
 

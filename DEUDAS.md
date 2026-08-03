@@ -3137,3 +3137,35 @@ la Fase 3 (plugins)** — el punto donde nace el dato —, no del motor.
 **Alcance del fix:** marcar un Fee=0 (o un valor bonificado en general) como PROMOCIÓN con `fechaVencimiento`. Al vencer, el Fee pasa solo al valor default post-promo — probablemente un cron que revise vigencias con promo vencida y genere la nueva vigencia con el valor "post-promo" (o simplemente jubile la promo y deje al motor caer en el default configurado). La fecha límite se setearía en el onboarding (`app/api/clientes/route.ts:172`) o vía el editor de sub-piece 4 parte A. Consecuencia sobre el ajuste masivo: promo-0 se ajusta (o al menos se lista aparte); legacy-0 sigue skippeado. Requiere schema (nuevo campo `fechaVencimiento` en `OperacionFee` o tabla lateral de promos) + cron + UI del gancho.
 
 ---
+
+## DEUDA 123 — `CredencialCourier.tarifaIncluyeIva` default `true` es un footgun de SUBCOBRO (mordió en prod 2026-08-03) (registrada 2026-08-03, scope chico, PRIORIDAD ALTA, pricing/schema)
+
+**Status:** ABIERTA — PRIORIDAD ALTA. El schema declara `tarifaIncluyeIva Boolean @default(true)` en `prisma/schema.prisma:438`, pero los adapters de Andreani y Moci's devuelven tarifa NETA (Andreani lee `data.tarifaSinIva.total` con fail-loud si falta; Moci's confirmado empíricamente 2026-07-21 que `opcionAkeron.price` viene sin IVA — ver `prisma/seed.ts:154-159`). El seed corrige las credenciales existentes con `prisma.credencialCourier.updateMany({ where: { nombreCourier: { in: ["Andreani", "Moci's"] } }, data: { tarifaIncluyeIva: false } })` (`prisma/seed.ts:161-163`), pero **cualquier credencial creada FUERA del seed nace en `true`** — típicamente vía el wizard de onboarding (`app/api/clientes/route.ts`, path que no toca `tarifaIncluyeIva`). Efecto: `aplicarMarkup` en `lib/cotizador.ts:156` toma la rama `secoNeto = seco.div(IVA_AR_MULTIPLIER)` sobre una tarifa que YA es neta → todos los precios cotizados quedan un factor `1/1.21 ≈ 0.826` más bajos: **SUBCOBRO de ~17.36%** (`1 - 1/1.21`) en cotización y en creación de envío (montoDebito y precioFactura).
+
+**Confirmado en producción durante el deploy de FASE 2 (2026-08-03):** las 2 credenciales de Argenshipro SAS estaban en `true` (creadas fuera del seed) y cotizaban ~17% por debajo del valor esperado. Se corrigió a mano en la BD de prod con un `UPDATE "CredencialCourier" SET "tarifaIncluyeIva" = false WHERE "nombreCourier" IN ('Andreani', 'Moci''s')`. Sin envíos reales todavía, así que no hubo pérdida — pero el próximo cliente onboardeado lo dispararía otra vez.
+
+**Alcance del fix:**
+1. **Cambiar el default del schema** a `tarifaIncluyeIva Boolean @default(false)` en `prisma/schema.prisma:438` + migración de rename del default. No requiere backfill (los rows existentes conservan su valor).
+2. **Endurecer el onboarding** (`app/api/clientes/route.ts` — la ruta que crea la CredencialCourier inicial) para setear explícitamente `tarifaIncluyeIva: false` al crear una credencial de Andreani o Moci's; opcionalmente extenderlo a todo `nombreCourier` conocido cuyo adapter devuelve neto (registry en `lib/couriers/serviciosSoportados.ts` o similar).
+3. **Documentar la política**: el flag describe el SHAPE del número que devuelve el adapter (¿la API del courier ya sumó IVA?), NO una decisión comercial. Su valor debe ser conocido en el momento de dar de alta el courier — no es negociable por empresa. Este comentario ya vive en `lib/cotizador.ts:151-155` y en `prisma/seed.ts:154-159`; conviene consolidarlo en el schema.
+
+---
+
+## DEUDA 124 — Estado de producción no reproducible desde el seed: parches manuales del deploy de FASE 2 (2026-08-03) no reflejados en `prisma/seed.ts` (registrada 2026-08-03, scope chico-medio, operaciones/deploy)
+
+**Status:** ABIERTA. Durante el deploy de FASE 2 a `pm.shipro.pro` (2026-08-03) se cargaron y/o corrigieron a mano en la BD de producción una serie de valores necesarios para que el motor de plata cotice bien. **Ninguno de estos parches está en `prisma/seed.ts` de forma que un reseed de prod los reproduzca.** Si por cualquier motivo (restore de backup a otra máquina, recreación de la base, rotación de infra) se resembrara prod desde cero, faltarían y el motor cotizaría mal (subcobros por owner ausente / SMO 0 / intermediario ausente).
+
+Los parches aplicados en prod:
+
+- (a) **`MarkupShiproVigencia`** — una fila global `valorPorcentaje = 10.0000`, `activo = true`, `vigenciaDesde = now`. Ya está en el seed local (`prisma/seed.ts:127`, sub-piece 2a + fix commit `6bf4056`), pero prod se sembró vacío antes de que el seed lo incluyera; en la ventana del deploy se insertó manualmente. Verificar si el seed alcanza para un reseed puro.
+- (b) **`SmoCourier`** — dos filas: `courierId=<Andreani>, valorNeto=121.50, activo=true` y `courierId=<Moci's>, valorNeto=121.50, activo=true`. Ya está en el seed local (`prisma/seed.ts:91-105`), pero se cargó manualmente en prod porque la BD había sido migrada antes de que el seed cubriera SMO por courier. Reseed en teoría lo reproduce.
+- (c) **`CourierIntermediario`** — una fila: `courierId=<Andreani>`, `propietarioCourierId=<Moci's>`, `markupPorcentaje=10`, `seguroFijoIntermediarioConIva=90`, `tarifaIncluyeIvaIntermediario=false`, `activo=true`. Ya está en el seed local (`prisma/seed.ts:139-152`), reseed lo reproduce.
+- (d) **`CredencialCourier.propietarioTipo` + `propietarioCourierId`** en las 2 credenciales de Argenshipro SAS: `Andreani → propietarioTipo=COURIER, propietarioCourierId=<Moci's>`; `Moci's → propietarioTipo=SHIPRO, propietarioCourierId=null`. **NO está en el seed** (el seed no crea credenciales de empresas cliente — sólo las de la empresa demo si `SEED_MODE=staging`). Si se resembra prod desde cero, la empresa cliente no existe y la credencial tampoco. La reproducción tendría que ser via re-onboarding manual.
+- (e) **`CredencialCourier.tarifaIncluyeIva = false`** en ambas credenciales de Argenshipro (parche del footgun DEUDA 123). Idem (d): el seed no las crea; la corrección tendría que aplicarse a mano después de re-onboardear.
+
+**Alcance del fix:**
+- Para (a-c): verificar que el seed de producción (`SEED_MODE ≠ staging`) los reproduce sin gatilar la parte demo. Si algo falta, agregarlo al bloque de esenciales del seed.
+- Para (d-e): son datos por empresa, no data de plataforma — no van al seed de producción. La solución correcta es **cerrar el footgun de DEUDA 123** (default `false`) + endurecer el onboarding para setear `propietarioTipo`/`propietarioCourierId` al crear la credencial (hoy es post-hoc, admin_shipro los completa después). Ver DEUDA 121 (verificación destrabe BLOQUEADO_CREDENCIAL API) — misma familia.
+- Registro operativo: mantener un registro humano-legible de los ajustes puntuales a prod (fecha, comando SQL, motivo) fuera del seed. Un `docs/PROD-STATE-CHANGES.md` en el repo permitiría reconstruir el estado si el seed no alcanza. Alternativamente: un archivo de migración de datos runtime específica de prod (idempotente) que se corre después del seed.
+
+---

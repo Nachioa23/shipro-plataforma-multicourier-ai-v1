@@ -3151,21 +3151,42 @@ la Fase 3 (plugins)** — el punto donde nace el dato —, no del motor.
 
 ---
 
-## DEUDA 124 — Estado de producción no reproducible desde el seed: parches manuales del deploy de FASE 2 (2026-08-03) no reflejados en `prisma/seed.ts` (registrada 2026-08-03, scope chico-medio, operaciones/deploy)
+## DEUDA 124 — Estado de producción no reproducible desde el seed: parches manuales del deploy de FASE 2 (2026-08-03) no reflejados en `prisma/seed.ts` (RESUELTA por auditoría 2026-08-03 — el seed sí reproduce (a-c); (d) re-scoped a DEUDA 125; (e) mooted por DEUDA 123)
 
-**Status:** ABIERTA. Durante el deploy de FASE 2 a `pm.shipro.pro` (2026-08-03) se cargaron y/o corrigieron a mano en la BD de producción una serie de valores necesarios para que el motor de plata cotice bien. **Ninguno de estos parches está en `prisma/seed.ts` de forma que un reseed de prod los reproduzca.** Si por cualquier motivo (restore de backup a otra máquina, recreación de la base, rotación de infra) se resembrara prod desde cero, faltarían y el motor cotizaría mal (subcobros por owner ausente / SMO 0 / intermediario ausente).
+**Status:** RESUELTA por auditoría de código 2026-08-03 sobre `prisma/seed.ts` en el commit `3fefa5d`. Los cinco ítems originales se resuelven así:
 
-Los parches aplicados en prod:
+- (a) **`MarkupShiproVigencia`** global 10% — ✅ **ya está en el seed** (`prisma/seed.ts:111-127`), corre antes del gate `if (seedDemo)` (o sea, corre en modo PRODUCCION), guard idempotente `findFirst({activo:true})` antes de crear. Reseed sobre BD limpia reproduce el valor.
+- (b) **`SmoCourier`** $121.50 para Andreani + Moci's — ✅ **ya está en el seed** (`prisma/seed.ts:84-109`), corre en modo PRODUCCION, guard idempotente por-courier. Reseed reproduce.
+- (c) **`CourierIntermediario`** Mocis→Andreani (markup 10%, seguro 90, tarifaIncluyeIvaIntermediario=false) — ✅ **ya está en el seed** (`prisma/seed.ts:129-152`), corre en modo PRODUCCION, guard idempotente por (courierId, propietarioCourierId, activo). Reseed reproduce.
+- (d) **`CredencialCourier.propietarioTipo` + `propietarioCourierId`** — es **data per-empresa**, no config de plataforma. No va en el seed. Que en prod se hayan creado credenciales con owner null es un problema del PATH DE ALTA de credencial (`app/api/configuracion/couriers/route.ts:301` no exige el campo), no del seed. Se re-scoped como **DEUDA 125** (endurecer el alta de credencial). Red de seguridad ya operativa: `BLOQUEADO_CREDENCIAL` (sub-piece 3, commit `c85269d`) bloquea la creación de envío en Rama A sin dueño, evitando envíos silenciosos mal cotizados.
+- (e) **`CredencialCourier.tarifaIncluyeIva`** — mooted por DEUDA 123: la columna fue dropeada (mov 3, commit `3fefa5d`) y la bandera vive ahora en el adapter (`ICourierIntegrator.tarifaApiIncluyeIva`). El parche manual que hubo en prod ya no aplica.
 
-- (a) **`MarkupShiproVigencia`** — una fila global `valorPorcentaje = 10.0000`, `activo = true`, `vigenciaDesde = now`. Ya está en el seed local (`prisma/seed.ts:127`, sub-piece 2a + fix commit `6bf4056`), pero prod se sembró vacío antes de que el seed lo incluyera; en la ventana del deploy se insertó manualmente. Verificar si el seed alcanza para un reseed puro.
-- (b) **`SmoCourier`** — dos filas: `courierId=<Andreani>, valorNeto=121.50, activo=true` y `courierId=<Moci's>, valorNeto=121.50, activo=true`. Ya está en el seed local (`prisma/seed.ts:91-105`), pero se cargó manualmente en prod porque la BD había sido migrada antes de que el seed cubriera SMO por courier. Reseed en teoría lo reproduce.
-- (c) **`CourierIntermediario`** — una fila: `courierId=<Andreani>`, `propietarioCourierId=<Moci's>`, `markupPorcentaje=10`, `seguroFijoIntermediarioConIva=90`, `tarifaIncluyeIvaIntermediario=false`, `activo=true`. Ya está en el seed local (`prisma/seed.ts:139-152`), reseed lo reproduce.
-- (d) **`CredencialCourier.propietarioTipo` + `propietarioCourierId`** en las 2 credenciales de Argenshipro SAS: `Andreani → propietarioTipo=COURIER, propietarioCourierId=<Moci's>`; `Moci's → propietarioTipo=SHIPRO, propietarioCourierId=null`. **NO está en el seed** (el seed no crea credenciales de empresas cliente — sólo las de la empresa demo si `SEED_MODE=staging`). Si se resembra prod desde cero, la empresa cliente no existe y la credencial tampoco. La reproducción tendría que ser via re-onboarding manual.
-- (e) **`CredencialCourier.tarifaIncluyeIva = false`** en ambas credenciales de Argenshipro (parche del footgun DEUDA 123). Idem (d): el seed no las crea; la corrección tendría que aplicarse a mano después de re-onboardear.
+**Por qué prod se veía "no reproducible" durante el deploy 2026-08-03**: no fue un defecto del seed sino un artifact operativo — la BD de prod ya tenía data de FASE 1, y durante el deploy sólo se corrieron migraciones (no se re-corrió el seed sobre la BD viva). Las tablas nuevas nacieron vacías y se llenaron a mano en la ventana del deploy. En una BD limpia (recreación de infra desde cero) el seed en modo PRODUCCION reproduce (a-c) sin intervención manual.
 
-**Alcance del fix:**
-- Para (a-c): verificar que el seed de producción (`SEED_MODE ≠ staging`) los reproduce sin gatilar la parte demo. Si algo falta, agregarlo al bloque de esenciales del seed.
-- Para (d-e): son datos por empresa, no data de plataforma — no van al seed de producción. La solución correcta es **cerrar el footgun de DEUDA 123** (default `false`) + endurecer el onboarding para setear `propietarioTipo`/`propietarioCourierId` al crear la credencial (hoy es post-hoc, admin_shipro los completa después). Ver DEUDA 121 (verificación destrabe BLOQUEADO_CREDENCIAL API) — misma familia.
-- Registro operativo: mantener un registro humano-legible de los ajustes puntuales a prod (fecha, comando SQL, motivo) fuera del seed. Un `docs/PROD-STATE-CHANGES.md` en el repo permitiría reconstruir el estado si el seed no alcanza. Alternativamente: un archivo de migración de datos runtime específica de prod (idempotente) que se corre después del seed.
+**Determinismo confirmado**: el seed no hardcodea IDs de courier. Todo se resuelve por nombre (`findUnique({where:{nombre:"Andreani"}})` etc.), así que un reseed sobre una BD limpia genera cualquier ID que el SERIAL asigne y las FKs internas de `CourierIntermediario`, `SmoCourier` etc. quedan consistentes.
+
+**Recomendaciones operativas (fuera de esta deuda pero relevantes)**:
+- Mantener un registro humano-legible de ajustes puntuales a prod (fecha, SQL, motivo) fuera del seed — un `docs/PROD-STATE-CHANGES.md` en el repo. Alternativamente, un archivo de migración de datos runtime específica de prod (idempotente) que corra post-seed.
+- Cerrar DEUDA 125 elimina el modo de falla que originó este DEUDA (credenciales Rama A born con owner null).
+
+---
+
+## DEUDA 125 — Endurecer el alta de `CredencialCourier`: exigir `propietarioTipo` en credenciales Rama A al crearlas (registrada 2026-08-03, scope chico, hardening/onboarding)
+
+**Status:** ABIERTA. El único creador de `CredencialCourier` en el sistema es el upsert en `app/api/configuracion/couriers/route.ts:301`. Su cuerpo aplica un set de `Patch` (activo, usaCredencialesPropias, credencialesJson, servicios, ajuste, markup, seguro, tipoCuenta, propietarioTipo, propietarioCourierId) donde cada uno se gate'ea por rol vía `puedeEditarCampo` — pero **el patch de `propietarioTipo` puede quedar vacío** cuando el rol que llama no puede editarlo (típico: `gerente_cliente` en el onboarding no tiene el permiso). Resultado: una credencial Rama A (`usaCredencialesPropias=false`) puede nacer sin `propietarioTipo` seteado, y `admin_shipro` tiene que completarlo después. Esto mordió en el deploy FASE 2 (2026-08-03): las dos credenciales de Argenshipro SAS se crearon con `propietarioTipo=null` y tuvieron que parchearse a mano en prod.
+
+**Red de seguridad actual (funciona pero es post-hoc)**: la sub-pieza 3 de FASE 2 pieza 1 (commit `c85269d`, 2026-07-30) agregó el guard `BLOQUEADO_CREDENCIAL` en `lib/envios/crear.ts`: cualquier intento de crear un envío Rama A sobre una credencial con `propietarioTipo=null` bloquea el envío (no llama al courier, no debita), lo etiqueta `BLOQUEADO_CREDENCIAL`, y se destraba automáticamente cuando `admin_shipro` completa el dueño (`lib/envios/procesar-bloqueados-credencial.ts`). El resultado observable: **ningún envío sale silenciosamente mal cotizado** — pero el operador entra a una experiencia post-hoc de "creé la credencial y ahora los envíos caen bloqueados hasta que el admin la termine de configurar".
+
+**Alcance del fix**: en el upsert de `app/api/configuracion/couriers/route.ts` (rama `create` — la de nacimiento), rechazar con 400 (`error: "PropietarioRequerido: las credenciales Rama A requieren propietarioTipo. Configuralo antes de guardar."`) toda combinación `usaCredencialesPropias=false && propietarioTipo=null`. Sub-cases:
+- Si el rol del caller no tiene permiso para editar `propietarioTipo` (matriz `lib/permisos.ts`), pero está creando una credencial Rama A → 403 con un mensaje que explique que la creación inicial de credenciales Rama A la debe hacer `admin_shipro` (o extender la matriz para permitir a `gerente_cliente` setear el campo al alta, decisión de producto).
+- El path de UPDATE existente (que puede llevar una credencial Rama A a `propietarioTipo=null` retroactivamente) también debería rechazar la transición → null si `usaCredencialesPropias=false`.
+- Testear específicamente el path e-commerce/API que también terminó relacionado con DEUDA 121 (verificación de destrabe API de BLOQUEADO_CREDENCIAL).
+
+**Relación con otras deudas**:
+- Cierra el modo de falla que originó DEUDA 124 ítem (d) (credenciales Rama A born con owner null).
+- Complementa DEUDA 121 (verificación EN VIVO del destrabe de BLOQUEADO_CREDENCIAL por la vía API): DEUDA 125 previene el bloqueo, DEUDA 121 verifica que el destrabe funciona cuando aparece.
+- Relacionada con DEUDA 120 (el mensaje de error genérico "Error interno al crear el envío" que oculta el mensaje real): al implementar DEUDA 125, propagar el error 400 con mensaje claro tanto al panel como a la vía API.
+
+**Prioridad**: FASE 4 (pre-primer-cliente hardening) — no bloquea la operación con Argenshipro (parche a mano ya aplicado), pero sí bloqueante para onboarding masivo (cada cliente nuevo que se cree por gerente_cliente puede caer en el mismo modo de falla y requerir intervención admin post-hoc).
 
 ---

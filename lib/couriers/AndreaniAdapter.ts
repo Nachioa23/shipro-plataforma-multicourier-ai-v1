@@ -24,6 +24,13 @@ export class AndreaniAdapter implements ICourierIntegrator {
   private API_URL = 'https://apis.andreani.com';
   private creds: CredencialesAndreani;
 
+  // DEUDA 123 mov 1 (2026-08-03): la API de Andreani (v1/tarifas) devuelve
+  // ambos precios; el adapter lee tarifaSinIva.total (neto oficial) con
+  // FAIL-LOUD si falta — nunca ve tarifaConIva. Por lo tanto para el motor,
+  // los precioNeto que este adapter produce ya son NET. Evidencia detallada
+  // en el bloque de cotizar() más abajo (lectura de tarifaSinIva.total).
+  readonly tarifaApiIncluyeIva = false;
+
   // DEUDA 29 Sub-fase 2.F: cache de token con expiración real (extraída del JWT)
   // y lock anti-race-condition. La vida típica del token es 24h, pero la fuente
   // de verdad es el claim `exp` del JWT mismo — Andreani NO devuelve un campo

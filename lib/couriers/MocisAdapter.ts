@@ -4,6 +4,13 @@ export class MocisAdapter implements ICourierIntegrator {
   private API_URL = 'https://mocis.akeron.net/api/v1';
   private clientApi: string;
   private clientSecret: string;
+
+  // DEUDA 123 mov 1 (2026-08-03): opcionAkeron.price viene SIN IVA — confirmado
+  // empíricamente el 2026-07-21 (tarifario público: CABA $5.000 +IVA / Zona1
+  // $6.750 +IVA / Zona2 $7.850 +IVA / Zona3 $9.000 +IVA; la API devuelve
+  // exactamente 5000/6750/7850/9000). Los docs de la API están silenciosos
+  // sobre IVA. Evidencia detallada en el bloque de cotizar() más abajo.
+  readonly tarifaApiIncluyeIva = false;
   
   private tokenActual: string | null = null;
   private tokenExpira: number = 0;

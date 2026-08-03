@@ -107,9 +107,36 @@ export interface SucursalInfo {
 // 5. EL MOLDE MAESTRO (ICourierIntegrator)
 // ==========================================
 export interface ICourierIntegrator {
+  // DEUDA 123 mov 1 (2026-08-03): declaración a nivel adapter de si la API
+  // del courier devuelve precios CON IVA o NETOS. Es un invariante del
+  // adapter (propiedad del courier + su decisión de qué campo leer), NO
+  // una decisión comercial per-empresa. Debe reemplazar el flag legacy
+  // CredencialCourier.tarifaIncluyeIva (schema.prisma:438 con default true
+  // que mordió en el deploy FASE 2, 2026-08-03: credenciales creadas fuera
+  // del seed nacían true y provocaban ~17% de UNDERCHARGE al dividir por
+  // 1.21 una tarifa que ya era neta).
+  //
+  // Semántica:
+  //   true  = la API del courier devuelve precios CON IVA — el engine debe
+  //           stripear el IVA al intake (dividir por IVA_AR_MULTIPLIER)
+  //           antes de aplicar la cascada de markups.
+  //   false = la API devuelve precios NETOS — no se strippea al intake;
+  //           el IVA se aplica UNA VEZ al final del cascade.
+  //
+  // Consistencia con el contrato existente: OpcionCotizacion.precioNeto
+  // (línea 27) declara que el precio devuelto por el adapter es "pelado,
+  // sin IVA ni Markup". Esta bandera describe el shape de la API cruda que
+  // el adapter le habla — información necesaria para que el adapter
+  // (o el engine post-adapter) pueda producir ese neto de forma correcta.
+  //
+  // NO conectado al motor en este commit (movimiento 1 de 3). Se cablea en
+  // un movimiento posterior; se elimina el flag per-credencial en un tercer
+  // movimiento.
+  readonly tarifaApiIncluyeIva: boolean;
+
   // AHORA DEVUELVE UN ARRAY DE OPCIONES
   cotizar(params: CotizacionParams): Promise<OpcionCotizacion[]>;
-  
+
   despachar(params: DespachoParams): Promise<{ tracking: string, etiquetaBase64?: string, etiquetaUrl?: string }>;
   rastrear(tracking: string): Promise<string>;
   traducirEstado(estadoCrudo: string): string;

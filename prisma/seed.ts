@@ -151,17 +151,11 @@ async function main() {
     }
   }
 
-  // === DEUDA 73 (IVA policy): tarifaIncluyeIva por courier en TODAS las credenciales existentes ===
-  // Andreani: el adapter lee tarifaSinIva.total (neto oficial), por eso flag=false → capa 2 NO divide
-  // por 1.21 al intake. Evita drift de rounding vs reconstruir el neto desde tarifaConIva.total.
-  // Mocis: confirmado EMPIRICAMENTE 2026-07-21 que opcionAkeron.price viene SIN IVA (tarifario CABA
-  // $5.000 +IVA → API devuelve 5000). Flag=false → capa 2 NO divide. Docs API silenciosos, empírico.
-  // updateMany es idempotente: si no existen credenciales todavia, no hace nada;
-  // cuando se creen via onboarding, ese flujo debe respetar este valor default.
-  await prisma.credencialCourier.updateMany({
-    where: { nombreCourier: { in: ["Andreani", "Moci's"] } },
-    data: { tarifaIncluyeIva: false },
-  });
+  // DEUDA 123 mov 3 (2026-08-03): el bloque updateMany DEUDA 73 (IVA policy)
+  // que seteaba tarifaIncluyeIva=false por courier fue eliminado. La bandera
+  // vive ahora a nivel adapter (ICourierIntegrator.tarifaApiIncluyeIva, mov 1
+  // commit 88abb30) — no requiere parche por credencial ni idempotencia en el
+  // seed. La columna se dropea en la migración 20260803190000_drop_credencial_tarifa_incluye_iva.
 
   // DEUDA 32+37: seed de servicios comerciales por courier.
   // El estado activo es la intencion comercial del director. La capacidad

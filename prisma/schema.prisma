@@ -435,7 +435,13 @@ model CredencialCourier {
   ofreceSucursal  Boolean @default(true)
 
   // --- REGLAS DE PRICING PARTICULAR ---
-  tarifaIncluyeIva       Boolean   @default(true)
+  // DEUDA 123 mov 3 (2026-08-03): campo tarifaIncluyeIva eliminado. La bandera
+  // vive ahora en el adapter (ICourierIntegrator.tarifaApiIncluyeIva, movement 1
+  // commit 88abb30) — es propiedad del adapter, no de la credencial. El motor
+  // consume el flag desde motorCourier.tarifaApiIncluyeIva en cotización y en
+  // el fallback de crear.ts (movement 2 commit 48d2067). La conciliación sigue
+  // usando su propia bandera Excel-declared (tarifaExcelIncluyeIva) que es
+  // independiente y no depende del adapter.
   ajusteTarifaPorcentaje Float     @default(0.0) // Markup en %
   markupFijo             Decimal   @default(0) @db.Decimal(12, 2) // Fee fijo por paquete (Ej: +$500)
   fechaCaducidadPromo    DateTime? // Fecha límite de esta condición comercial

@@ -5,6 +5,11 @@ import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/cou
 import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
 import { calcularPromesaCalibrada } from "@/lib/utils/promesa-calibrada";
 import { calcularFeeOperacion } from "@/lib/utils/operacion-fee";
+import {
+  resolverMarkupShiproPorcentaje,
+  resolverSmoNeto,
+  resolverIntermediarioMarkupPorcentaje,
+} from "@/lib/utils/resolvers-tarifa";
 import type { Paquete } from "@/lib/couriers/CourierInterface";
 import { IVA_AR_MULTIPLIER } from "@/lib/constants/iva";
 
@@ -368,25 +373,38 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
 
       const motorCourier = CourierFactory.crear(nombreNormalizado, credenciales);
 
-      // DEUDA 107 capa 1: intermediario activo del courier (si existe y aplicamos Modelo A).
       const courierReal = couriersReales.find((c: any) => c.nombre === config.nombreCourier);
-      const intermediarioActivo = (!config.usaCredencialesPropias && courierReal?.intermediarios?.length)
-        ? courierReal.intermediarios[0]
-        : null;
 
-      // DEUDA 73 capa 2: SMO neto del courier (SIN IVA a pesar del nombre del campo — el rename es
-      // deuda aparte). Se acumula al costoConMarkup dentro de aplicarMarkup, ANTES del IVA final.
-      const smoNeto = courierReal?.smoActivo
-        ? new Prisma.Decimal(courierReal.smoPrecioAlClienteConIva)
+      // FASE 2 motor mov 2 (2026-08-03): 3 valores resueltos desde las nuevas
+      // fuentes de config (docs/DISENO-MODELO-DATOS-CONFIG-VARIABLES.md). La
+      // cascada de aplicarMarkup queda sync/pure — sólo cambia de dónde vienen
+      // sus inputs:
+      //   - Markup Shipro (%): MarkupShiproVigencia global vigente, con
+      //     credencial.ajusteTarifaPorcentaje como override (0 = hereda global).
+      //   - SMO (neto): SmoCourier del courier ejecutor, vigente. Sin fila → 0
+      //     con warn. NO se dual-read el legacy Courier.smoPrecioAlClienteConIva.
+      //   - Intermediario (%): owner-keyed via credencial.propietarioCourierId,
+      //     no ejecutor. Fallback ejecutor-keyed para configs legacy sin
+      //     propietario seteado (browse/quote no rompe; creación de envío ya
+      //     bloquea legacy null-owner Rama A con BLOQUEADO_CREDENCIAL, sub-piece 3).
+      // Ver lib/utils/resolvers-tarifa.ts para los contratos completos.
+      const markupShiproPorcentaje = await resolverMarkupShiproPorcentaje(
+        config.ajusteTarifaPorcentaje
+      );
+      const smoNeto = courierReal
+        ? await resolverSmoNeto(courierReal.id)
         : new Prisma.Decimal(0);
+      const intermediarioMarkupPorcentaje = courierReal
+        ? await resolverIntermediarioMarkupPorcentaje(config, courierReal.id)
+        : null;
 
       const calcularPrecios = (costoSecoCourier: number) =>
         aplicarMarkup(costoSecoCourier, {
           usaCredencialesPropias: config.usaCredencialesPropias,
-          ajusteTarifaPorcentaje: config.ajusteTarifaPorcentaje,
+          ajusteTarifaPorcentaje: markupShiproPorcentaje,
           markupFijo: config.markupFijo,
           tarifaIncluyeIva: config.tarifaIncluyeIva,
-          intermediarioMarkupPorcentaje: intermediarioActivo ? Number(intermediarioActivo.markupPorcentaje) : null,
+          intermediarioMarkupPorcentaje,
           smoNeto,
           feeShiproNeto,
         });

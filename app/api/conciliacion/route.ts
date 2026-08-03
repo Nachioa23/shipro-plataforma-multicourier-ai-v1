@@ -3,6 +3,11 @@ import prisma from "@/lib/prisma";
 import { Prisma, EstadoLiquidacion } from "@prisma/client";
 import { aplicarMarkup, type ConfigMarkup } from "@/lib/cotizador";
 import { calcularFeeOperacion } from "@/lib/utils/operacion-fee";
+import {
+  resolverMarkupShiproPorcentaje,
+  resolverSmoNeto,
+  resolverIntermediarioMarkupPorcentaje,
+} from "@/lib/utils/resolvers-tarifa";
 import { evaluarSuspension, suspenderEmpresa, reactivarEmpresa } from "@/lib/utils/suspension-cuenta";
 import { IVA_AR_MULTIPLIER } from "@/lib/constants/iva";
 
@@ -160,7 +165,12 @@ export async function POST(request: Request) {
 
     // Cachés por proceso: mismo empresa/courier suele repetirse en un mismo Excel.
     const feeShiproNetoCache = new Map<number, Prisma.Decimal>();
-    const intermediarioCache = new Map<number, number | null>();
+    // FASE 2 motor mov 2 (2026-08-03): el intermediarioCache anterior estaba
+    // keyed por envio.courierId (ejecutor). Con lookup owner-keyed (resolver)
+    // la clave debería incluir credencial.propietarioTipo/CourierId — para
+    // mantener simple el path se llama al resolver por envío en la rama
+    // subioPeso (que es un subconjunto de los envíos de la corrida). Si
+    // llegara a hacer falta perf, cachear por credencial.id en su momento.
     let credencialMissingWarned = false;
     const ahora = new Date();
 
@@ -298,29 +308,28 @@ export async function POST(request: Request) {
             feeShiproNetoCache.set(envio.empresaId, feeShiproNeto);
           }
 
-          let intermediarioMarkupPorcentaje: number | null;
-          if (intermediarioCache.has(envio.courierId)) {
-            intermediarioMarkupPorcentaje = intermediarioCache.get(envio.courierId) ?? null;
-          } else {
-            const inter = await tx.courierIntermediario.findFirst({
-              where: {
-                courierId: envio.courierId,
-                activo: true,
-                vigenciaDesde: { lte: ahora },
-                OR: [{ vigenciaHasta: null }, { vigenciaHasta: { gte: ahora } }],
-              },
-            });
-            intermediarioMarkupPorcentaje = inter?.markupPorcentaje ?? null;
-            intermediarioCache.set(envio.courierId, intermediarioMarkupPorcentaje);
-          }
+          // FASE 2 motor mov 2 (2026-08-03): pivote de las 3 fuentes a los
+          // resolvers (mismo camino que cotización + fallback en crear.ts).
+          // Owner-keyed intermediario / SmoCourier vigente / MarkupShiproVigencia
+          // global con override. Ver lib/utils/resolvers-tarifa.ts.
+          // La ausencia de deltas espurios entre cotización y conciliación
+          // depende de que ambas usen la MISMA fuente — de ahí la pivote acá.
+          const intermediarioMarkupPorcentaje = await resolverIntermediarioMarkupPorcentaje(
+            credencial,
+            envio.courierId,
+            tx
+          );
 
-          const smoNeto: Prisma.Decimal = envio.courier.smoActivo
-            ? new Prisma.Decimal(envio.courier.smoPrecioAlClienteConIva) // stored NETO pese al nombre del campo
-            : new Prisma.Decimal(0);
+          const smoNeto: Prisma.Decimal = await resolverSmoNeto(envio.courierId, tx);
+
+          const markupShiproPorcentaje = await resolverMarkupShiproPorcentaje(
+            credencial.ajusteTarifaPorcentaje,
+            tx
+          );
 
           const config: ConfigMarkup = {
             usaCredencialesPropias: credencial.usaCredencialesPropias,
-            ajusteTarifaPorcentaje: credencial.ajusteTarifaPorcentaje,
+            ajusteTarifaPorcentaje: markupShiproPorcentaje,
             markupFijo: credencial.markupFijo,
             // OVERRIDE respecto de credencial.tarifaIncluyeIva: el flag de la
             // credencial describe lo que devuelve la API del courier; el Excel

@@ -13,6 +13,11 @@ import { validarOperatividadPar } from "@/lib/depositos/operatividad";
 import { getAppUrl } from "@/lib/utils/app-url";
 import { resolverPrecioFallback } from "@/lib/utils/precio-fallback";
 import { calcularFeeOperacion } from "@/lib/utils/operacion-fee";
+import {
+  resolverMarkupShiproPorcentaje,
+  resolverSmoNeto,
+  resolverIntermediarioMarkupPorcentaje,
+} from "@/lib/utils/resolvers-tarifa";
 import { Prisma, EstadoLiquidacion, type DepositoCourierConfig } from "@prisma/client";
 
 export interface CrearEnvioInput {
@@ -527,20 +532,18 @@ export async function crearEnvio(input: CrearEnvioInput) {
       // ============================================================
       // FALLBACK Rama A: red de seguridad de precio cuando no hay
       // cotización o el courier elegido no aparece en las opciones.
-      // GAP CONOCIDO (FASE 1): configMarkup.intermediarioMarkupPorcentaje=null
-      // hace que este fallback UNDERCHARGUE cuando el courier tiene
-      // intermediario vigente (Mocis→Andreani, DEUDA 107). El path de
-      // fallback NO reconstruye la cascada de intermediario. No se
-      // arregla aca; queda como deuda pendiente.
+      //
+      // FASE 2 motor mov 2 (2026-08-03): reconstruye la cascada completa
+      // igual que cotización (intermediario owner-keyed + SMO por courier +
+      // markup Shipro global con override + Fee). Cierra el GAP FASE 1 que
+      // hacía UNDERCHARGE cuando el courier tenía intermediario vigente.
       //
       // CONTRATO STEP 1 (dos-vías-de-liquidación): cuando este fallback
       // dispara, resolverPrecioFallback devuelve solo {precio, fuente,
       // detalle} — sin desglose. Por lo tanto los campos de breakdown
       // (feeNetoFacturado / logisticaNetaFacturada / ivaFacturado) se
       // persisten como NULL y estadoLiquidacionFee se setea en OBSERVADO
-      // para que la fila caiga a revisión manual en la proforma. La
-      // persistencia se implementa en la STAGE 4 del prompt grande;
-      // este comentario documenta el contrato.
+      // para que la fila caiga a revisión manual en la proforma.
       // ============================================================
       montoDebito = new Prisma.Decimal(0);
       // STEP 1 Rama A FALLBACK: breakdown irrecuperable → NULLs + OBSERVADO en ambos tracks.
@@ -552,6 +555,19 @@ export async function crearEnvio(input: CrearEnvioInput) {
           ? "sucursal"
           : "domicilio";
         try {
+          // FASE 2 motor mov 2: resolver los 4 términos de la cascada
+          // (intermediario, markup Shipro, SMO, Fee) igual que cotización.
+          const markupShiproPorcentajeFB = await resolverMarkupShiproPorcentaje(
+            credencialMain.ajusteTarifaPorcentaje
+          );
+          const smoNetoFB = await resolverSmoNeto(courierIdReal);
+          const intermediarioMarkupPorcentajeFB = await resolverIntermediarioMarkupPorcentaje(
+            credencialMain,
+            courierIdReal
+          );
+          const feeResFB = await calcularFeeOperacion(empresaId, new Prisma.Decimal(0));
+          const feeShiproNetoFB = feeResFB?.feePreIva ?? new Prisma.Decimal(0);
+
           const fallbackA = await resolverPrecioFallback({
             courierId: courierIdReal,
             cpOrigen: deposito.codigoPostal,
@@ -561,18 +577,20 @@ export async function crearEnvio(input: CrearEnvioInput) {
             tarifaPlanaRespaldo: empresaConData.tarifaPlanaRespaldo,
             configMarkup: {
               usaCredencialesPropias: credencialMain.usaCredencialesPropias,
-              ajusteTarifaPorcentaje: credencialMain.ajusteTarifaPorcentaje,
+              ajusteTarifaPorcentaje: markupShiproPorcentajeFB,
               markupFijo: credencialMain.markupFijo,
               tarifaIncluyeIva: credencialMain.tarifaIncluyeIva,
-              intermediarioMarkupPorcentaje: null, // GAP FASE 1: ver comentario arriba.
+              intermediarioMarkupPorcentaje: intermediarioMarkupPorcentajeFB,
+              smoNeto: smoNetoFB,
+              feeShiproNeto: feeShiproNetoFB,
             },
           });
           if (fallbackA.precio != null && fallbackA.precio.gt(0)) {
             montoDebito = fallbackA.precio;
-            console.warn(`[FASE1 GAP] Rama A fallback aplicado: $${fallbackA.precio.toFixed(2)} (fuente: ${fallbackA.fuente}). UNDERCHARGE si el courier tiene intermediario vigente (missing cascade). ${fallbackA.detalle}`);
+            console.warn(`[FASE2] Rama A fallback aplicado: $${fallbackA.precio.toFixed(2)} (fuente: ${fallbackA.fuente}). Cascada completa reconstruida. ${fallbackA.detalle}`);
           }
         } catch (err) {
-          console.warn("[FASE1] No se pudo resolver precio de fallback Rama A:", err);
+          console.warn("[FASE2] No se pudo resolver precio de fallback Rama A:", err);
         }
       }
     }

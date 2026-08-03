@@ -403,7 +403,13 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
           usaCredencialesPropias: config.usaCredencialesPropias,
           ajusteTarifaPorcentaje: markupShiproPorcentaje,
           markupFijo: config.markupFijo,
-          tarifaIncluyeIva: config.tarifaIncluyeIva,
+          // DEUDA 123 mov 2 (2026-08-03): la bandera IVA la aporta el ADAPTER,
+          // no la credencial. Quien sabe si la API del courier devuelve neto o
+          // gross es el adapter (declaración estática, movement 1 commit 88abb30).
+          // Elimina el footgun del default true de CredencialCourier.tarifaIncluyeIva
+          // que en el deploy FASE 2 causó un ~17% UNDERCHARGE en las credenciales
+          // recién creadas fuera del seed.
+          tarifaIncluyeIva: motorCourier.tarifaApiIncluyeIva,
           intermediarioMarkupPorcentaje,
           smoNeto,
           feeShiproNeto,

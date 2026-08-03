@@ -18,6 +18,12 @@ import {
   resolverSmoNeto,
   resolverIntermediarioMarkupPorcentaje,
 } from "@/lib/utils/resolvers-tarifa";
+// DEUDA 123 mov 2 (2026-08-03): imports para instanciar el adapter del courier
+// en el path de fallback Rama A y leer su tarifaApiIncluyeIva sin depender del
+// flag legacy en CredencialCourier.
+import { CourierFactory } from "@/lib/couriers/CourierFactory";
+import { obtenerCredencialesShipro } from "@/lib/couriers/credenciales";
+import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
 import { Prisma, EstadoLiquidacion, type DepositoCourierConfig } from "@prisma/client";
 
 export interface CrearEnvioInput {
@@ -568,6 +574,16 @@ export async function crearEnvio(input: CrearEnvioInput) {
           const feeResFB = await calcularFeeOperacion(empresaId, new Prisma.Decimal(0));
           const feeShiproNetoFB = feeResFB?.feePreIva ?? new Prisma.Decimal(0);
 
+          // DEUDA 123 mov 2 (2026-08-03): instanciamos el adapter para leer su
+          // tarifaApiIncluyeIva estática (la bandera es propiedad del adapter,
+          // no de la credencial). El fallback de crear.ts vive dentro del else
+          // de Rama A → siempre usaCredencialesPropias=false → se puede usar
+          // obtenerCredencialesShipro sin parsear un JSON. El flag no depende
+          // de las credenciales concretas — mismo adapter, mismo valor.
+          const nombreNormalizadoFB = normalizarParaComparacion(courierReal.nombre);
+          const credencialesFB = obtenerCredencialesShipro(nombreNormalizadoFB);
+          const motorCourierFB = CourierFactory.crear(nombreNormalizadoFB, credencialesFB);
+
           const fallbackA = await resolverPrecioFallback({
             courierId: courierIdReal,
             cpOrigen: deposito.codigoPostal,
@@ -579,7 +595,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
               usaCredencialesPropias: credencialMain.usaCredencialesPropias,
               ajusteTarifaPorcentaje: markupShiproPorcentajeFB,
               markupFijo: credencialMain.markupFijo,
-              tarifaIncluyeIva: credencialMain.tarifaIncluyeIva,
+              tarifaIncluyeIva: motorCourierFB.tarifaApiIncluyeIva,
               intermediarioMarkupPorcentaje: intermediarioMarkupPorcentajeFB,
               smoNeto: smoNetoFB,
               feeShiproNeto: feeShiproNetoFB,

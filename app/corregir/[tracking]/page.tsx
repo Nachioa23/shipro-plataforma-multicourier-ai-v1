@@ -28,6 +28,11 @@ export default function CorregirDireccion({ params }: { params: Promise<{ tracki
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState(false);
   const [exito, setExito] = useState(false);
+  // DEUDA 106 pieza 2 (fix 2026-08-04): la corrección genera un tracking NUEVO
+  // en el courier; el envío en BD queda con ese nuevo trackingNumber, y el
+  // viejo SHP-… deja de resolver. Guardamos el nuevo desde la respuesta del
+  // POST para linkear al rastreo correcto en la pantalla de éxito.
+  const [trackingOficial, setTrackingOficial] = useState<string | null>(null);
 
   const [form, setForm] = useState({
     calle: "", altura: "", piso: "", dpto: "", cp: "", localidad: "", provincia: ""
@@ -203,6 +208,11 @@ export default function CorregirDireccion({ params }: { params: Promise<{ tracki
         body: JSON.stringify({ trackingNumber: tracking, ...form, token })
       });
       if (res.ok) {
+        // Capturamos el trackingOficial nuevo (nuevo tracking del courier tras la
+        // corrección) para redirigir al rastreo correcto. La RAMA 1 del handler
+        // siempre lo devuelve; el fallback nullish en el Link cubre el edge case.
+        const data = await res.json();
+        setTrackingOficial(data?.trackingOficial ?? null);
         setExito(true);
       } else {
         alert("Hubo un error al guardar. Por favor, intentá de nuevo.");
@@ -247,7 +257,7 @@ export default function CorregirDireccion({ params }: { params: Promise<{ tracki
         <p className="text-gray-600 font-medium max-w-sm mb-8 leading-relaxed">
           Gracias por actualizar tus datos. Ya liberamos tu pedido para que siga su curso normal.
         </p>
-        <Link href={`/s/${tracking}`} className="px-8 py-3 bg-[#233b6b] text-white font-bold rounded-xl shadow-lg hover:bg-blue-900 transition-colors flex items-center gap-2">
+        <Link href={`/s/${trackingOficial ?? tracking}`} className="px-8 py-3 bg-[#233b6b] text-white font-bold rounded-xl shadow-lg hover:bg-blue-900 transition-colors flex items-center gap-2">
           Ir al seguimiento de mi pedido <ArrowRight className="w-4 h-4" />
         </Link>
       </div>

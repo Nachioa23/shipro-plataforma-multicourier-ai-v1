@@ -2800,6 +2800,35 @@ RETENIDO y por el volumen bajo actual. Resolver antes del onboarding de clientes
 
 ---
 
+## APRENDIZAJE DE DEPLOY — Rebuild limpio obligatorio cuando el deploy toca `proxy.ts` o el schema Prisma (registrado 2026-08-04)
+
+**Descubierto durante el deploy de DEUDA 106 pieza 2 a prod (2026-08-04).** La migración aditiva `20260804190000_envio_correccion_token` se aplicó con `prisma migrate deploy` sin problema, pero el build/restart estándar dejó dos regresiones sutiles que sólo se detectaron probando el flujo end-to-end en prod.
+
+**Síntomas observados:**
+1. **Middleware caché de Next.js** — `GET /api/envios/rastreo-publico` (endpoint agregado a `PUBLIC_API_EXACT` en `proxy.ts` por mov 1) devolvía `{"error":"No autenticado"}` a llamadas anónimas después de `git pull && npm run build && pm2 restart shipro`. El `proxy.ts` compilado quedó cacheado en `.next/` con la lista vieja de rutas públicas — la ruta nueva no estaba clasificada como `public`, así que el gate del proxy la trataba como default (session-required).
+2. **Prisma client desincronizado** — el build tiraba `Property 'correccionToken' does not exist on type 'EnvioWhereInput'`. Prisma genera el client tipado (`@prisma/client`) a partir del `schema.prisma`; sin correr `prisma generate` post-migración, los tipos del client no conocen las columnas nuevas y `tsc` falla al compilar cualquier handler que las use en un `where` / `select` / `create`.
+
+**Procedimiento correcto — rebuild limpio (para deploys que tocan `proxy.ts` O `prisma/schema.prisma`):**
+
+```bash
+git pull                    # (obvio)
+npx prisma migrate deploy   # sólo si el schema cambió — aplica migraciones pendientes en orden
+npx prisma generate         # sólo si el schema cambió — regenera @prisma/client contra el nuevo schema
+rm -rf .next                # fuerza a Next a recompilar middleware + rutas desde cero (no reusa build viejo)
+npm run build
+pm2 restart shipro
+```
+
+**Para deploys que NO tocan `proxy.ts` NI el schema** el flujo incremental sigue sirviendo (`git pull && npm run build && pm2 restart shipro`); el rebuild limpio es específicamente para los dos triggers de arriba.
+
+**Verificación post-deploy de DEUDA 106 pieza 2:** después del rebuild limpio, `curl` anónimo a `/api/envios/rastreo-publico?tracking=360003057165780` devuelve el DTO L1 (estado + courier + vendor + timeline, sin PII) — el gate del proxy clasifica correctamente y el handler responde. Flujo verde.
+
+**Regla operativa incorporada:** cualquier futuro cambio en el clasificador del proxy (agregar/quitar rutas de `PUBLIC_API_EXACT`, `DUAL_EXACT`, `API_KEY_EXACT`) o en el schema Prisma (nuevas columnas, tablas, índices, o cualquier cosa que altere el shape del client generado) dispara este checklist de rebuild limpio. Añadir al runbook de deploy cuando se materialice como documento propio.
+
+**Cross-reference:** DEUDA 106 pieza 2 (arriba).
+
+---
+
 ## DEUDA 107 — El markup del intermediario que presta credenciales no está modelado (NEGOCIO/PRECIO) (registrada 2026-07-17, scope medio-grande)
 
 **Status:** RESUELTA 2026-07-24. Modelo `CourierIntermediario` (markupPorcentaje + seguroFijo + vigencias) + cascada en `aplicarMarkup` (intermediario% aplicado sobre el neto ANTES del markup Shipro) + desglose `matchedA.desglose.{cascadaNeto, smoNeto, feeNeto, netoAcumulado}` propagado por `OpcionTarifa` y persistido en `FinanzasEnvio` (feeNetoFacturado / logisticaNetaFacturada / ivaFacturado) — la conciliación ya distingue esperado vs anomalía sobre estos campos. Commits: 996142f (fórmula), 0d6fd7b (desglose propagado + persistido). FOLLOW-UPS (no bloqueantes): UI admin para editar el intermediario por-courier (hoy solo seed/manual DB); el fallback `resolverPrecioFallback` aún NO reconstruye la cascada (`intermediarioMarkupPorcentaje: null`) — documentado como GAP en `lib/envios/crear.ts` con el contrato de OBSERVADO + breakdown NULL en esa rama.

@@ -210,7 +210,11 @@ export default function TrackingPublico({ params }: { params: Promise<{ tracking
   useEffect(() => {
     const fetchEnvio = async () => {
       try {
-        const res = await fetch(`/api/envios/buscar?tracking=${tracking}`);
+        // DEUDA 106 pieza 2 mov 1 (2026-08-04): página pública → endpoint L1 público.
+        // PIEZA 1 gateó /api/envios/buscar por sesión/ownership; el buyer anónimo
+        // no puede llegar. Este endpoint devuelve estado + courier + vendor + timeline,
+        // SIN destino (Andreani-style: no expone el nombre del comprador).
+        const res = await fetch(`/api/envios/rastreo-publico?tracking=${tracking}`);
         if (!res.ok) throw new Error("404");
         const data = await res.json();
         setEnvio(data);
@@ -388,10 +392,9 @@ export default function TrackingPublico({ params }: { params: Promise<{ tracking
                 <span className="text-gray-400 font-bold uppercase text-[10px] tracking-widest">Tienda</span>
                 <span className="font-black text-gray-800">{envio.empresa?.nombre || "Vendedor Shipro"}</span>
              </div>
-             <div className="flex justify-between items-center text-sm">
-                <span className="text-gray-400 font-bold uppercase text-[10px] tracking-widest">Destinatario</span>
-                <span className="font-bold text-gray-700">{envio.destino?.nombre || "Cliente"}</span>
-             </div>
+             {/* DEUDA 106 pieza 2 mov 1 (2026-08-04): fila "Destinatario" removida —
+                 L1 público no expone el nombre del comprador (Andreani-style). El buyer
+                 confirma su paquete por tracking + estado, no por ver su nombre. */}
              <div className="flex justify-between items-center text-sm">
                 <span className="text-gray-400 font-bold uppercase text-[10px] tracking-widest">Correo</span>
                 <span className="font-black text-blue-600 bg-blue-50 px-3 py-1 rounded-full text-xs">{envio.courier?.nombre}</span>

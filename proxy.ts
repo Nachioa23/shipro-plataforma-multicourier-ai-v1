@@ -9,6 +9,7 @@ const PUBLIC_API_EXACT = [
   "/api/nps/comentario",
   "/api/nps-empresa",
   "/api/envios/rastreo-manual",
+  "/api/envios/rastreo-publico", // DEUDA 106 pieza 2 mov 1 — rastreo L1 público (sin PII).
   "/api/envios/corregir",
   "/api/geografia/buscar",
 ];

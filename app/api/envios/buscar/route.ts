@@ -57,21 +57,26 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Envío no encontrado" }, { status: 404 });
     }
 
-    // (B) DTO whitelist — sólo lo que los consumidores reales usan:
-    //   - app/s/[tracking]/page.tsx (public tracking, session-gated hoy):
-    //       tracking, estado, eventos, fechaEntrega/Colecta/Impresion,
-    //       empresa.nombre (vendedor), destino.nombre (comprador), courier.nombre.
-    //   - app/corregir/[tracking]/page.tsx: estadoActual + destino address parts
-    //       (calle..provincia) para prefill del form. NO documento/email/telefono.
-    //   - app/(dashboard)/rastreo/page.tsx: scope propio via ownership gate arriba;
-    //       este DTO le alcanza para su render (no requiere financials de su propia
-    //       empresa vía este endpoint — los tiene por otros paths).
+    // (B) DTO whitelist — este endpoint sirve el NIVEL L3 (dashboard, session +
+    // ownership). El L1 público (rastreo Andreani-style, sin PII) vive en
+    // /api/envios/rastreo-publico (DEUDA 106 pieza 2 mov 1, commit ${commit-hash}).
+    //
+    //   - app/(dashboard)/rastreo/page.tsx: operador de la empresa dueña — necesita
+    //       datos de contacto del comprador (email, telefono) para coordinar
+    //       entregas. Legítimo: sólo llega acá quien es dueño del envío.
+    //   - app/corregir/[tracking]/page.tsx (con sesión de admin_shipro / cliente):
+    //       estadoActual + address parts (calle..provincia) para prefill del form.
+    //
+    // DEUDA 106 pieza 2 mov 1 (2026-08-04): destino.email + destino.telefono
+    // restaurados al DTO — PIEZA 1 los recortó y rompió el flujo de coordinación
+    // del operador (regresión). documento (DNI) NO se restaura hasta que un
+    // consumidor real lo pida (defense-in-depth por PII).
     //
     // Explícitamente EXCLUIDO:
     //   empresa: saldoActivo, limiteDescubierto, apiKeyHash, apiKeyActiva, cuit,
     //     direccionFiscal*, modalidadPago, tarifaPlanaRespaldo, suspendida,
     //     onboardingCompletado.
-    //   destino: documento (DNI), email, telefono.
+    //   destino: documento (DNI).
     //   courier: emailSoporte, telefonoSoporte, contactoComercial, smo*, puede*, etc.
     //   envio: valorDeclarado, numeroOrden, apiExterna, motivoRetencion, fragil,
     //     campos operativos internos.
@@ -94,6 +99,8 @@ export async function GET(request: Request) {
             cp: envio.destino.cp,
             localidad: envio.destino.localidad,
             provincia: envio.destino.provincia,
+            email: envio.destino.email,       // L3 owner-only: coordinación operador.
+            telefono: envio.destino.telefono, // L3 owner-only: coordinación operador.
           }
         : null,
       eventos: envio.eventos.map((e) => ({

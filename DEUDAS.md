@@ -2699,9 +2699,32 @@ se puede trabajar en paralelo — no depende del código.
 
 ---
 
-## DEUDA 106 — `/api/envios/corregir` es PUBLIC: el tracking es la única llave (SEGURIDAD) (registrada 2026-07-14, scope medio, seguridad)
+## DEUDA 106 — `/api/envios/corregir` es PUBLIC + read-leak en `/api/envios/buscar` (SEGURIDAD) (registrada 2026-07-14, scope medio, seguridad — PIEZA 1 hecha 2026-08-03, PIEZA 2 pendiente)
 
-**Status:** ABIERTA. Detectada 2026-07-14 durante el relevamiento de la API externa.
+**Status: PARCIAL — pieza 1 shippeada, pieza 2 pendiente.**
+
+- **PIEZA 1 (DONE — commit `71d2f6b`, deployado a prod 2026-08-03).** Cierra dos flancos descubiertos durante el recon:
+  - **Ownership en `/api/envios/buscar`**: el handler ahora usa `verificarAccesoEnvio` (`lib/envios/ownership.ts`, PRINCIPIO 2 DEUDAS.md:19). Un cliente ve sólo envíos de su propia empresa; cross-empresa retorna 404 `"Envío no encontrado"` — misma respuesta que envío inexistente, no filtra existencia. Shipro (empresaId=null) mantiene scope global. `verificarAccesoEnvio` ya existía y estaba aplicado en `envios/cancelar` + `envios/inversa` (fix de FAMILIA 2, commit `92cf83f`) — buscar era el único endpoint del family que no había sido migrado.
+  - **DTO whitelist en `/api/envios/buscar`**: la respuesta antes era el objeto Prisma completo — leaba `empresa.{saldoActivo,limiteDescubierto,apiKeyHash,apiKeyActiva,cuit,direccionFiscal*,modalidadPago,tarifaPlanaRespaldo,suspendida,onboardingCompletado}`, `destino.{documento,email,telefono}`, y todos los internals del `courier` (emailSoporte, smo\*, puede\*, etc.). Ahora emite sólo el mínimo que los consumidores reales necesitan: `trackingNumber, estadoActual, modalidad, fechaImpresion/Colecta/Entrega, courier.nombre, empresa.nombre, destino.{nombre,calle,altura,piso,dpto,cp,localidad,provincia}, eventos[].{estado,observacion,fecha}` — sin PII del comprador más allá del nombre y sin ningún dato financiero de la empresa.
+  - **Verificación local**: dashboard encuentra sus propios envíos ✓; `cliente@demo.com` no ve un tracking de otra empresa (obtiene "no hay coincidencias") ✓. Deployado a prod.
+  - **NO cambia el clasificador del proxy** — `/api/envios/buscar` sigue en `DUAL_EXACT` (session o api-key). Por eso el path anónimo del comprador todavía no funciona (ver PIEZA 2).
+
+- **PIEZA 2 (STILL OPEN — link mágico con token para el comprador).** El comprador (destinatario, no usuario de Shipro) hoy **no tiene mecanismo de identidad**. El proxy responde 401 a llamadas anónimas de `/api/envios/buscar` y `/api/envios/corregir` requiere sesión — resultado: las páginas públicas `app/s/[tracking]/page.tsx` y `app/corregir/[tracking]/page.tsx` fallan silenciosamente para el comprador (setError → "no encontrado"). Es la misma pieza que resuelve la mutación pública de corregir Y habilita el rastreo anónimo por el destinatario, con un único mecanismo. Diseño (original DEUDA 106):
+  - Modelo/campo para token de corrección: `token, envioId, vencimiento, usado` (nuevo model o columna en `Envio`).
+  - Generación + envío del mail al pasar a `RETENIDO` (`enviarMailRetenido`) y también al crear el envío (`enviarMailCreacion`) para habilitar rastreo por link mágico. Ambos ya viven en `lib/mailer.ts` / `lib/envios/crear.ts`.
+  - Ventana de vencimiento: 48 h para el destinatario. Si no corrige en esa ventana, el token vence y el cliente de Shipro resuelve desde la plataforma. Nadie queda trabado; carrera sana.
+  - Validación del token en `POST /api/envios/corregir` Y en `GET /api/envios/buscar` — el handler acepta **token OR session OR api-key**. Se saca `/api/envios/corregir` de `PUBLIC_API_EXACT`; el proxy queda en `DUAL_EXACT` para buscar/corregir con el handler validando el token como tercer modo.
+  - La página `/corregir/<tracking>` y `/s/<tracking>` leen el token del querystring y lo mandan al endpoint (o al fetch inicial).
+  - **Por qué link mágico y no "tracking + email"**: link mágico es más seguro (token no adivinable ni scrapeable; el email viaja en el mismo mail que el tracking) Y mejor experiencia (comprador no escribe nada, sólo clickea). Patrón industria estándar (mismo mecanismo que recuperar contraseña).
+  - **API de plugins**: la decisión de producto sigue: la corrección **no** se hace por API de plugins (el e-commerce no corrige por API). Esta función es plataforma→comprador, no integración.
+
+**Riesgo remanente hasta PIEZA 2:**
+- `POST /api/envios/corregir` sigue en `PUBLIC_API_EXACT` (`proxy.ts:12`) — mutación de dirección de destino sin ninguna auth, cualquiera con un tracking en RETENIDO puede redirigir el paquete. Mitigación parcial: sólo envíos en RETENIDO son correctables + PIEZA 1 cerró el path por el que un atacante autenticado podía descubrir trackings ajenos vía buscar.
+- Path anónimo del comprador roto: `/s/[tracking]` y `/corregir/[tracking]` para un buyer sin sesión terminan en "no encontrado". Trabajo pendiente hasta PIEZA 2.
+
+**Contexto original (preservado):**
+
+Detectada 2026-07-14 durante el relevamiento de la API externa.
 
 **Síntoma:** El endpoint `POST /api/envios/corregir` está clasificado `public` en `proxy.ts:12`
 (`PUBLIC_API_EXACT`) — **no pide ninguna credencial**. Con solo conocer un `trackingNumber` de un
@@ -3188,5 +3211,38 @@ la Fase 3 (plugins)** — el punto donde nace el dato —, no del motor.
 - Relacionada con DEUDA 120 (el mensaje de error genérico "Error interno al crear el envío" que oculta el mensaje real): al implementar DEUDA 125, propagar el error 400 con mensaje claro tanto al panel como a la vía API.
 
 **Prioridad**: FASE 4 (pre-primer-cliente hardening) — no bloquea la operación con Argenshipro (parche a mano ya aplicado), pero sí bloqueante para onboarding masivo (cada cliente nuevo que se cree por gerente_cliente puede caer en el mismo modo de falla y requerir intervención admin post-hoc).
+
+---
+
+## DEUDA 126 — `/api/envios/rastreo-manual` sigue leakeando PII del comprador en su DTO (SEGURIDAD/PRIVACIDAD) (registrada 2026-08-03, scope chico, seguridad)
+
+**Status:** ABIERTA. Descubierta durante el recon de DEUDA 106 pieza 1 (2026-08-03). `POST /api/envios/rastreo-manual` (`app/api/envios/rastreo-manual/route.ts`) es un endpoint `PUBLIC_API_EXACT` (`proxy.ts:11`) que hand-picka un DTO — a diferencia de la vieja versión de buscar, este ya NO devuelve `saldoActivo/limiteDescubierto/apiKeyHash/cuit/direccionFiscal*` (bien). PERO **sí devuelve el bloque completo de destinatario con PII**: `documento` (DNI), `email`, `telefono`, `direccionStr`, `localidad`, `cp` (`route.ts:68-76`). Cualquiera con un tracking (que no es secreto — viaja por mail, en la etiqueta) puede leer el DNI/email/teléfono del comprador de ese envío. Misma clase de leak que DEUDA 106 pieza 1 en un endpoint distinto.
+
+**Alcance del fix (chico):**
+- Trim del bloque `destinatario` del DTO: quitar `documento`, `email`, `telefono`. Mantener sólo lo que la UI de rastreo público realmente necesita (nombre para saludo + localidad para contexto — la dirección completa NO es necesaria en la vista de rastreo).
+- Considerar aplicar el mismo `verificarAccesoEnvio` que ahora vive en buscar. Complicación: `rastreo-manual` está en `PUBLIC_API_EXACT` (no en `DUAL_EXACT`), y su único caller runtime es `components/AccionesEnvio.tsx:80` (dashboard, session-gated en la práctica). Opciones: (a) migrar a `DUAL_EXACT` + gate ownership (cierra el path anónimo); (b) mantener público pero sólo trimmear PII (deja el endpoint como una API de rastreo pública real, correcta si el producto lo quiere así). Decidir con producto.
+- Consumidor único a verificar: `components/AccionesEnvio.tsx` — leer qué campos del `envio.destinatario` renderiza y validar que la trimmed version le alcanza.
+
+**Relación con DEUDA 106**: misma clase (endpoint tracking-as-key devolviendo PII de más). Se separa como deuda propia porque el endpoint es distinto y su clasificación en el proxy es distinta — no comparte el fix con PIEZA 1 (que fue cirugía sobre buscar) ni con PIEZA 2 (que introduce el token).
+
+**Prioridad:** media. Menos grave que DEUDA 106 pieza 1 (no leaka finanzas de empresa), pero sigue exponiendo PII del comprador. Cerrar antes del onboarding masivo.
+
+---
+
+## DEUDA 127 — `magicLink` a `/fix/[orden]` en `/api/checkouts` apunta a una ruta que NO existe (limpieza / seguridad futura) (registrada 2026-08-03, scope chico, limpieza)
+
+**Status:** ABIERTA. Descubierta durante el recon de DEUDA 106 (2026-08-03). En `app/api/checkouts/route.ts:82` el código construye:
+```
+const magicLink = `https://shipro.pro/fix/${id_orden}`;
+```
+y lo devuelve en el response como `magicLinkGenerado` (`route.ts:93`). PERO **no existe** una página `app/fix/[orden]/page.tsx` ni un handler `app/api/fix/*` — grep en el repo confirma cero coincidencias. El URL emitido es o bien (a) una feature nunca-shippada (stub que se dejó en el response), o (b) apunta a una app externa/servicio distinto que no vive en este repo.
+
+**Alcance del fix (decidir con producto):**
+- **Opción A — construir el flujo**: si el producto quiere que el comprador pueda "arreglar" un checkout desde ese link, construir la página `/fix/[orden]` con autenticación decente (token + proyección segura, mismo mecanismo que DEUDA 106 pieza 2). Cuidado: el `id_orden` es también no-secreto (adivinable/enumerable), aplica la misma lógica que tracking.
+- **Opción B — remover la emisión muerta**: si el flujo no existe ni va a existir, borrar la construcción del `magicLink` de `route.ts:82` y su emisión en `magicLinkGenerado` — evita que consumidores de la API confíen en un URL que 404-a.
+
+**Relación con DEUDA 106 pieza 2:** misma clase de problema en un subsistema distinto (checkout vs envíos). Si se resuelve como Opción A, reutilizar el mecanismo de token de PIEZA 2.
+
+**Prioridad:** baja. No es una vulnerabilidad activa (el URL no lleva a nada), pero es un dangling emission que confunde a integradores y es una superficie de riesgo si en el futuro alguien construye la página sin auth.
 
 ---

@@ -14,6 +14,7 @@ import { validarOperatividadPar } from "@/lib/depositos/operatividad";
 import { getAppUrl } from "@/lib/utils/app-url";
 import { resolverPrecioFallback } from "@/lib/utils/precio-fallback";
 import { calcularFeeOperacion } from "@/lib/utils/operacion-fee";
+import { validarDireccionEnvio } from "@/lib/geo/validar-direccion";
 import {
   resolverMarkupShiproPorcentaje,
   resolverSmoNeto,
@@ -240,68 +241,24 @@ export async function crearEnvio(input: CrearEnvioInput) {
   }) : null;
 
   // ==============================================================
-  // REGLA DEL PEAJE (Google Maps)
+  // REGLA DEL PEAJE (Google Maps) — validación delegada al helper.
+  // Lógica extraída a lib/geo/validar-direccion.ts (DEUDA 106 pieza 2 mov 3,
+  // refactor 2026-08-04). Reproduce los 5 checks (calle vacía / altura sin
+  // keyword / Google ZERO_RESULTS / no-street-level / CP mismatch) con las
+  // mismas motivo strings y el mismo fallback ante fallo de Google.
+  // El helper también sirve al path de corrección del comprador (mov 4).
   // ==============================================================
-  const calleLower = calle?.toLowerCase() || "";
-  const alturaStr = altura?.toString().trim() || "";
-
-  const keywordsTolerancia = ["lote", "ruta", "km", "barrio", "manzana", "country", "s/n", "sin numero", "parcela"];
-  const tienePalabraClave = keywordsTolerancia.some(kw => calleLower.includes(kw));
-
-  if (!calle || calle.trim() === "") {
+  const resultadoValidacion = await validarDireccionEnvio({
+    calle,
+    altura,
+    cp: cpDestino,
+    localidad,
+    provincia: provinciaDestino,
+  });
+  if (!resultadoValidacion.valida) {
     estadoInicialEnvio = "RETENIDO";
     falloPorPeaje = true;
-    motivoRetencion = "El nombre de la calle está vacío.";
-  } else if (!alturaStr && !tienePalabraClave) {
-    estadoInicialEnvio = "RETENIDO";
-    falloPorPeaje = true;
-    motivoRetencion = "Falta altura y no posee palabras clave de excepción.";
-  }
-
-  if (!falloPorPeaje) {
-    const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY;
-    if (apiKey) {
-      try {
-        const direccionQuery = `${calle} ${alturaStr}, ${localidad}, ${provinciaDestino}, Argentina`;
-        const geoRes = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(direccionQuery)}&key=${apiKey}`);
-        const geoData = await geoRes.json();
-
-        if (geoData.status === "ZERO_RESULTS") {
-          estadoInicialEnvio = "RETENIDO";
-          falloPorPeaje = true;
-          motivoRetencion = "Google Maps no pudo ubicar esta dirección en el mapa.";
-        } else if (geoData.status === "OK" && geoData.results.length > 0) {
-          const primerResultado = geoData.results[0];
-
-          const isStreetLevel = primerResultado.types.includes("street_address") ||
-                                primerResultado.types.includes("route") ||
-                                primerResultado.types.includes("premise") ||
-                                primerResultado.types.includes("intersection");
-
-          if (!isStreetLevel && !tienePalabraClave) {
-            estadoInicialEnvio = "RETENIDO";
-            falloPorPeaje = true;
-            motivoRetencion = `La calle no parece ser válida. Google solo encontró la zona o localidad.`;
-          } else {
-            let cpGoogle = "";
-            for (const comp of primerResultado.address_components) {
-              if (comp.types.includes("postal_code")) {
-                cpGoogle = comp.long_name.replace(/\D/g, '');
-              }
-            }
-
-            const cpUserLimpio = String(cpDestino).replace(/\D/g, '');
-            if (cpGoogle && cpUserLimpio && cpGoogle.substring(0, 2) !== cpUserLimpio.substring(0, 2)) {
-              estadoInicialEnvio = "RETENIDO";
-              falloPorPeaje = true;
-              motivoRetencion = `Discrepancia geográfica: El CP ingresado difiere de la zona real.`;
-            }
-          }
-        }
-      } catch (geoErr) {
-        console.warn("Error en Geocoding API.");
-      }
-    }
+    motivoRetencion = resultadoValidacion.motivo;
   }
 
   // ==============================================================

@@ -1,38 +1,128 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { getToken } from "next-auth/jwt";
 import { obtenerCredencialCourier } from "@/lib/couriers/normalizar";
 import { despacharCourier } from "@/lib/envios/dispatch";
+import { verificarAccesoEnvio } from "@/lib/envios/ownership";
+import { validarDireccionEnvio } from "@/lib/geo/validar-direccion";
+
+// DEUDA 106 pieza 2 mov 4 (2026-08-04): dos caminos de auth para corregir.
+//
+// (a) BUYER PATH — anónimo con `token` en el body (mov 5 lo forward-ea desde el
+//     querystring del link mágico del mail). El token identifica: (i) el envío,
+//     (ii) no expiró, (iii) sigue RETENIDO. Éxito → esBuyer=true. Falla del
+//     token → 404 (no se revela existencia). NO se cae a session — un token
+//     malo es un token malo, no es "quizás sea el operador".
+//
+// (b) CLIENTE/SHIPRO PATH — sin token en el body, con sesión NextAuth. Este
+//     endpoint está en PUBLIC_API_EXACT (proxy.ts:13) → proxy NO inyecta
+//     x-empresa-id (proxy.ts:98). Así que aquí el handler self-authentica
+//     via getToken(...) — mismo patrón que proxy.authBySession (proxy.ts:72-90),
+//     replicado inline. Con el ctx armado, se usa verificarAccesoEnvio para
+//     ownership + se re-verifica el scope RETENIDO manualmente (el helper
+//     no filtra por estado).
+//
+// GOOGLE VALIDATION es obligatoria para el buyer y SALTEADA para el cliente
+// (design lock Nacho: cliente tiene "última palabra"). Se ubica ANTES del
+// Direccion.update para que una dirección rechazada del buyer no pise la
+// dirección actual del envío. Ver validarDireccionEnvio en
+// lib/geo/validar-direccion.ts (mov 3).
+//
+// TOKEN LIFECYCLE: NO se hace null-out en éxito. El filtro RETENIDO en la
+// query del buyer path ya mata el token cuando el envío pasa a Pendiente
+// (no hay re-entrada a RETENIDO por diseño). El valor histórico queda para
+// auditoría / debug.
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { trackingNumber, calle, altura, cp, localidad, provincia, piso, dpto } = body;
+    const { trackingNumber, calle, altura, cp, localidad, provincia, piso, dpto, token } = body;
 
     if (!trackingNumber || !calle || !altura || !cp) {
       return NextResponse.json({ error: "Faltan datos obligatorios" }, { status: 400 });
     }
 
-    // 1. Buscar envío en RETENIDO con info necesaria.
-    // DEUDA 29 Sub-fase 1.C.2: include extendido para construir origen real
-    // del despacho (deposito vivo + origen snapshot fallback) y para defense
-    // contra futuros cambios del filtro de estados (tramos previos).
-    const envio = await prisma.envio.findFirst({
-      where: {
-        trackingNumber,
-        estadoActual: { in: ["RETENIDO", "Retenido"] },
-      },
-      include: {
-        destino: true,
-        courier: true,
-        finanzas: true,
-        empresa: true,
-        deposito: true,
-        origen: true,
-        tramos: true,
-      },
-    });
+    // 1. Resolver el caller — buyer con token o cliente/Shipro con sesión.
+    // El include tree es el mismo que el handler pre-refactor: destino,
+    // courier, finanzas, empresa, deposito, origen, tramos. Ver DEUDA 29
+    // Sub-fase 1.C.2 para por qué extenso (origen real + defense contra
+    // cambios del filtro de estados que dejaran pasar envíos con tramos).
+    const includeTree = {
+      destino: true,
+      courier: true,
+      finanzas: true,
+      empresa: true,
+      deposito: true,
+      origen: true,
+      tramos: true,
+    } as const;
 
-    if (!envio || !envio.destino || !envio.courier) {
+    let envio: any = null;
+    let esBuyer = false;
+
+    if (typeof token === "string" && token.length > 0) {
+      // (a) BUYER PATH — el token ES la identidad. Query one-shot con las 4
+      // condiciones. Si falta cualquiera → null → 404 idéntico (no se revela
+      // si es porque el envío no existe, el token equivocado, expiró, o el
+      // envío ya no está RETENIDO).
+      envio = await prisma.envio.findFirst({
+        where: {
+          trackingNumber,
+          correccionToken: token,
+          correccionTokenExpira: { gt: new Date() },
+          estadoActual: { in: ["RETENIDO", "Retenido"] },
+        },
+        include: includeTree,
+      });
+      if (!envio) {
+        return NextResponse.json({ error: "Envío no encontrado" }, { status: 404 });
+      }
+      esBuyer = true;
+    } else {
+      // (b) CLIENTE/SHIPRO PATH — self-auth via getToken (proxy no inyecta
+      // headers en PUBLIC_API_EXACT). Réplica de proxy.authBySession.
+      const jwt = await getToken({
+        req: request as any,
+        secret: process.env.NEXTAUTH_SECRET,
+      });
+      if (!jwt) {
+        return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+      }
+      const jwtEmpresaId =
+        typeof jwt.empresaId === "number" ? jwt.empresaId : null;
+      // Non-null empresaId → verificamos empresa.activo (mirror proxy.ts:82-88).
+      if (jwtEmpresaId !== null) {
+        const empresa = await prisma.empresa.findUnique({
+          where: { id: jwtEmpresaId },
+          select: { activo: true },
+        });
+        if (!empresa?.activo) {
+          return NextResponse.json({ error: "Empresa deshabilitada" }, { status: 401 });
+        }
+      }
+      const ctx = {
+        empresaId: jwtEmpresaId,
+        rol: typeof jwt.rol === "string" ? jwt.rol : "",
+        modoDios: jwtEmpresaId === null,
+      };
+      envio = await verificarAccesoEnvio(
+        { trackingNumber },
+        ctx,
+        includeTree,
+      );
+      // verificarAccesoEnvio hace ownership + existencia. El scope RETENIDO
+      // se re-chequea acá (el helper no filtra por estado). Mismo 404 que
+      // el buyer path — nunca revelamos si el envío existe pero salió de
+      // RETENIDO vs no existe vs es de otra empresa.
+      const esRetenido =
+        envio?.estadoActual === "RETENIDO" || envio?.estadoActual === "Retenido";
+      if (!envio || !esRetenido) {
+        return NextResponse.json({ error: "Envío no encontrado" }, { status: 404 });
+      }
+    }
+
+    // A este punto envío existe, está RETENIDO, y el caller es autorizado.
+    if (!envio.destino || !envio.courier) {
       return NextResponse.json({ error: "Envío no encontrado o inválido para corrección" }, { status: 404 });
     }
 
@@ -44,6 +134,28 @@ export async function POST(request: Request) {
       return NextResponse.json({
         error: "Este envío ya tiene tramos despachados. Usar otro endpoint para corrección post-despacho.",
       }, { status: 400 });
+    }
+
+    // ==============================================================
+    // GOOGLE VALIDATION — obligatoria para el buyer, salteada para el cliente.
+    // Se ubica ANTES del Direccion.update para que una dirección inválida
+    // enviada por el buyer NO pise la dirección actual. El cliente salta este
+    // check por diseño (última palabra).
+    // ==============================================================
+    if (esBuyer) {
+      const resultadoValidacion = await validarDireccionEnvio({
+        calle,
+        altura,
+        cp,
+        localidad,
+        provincia,
+      });
+      if (!resultadoValidacion.valida) {
+        return NextResponse.json(
+          { error: "Direccion no validada", motivo: resultadoValidacion.motivo },
+          { status: 422 },
+        );
+      }
     }
 
     // 2. Actualizar dirección del destinatario.

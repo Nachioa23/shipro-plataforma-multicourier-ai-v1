@@ -33,6 +33,68 @@ import { validarDireccionEnvio } from "@/lib/geo/validar-direccion";
 // (no hay re-entrada a RETENIDO por diseño). El valor histórico queda para
 // auditoría / debug.
 
+// DEUDA 106 pieza 2 mov 5 (2026-08-04): GET read-only para el prefill del form
+// del comprador. Devuelve L2 (dirección actual del destino) validando el token
+// con las mismas 4 condiciones que el POST buyer path (envío + token + no
+// expirado + RETENIDO). NO despacha, NO muta, NO devuelve PII de más — sólo
+// la dirección para prefill. El buscar de PIEZA 1 quedó session-gated para
+// hardening; el buyer necesita este otro camino token-aware, y mantener la
+// lógica del token en un solo endpoint (corregir) es más simple que abrir
+// buscar a token.
+//
+// El session-path (cliente/Shipro) para prefill sigue usando /api/envios/buscar
+// (que ya tiene su ownership gate + su DTO L3 para el operador). Esta GET es
+// SÓLO para el buyer con token.
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const tracking = searchParams.get("tracking");
+    const token = searchParams.get("token");
+
+    if (!tracking || !token) {
+      return NextResponse.json({ error: "Faltan datos obligatorios" }, { status: 400 });
+    }
+
+    // Same 4 gates as POST buyer path — envío + token válido + no expirado +
+    // RETENIDO. Cualquier fallo → 404 idéntico (no revela existencia).
+    const envio = await prisma.envio.findFirst({
+      where: {
+        trackingNumber: tracking,
+        correccionToken: token,
+        correccionTokenExpira: { gt: new Date() },
+        estadoActual: { in: ["RETENIDO", "Retenido"] },
+      },
+      // Proyección Prisma-enforced — sólo lo que el prefill del form necesita.
+      // Nada de destino.{nombre, documento, email, telefono}, empresa, courier,
+      // finanzas ni internals — el comprador conoce sus propios datos, no
+      // necesita re-verlos.
+      select: {
+        estadoActual: true,
+        destino: {
+          select: {
+            calle: true,
+            altura: true,
+            piso: true,
+            dpto: true,
+            cp: true,
+            localidad: true,
+            provincia: true,
+          },
+        },
+      },
+    });
+
+    if (!envio) {
+      return NextResponse.json({ error: "Envío no encontrado" }, { status: 404 });
+    }
+
+    return NextResponse.json(envio);
+  } catch (error) {
+    console.error("Error leyendo envío para corrección (GET):", error);
+    return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();

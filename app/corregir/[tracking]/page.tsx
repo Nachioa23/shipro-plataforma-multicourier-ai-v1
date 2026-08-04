@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, use } from "react";
+import { useSearchParams } from "next/navigation";
 import { MapPin, AlertTriangle, CheckCircle2, Loader2, ArrowRight, Building, Search } from 'lucide-react';
 import Link from "next/link";
 
@@ -14,6 +15,14 @@ export default function CorregirDireccion({ params }: { params: Promise<{ tracki
   const brandColor = '#233b6b';
   
   const { tracking } = use(params);
+
+  // DEUDA 106 pieza 2 mov 5 (2026-08-04): token del link mágico del mail.
+  // Con token → path del comprador: GET a /api/envios/corregir?tracking&token
+  // (prefill L2) y POST con el token en el body (validación buyer + Google
+  // obligatorio). Sin token → fallback al buscar de siempre (path cliente/Shipro
+  // session-authenticated) — corregir POST cae al self-auth path.
+  const searchParams = useSearchParams();
+  const token = searchParams?.get("token") ?? null;
 
   const [envio, setEnvio] = useState<any>(null);
   const [cargando, setCargando] = useState(true);
@@ -36,7 +45,15 @@ export default function CorregirDireccion({ params }: { params: Promise<{ tracki
   useEffect(() => {
     const fetchEnvio = async () => {
       try {
-        const res = await fetch(`/api/envios/buscar?tracking=${tracking}`);
+        // DEUDA 106 pieza 2 mov 5 (2026-08-04): prefill del form.
+        // Con token → GET token-aware en /api/envios/corregir (returns L2, sólo
+        // la dirección para prefill). Sin token → fallback al buscar de siempre
+        // (path cliente/Shipro session-authenticated, con su DTO L3 owner + su
+        // ownership gate ya vigente desde PIEZA 1).
+        const url = token
+          ? `/api/envios/corregir?tracking=${encodeURIComponent(tracking)}&token=${encodeURIComponent(token)}`
+          : `/api/envios/buscar?tracking=${encodeURIComponent(tracking)}`;
+        const res = await fetch(url);
         if (!res.ok) throw new Error("404");
         const data = await res.json();
         
@@ -61,7 +78,7 @@ export default function CorregirDireccion({ params }: { params: Promise<{ tracki
       }
     };
     fetchEnvio();
-  }, [tracking]);
+  }, [tracking, token]);
 
   // NUEVO: Buscador automático de CP (Igual que en la Plataforma Interna)
   useEffect(() => {
@@ -177,10 +194,13 @@ export default function CorregirDireccion({ params }: { params: Promise<{ tracki
     e.preventDefault();
     setGuardando(true);
     try {
+      // DEUDA 106 pieza 2 mov 5: forward del token al body. Si no hay token,
+      // el handler cae al self-auth path (session, cliente/Shipro) — el POST
+      // ignora token=null y busca sesión NextAuth.
       const res = await fetch('/api/envios/corregir', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ trackingNumber: tracking, ...form })
+        body: JSON.stringify({ trackingNumber: tracking, ...form, token })
       });
       if (res.ok) {
         setExito(true);

@@ -1,4 +1,5 @@
 import prisma from "@/lib/prisma";
+import { randomBytes } from "crypto";
 import {
   evaluarSuspension,
   suspenderEmpresa,
@@ -757,6 +758,17 @@ export async function crearEnvio(input: CrearEnvioInput) {
     }
   }
 
+  // DEUDA 106 pieza 2 mov 2 (2026-08-04): token de corrección para el comprador.
+  // Se genera SÓLO si el envío nace RETENIDO (falloPorPeaje === true); expira
+  // en 48h. Se persiste en Envio.correccionToken/correccionTokenExpira dentro
+  // de la tx (línea ~795) y viaja al comprador en el mail de retenido más
+  // abajo (línea ~955). NADA VALIDA el token todavía — la validación se
+  // conecta en el movimiento 4 (endpoints buscar + corregir aceptan
+  // token OR session). 192 bits de entropía via randomBytes(24) → base64url
+  // = 32 chars URL-safe unguessable.
+  const correccionToken = falloPorPeaje ? randomBytes(24).toString("base64url") : null;
+  const correccionTokenExpira = falloPorPeaje ? new Date(Date.now() + 48 * 60 * 60 * 1000) : null;
+
   const resultadoTransaccion = await prisma.$transaction(async (tx) => {
     const empresaData = await tx.empresa.findUnique({ where: { id: empresaId } });
     if (empresaData) empresaNombreParaMail = empresaData.nombre;
@@ -793,6 +805,10 @@ export async function crearEnvio(input: CrearEnvioInput) {
         pesoReal: parseFloat(String(pesoReal)) || 1.0,
         estadoActual: estadoInicialEnvio,
         modalidad: modalidadCanonica,
+        // DEUDA 106 pieza 2 mov 2: token de corrección (RETENIDO only). null si
+        // el envío no nace RETENIDO. Ver bloque de generación arriba.
+        correccionToken,
+        correccionTokenExpira,
         // === DEUDA 35: persistir tipoOrigen del input ===
         // Sin esto el schema default ("recoleccion_courier") siempre se aplicaba,
         // aunque dispatch ramificara bien por el valor del input.
@@ -950,7 +966,9 @@ export async function crearEnvio(input: CrearEnvioInput) {
     if (baseUrl) {
       if (falloPorPeaje) {
         const { enviarMailRetenido } = await import("@/lib/mailer");
-        await enviarMailRetenido(email, trackingOficial, destinatarioNombre, `${baseUrl}/corregir/${trackingOficial}`, empresaNombreParaMail);
+        // DEUDA 106 pieza 2 mov 2: URL lleva el token generado arriba (~línea 760).
+        // falloPorPeaje=true acá → correccionToken es non-null por construcción.
+        await enviarMailRetenido(email, trackingOficial, destinatarioNombre, `${baseUrl}/corregir/${trackingOficial}?token=${correccionToken}`, empresaNombreParaMail);
       } else {
         // QW#5 (2026-06-02): path /s/ es el canonico, /seguimiento es redirect deprecado.
         enviarMailCreacion(email, trackingOficial, destinatarioNombre, courierReal.nombre, `${baseUrl}/s/${trackingOficial}`);

@@ -754,6 +754,18 @@ model Envio {
   movimientos MovimientoFinanciero[]
   encuestaNPS EncuestaNPS?
 
+  // DEUDA 106 pieza 2 mov 2 (2026-08-04): token del comprador para corregir la
+  // dirección de un envío RETENIDO. Se genera al nacer el envío si va a estado
+  // RETENIDO (lib/envios/crear.ts, block de peaje), viaja en el mail al comprador
+  // como /corregir/<tracking>?token=<token>, y validador se conecta en el
+  // movimiento 4 (endpoints buscar + corregir aceptan token OR session).
+  // Vencimiento: 48h desde generación (design lock Nacho).
+  // @unique nullable — Postgres permite múltiples NULL bajo una unique constraint
+  // (cada NULL cuenta como distinto), así que sólo los envíos con token tienen
+  // valor y el índice sirve para lookup O(1) al validar.
+  correccionToken       String?   @unique
+  correccionTokenExpira DateTime?
+
   // DEUDA 29: cadena de tramos (recolección, entrega, ciclo_completo).
   // Cada tramo tiene su propio courier responsable y trackingExterno.
   tramos TramoEnvio[]

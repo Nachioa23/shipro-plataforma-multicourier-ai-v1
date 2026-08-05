@@ -62,6 +62,12 @@ export interface CrearEnvioInput {
   provinciaDestino?: string;
   numeroOrden?: string | null;
 
+  // DEUDA 128: clave de idempotencia. La produce el plugin (Idempotency-Key header),
+  // se persiste en Envio.idempotencyKey. El check de duplicados vive en la ruta
+  // (POST /api/envios); acá sólo se almacena. Null → creación sin clave (dashboard
+  // manual, no plugin).
+  idempotencyKey?: string | null;
+
   // === DEUDA 29 Sub-fase 1.C.2 ===
   // Cómo arrancó el envío. Default "recoleccion_courier".
   // - "recoleccion_courier": el courier (mismo o consolidador) retira del depósito.
@@ -84,6 +90,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
     empresaId, depositoId: depositoIdInput, permitirBloqueoPorDeposito, destinatarioNombre, cpDestino, pesoReal, nombreCourier,
     calle, altura, piso, dpto, dni, email, telefono, localidad, modalidad,
     valorDeclarado, costoEnvio, costoProveedor, provinciaDestino, numeroOrden,
+    idempotencyKey,
     tipoOrigen, sucursalOrigenId, sucursalDestinoId
   } = input;
 
@@ -758,6 +765,9 @@ export async function crearEnvio(input: CrearEnvioInput) {
         diasPrometidosCheckout: diasPrometidosCalculados,
         // TODO DEUDA 29 Sub-fase 3: tracking del first-mile ahora vive en TramoEnvio.trackingExterno.
         numeroOrden: numeroOrden || null,
+        // DEUDA 128: persistir la clave del plugin para que la ruta pueda
+        // detectar reintentos y devolver la etiqueta existente sin re-crear.
+        idempotencyKey: idempotencyKey ?? null,
         etiquetaUrl: urlEtiquetaFinal,
         pesoReal: parseFloat(String(pesoReal)) || 1.0,
         estadoActual: estadoInicialEnvio,

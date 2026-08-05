@@ -692,6 +692,11 @@ model Envio {
   diasPrometidosCheckout Int?
   numeroOrden            String?
 
+  // DEUDA 128: clave de idempotencia por plugin. Enviada como header Idempotency-Key.
+  // Scope per-empresa: @@unique([empresaId, idempotencyKey]) previene duplicados
+  // dentro de la misma empresa. NULL = creado sin clave (dashboard manual, no plugin).
+  idempotencyKey String?
+
   // DEUDA 29: cómo arrancó el envío.
   // - "recoleccion_courier": un courier (mismo o consolidador) retira del depósito.
   // - "drop_off_cliente": el cliente llevó el paquete a una sucursal del courier.
@@ -777,6 +782,11 @@ model Envio {
   // STEP 1: la app usa fechaImpresion como "created at" del envío (no hay createdAt).
   // Este índice sirve al 6-month sweep + al wallet-por-empresa por fecha.
   @@index([empresaId, fechaImpresion])
+
+  // DEUDA 128: idempotencia per-empresa. Postgres permite múltiples NULL bajo la
+  // unique constraint (cada NULL cuenta como distinto), así que envíos sin clave
+  // no colisionan entre sí; sólo empresas que mandan clave la ven enforced.
+  @@unique([empresaId, idempotencyKey])
 }
 
 // ==========================================

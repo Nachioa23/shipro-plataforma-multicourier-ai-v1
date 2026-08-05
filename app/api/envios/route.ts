@@ -115,6 +115,41 @@ export async function POST(request: Request) {
   const empresaId = parseInt(empresaIdHeader);
 
   try {
+    // DEUDA 128: idempotency check. Si el plugin manda Idempotency-Key y ya existe
+    // un envío de esta empresa con esa clave, devolvemos la respuesta original
+    // (misma tracking / etiqueta) sin re-crear. Scope per-empresa: dos empresas
+    // pueden mandar la misma clave sin colisionar (schema: @@unique([empresaId,
+    // idempotencyKey])). Header de respuesta Idempotency-Replayed: true para que
+    // el plugin distinga replay de creación fresh si lo necesita.
+    const idempotencyKey = request.headers.get("Idempotency-Key") ?? null;
+
+    if (idempotencyKey) {
+      const existing = await prisma.envio.findFirst({
+        where: { empresaId, idempotencyKey },
+        select: {
+          trackingNumber: true,
+          etiquetaUrl: true,
+          estadoActual: true,
+          courier: { select: { nombre: true } },
+        },
+      });
+      if (existing) {
+        return NextResponse.json(
+          {
+            tracking: existing.trackingNumber,
+            etiquetaUrl: existing.etiquetaUrl,
+            status: existing.estadoActual,
+            courier: existing.courier?.nombre ?? null,
+            replayed: true,
+          },
+          {
+            status: 200,
+            headers: { "Idempotency-Replayed": "true" },
+          }
+        );
+      }
+    }
+
     const body = await request.json();
 
     // === DEUDA 35: validacion de tipoOrigen ===
@@ -147,6 +182,7 @@ export async function POST(request: Request) {
       costoProveedor: body.costoProveedor,
       provinciaDestino: body.provinciaDestino,
       numeroOrden: body.numeroOrden,
+      idempotencyKey: idempotencyKey ?? null,
       tipoOrigen: body.tipoOrigen,
       permitirBloqueoPorDeposito: true,
     });

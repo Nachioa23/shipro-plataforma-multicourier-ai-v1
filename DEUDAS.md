@@ -1807,29 +1807,64 @@ tener producción en pie. Se registran para no perderlas.
 
 ---
 
-## DEUDA 103 — POST /api/envios no soporta multi-bulto ni dimensiones en la creación (scope medio, prerequisito plugins)
+## DEUDA 103 — Modelo de bultos completo: motor de reglas de empaquetado (por cliente) + creación multi-bulto + soporte etiqueta madre/hija (scope grande, prerequisito plugins)
 
-**Status:** ABIERTA. Detectada 2026-07-13.
+**Status:** ABIERTA. Reescrita 2026-08-05 tras clarificación del modelo de negocio de Nacho + relevamiento de dolores del mercado (Tiendanube/OCA/Andreani: *"el sistema asumió mal los bultos → el comerciante paga sobrepeso"*). Reemplaza la definición previa (2026-07-13) que sólo hablaba de multi-bulto en la creación — el hueco real es más amplio y tiene tres capas conceptuales distintas.
 
-**Síntoma:** El endpoint de creación de envío (`POST /api/envios`, el que usan los e-commerces vía API key)
-acepta solo `pesoReal` (un escalar) — no una lista de paquetes, no dimensiones. Dos problemas concretos:
-1. **Un solo bulto:** un plugin solo puede crear envíos de una caja. Los e-commerces reales despachan
-   pedidos multi-caja (combos, kits, pallets). Limitación dura.
-2. **Sin dimensiones en la creación:** la cotización sí usa dimensiones (largo/ancho/alto), pero la creación
-   solo pasa el peso. El adapter cae a medidas de relleno (10×10×10), así que el peso volumétrico que el
-   courier factura puede **diferir del precio cotizado** — descalce de plata silencioso.
+**El modelo correcto** — un producto en el carrito **NO es un bulto**. La relación producto → bulto es una **regla configurable por cliente**, no una identidad. Antes de la creación del envío hay que resolver, para cada carrito, CUÁNTOS bultos físicos salen y QUÉ dimensiones tiene cada uno. Después la creación acepta ese output. La cadena tiene tres capas.
 
-Además, faltan dos campos que el modelo `Envio` ya soporta pero el endpoint no acepta:
-3. `fragil` (boolean) — no se puede declarar frágil.
-4. `contenido` (string) — no se puede mandar declaración de contenido.
+---
 
-**Fix propuesto:** extender `crearEnvio` para aceptar un `paquetes[]` (con `pesoKg`, `largoCm`, `anchoCm`,
-`altoCm`, `valorDeclarado`, `fragil?`, `contenido?`) además del `pesoReal` escalar (backward-compat: si viene
-`paquetes[]`, se usa; si no, se respeta el `pesoReal` actual). Threading a `dispatch.ts` → adapters (Andreani
-soporta `bultos[]` nativo; Mocis requiere unir las tuplas por paquete). Persistir el agregado en `Envio`
-(`pesoReal = suma(pesoKg)`, `pesoVolumetrico = suma(volumen/factor)`).
+### CAPA 1 — Motor de reglas de empaquetado (por cliente, en la NPMS)
 
-**Prioridad:** media. Prerequisito para documentar la creación de envío en la API externa. ~1-2 días.
+**Input:** el carrito (cantidad de productos + tipo de cada producto).
+**Output:** cuántos bultos físicos + dimensiones (largo/ancho/alto) + peso + valor declarado de cada uno.
+
+**Casos reales de Nacho:**
+- **Moda** (por rangos de cantidad): 1–3 productos → bolsa 20×30×30, 2 kg. 4–6 productos → bolsa 30×40×40, 4 kg.
+- **Tecnología** (por tipo de producto): smartphones se consolidan en una sola caja; impresoras no (cada una en su propio bulto).
+
+**⚠️ Decisión de producto PENDIENTE (no resolver todavía — hay que fijar la política).** Los dos ejemplos de arriba usan lógicas DISTINTAS. Al menos cuatro ejes posibles para la regla de empaquetado:
+1. **Rangos de cantidad** (moda).
+2. **Tipo/categoría del producto** (consolidable vs no — tecnología).
+3. **Peso o volumen acumulado** (thresholds tipo "cuando pasa X kg / Y cm³ arma otro bulto").
+4. **Combinación** de los anteriores (mixed rules).
+
+Hay que decidir con Nacho: ¿el motor soporta las 4 lógicas desde el día uno? ¿Empieza sólo con rangos de cantidad y evoluciona? ¿Templates por vertical (moda / tecnología / muebles / alimentos)? Impacto directo en la UI de configuración (cuántos parámetros expone) y en el modelo de datos de la regla.
+
+**Ticket to win** — este motor es un diferencial competitivo, no un check-box. En el mercado local hay un dolor recurrente compartido entre Tiendanube, OCA y Andreani: el sistema asume mal los bultos y el comerciante paga sobrepeso silenciosamente en la conciliación. Un motor de empaquetado configurable (no un fudge de "peso volumétrico promedio") resuelve el pain point que hoy nadie resuelve bien.
+
+---
+
+### CAPA 2 — Creación multi-bulto (`POST /api/envios` acepta `paquetes[]`)
+
+**Estado actual:** el endpoint sólo acepta `pesoReal` escalar. La cotización (`POST /api/cotizar`) SÍ acepta `paquetes[]` con dimensiones — el hueco está sólo en la creación.
+
+**Contrato propuesto:** `POST /api/envios` acepta `paquetes[]` (`pesoKg`, `largoCm`, `anchoCm`, `altoCm`, `valorDeclarado`, `fragil?`, `contenido?`). Es el output natural del motor de la Capa 1.
+
+**Caso común (una etiqueta por bulto):** cada bulto viaja con su propia etiqueta + su propia tarifa cotizada + facturada por separado. Sin descalce silencioso entre lo cotizado y lo facturado por peso volumétrico.
+
+**Backward-compat:** si el body trae sólo `pesoReal` sin `paquetes[]`, mantener el comportamiento actual (una etiqueta unibulto). Nadie que ya integre contra la API se rompe.
+
+**Threading:** `crearEnvio` → `dispatch.ts` → adapters. Andreani soporta `bultos[]` nativo. Mocis requiere unir las tuplas por paquete (una llamada por bulto o batch según su API). Persistir el agregado en `Envio` (`pesoReal = suma(pesoKg)`, `pesoVolumetrico = suma(volumen/factor)`).
+
+Además restaurar los dos campos que el modelo `Envio` ya soporta pero el endpoint no acepta hoy: `fragil` (boolean) y `contenido` (string).
+
+---
+
+### CAPA 3 — Excepción: etiqueta madre / etiqueta hija (courier-dependent)
+
+Algunos couriers permiten UN tracking para varias cajas con una sola tarifa de aforo (suma de dimensiones/peso; valor declarado consolidado para el seguro). **No es lo común** — depende de cada courier ofrecerlo. Andreani, Mocis y los demás se relevan uno por uno.
+
+Cuando el courier lo ofrece, el motor de empaquetado puede sugerir la ruta "madre/hija" como alternativa a "una etiqueta por bulto" cuando el aforo consolidado sale más barato. Es un segundo camino, no reemplazo del común de Capa 2.
+
+**Modelo de datos:** `Envio` madre + N `EnvioBulto` hijas (o un flag en `Envio` con `paquetes[]` embebidos con sub-tracking por bulto). A diseñar cuando se relevan los couriers que lo soportan.
+
+---
+
+**Prioridad:** alta dentro del frente de plugins. La Capa 2 es prerequisito duro para documentar la creación de envío en la API externa (sin ella un plugin sólo despacha unibulto). La Capa 1 es el diferencial que convierte a Shipro de "otro plugin más" en la respuesta al pain point del mercado. La Capa 3 se pospone hasta relevar cada courier.
+
+**Scope estimado:** grande. Capa 2 son ~1-2 días (extender endpoint + threading a adapters). Capa 1 son ~1-2 semanas (modelo de datos + UI de configuración + motor de evaluación) según el alcance de política que se elija. Capa 3 depende de qué couriers ofrezcan la opción.
 
 ---
 
@@ -1872,6 +1907,56 @@ key), y verificar que el handler resuelva bien el `empresaId` en modo API key (m
 
 **Prioridad:** baja-media. Chico, pero necesario para un plugin completo. Registrar también que al abrirlo hay
 que confirmar el aislamiento per-empresa en la cancelación.
+
+---
+
+## DEUDA 128 — Idempotencia en creación de etiquetas por API (prerequisito plugins, ticket to play) (registrada 2026-08-05, scope medio)
+
+**Status:** ABIERTA. Registrada 2026-08-05.
+
+**Problema:** `POST /api/envios` hoy NO tiene mecanismo de idempotencia. Si un e-commerce reintenta la creación de una etiqueta por latencia de red, timeout, o reintento de su propio webhook interno ("orden pagada"), Shipro **crea DOS etiquetas y cobra dos veces**. Es el modo de falla clásico de una API de e-commerce sin idempotencia. Un plugin no puede confiar en un reintento seguro sin este contrato.
+
+**Fix — token de idempotencia derivado de un identificador ESTABLE del pedido:**
+- **Identificador estable** = `platform + store_id + order_id + fulfillment_id` (ej. `tiendanube:store42:order123:ful1`). Es la clave que identifica UN despacho específico dentro de un pedido específico dentro de una tienda específica de una plataforma específica.
+- **Comportamiento en el handler:** si el token ya generó una etiqueta, devolver la EXISTENTE (misma response — mismo `trackingNumber`, misma `etiquetaUrl`). NO crear otra. Si el token es nuevo, crear + persistir la asociación token→envío.
+- **Refuerzo en DB:** constraint `UNIQUE` sobre la clave de idempotencia en `Envio` (o tabla puente si preferimos separar). Race-condition-safe: dos requests paralelos con el mismo token → uno crea, el otro obtiene `UniqueConstraintViolation` y lee el existente. Devuelve la misma response.
+- **Estándar de industria (EasyPost / Stripe):** header `Idempotency-Key` recibido en la request; respuesta cacheada por (key, endpoint) durante ~24h; lock para requests concurrentes con el mismo key. Shipro puede seguir el mismo pattern (header + fallback al body si el plugin no lo maneja).
+
+**Por qué importa para plugins:** los webhooks de e-commerces reintentan (Tiendanube hasta 5 veces con backoff; Shopify hasta 19). Sin idempotencia, cada reintento nos hace **despachar de nuevo → cobrar de nuevo → duplicar tracking → romper la conciliación del cliente**. **Es prerequisito de TODOS los plugins.** No es opcional.
+
+**Prioridad:** alta. Prerequisito duro. Scope medio (~2-3 días: schema + handler + tests de race conditions + documentación del header). Coordinar con DEUDA 103 (misma capa de creación); pueden atacarse juntas o secuenciadas.
+
+---
+
+## DEUDA 129 — Contrato de resiliencia del checkout: circuit breaker amigable + fallback rates (prerequisito plugins, ticket to play) (registrada 2026-08-05, scope medio)
+
+**Status:** ABIERTA. Registrada 2026-08-05.
+
+**Problema:** la cotización que consume el plugin (`POST /api/cotizar`) tiene que responder **rápido y sin 5xx innecesarios**, porque los marketplaces la clasifican como transporte crítico del checkout y aplican circuit breakers agresivos:
+
+| Marketplace | Timeout de cotización | Circuit breaker |
+|---|---|---|
+| Tiendanube | 5s | Se activa con >500 req en 30 min y >50% de fallas 5xx/timeout. Cuando se abre, **bloquea el transporte 5 min para TODOS los clientes que lo usen**. |
+| VTEX | 2.5s | Similar (SLA de checkout). |
+| Shopify | 10s / 5s / 3s dinámico según región | Similar. |
+
+Un checkout que devuelve 5xx o tarda >5s se transforma en un **transporte bloqueado 5 min** para todos los clientes de esa plataforma. Un solo courier caído puede sacarnos del canal entero.
+
+**Regla clave de implementación — errores de negocio NUNCA son 5xx:**
+
+- **`5xx` = error del SISTEMA Shipro.** Cuenta para el circuit breaker (Tiendanube et al. los clasifican como "no saludable"). Uso legítimo: bug interno, DB caída, código crashea. Poco común, se resuelve con monitoreo + alerts.
+- **`4xx` = error del PEDIDO / CP / NEGOCIO.** NO cuenta para el circuit breaker (los marketplaces los clasifican "saludable"). Uso legítimo: CP inválido, sin cobertura del courier, dirección incompleta, fuera de peso máximo.
+
+**El bug clásico que hay que evitar:** devolver `500 { error: "El CP 9999 no tiene cobertura de Andreani" }` en vez de `422 { error: "SIN_COBERTURA", detalle: "..." }`. **Un error de negocio devuelto como 5xx nos autobloquea el transporte** en la puerta de Tiendanube. Auditar cada branch de `/api/cotizar` + `/api/envios` para clasificar cada excepción como 4xx (negocio) o 5xx (sistema). Tabla mínima de códigos: `422 SIN_COBERTURA`, `422 CP_INVALIDO`, `422 DIRECCION_INCOMPLETA`, `422 SUPERA_PESO_MAX`, `409 CREDENCIAL_INVALIDA`, `503 COURIER_TIMEOUT` (este último SÍ es 5xx correctamente porque es fallo del sistema aguas arriba).
+
+**Fallback rate cuando el courier se cae o tira timeout:**
+- La `tarifaPlanaRespaldo` (per-empresa, ya existe, obligatoria en el alta desde DEUDA 10 Paso 5b) sirve como **fallback rate del checkout**. Extender su uso: hoy se dispara sólo cuando el histórico + APIs fallan en la creación; ampliarla al escenario "courier lento/caído durante la cotización del plugin".
+- Threshold sugerido: si un courier no responde en <2s (< timeout marketplace), retornar `tarifaPlanaRespaldo` marcada como `fallback: true` + `motivo: "COURIER_TIMEOUT"`. El e-commerce muestra tarifa, se cierra la venta, Shipro conserva el margen. Consigna Nacho: **"el cliente vende siempre".**
+- Log estructurado del fallback para observabilidad (contar cuántas cotizaciones cayeron a respaldo, por courier, por empresa — feed a la Torre de Control).
+
+**Por qué importa para plugins:** un plugin sin este contrato de resiliencia se autobloquea la primera vez que Andreani tira 500ms de latencia extra. La regla 4xx-vs-5xx + el fallback son **contratos de convivencia con el marketplace**, no optimizaciones.
+
+**Prioridad:** alta. Prerequisito duro. Scope medio (~1-2 semanas: auditar códigos de error en cotizar + envios, extender `tarifaPlanaRespaldo` al camino "courier timeout", tests de scenarios de fallo). Conecta con `tarifaPlanaRespaldo` existente (obligatoria per-cliente al alta desde DEUDA 10 Paso 5b) — es reutilización, no diseño nuevo.
 
 ---
 

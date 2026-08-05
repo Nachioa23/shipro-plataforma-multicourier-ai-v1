@@ -469,6 +469,10 @@ model CredencialCourier {
   requiereSeguro Boolean @default(false)
   slaPromedioHs  Int     @default(48)
 
+  // Tarifa plana de rescate per-courier. Si null, cae al campo homónimo de Empresa.
+  // Mismo patrón que slaPromedioHs: override per-courier del default de empresa.
+  tarifaPlanaRespaldo Decimal? @db.Decimal(12, 2)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

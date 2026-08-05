@@ -51,6 +51,11 @@ export interface OpcionTarifa {
     feeNeto: Prisma.Decimal;
     netoAcumulado: Prisma.Decimal;
   };
+  // DEUDA 129 (per-courier fallback): true cuando la opción es una tarifa de
+  // rescate porque el courier no cotizó (no es una tarifa real del courier).
+  // El comprador ve el nombre real del courier (transparencia comercial ausente);
+  // la UI + crear.ts pueden distinguir con este flag si necesitan diferenciar.
+  esFallback?: boolean;
 }
 
 export interface CotizarResult {
@@ -360,6 +365,54 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
   const feeResult = await calcularFeeOperacion(empresaId, new Prisma.Decimal(0));
   const feeShiproNeto = feeResult?.feePreIva ?? new Prisma.Decimal(0);
 
+  // DEUDA 129 (per-courier fallback): construye una OpcionTarifa de rescate para
+  // un courier que no pudo cotizar. Resolución de tarifa: override per-courier
+  // (CredencialCourier.tarifaPlanaRespaldo) > default per-empresa
+  // (Empresa.tarifaPlanaRespaldo) > null (no push). SLA vía el mismo helper
+  // calibrado que el path real (calcularPromesaCalibrada); si el helper también
+  // rompe, cae a 72h (nivel 4 del cuádruple fallback de Torre de Control).
+  // El comprador ve el nombre real del courier — nunca sabe que falló la cotización.
+  const construirOpcionFallback = async (
+    config: any,
+    tipo: "domicilio" | "sucursal"
+  ): Promise<OpcionTarifa | null> => {
+    const tarifaCourier = config.tarifaPlanaRespaldo as Prisma.Decimal | null | undefined;
+    const tarifaEmpresa = empresa?.tarifaPlanaRespaldo;
+    const tarifa =
+      tarifaCourier && tarifaCourier.gt(0)
+        ? tarifaCourier
+        : tarifaEmpresa && tarifaEmpresa.gt(0)
+        ? tarifaEmpresa
+        : null;
+    if (!tarifa) return null;
+
+    let slaHorasFallback: number;
+    try {
+      const promesa = await calcularPromesaCalibrada(
+        config.id,
+        depositoIdParaCalibracion,
+        provinciaDestino,
+        config.nombreCourier
+      );
+      slaHorasFallback = promesa.slaHoras;
+    } catch {
+      slaHorasFallback = 72;
+    }
+    const textoFallback = await calcularFechaEstimada(slaHorasFallback);
+
+    return {
+      id: `fallback-${config.nombreCourier.toLowerCase()}-${tipo}`,
+      courier: config.nombreCourier,
+      modalidad: "Estándar",
+      precioFinal: tarifa,
+      precioProveedor: new Prisma.Decimal(0),
+      slaHs: slaHorasFallback,
+      fechaEstimadaString: textoFallback,
+      etiquetaSla: "Tiempo estimado",
+      esFallback: true,
+    };
+  };
+
   for (const config of couriersAptos) {
     try {
       const nombreNormalizado = normalizarParaComparacion(config.nombreCourier);
@@ -467,10 +520,13 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
             });
           }
         } catch (e: any) {
-          // DEUDA 129: courier falló al cotizar domicilio. Se descarta esa opción
-          // (no aparece en el array) pero registramos la causa para observabilidad
-          // (timeout? credencial vencida? body malformado?).
+          // DEUDA 129: courier falló al cotizar domicilio. Logueamos la causa
+          // (timeout? credencial vencida? body malformado?) y empujamos una
+          // opción de rescate con el nombre real del courier + tarifaPlana
+          // (per-courier > per-empresa) para que el comprador no perciba el fallo.
           console.warn("[cotizador] courier falló:", e instanceof Error ? e.message : String(e));
+          const fb = await construirOpcionFallback(config, "domicilio");
+          if (fb) opcionesDomicilio.push(fb);
         }
       }
 
@@ -499,17 +555,27 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
             });
           }
         } catch (e) {
-          // DEUDA 129: courier falló al cotizar sucursal. Se descarta esa opción
-          // pero logueamos la causa para observabilidad (misma disciplina que en
-          // el catch de domicilio arriba).
+          // DEUDA 129: courier falló al cotizar sucursal. Misma disciplina que
+          // el catch de domicilio: log + fallback con nombre real del courier.
           console.warn("[cotizador] courier falló:", e instanceof Error ? e.message : String(e));
+          const fb = await construirOpcionFallback(config, "sucursal");
+          if (fb) opcionesSucursal.push(fb);
         }
       }
     } catch (errorFatal: any) {
-      // DEUDA 129: fallo courier-level (antes de intentar sucursal o domicilio,
-      // ej. credencial malformada o CourierFactory rechazó). Loguear + continue
-      // para no romper la cotización de los demás couriers.
+      // DEUDA 129: fallo courier-level ANTES de intentar sucursal o domicilio
+      // (ej. credencial malformada, CourierFactory rechazó). Logueamos + pusheamos
+      // fallback en AMBAS modalidades habilitadas por el cliente para que el
+      // courier no desaparezca del checkout aunque haya caído entero.
       console.warn("[cotizador] courier falló:", errorFatal instanceof Error ? errorFatal.message : String(errorFatal));
+      if (config.ofreceDomicilio !== false) {
+        const fbDom = await construirOpcionFallback(config, "domicilio");
+        if (fbDom) opcionesDomicilio.push(fbDom);
+      }
+      if (config.ofreceSucursal !== false) {
+        const fbSuc = await construirOpcionFallback(config, "sucursal");
+        if (fbSuc) opcionesSucursal.push(fbSuc);
+      }
       continue;
     }
   }
@@ -581,37 +647,6 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
       .catch((err) => {
         console.warn("[cotizador] No se pudo registrar cobertura vacia:", err);
       });
-  }
-
-  // DEUDA 129: fallback rate cuando ningún courier real cotizó. Empujamos
-  // tarifaPlanaRespaldo per-empresa (obligatoria en el alta, DEUDA 10 Paso 5b)
-  // como opción única en domicilio para que el checkout no muestre cero
-  // opciones. Consigna Nacho: "el cliente vende siempre".
-  //   - id "fallback-plana" es el marcador semántico (mismo pattern que dom-* / suc-*);
-  //     consumidores downstream (UI, crear.ts) pueden distinguirlo por prefix.
-  //   - precioProveedor=0 porque no hay costo courier real detrás; sirve como
-  //     estimación al comprador, la conciliación se corrige cuando se sepa el
-  //     costo real (mismo comportamiento que el fallback existente en crear.ts).
-  //   - slaHs=72 conservador — sin courier real no hay SLA calibrado.
-  //   - coberturaVacia se mantiene true para que el audit (registroCoberturaVacia)
-  //     siga registrando el caso, y para que la UI pueda mostrar el badge "rescate".
-  if (
-    coberturaVacia &&
-    empresa?.tarifaPlanaRespaldo &&
-    empresa.tarifaPlanaRespaldo.gt(0)
-  ) {
-    const slaFallback = 72;
-    const textoFallback = await calcularFechaEstimada(slaFallback);
-    finalDomicilio.push({
-      id: "fallback-plana",
-      courier: "Tarifa de rescate",
-      modalidad: "Estándar",
-      precioFinal: empresa.tarifaPlanaRespaldo,
-      precioProveedor: new Prisma.Decimal(0),
-      slaHs: slaFallback,
-      fechaEstimadaString: textoFallback,
-      etiquetaSla: "Tiempo estimado",
-    });
   }
 
   return {

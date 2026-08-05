@@ -1912,7 +1912,9 @@ que confirmar el aislamiento per-empresa en la cancelación.
 
 ## DEUDA 128 — Idempotencia en creación de etiquetas por API (prerequisito plugins, ticket to play) (registrada 2026-08-05, scope medio)
 
-**Status:** ABIERTA. Registrada 2026-08-05.
+**Status:** RESUELTA. Commit 99af569 (2026-08-05). Deployada a producción 2026-08-05.
+Header Idempotency-Key en POST /api/envios. @@unique([empresaId, idempotencyKey])
+en Envio. Migración 20260805230917. Race condition menor registrada como DEUDA 131.
 
 **Problema:** `POST /api/envios` hoy NO tiene mecanismo de idempotencia. Si un e-commerce reintenta la creación de una etiqueta por latencia de red, timeout, o reintento de su propio webhook interno ("orden pagada"), Shipro **crea DOS etiquetas y cobra dos veces**. Es el modo de falla clásico de una API de e-commerce sin idempotencia. Un plugin no puede confiar en un reintento seguro sin este contrato.
 
@@ -1930,7 +1932,10 @@ que confirmar el aislamiento per-empresa en la cancelación.
 
 ## DEUDA 129 — Contrato de resiliencia del checkout: circuit breaker amigable + fallback rates (prerequisito plugins, ticket to play) (registrada 2026-08-05, scope medio)
 
-**Status:** ABIERTA. Registrada 2026-08-05.
+**Status:** RESUELTA. Commits 9e4864d + ced0dbf (2026-08-05). Deployada a producción
+2026-08-05. Timeout 8s (AbortController) en ambos adapters. 503/422 en route.ts.
+Fallback per-courier con nombre real + SLA calibrado + tarifaPlanaRespaldo override
+en CredencialCourier. Migración 20260805223416.
 
 **Problema:** la cotización que consume el plugin (`POST /api/cotizar`) tiene que responder **rápido y sin 5xx innecesarios**, porque los marketplaces la clasifican como transporte crítico del checkout y aplican circuit breakers agresivos:
 
@@ -2052,6 +2057,28 @@ Sin estas 6 respuestas, la implementación queda con huecos de contrato que van 
 ---
 
 **Próxima acción:** ejecutar por WhatsApp el pedido a Franco Radavero (6 puntos de "Pendientes de conseguir"), esperar respuesta, y con esa info recién arrancar la sesión de diseño dedicada al plugin.
+
+---
+
+## DEUDA 131 — Race condition en idempotency check de POST /api/envios (scope pequeño, follow-up DEUDA 128)
+
+**Status:** ABIERTA. Registrada 2026-08-05.
+
+**Problema:** si dos requests llegan exactamente al mismo tiempo con la misma
+`Idempotency-Key` y `empresaId`, ambos pasan el `findFirst` (el primero no existe
+aún), y ambos intentan crear el `Envio`. El segundo obtiene una violación P2002
+(`@@unique([empresaId, idempotencyKey])`) que sube al catch-all de `route.ts` y
+devuelve 500 en lugar de 200 con la etiqueta ya creada.
+
+**Frecuencia:** muy baja en producción — requiere dos webhooks de Tiendanube
+disparándose en el mismo milisegundo con la misma key. No es un bloqueante para
+el lanzamiento del plugin.
+
+**Fix:** en el catch del `prisma.envio.create` dentro de `route.ts`, detectar el
+código Prisma `P2002` y hacer un segundo `findFirst` para devolver el envío ya
+creado con `replayed: true`. Patrón: try-create → catch P2002 → re-query → return.
+
+**Archivos:** `app/api/envios/route.ts`.
 
 ---
 

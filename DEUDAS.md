@@ -1960,6 +1960,101 @@ Un checkout que devuelve 5xx o tarda >5s se transforma en un **transporte bloque
 
 ---
 
+## DEUDA 130 — Requisitos de homologación de Tiendanube para la app de envíos (shipping carrier) — preparar para publicar en marketplace (scope grande, plugin Tiendanube)
+
+**Status:** ABIERTA. Registrada 2026-08-05. **Spec reference del plugin Tiendanube.** Cuando se ataque el plugin de Tiendanube en una sesión dedicada, este documento manda: la app se construye desde el día uno cumpliendo TODOS los requisitos de homologación para no rehacer, aunque se lance antes de homologar.
+
+---
+
+### Estrategia de lanzamiento (LOCKED, Nacho)
+
+**Dos velocidades:**
+1. **Vender YA vía link directo** — igual que la plataforma legacy hoy: Nacho manda al cliente la URL de instalación de la app en su Tiendanube, el cliente la instala. No se espera homologación ni publicación en el App Store. Onboardings inmediatos.
+2. **Homologar / publicar después** — cuando Nacho decida (masa crítica de clientes reales, feedback estabilizado, capacidad operativa para la reunión de validación conjunta).
+
+**Consecuencia arquitectónica:** la app se construye desde el día uno cumpliendo TODAS las specs de homologación de abajo. No se toma ningún atajo "porque hoy no vamos al marketplace" — reharlo después es doble trabajo y arrastra decisiones incompatibles.
+
+---
+
+### Hallazgos de la doc oficial (dev.tiendanube.com, consultado 2026-08-05)
+
+**1. HOMOLOGACIÓN SÍNCRONA obligatoria.** Las apps tipo Envíos (junto con Pagos y ERP) requieren homologación **síncrona** — reunión de validación conjunta donde el equipo de Tiendanube revisa la app ítem por ítem contra la checklist técnica. Más exigente que la asíncrona (que otras categorías de apps usan). Fuente: `dev.tiendanube.com/docs/homologation/sync`.
+
+**2. ⚠️ NubeSDK OBLIGATORIO (impacta el stack).** Desde el **5-jun-2026**, la parte visual de la app (lo que el merchant ve dentro del panel de Tiendanube) DEBE construirse con **NubeSDK**, corriendo dentro de un **Web Worker**.
+
+- **PROHIBIDO** (motivo directo de rechazo): `document`, `window`, `jQuery`, manipulación directa del DOM.
+- **OBLIGATORIO**: UI con componentes NubeSDK + sistema de diseño **Nimbus**. Stack React.
+- La fecha ya pasó → **aplica sí o sí** desde el momento en que empecemos la app.
+- Fuentes: `dev.tiendanube.com/docs/homologation/checklist` + `dev.tiendanube.com/applications/native`.
+
+**Impacto**: la sección de la app que vive dentro del panel de Tiendanube no puede ser una vista Next.js/React "normal" — tiene que compilarse contra NubeSDK y correr en un Web Worker. Todo lo que necesite acceder al DOM, a `window` o a librerías DOM-dependientes queda del lado de la NPMS/servidor Shipro, no del lado del panel del merchant.
+
+**3. WEBHOOKS NO DIFERIBLES.** La doc exige "uso eficiente de recursos" y explícita que hacer **GETs continuos para detectar cambios (polling)** en vez de escuchar un webhook es motivo de observación o rechazo. **Confirma que DEUDA 104 (webhooks salientes) es parte del core obligatorio para homologar, no diferible.** Sin webhooks Shipro→e-commerce, no hay homologación.
+
+**4. ARTEFACTOS OBLIGATORIOS de homologación (a producir para la reunión síncrona):**
+- **Diagrama de secuencia** — cómo la app interactúa con la API de Tiendanube: qué evento dispara qué llamado, con qué payload, y qué resultado esperado.
+- **Video demo** con escenarios específicos:
+  - Instalación desde Tiendanube vía URL `https://www.tiendanube.com/apps/{app_id}/authorize`.
+  - Registro de usuario nuevo (primer alta del comerciante).
+  - Login de usuario existente (que ya tiene cuenta Shipro).
+  - Reinstalación tras desinstalar (flujo de re-onboarding limpio).
+- **Cuenta demo** ya liberada de suscripciones/esperas: entregar credenciales de una tienda Tiendanube activa + cuenta Shipro asociada + saldo/config listos para que el revisor pruebe end-to-end sin fricción.
+- **Documento FAQ + contactos** de soporte: nivel 1 (comerciante), nivel 2 (técnico primer piso), nivel técnico avanzado, ventas. Ownership por nivel.
+
+**5. Mecanismo Shipping Carrier (API doc).** La app registra un carrier con:
+- `callback_url` — endpoint que Tiendanube llama para pedir rates durante el checkout. Debe responder rápido y sin 5xx (conecta con DEUDA 129: circuit breaker de Tiendanube corta a 5s con >50% 5xx).
+- `callback_labels_url` — endpoint asíncrono para la Labels API (crear etiqueta post-orden).
+- **`rates[]`** — JSON array con campos obligatorios (contrato exacto A CONFIRMAR con Tiendanube — ver pendientes).
+- Tipos de tarifa: `ship` (envío a domicilio) y `pickup` (retiro en sucursal).
+- **Fulfillment Events** para tracking bidireccional (Shipro emite eventos hacia Tiendanube; Tiendanube los muestra al comerciante y al comprador).
+- Fuente: `tiendanube.github.io/api-documentation/resources/shipping-carrier`.
+
+---
+
+### Pendientes de conseguir (Nacho lo pide vía WhatsApp a su contacto en Tiendanube AR, Franco Radavero)
+
+1. **Checklist técnico específico de apps de Envíos** — el que revisan en la reunión síncrona; no está público en la doc general.
+2. **Contrato exacto de `rates[]`** — schema completo con campos obligatorios / opcionales / tipos / rangos.
+3. **Especificación completa de la Labels API** — flujo asíncrono, timeouts, reintentos esperados, formato de etiqueta.
+4. **Webhooks obligatorios + requisitos de seguridad** — qué eventos de Tiendanube debemos escuchar sí o sí, firma HMAC (algoritmo, header, formato del secret), política de reintentos que hace Tiendanube.
+5. **Umbrales de performance/timeout evaluados** — más allá del corte de 5s conocido en checkout, qué otros SLAs miden en la homologación (Labels API, tracking events, disponibilidad).
+6. **Acceso a sandbox/testing** para apps de envíos — entorno específico donde probar sin afectar tiendas reales.
+
+Sin estas 6 respuestas, la implementación queda con huecos de contrato que van a salir en la reunión síncrona.
+
+---
+
+### Relación con otras DEUDAs del frente plugins
+
+- **DEUDA 103** (motor de reglas de empaquetado + multi-bulto + madre/hija): la CAPA 2 de 103 (creación multi-bulto) es lo que despacha las etiquetas que Tiendanube pide vía Labels API. Prerequisito duro.
+- **DEUDA 104** (webhooks salientes): **NO es diferible para homologar Tiendanube** (ver hallazgo 3). Cambia de "gap grande" a "prerequisito duro de homologación".
+- **DEUDA 105** (cancelar por API): un plugin completo cancela desde Tiendanube. Sin esto, la reunión síncrona lo va a observar.
+- **DEUDA 128** (idempotencia): Tiendanube reintenta webhooks; sin idempotencia se duplican etiquetas en cada reintento (bloqueante).
+- **DEUDA 129** (resiliencia checkout / 4xx-vs-5xx / fallback rate): directamente contra el circuit breaker de Tiendanube (5s + >50% 5xx = 5 min bloqueado). Prerequisito duro para pasar la homologación.
+
+**Todas las 5 anteriores son necesarias para tener una app Tiendanube homologable.** DEUDA 130 es la envoltura que las une + lo específico de la plataforma (NubeSDK + Nimbus + artefactos + reunión síncrona).
+
+---
+
+### Scope y prioridad
+
+**Scope:** grande. Estimación gruesa (pendiente de refinar cuando lleguen las respuestas de Radavero):
+- Componente NubeSDK + Web Worker + Nimbus (parte visual dentro del panel): ~2-3 semanas.
+- OAuth Tiendanube + instalación + `callback_url` (rates) + `callback_labels_url` (Labels): ~1-2 semanas.
+- Fulfillment Events (bidireccional con webhooks): depende de DEUDA 104.
+- Idempotencia (DEUDA 128) + resiliencia checkout (DEUDA 129) + multi-bulto (DEUDA 103 Capa 2) + cancelar (DEUDA 105) resueltas **antes** de la app Tiendanube.
+- Artefactos de homologación (diagrama, video, cuenta demo, FAQ): ~1 semana concentrada.
+
+**Total razonable para app homologable**: ~2-3 meses de trabajo enfocado, asumiendo que las 5 DEUDAS prerequisito ya están cerradas.
+
+**Prioridad:** el plugin Tiendanube es el primer canal comercial serio (mayor share de e-commerce en AR). Pero **no es urgente por el marketplace** (Nacho lanza por link directo). Lo urgente es que las DEUDAs prerequisito (103, 104, 105, 128, 129) se ataquen antes del plugin, y que cuando el plugin arranque, se construya cumpliendo estas specs.
+
+---
+
+**Próxima acción:** ejecutar por WhatsApp el pedido a Franco Radavero (6 puntos de "Pendientes de conseguir"), esperar respuesta, y con esa info recién arrancar la sesión de diseño dedicada al plugin.
+
+---
+
 **Nota de secuencia:** el orden lógico de construcción antes de documentar la API externa es: DEUDA 103
 (multi-bulto — el hueco que más muerde), DEUDA 104 (webhooks — el desbloqueante grande), DEUDA 105 (cancelar —
 chico). Las tres, más la redacción de la especificación OpenAPI, son el trabajo del frente de plugins, POSPUESTO

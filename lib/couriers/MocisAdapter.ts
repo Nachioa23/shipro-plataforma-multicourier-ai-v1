@@ -1,5 +1,26 @@
 import { ICourierIntegrator, CotizacionParams, DespachoParams, SucursalInfo } from './CourierInterface';
 
+// DEUDA 129: timeout de outbound fetch al courier + reclasificación de AbortError
+// como CourierTimeout (crear.ts lo mapea a HTTP 503 al caller de la API pública).
+// 8s queda por debajo del threshold del circuit breaker de Tiendanube (10s) y por
+// encima del budget típico de Moci's (<2s), con margen para picos legítimos.
+const COURIER_TIMEOUT_MS = 8000; // 8 seconds — below Tiendanube's 10s circuit breaker threshold
+
+async function fetchConTimeout(input: string | URL, init?: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), COURIER_TIMEOUT_MS);
+  try {
+    return await fetchConTimeout(input, { ...init, signal: controller.signal });
+  } catch (e: any) {
+    if (e?.name === "AbortError") {
+      throw new Error("CourierTimeout: Mocis no respondió en " + COURIER_TIMEOUT_MS + "ms");
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export class MocisAdapter implements ICourierIntegrator {
   private API_URL = 'https://mocis.akeron.net/api/v1';
   private clientApi: string;
@@ -73,7 +94,7 @@ export class MocisAdapter implements ICourierIntegrator {
     formData.append('client_api', this.clientApi);
     formData.append('client_secret', this.clientSecret);
 
-    const res = await fetch(`${this.API_URL}/auth/token`, { method: 'POST', body: formData });
+    const res = await fetchConTimeout(`${this.API_URL}/auth/token`, { method: 'POST', body: formData });
     const data = await res.json();
 
     if (!data.status || !data.result || data.result.length === 0) {
@@ -94,7 +115,7 @@ export class MocisAdapter implements ICourierIntegrator {
     // Si el caché está vacío, le pedimos a Moci's su lista oficial
     if (this.provinciasAkeron.length === 0) {
       try {
-        const res = await fetch(`${this.API_URL}/shipping/provincias`, {
+        const res = await fetchConTimeout(`${this.API_URL}/shipping/provincias`, {
           method: 'GET', headers: { 'Authorization': `Bearer ${token}` }
         });
         const data = await res.json();
@@ -180,7 +201,7 @@ export class MocisAdapter implements ICourierIntegrator {
     formData.append('postal_code', cpAkeron);
     formData.append('items', JSON.stringify(itemsArray)); 
 
-    const res = await fetch(`${this.API_URL}/shipping/price`, { 
+    const res = await fetchConTimeout(`${this.API_URL}/shipping/price`, { 
       method: 'POST', headers: { 'Authorization': `Bearer ${token}` }, body: formData 
     });
     
@@ -281,7 +302,7 @@ export class MocisAdapter implements ICourierIntegrator {
         service: 1
       };
 
-      const resInversa = await fetch(`${this.API_URL}/shipping_inversa/new`, {
+      const resInversa = await fetchConTimeout(`${this.API_URL}/shipping_inversa/new`, {
         method: 'POST',
         headers: { 
           'Authorization': `Bearer ${token}`,
@@ -328,7 +349,7 @@ export class MocisAdapter implements ICourierIntegrator {
     
     bodyParams.append('items', JSON.stringify(itemsArray));
 
-    const resNormal = await fetch(`${this.API_URL}/shipping/new`, {
+    const resNormal = await fetchConTimeout(`${this.API_URL}/shipping/new`, {
       method: 'POST',
       headers: { 
         'Authorization': `Bearer ${token}`,
@@ -355,7 +376,7 @@ export class MocisAdapter implements ICourierIntegrator {
   async obtenerEtiquetaBuffer(tracking: string): Promise<Buffer> {
     const token = await this.getToken();
     
-    const res = await fetch(`${this.API_URL}/shipping/print/label/${tracking}`, {
+    const res = await fetchConTimeout(`${this.API_URL}/shipping/print/label/${tracking}`, {
       method: 'GET', 
       headers: { 'Authorization': `Bearer ${token}` }
     });
@@ -395,7 +416,7 @@ export class MocisAdapter implements ICourierIntegrator {
        console.log(`✅ [Moci's] Archivo listo. Yendo a buscar a: ${urlDescarga}`);
 
        // Vamos a robar el PDF real
-       const pdfRes = await fetch(urlDescarga, {
+       const pdfRes = await fetchConTimeout(urlDescarga, {
          headers: { 'Authorization': `Bearer ${token}` }
        });
 
@@ -427,7 +448,7 @@ export class MocisAdapter implements ICourierIntegrator {
       const bodyParams = new URLSearchParams();
       bodyParams.append('code', tracking);
 
-      const res = await fetch(`${this.API_URL}/shipping/cancel`, {
+      const res = await fetchConTimeout(`${this.API_URL}/shipping/cancel`, {
         method: 'POST', // ¡Era POST!
         headers: { 
           'Authorization': `Bearer ${token}`, 
@@ -467,7 +488,7 @@ export class MocisAdapter implements ICourierIntegrator {
   async rastrear(tracking: string): Promise<string> { 
     try {
       const token = await this.getToken();
-      const res = await fetch(`${this.API_URL}/shipping/state/${tracking}`, {
+      const res = await fetchConTimeout(`${this.API_URL}/shipping/state/${tracking}`, {
         method: 'GET', headers: { 'Authorization': `Bearer ${token}` }
       });
       const data = await res.json();

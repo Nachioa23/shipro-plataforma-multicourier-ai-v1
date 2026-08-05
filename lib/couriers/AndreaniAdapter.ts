@@ -5,6 +5,27 @@ import {
   SucursalInfo
 } from './CourierInterface';
 
+// DEUDA 129: timeout de outbound fetch al courier + reclasificación de AbortError
+// como CourierTimeout (crear.ts lo mapea a HTTP 503 al caller de la API pública).
+// 8s queda por debajo del threshold del circuit breaker de Tiendanube (10s) y por
+// encima del budget típico de Andreani (<2s), con margen para picos legítimos.
+const COURIER_TIMEOUT_MS = 8000; // 8 seconds — below Tiendanube's 10s circuit breaker threshold
+
+async function fetchConTimeout(input: string | URL, init?: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), COURIER_TIMEOUT_MS);
+  try {
+    return await fetchConTimeout(input, { ...init, signal: controller.signal });
+  } catch (e: any) {
+    if (e?.name === "AbortError") {
+      throw new Error("CourierTimeout: Andreani no respondió en " + COURIER_TIMEOUT_MS + "ms");
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export interface CredencialesAndreani {
   username: string;
   password: string;
@@ -108,7 +129,7 @@ export class AndreaniAdapter implements ICourierIntegrator {
   private async refreshToken(): Promise<string> {
     const credencialesBase64 = Buffer.from(`${this.creds.username}:${this.creds.password}`).toString('base64');
 
-    const res = await fetch(`${this.API_URL}/login`, {
+    const res = await fetchConTimeout(`${this.API_URL}/login`, {
       method: 'GET',
       headers: { 'Authorization': `Basic ${credencialesBase64}` }
     });
@@ -182,7 +203,7 @@ export class AndreaniAdapter implements ICourierIntegrator {
       'bultos[0][kilos]': pesoTotal.toString()
     });
 
-    const res = await fetch(`${this.API_URL}/v1/tarifas?${query.toString()}`, { 
+    const res = await fetchConTimeout(`${this.API_URL}/v1/tarifas?${query.toString()}`, { 
         method: 'GET',
         headers: { 'Authorization': `Bearer ${token}` }
     });
@@ -293,7 +314,7 @@ export class AndreaniAdapter implements ICourierIntegrator {
       }]
     };
 
-    const res = await fetch(`${this.API_URL}/v2/ordenes-de-envio`, {
+    const res = await fetchConTimeout(`${this.API_URL}/v2/ordenes-de-envio`, {
       method: 'POST',
       headers: { 
           'Authorization': `Bearer ${token}`, 
@@ -318,7 +339,7 @@ export class AndreaniAdapter implements ICourierIntegrator {
   async rastrear(tracking: string): Promise<string> { 
     const token = await this.getToken();
     
-    const res = await fetch(`${this.API_URL}/v2/envios/${tracking}`, {
+    const res = await fetchConTimeout(`${this.API_URL}/v2/envios/${tracking}`, {
         method: 'GET',
         headers: { 
           'Authorization': `Bearer ${token}`, 
@@ -383,7 +404,7 @@ export class AndreaniAdapter implements ICourierIntegrator {
       seHaceAtencionAlCliente: "true"
     });
 
-    const res = await fetch(`${this.API_URL}/v2/sucursales?${query.toString()}`, {
+    const res = await fetchConTimeout(`${this.API_URL}/v2/sucursales?${query.toString()}`, {
       method: 'GET',
       headers: { 
         'Authorization': `Bearer ${token}`,
@@ -421,7 +442,7 @@ export class AndreaniAdapter implements ICourierIntegrator {
     const token = await this.getToken();
     const bodyAccion = { accion: "cancelacion", datos: { contrato: this.creds.contrato_domicilio, numeroAndreani: [tracking] } };
 
-    const res = await fetch(`${this.API_URL}/v2/nueva-accion`, {
+    const res = await fetchConTimeout(`${this.API_URL}/v2/nueva-accion`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'x-authorization-token': token, 'Content-Type': 'application/json' },
         body: JSON.stringify(bodyAccion)
@@ -437,7 +458,7 @@ export class AndreaniAdapter implements ICourierIntegrator {
   // ==============================================================
   async obtenerEtiquetaBuffer(urlEtiqueta: string): Promise<ArrayBuffer> {
     const token = await this.getToken();
-    const res = await fetch(urlEtiqueta, {
+    const res = await fetchConTimeout(urlEtiqueta, {
       method: 'GET',
       headers: { 'Authorization': `Bearer ${token}`, 'x-authorization-token': token }
     });

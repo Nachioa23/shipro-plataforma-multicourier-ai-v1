@@ -204,6 +204,31 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+    // DEUDA 129: courier upstream no respondió en el timeout del adapter.
+    // 503 = infra fallada aguas arriba (safe to retry). Los marketplaces
+    // (Tiendanube et al.) tratan 5xx como transitorios sin abrir el circuit
+    // breaker si el ratio se mantiene bajo — un CourierTimeout puntual es
+    // aceptable operativamente.
+    if (error?.message?.startsWith("CourierTimeout:")) {
+      return NextResponse.json(
+        { error: "El servicio de courier no respondió. Reintentá en unos segundos.", code: "COURIER_TIMEOUT" },
+        { status: 503 }
+      );
+    }
+    // DEUDA 129: courier rechazó por regla de negocio (CP fuera de cobertura,
+    // dirección malformada, servicio inexistente). NO es fallo del sistema
+    // Shipro — 422 = unprocessable entity, error de datos del pedido. NUNCA
+    // 5xx: los marketplaces tratan 4xx como healthy (no cuentan para el
+    // circuit breaker), así un error de negocio no nos autobloquea el transporte.
+    if (
+      error?.message?.includes("no devolvió tarifas") ||
+      error?.message?.includes("no cotiza")
+    ) {
+      return NextResponse.json(
+        { error: "El courier no pudo procesar este envío. Revisá los datos del destinatario.", code: "COURIER_REJECTED" },
+        { status: 422 }
+      );
+    }
     console.error("Error en POST /api/envios:", error);
     return NextResponse.json({ error: "Error interno al crear el envío o debitar el saldo." }, { status: 500 });
   }

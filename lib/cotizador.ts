@@ -466,7 +466,12 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
               },
             });
           }
-        } catch (e: any) { }
+        } catch (e: any) {
+          // DEUDA 129: courier falló al cotizar domicilio. Se descarta esa opción
+          // (no aparece en el array) pero registramos la causa para observabilidad
+          // (timeout? credencial vencida? body malformado?).
+          console.warn("[cotizador] courier falló:", e instanceof Error ? e.message : String(e));
+        }
       }
 
       if (config.ofreceSucursal !== false && courierPuedeSucursal) {
@@ -493,9 +498,20 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
               },
             });
           }
-        } catch (e) { }
+        } catch (e) {
+          // DEUDA 129: courier falló al cotizar sucursal. Se descarta esa opción
+          // pero logueamos la causa para observabilidad (misma disciplina que en
+          // el catch de domicilio arriba).
+          console.warn("[cotizador] courier falló:", e instanceof Error ? e.message : String(e));
+        }
       }
-    } catch (errorFatal: any) { continue; }
+    } catch (errorFatal: any) {
+      // DEUDA 129: fallo courier-level (antes de intentar sucursal o domicilio,
+      // ej. credencial malformada o CourierFactory rechazó). Loguear + continue
+      // para no romper la cotización de los demás couriers.
+      console.warn("[cotizador] courier falló:", errorFatal instanceof Error ? errorFatal.message : String(errorFatal));
+      continue;
+    }
   }
 
   // EL CEREBRO DE RUTEO
@@ -565,6 +581,37 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
       .catch((err) => {
         console.warn("[cotizador] No se pudo registrar cobertura vacia:", err);
       });
+  }
+
+  // DEUDA 129: fallback rate cuando ningún courier real cotizó. Empujamos
+  // tarifaPlanaRespaldo per-empresa (obligatoria en el alta, DEUDA 10 Paso 5b)
+  // como opción única en domicilio para que el checkout no muestre cero
+  // opciones. Consigna Nacho: "el cliente vende siempre".
+  //   - id "fallback-plana" es el marcador semántico (mismo pattern que dom-* / suc-*);
+  //     consumidores downstream (UI, crear.ts) pueden distinguirlo por prefix.
+  //   - precioProveedor=0 porque no hay costo courier real detrás; sirve como
+  //     estimación al comprador, la conciliación se corrige cuando se sepa el
+  //     costo real (mismo comportamiento que el fallback existente en crear.ts).
+  //   - slaHs=72 conservador — sin courier real no hay SLA calibrado.
+  //   - coberturaVacia se mantiene true para que el audit (registroCoberturaVacia)
+  //     siga registrando el caso, y para que la UI pueda mostrar el badge "rescate".
+  if (
+    coberturaVacia &&
+    empresa?.tarifaPlanaRespaldo &&
+    empresa.tarifaPlanaRespaldo.gt(0)
+  ) {
+    const slaFallback = 72;
+    const textoFallback = await calcularFechaEstimada(slaFallback);
+    finalDomicilio.push({
+      id: "fallback-plana",
+      courier: "Tarifa de rescate",
+      modalidad: "Estándar",
+      precioFinal: empresa.tarifaPlanaRespaldo,
+      precioProveedor: new Prisma.Decimal(0),
+      slaHs: slaFallback,
+      fechaEstimadaString: textoFallback,
+      etiquetaSla: "Tiempo estimado",
+    });
   }
 
   return {

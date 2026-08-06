@@ -1978,6 +1978,8 @@ desde la plataforma.
 **Impacto en plugins:** ninguno. Los plugins crean envíos y consultan estado. La
 cancelación queda fuera del contrato de la API externa deliberadamente.
 
+**EXCEPCIÓN aprobada por Nacho (2026-08-06) — plugin Tiendanube:** exclusivamente para el plugin de Tiendanube, se permite cancelar desde el e-commerce, para que el usuario no tenga que hacer dos acciones para un mismo fin (cancelar en Tiendanube + cancelar en Shipro). La regla general (cancelar es solo-plataforma) se mantiene para todos los demás canales; el plugin de Tiendanube es la **única excepción**, y es una decisión consciente de UX. Implementación: escuchar el webhook `order/cancelled` de Tiendanube y anular el envío correspondiente en Shipro.
+
 ---
 
 ## DEUDA 128 — Idempotencia en creación de etiquetas por API (prerequisito plugins, ticket to play) (registrada 2026-08-05, scope medio)
@@ -2181,6 +2183,60 @@ La creencia previa ("la parte visual corre con NubeSDK") era incompleta. Hay **D
 
 ---
 
+### Hallazgos de la guía oficial + checklist de homologación (Poggi, verificado 2026-08-06)
+
+**Fuentes:** guía oficial de integración de envíos + checklist real de homologación (planilla de 11 hojas con puntajes) enviadas por Nicolás Poggi. Niveles de la checklist: Optional (1pt), Minimal (3pt = obligatorio de hecho), Awesome (5pt = diferencial). Total 233 pts.
+
+**Performance (umbral de homologación, VERIFICADO):**
+- Al menos **95% de las cotizaciones deben ser exitosas** (HTTP 200).
+- Tiempo de respuesta del rates callback **< 5 segundos**.
+- ⚠️ **AJUSTE REQUERIDO**: DEUDA 129 puso timeout de **8s** en los adapters. Para el plugin, la respuesta a Tiendanube debe llegar < 5s. Si el courier tarda 8s, incumplimos. Hay que revisar el timeout del rates callback del plugin para que respete el límite de 5s de Tiendanube (probablemente timeout más agresivo en el path del plugin, cayendo a tarifa de rescate antes de los 5s). **Registrar como sub-tarea del diseño del rates callback.**
+
+**Webhooks de ciclo de vida de la app (Minimal = obligatorios, NUEVOS):**
+- `app/uninstalled`: al desinstalar, eliminar todas las llamadas a la API de esa tienda.
+- `app/suspended`: tienda con deuda → pausar solicitudes a la API.
+- `app/resumed`: deuda regularizada → retomar solicitudes.
+- Son **distintos** de los webhooks LGPD (DEUDA 133) y de los operativos (`order/*`).
+
+**Webhooks operativos de órdenes (de la guía):**
+- `order/created`: importar la venta (usar el payload del webhook, sin `GET /orders/:id`).
+- `order/cancelled`: orden cancelada → anular el envío.
+- `order/edited`: **EN ESTUDIO** — ver DEUDA 134 (alcance depende de cada courier).
+- Regla de la checklist: solo importar órdenes que tengan entregas a NUESTRAS shipping options; descartar el resto. **Verificar si la orden ya fue importada antes de importarla** (idempotencia — conecta con DEUDA 128).
+
+**Webhooks LGPD (DEUDA 133) — precisión:** en Argentina son OPCIONALES por ahora, obligatorios a largo plazo. Baja la urgencia para el primer lanzamiento, pero se hacen igual.
+
+**Match de Locations / depósitos (Awesome, NUEVO — conecta con DEUDA 4):**
+- Tiendanube maneja "locations" (depósitos) según el plan del merchant (básico: 1; superiores: N). La app puede mapear las locations del merchant a los puntos de colecta configurados en Shipro. El `origin.location_id` (ULID) del rates callback indica de qué depósito sale. Hay que resolver el **match location_id (Tiendanube) ↔ depósito (Shipro)**.
+
+**Shipping carrier — reglas de la checklist (Minimal):**
+- **UN SOLO shipping carrier por app**, aunque se reinstale (la API permite duplicar, NO se debe). Valida el campo `shippingCarrierId` de la tabla `TiendaTiendanube` del diseño.
+- Crear el carrier **SIN marcar envío gratis ni modificar días/precio extra** (el merchant los configura desde su panel; si los tocamos, entra en conflicto).
+- El nombre de cada opción debe permitir al comprador **entender el tipo de envío** (expreso, normal, económico).
+- Reinstalación: guardar el nuevo `access_token` (el viejo queda inactivo).
+
+**Rates — reglas de la checklist (Minimal salvo aclaración):**
+- El `code` devuelto en rates **DEBE coincidir** con el registrado en `shipping_carrier_options`.
+- Informar `min_delivery_date` y `max_delivery_date`, ignorando fines de semana y feriados nacionales (Shipro ya calcula esto).
+- El precio debe incluir impuestos (IVA) o permitir al merchant elegir (NO imponer). Shipro ya aplica IVA al final.
+- **Usar dimensiones para calcular volumen**: NO devolver la misma tarifa para 1 producto que para 10. Valida la decisión de Opción C (empaquetado real).
+- Validar mín/máx de dimensiones y peso.
+- `price` vs `price_merchant`: manejar envío gratis (price = lo que paga el comprador, price_merchant = lo que paga el merchant) y carritos mixtos. **Registrar para el diseño.**
+- La checklist pregunta explícitamente *"¿cómo funcionan los volúmenes múltiples? ¿cómo aprende el vendedor a empacar?"* → **la Capa 1 (regla de empaquetado) responde este ítem evaluado.**
+
+**Fulfillment/tracking — reglas de la checklist (Minimal):**
+- El `tracking_code` se envía **SOLO cuando el paquete se despacha realmente**.
+- Notificar el evento `fulfill` solo cuando el merchant emite etiqueta / despacha / se colecta.
+- Enviar por cada Fulfillment Order: `status`, `tracking_info`, `destination`, `shipping`, `recipient`, `assigned_location`.
+- Eventos de tracking (Recogido, Publicado, En tránsito, Fuera de entrega, Entregado, Fallido) vía la Fulfillment Events API (conecta con DEUDA 104).
+- **Admin links (Awesome):** impresión individual y masiva de etiquetas; logística inversa. Admin links requieren autenticación del merchant (login+password), **nunca sin auth**.
+
+**Sandbox (VERIFICADO por Poggi):** con la cuenta partner se crean varias apps (una a producción, otras a pruebas) y **tiendas demo propias** como si fueran clientes, para testear todo sin afectar tiendas reales.
+
+**Refinamiento de la Capa 1 (empaquetado) por decisión de Nacho:** el motor es un **bin-packing**. El cliente define sus tipos de bolsa/caja con capacidad (ej. bolsa 30×30×20 → hasta 4kg y esas dimensiones). El motor toma los items del carrito (Tiendanube ya manda `grams` + `dimensions` por item), los acomoda en la **menor cantidad de bolsas**, y cotiza esa cantidad de bultos. Si el cliente al empaquetar consolida en menos bolsas, se ahorra la etiqueta sobrante (cotización referencial, facturación sobre lo físico real — principio ya vigente en Shipro). **NOTA TÉCNICA:** bin-packing 3D con límite de peso es un problema complejo; al construir la Capa 1 se arranca con **heurística pragmática** (la mayoría de los carritos tienen pocos productos), no con la solución óptima matemática. Detalle abierto para el diseño de la Capa 1: si el peso/volumen de la bolsa misma cuenta, y qué dimensiones se pasan al courier (la bolsa o el contenido).
+
+---
+
 ## DEUDA 131 — Race condition en idempotency check de POST /api/envios (scope pequeño, follow-up DEUDA 128)
 
 **Status:** ABIERTA. Registrada 2026-08-05.
@@ -2261,6 +2317,22 @@ un bug de facturación que ya existe hoy. NO bloquea el desarrollo del plugin de
 **Archivos (a futuro):** endpoints nuevos para los tres webhooks + validador HMAC compartido.
 
 **Prioridad:** media. No bloquea el desarrollo del backend de cotización, pero sí la homologación.
+
+---
+
+## DEUDA 134 — `order/edited` de Tiendanube: alcance de edición depende de cada courier (deuda de INVESTIGACIÓN, no de construcción inmediata) (registrada 2026-08-06)
+
+**Status:** ABIERTA — investigación. NO construir hasta entender el alcance por courier.
+
+**Contexto:** Tiendanube ofrece el webhook `order/edited` (orden editada antes de empaquetarse). "Editar" puede significar cosas distintas: cambiar datos postales/dirección, cambiar productos, cambiar cantidades. El alcance real de lo que Shipro puede hacer depende de qué permita CADA courier una vez creado el envío.
+
+**Conocimiento de dominio (Nacho):**
+- **Andreani**: SÍ tiene recursos en su API para modificar datos postales/de entrega y regenerar la etiqueta actualizada.
+- **Mocis**: NO ofrece ningún endpoint ni acción para editar una etiqueta ni modificar datos postales/dirección una vez creado el envío.
+
+**Consecuencia:** `order/edited` no se puede diseñar en abstracto. Hay que resolverlo courier por courier, y para cada nueva integración de courier verificar si la edición es posible. Para couriers que no permiten editar (como Mocis), la única vía sería anular y recrear (si el estado lo permite) o rechazar la edición con un mensaje claro.
+
+**Acción:** al integrar cada courier, documentar sus capacidades de edición post-creación. Diseñar el manejo de `order/edited` recién cuando haya al menos un mapa claro de qué permite cada courier en producción.
 
 ---
 

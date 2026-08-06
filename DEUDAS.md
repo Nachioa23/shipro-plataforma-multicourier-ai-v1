@@ -2037,7 +2037,7 @@ Sin estas 6 respuestas, la implementación queda con huecos de contrato que van 
 
 - **DEUDA 103** (motor de reglas de empaquetado + multi-bulto + madre/hija): la CAPA 2 de 103 (creación multi-bulto) es lo que despacha las etiquetas que Tiendanube pide vía Labels API. Prerequisito duro.
 - **DEUDA 104** (webhooks salientes): **NO es diferible para homologar Tiendanube** (ver hallazgo 3). Cambia de "gap grande" a "prerequisito duro de homologación".
-- **DEUDA 105** (cancelar por API): un plugin completo cancela desde Tiendanube. Sin esto, la reunión síncrona lo va a observar.
+- **DEUDA 105** (cancelar por API): **decisión de producto — NO se implementa** (RESUELTA por diseño 2026-08-05). Cancelar es platform-only por juicio operativo del cliente; la reunión síncrona debe reflejar que la app deliberadamente NO expone cancelación via API.
 - **DEUDA 128** (idempotencia): Tiendanube reintenta webhooks; sin idempotencia se duplican etiquetas en cada reintento (bloqueante).
 - **DEUDA 129** (resiliencia checkout / 4xx-vs-5xx / fallback rate): directamente contra el circuit breaker de Tiendanube (5s + >50% 5xx = 5 min bloqueado). Prerequisito duro para pasar la homologación.
 
@@ -2051,7 +2051,7 @@ Sin estas 6 respuestas, la implementación queda con huecos de contrato que van 
 - Componente NubeSDK + Web Worker + Nimbus (parte visual dentro del panel): ~2-3 semanas.
 - OAuth Tiendanube + instalación + `callback_url` (rates) + `callback_labels_url` (Labels): ~1-2 semanas.
 - Fulfillment Events (bidireccional con webhooks): depende de DEUDA 104.
-- Idempotencia (DEUDA 128) + resiliencia checkout (DEUDA 129) + multi-bulto (DEUDA 103 Capa 2) + cancelar (DEUDA 105) resueltas **antes** de la app Tiendanube.
+- Idempotencia (DEUDA 128) + resiliencia checkout (DEUDA 129) + multi-bulto (DEUDA 103 Capa 2) resueltas **antes** de la app Tiendanube.
 - Artefactos de homologación (diagrama, video, cuenta demo, FAQ): ~1 semana concentrada.
 
 **Total razonable para app homologable**: ~2-3 meses de trabajo enfocado, asumiendo que las 5 DEUDAS prerequisito ya están cerradas.
@@ -2086,11 +2086,16 @@ creado con `replayed: true`. Patrón: try-create → catch P2002 → re-query �
 
 ---
 
-**Nota de secuencia:** el orden lógico de construcción antes de documentar la API externa es: DEUDA 103
-(multi-bulto — el hueco que más muerde), DEUDA 104 (webhooks — el desbloqueante grande), DEUDA 105 (cancelar —
-chico). Las tres, más la redacción de la especificación OpenAPI, son el trabajo del frente de plugins, POSPUESTO
-hasta tener el deploy en producción. El diseño de "qué datos pedir al e-commerce y para qué" (la normalización)
-se puede trabajar en paralelo — no depende del código.
+**Nota de secuencia** (actualizada 2026-08-06)**:** el orden lógico de construcción antes de documentar la API
+externa es: DEUDA 103 (multi-bulto — el hueco que más muerde) y DEUDA 104 (webhooks — el desbloqueante
+grande). Ambas, más la redacción de la especificación OpenAPI, son el trabajo del frente de plugins. El
+diseño de "qué datos pedir al e-commerce y para qué" (la normalización) se puede trabajar en paralelo — no
+depende del código.
+
+- DEUDA 128 (idempotencia) y DEUDA 129 (resiliencia checkout) — RESUELTAS + deployadas 2026-08-05.
+- DEUDA 105 (cancelar via API) — RESUELTA POR DECISIÓN DE PRODUCTO: cancelar es platform-only, no se expone
+  via API. No es prerequisito técnico.
+- DEUDA 131 (race condition idempotency) — follow-up menor de 128, no bloqueante.
 
 ---
 

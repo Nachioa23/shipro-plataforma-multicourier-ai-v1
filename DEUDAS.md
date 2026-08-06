@@ -1807,64 +1807,139 @@ tener producción en pie. Se registran para no perderlas.
 
 ---
 
-## DEUDA 103 — Modelo de bultos completo: motor de reglas de empaquetado (por cliente) + creación multi-bulto + soporte etiqueta madre/hija (scope grande, prerequisito plugins)
+## DEUDA 103 — Modelo de bultos completo: motor de reglas de empaquetado (por cliente) + creación multi-bulto (N bultos = N envíos en B2C) + agrupación bajo el pedido (scope grande, prerequisito plugins)
 
-**Status:** ABIERTA. Reescrita 2026-08-05 tras clarificación del modelo de negocio de Nacho + relevamiento de dolores del mercado (Tiendanube/OCA/Andreani: *"el sistema asumió mal los bultos → el comerciante paga sobrepeso"*). Reemplaza la definición previa (2026-07-13) que sólo hablaba de multi-bulto en la creación — el hueco real es más amplio y tiene tres capas conceptuales distintas.
-
-**El modelo correcto** — un producto en el carrito **NO es un bulto**. La relación producto → bulto es una **regla configurable por cliente**, no una identidad. Antes de la creación del envío hay que resolver, para cada carrito, CUÁNTOS bultos físicos salen y QUÉ dimensiones tiene cada uno. Después la creación acepta ese output. La cadena tiene tres capas.
+**Status:** ABIERTA. Reescrita 2026-08-07 tras verificación cruzada: recon de código + documentación API Andreani (Gemini Notebook de Nacho) + decisiones de producto confirmadas. Reemplaza la versión previa (2026-08-05) que asumía "madre/hija" como el modelo común — el modelo B2C real es 1 bulto = 1 envío.
 
 ---
 
-### CAPA 1 — Motor de reglas de empaquetado (por cliente, en la NPMS)
+### Hallazgo de código (verificado en este commit-tree)
 
-**Input:** el carrito (cantidad de productos + tipo de cada producto).
-**Output:** cuántos bultos físicos + dimensiones (largo/ancho/alto) + peso + valor declarado de cada uno.
+Recon leído directo en el repo:
 
-**Casos reales de Nacho:**
-- **Moda** (por rangos de cantidad): 1–3 productos → bolsa 20×30×30, 2 kg. 4–6 productos → bolsa 30×40×40, 4 kg.
-- **Tecnología** (por tipo de producto): smartphones se consolidan en una sola caja; impresoras no (cada una en su propio bulto).
-
-**⚠️ Decisión de producto PENDIENTE (no resolver todavía — hay que fijar la política).** Los dos ejemplos de arriba usan lógicas DISTINTAS. Al menos cuatro ejes posibles para la regla de empaquetado:
-1. **Rangos de cantidad** (moda).
-2. **Tipo/categoría del producto** (consolidable vs no — tecnología).
-3. **Peso o volumen acumulado** (thresholds tipo "cuando pasa X kg / Y cm³ arma otro bulto").
-4. **Combinación** de los anteriores (mixed rules).
-
-Hay que decidir con Nacho: ¿el motor soporta las 4 lógicas desde el día uno? ¿Empieza sólo con rangos de cantidad y evoluciona? ¿Templates por vertical (moda / tecnología / muebles / alimentos)? Impacto directo en la UI de configuración (cuántos parámetros expone) y en el modelo de datos de la regla.
-
-**Ticket to win** — este motor es un diferencial competitivo, no un check-box. En el mercado local hay un dolor recurrente compartido entre Tiendanube, OCA y Andreani: el sistema asume mal los bultos y el comerciante paga sobrepeso silenciosamente en la conciliación. Un motor de empaquetado configurable (no un fudge de "peso volumétrico promedio") resuelve el pain point que hoy nadie resuelve bien.
-
----
-
-### CAPA 2 — Creación multi-bulto (`POST /api/envios` acepta `paquetes[]`)
-
-**Estado actual:** el endpoint sólo acepta `pesoReal` escalar. La cotización (`POST /api/cotizar`) SÍ acepta `paquetes[]` con dimensiones — el hueco está sólo en la creación.
-
-**Contrato propuesto:** `POST /api/envios` acepta `paquetes[]` (`pesoKg`, `largoCm`, `anchoCm`, `altoCm`, `valorDeclarado`, `fragil?`, `contenido?`). Es el output natural del motor de la Capa 1.
-
-**Caso común (una etiqueta por bulto):** cada bulto viaja con su propia etiqueta + su propia tarifa cotizada + facturada por separado. Sin descalce silencioso entre lo cotizado y lo facturado por peso volumétrico.
-
-**Backward-compat:** si el body trae sólo `pesoReal` sin `paquetes[]`, mantener el comportamiento actual (una etiqueta unibulto). Nadie que ya integre contra la API se rompe.
-
-**Threading:** `crearEnvio` → `dispatch.ts` → adapters. Andreani soporta `bultos[]` nativo. Mocis requiere unir las tuplas por paquete (una llamada por bulto o batch según su API). Persistir el agregado en `Envio` (`pesoReal = suma(pesoKg)`, `pesoVolumetrico = suma(volumen/factor)`).
-
-Además restaurar los dos campos que el modelo `Envio` ya soporta pero el endpoint no acepta hoy: `fragil` (boolean) y `contenido` (string).
+- **`lib/envios/crear.ts:408-413`**: al re-cotizar internamente (para conciliación + persistencia), sintetiza `paquetes: [{ pesoKg, largoCm: 10, anchoCm: 10, altoCm: 10, valorDeclarado, requiereSeguro: false }]`. Los tres `10, 10, 10` son **literales hardcoded**, no leídos de variable ni input.
+- **`CrearEnvioInput`** (interface en `crear.ts`): tiene `pesoReal` escalar + `valorDeclarado`. **Sin `largoCm/anchoCm/altoCm`, sin `dimensiones`, sin `paquetes[]`**.
+- **`POST /api/envios`** (`app/api/envios/route.ts:167-188`) y **`POST /api/envios/manual`** (`app/api/envios/manual/route.ts:48-67`): ninguno lee `body.paquetes[]` ni ningún campo de dimensión. Solo forwardean `pesoReal`.
+- **Formulario `/nuevo-envio`** (`app/(dashboard)/nuevo-envio/page.tsx:104-107`): SÍ colecciona `paqPeso + paqLargo + paqAncho + paqAlto` como campos obligatorios (validación en línea 246). Defaults empty — el usuario debe completar los cuatro. Viajan como URL params al pushear a `/cotizar` (líneas 271-274).
+- **Página `/cotizar`** (`app/(dashboard)/cotizar/page.tsx:94-100`): construye `paquetes[]` con las dimensiones reales del URL y las pasa CORRECTAMENTE a `POST /api/cotizar`. Precio del checkout: OK.
+- **Al confirmar y crear** (`cotizar/page.tsx:208-210`): POST a `/api/envios/manual` con `payload` que **NO incluye largo/ancho/alto**. Las dimensiones se pierden entre la cotización mostrada y la creación real. `crear.ts` cae al 10×10×10 hardcoded.
+- **Consecuencia**: la cotización que el usuario ve usa dimensiones reales (precio correcto). La cotización que `crear.ts` computa internamente (para persistir en `FinanzasEnvio` y matchear la opción del usuario) usa 10×10×10. Y la etiqueta que se manda al courier (Andreani despachar → `bultos[0]` con dims hardcoded) también usa 10×10×10. El courier factura por su propio peso volumétrico con dimensiones equivocadas → **descalce silencioso: cotizado ≠ despachado ≠ facturado**. Este bug **YA existe en el dashboard humano hoy**, independiente de plugins.
+- **Estado de adapters**:
+  - `MocisAdapter.despachar` **vía normal** (línea 342-350): `params.paquetes.map(...)` — multi-items nativo, N tuplas en `items`.
+  - `MocisAdapter.despachar` **vía inversa** (línea 301): `paquetes[0]?.pesoKg` — single-bulto.
+  - `AndreaniAdapter.despachar` (línea 234, 305): `const paquetePrincipal = params.paquetes[0]` + `bultos: [{...}]` array de UN elemento. Single-bulto estricto en el adapter (consistente con el canal B2C — ver "Modelo de dominio").
+  - Cotización: Andreani agrega peso + volumen total; Mocis manda todas las tuplas.
+- **Motor de reglas de empaquetado (Layer 1)**: cero. `grep -rn "empaquetado\|packaging\|reglaEmpaque"` → vacío. Sin modelos en schema, sin código. **Greenfield puro**.
+- **Persistencia per-bulto**: cero. `Envio` tiene sólo `pesoReal Float / pesoVolumetrico Float? / pesoFacturado Float?` — todo agregado escalar. Sin modelo `Bulto/EnvioBulto/EnvioPaquete`.
+- **UI multi-bulto**: cero. `grep -rn "paquetes.*push\|agregarPaquete\|nuevoBulto"` → vacío. No hay botón "+ Agregar bulto" en ningún componente del dashboard.
 
 ---
 
-### CAPA 3 — Excepción: etiqueta madre / etiqueta hija (courier-dependent)
+### Modelo de dominio del courier (verificado con documentación)
 
-Algunos couriers permiten UN tracking para varias cajas con una sola tarifa de aforo (suma de dimensiones/peso; valor declarado consolidado para el seguro). **No es lo común** — depende de cada courier ofrecerlo. Andreani, Mocis y los demás se relevan uno por uno.
-
-Cuando el courier lo ofrece, el motor de empaquetado puede sugerir la ruta "madre/hija" como alternativa a "una etiqueta por bulto" cuando el aforo consolidado sale más barato. Es un segundo camino, no reemplazo del común de Capa 2.
-
-**Modelo de datos:** `Envio` madre + N `EnvioBulto` hijas (o un flag en `Envio` con `paquetes[]` embebidos con sub-tracking por bulto). A diseñar cuando se relevan los couriers que lo soportan.
+- **Andreani Canal B2C (≤50 kg, el canal del plugin/checkout)**: **1 bulto = 1 orden = 1 etiqueta = 1 tracking**. Un pedido con 3 bultos se materializa como **3 órdenes separadas**, cada una con su `numeroDeEnvio` y su etiqueta. Fuente: Notebook Gemini de Andreani API (autoridad del canal).
+- **Andreani Canal B2B / BIGGER (>50 kg o consolidado)**: multi-bulto bajo UN mismo `numeroDeEnvio` — cada bulto tiene su `numeroDeBulto` + totalizador ("3/10"), PDF grupal via `etiquetasPorAgrupador`. **Fuera de scope del plugin de checkout**; es modelo B2B/mayorista.
+- **Conclusión operativa para el plugin B2C**: la unidad correcta es **1 bulto = 1 envío Shipro = 1 tracking real del courier**. Si el carrito resuelve a N bultos, se crean N envíos Shipro con N trackings independientes. Multi-bulto-bajo-un-tracking es feature B2B, no aplica al checkout.
+- **Mocis en B2C — ⚠️ PENDIENTE VERIFICAR**: el adapter hoy hace multi-items nativo (línea 342 despachar normal), pero NO está confirmado contra doc oficial de Mocis si ese multi-items significa "N bultos bajo un tracking" (tipo Andreani B2B) o "N líneas descompuestas para factura de un solo bulto". **Sub-tarea de verificación** dentro de esta deuda antes de arrancar CAPA 2.
 
 ---
 
-**Prioridad:** alta dentro del frente de plugins. La Capa 2 es prerequisito duro para documentar la creación de envío en la API externa (sin ella un plugin sólo despacha unibulto). La Capa 1 es el diferencial que convierte a Shipro de "otro plugin más" en la respuesta al pain point del mercado. La Capa 3 se pospone hasta relevar cada courier.
+### Decisiones de producto (confirmadas por Nacho, esta sesión)
 
-**Scope estimado:** grande. Capa 2 son ~1-2 días (extender endpoint + threading a adapters). Capa 1 son ~1-2 semanas (modelo de datos + UI de configuración + motor de evaluación) según el alcance de política que se elija. Capa 3 depende de qué couriers ofrezcan la opción.
+1. **La regla de empaquetado (cuántos productos por bulto) la configura el CLIENTE en la NPMS.** Diferentes industrias tienen políticas distintas: productos voluminosos raramente consolidan (uno por bulto); productos chicos consolidan (muchos por bulto). Es **por qué la regla DEBE ser configurable**: impacta directamente si la venta se cierra (3 tarifas separadas vs 1 sumada puede perder la venta).
+2. **La regla corre ANTES de cotizar.** El comprador ve el precio del envío ya con la regla aplicada (consolidado si corresponde).
+3. **El comprador en el checkout de Tiendanube ve UNA tarifa sumada** (ej. `"Envío: $12.000"`), **NUNCA el desglose por bulto**. La mecánica multi-bulto es invisible al comprador.
+4. **Cuando un carrito resuelve a N bultos → N envíos Shipro** (cada uno su tracking + tarifa), pero **agrupados bajo el pedido original** del e-commerce para que el cliente vea una sola venta y la conciliación cierre por pedido. Esto requiere modelo de datos para la agrupación pedido → N envíos.
+
+---
+
+### Las tres capas
+
+**CAPA 1 — Motor de reglas de empaquetado (por cliente, configurable en NPMS)**
+- **Input**: carrito (cantidad de productos + tipo de cada producto).
+- **Output**: N bultos con dimensiones (largo/ancho/alto) + peso + valor declarado por bulto.
+- **Estado**: greenfield puro (verificado — cero código, cero modelo).
+- **Ejes de la regla** (a decidir antes de arrancar):
+  1. Rangos de cantidad (moda: 1-3 productos → bolsa X; 4-6 → bolsa Y).
+  2. Tipo/categoría del producto (tecnología: smartphones consolidan; impresoras no).
+  3. Peso o volumen acumulado (thresholds tipo "cuando pasa X kg / Y cm³ arma otro bulto").
+  4. Combinación de los anteriores (mixed rules).
+- **Ticket to win**: es el diferencial competitivo. Tiendanube/OCA/Andreani comparten el pain point *"el sistema asumió mal los bultos → el comerciante paga sobrepeso"*. Un motor configurable resuelve lo que nadie resuelve bien.
+- **Corre ANTES de cotizar** — el resultado del motor es el `paquetes[]` que se manda a `/api/cotizar`.
+
+**CAPA 2 — Creación multi-envío (N envíos = N bultos, agrupados bajo el pedido) — modelo B2C**
+- Un carrito con N bultos genera **N envíos Shipro independientes**, cada uno con:
+  - Su tracking real del courier (1 orden Andreani B2C = 1 tracking).
+  - Su tarifa cotizada + facturada por separado.
+  - Su etiqueta física.
+- **Agrupación bajo el pedido**: los N envíos deben referenciar un pedido madre (del e-commerce) para que:
+  - El cliente Shipro vea "1 venta con 3 bultos", no "3 ventas separadas".
+  - La conciliación cierre por pedido, no por envío individual.
+  - El plugin pueda mostrar el estado agregado al comprador en el panel Tiendanube.
+- **Modelo de datos requerido**: un modelo tipo `PedidoExterno` (o `AgrupacionEnvios`) que agrupe los N envíos, con `platformOrderId` (el ID del pedido en Tiendanube), `empresaId`, y relación 1:N a `Envio`. **NO se necesita `EnvioBulto`** en B2C — cada bulto ES un envío completo con su tracking; no hay sub-tabla.
+- **Sub-pieza temprana: arreglar la fuga de dimensiones del dashboard** (ver bug independiente abajo). Threading real de dimensiones desde el body hasta `crear.ts` + adapter + persistencia.
+- **Adapters**: `AndreaniAdapter.despachar` sigue single-bulto (correcto para B2C — 1 orden = 1 bulto). `MocisAdapter.despachar` normal ya multi-items; PENDIENTE VERIFICAR si 1 tracking o N (ver "Modelo de dominio").
+
+**CAPA 3 — Multi-bulto B2B bajo un tracking (Andreani BIGGER) — POSPUESTA**
+- Andreani ofrece el canal BIGGER donde un pedido tiene N bultos bajo UN `numeroDeEnvio` con etiquetas hijas (numeroDeBulto + totalizador). Feature de canal B2B/mayorista.
+- **NO es el modelo del checkout / plugin**. Pospuesta hasta que aparezca demanda B2B con carga sobre 50 kg.
+- Cuando se aborde: requerirá modelo `EnvioBulto` (o similar) porque en ese caso 1 envío tiene N bultos con sub-tracking cada uno.
+
+---
+
+### Impacto en el plugin Tiendanube
+
+**CAPA 1 + CAPA 2 son prerequisito duro.** Sin ellas:
+- Sin regla de empaquetado configurable, el comprador puede ver **tarifas infladas** (3 bultos consolidables que se cotizaron por separado) y desistir de la compra.
+- Sin la creación multi-envío agrupada bajo el pedido, un carrito con varios bultos no se puede despachar de forma coherente (¿un tracking? ¿tres? ¿quién agrupa la conciliación?).
+
+**CAPA 3 no impacta al plugin B2C.**
+
+---
+
+### Bug independiente detectado (arreglable YA, dashboard humano)
+
+La **fuga de dimensiones** del dashboard ya existe hoy, sin relación con plugins:
+- Formulario `/nuevo-envio` obliga a cargar largo/ancho/alto.
+- `/cotizar` los usa correctamente para el precio mostrado.
+- POST `/api/envios/manual` **NO los envía en el payload**.
+- `crear.ts` cae al 10×10×10 hardcoded → cotización interna y etiqueta divergen del precio mostrado.
+- Courier factura por peso volumétrico con dimensiones equivocadas → conciliación estropeada.
+
+**Fix mínimo** (independiente del plugin, sub-pieza temprana de CAPA 2):
+1. Extender `CrearEnvioInput` con `paquetes?: Paquete[]` (opcional; backward-compat).
+2. `POST /api/envios` + `POST /api/envios/manual`: leer `body.paquetes[]` y forwardear.
+3. `crear.ts:408-413`: si viene `input.paquetes`, usarlo; si no, sintetizar como hoy.
+4. UI `/cotizar` al confirmar: incluir `paquetes` en el payload de `/api/envios/manual` (los tiene desde URL params — sólo falta forwardearlos).
+5. `AndreaniAdapter.despachar`: leer dimensiones del `paquetePrincipal` correctamente (hoy caen a 10×10×10 en fallback también).
+6. Persistir `pesoReal = Σ pesoKg`, `pesoVolumetrico = Σ (largo×ancho×alto)/factor` (los campos ya existen en `Envio`).
+
+**Sin cambio de schema.** ~1 día real. **Prioridad: alta** — afecta conciliación y facturación real del dashboard actual.
+
+---
+
+### Archivos afectados (referencia)
+
+- `lib/envios/crear.ts` — interface + synthesis + persistence
+- `app/api/envios/route.ts` — body parsing (plugin)
+- `app/api/envios/manual/route.ts` — body parsing (dashboard)
+- `lib/couriers/AndreaniAdapter.ts` — dispatch reader (dims + eventualmente splitter B2C)
+- `lib/couriers/MocisAdapter.ts` — dispatch reader + verify multi-items semantics
+- `app/(dashboard)/nuevo-envio/page.tsx` — form ya tiene dims
+- `app/(dashboard)/cotizar/page.tsx` — payload del confirm-and-create pierde dims
+- `prisma/schema.prisma` — CAPA 1: modelos para regla de empaquetado; CAPA 2: modelo `PedidoExterno` (agrupación pedido → N envíos). Sin `EnvioBulto` en B2C.
+
+---
+
+### Prioridad y estimación revisada
+
+**Prioridad**: alta dentro del frente de plugins. La fuga de dimensiones (fix mínimo) es arreglable YA, independiente. El motor de reglas (CAPA 1) es el diferencial competitivo.
+
+**Estimación revisada** (más precisa que la versión previa 2026-08-05):
+- **Fix fuga de dimensiones** (sub-pieza temprana de CAPA 2, arregla dashboard): ~1 día.
+- **CAPA 2 completa** (multi-envío + modelo `PedidoExterno` + agrupación + threading multi-bulto real desde plugin): ~3-5 días.
+- **CAPA 1** (motor de reglas + UI de configuración + evaluador): ~1-2 semanas según la política elegida (rangos simples vs mixed rules con templates por vertical).
+- **CAPA 3**: diferida hasta demanda B2B — no aplica ahora.
 
 ---
 

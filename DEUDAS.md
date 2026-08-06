@@ -1894,19 +1894,23 @@ publicada dentro del panel del e-commerce). ~1-2 días. Requiere diseño dedicad
 
 ---
 
-## DEUDA 105 — /api/envios/cancelar es solo-sesión (no usable por plugins) (scope chico, prerequisito plugins)
+## DEUDA 105 — Cancelación de envíos: decisión de producto — solo desde la plataforma (NO via plugin)
 
-**Status:** ABIERTA. Detectada 2026-07-13.
+**Status:** RESUELTA POR DECISIÓN DE PRODUCTO. Confirmada en múltiples sesiones (2026-07-13, 2026-08-05).
+No hay código que construir.
 
-**Síntoma:** El endpoint de cancelación (`/api/envios/cancelar`) está clasificado como `session` en `proxy.ts`
-— solo lo puede usar el dashboard humano, no un e-commerce vía API key. Un plugin no puede cancelar un envío.
+**Decisión:** la cancelación de un envío es una acción operativa que ejecuta el cliente
+desde la plataforma NPMS. Los plugins de e-commerce (Tiendanube, etc.) NO tienen acceso
+a `/api/envios/cancelar`. El endpoint permanece clasificado como `session` en `proxy.ts`
+— no se abre a API key.
 
-**Fix propuesto:** agregar `/api/envios/cancelar` a la lista `DUAL_EXACT` en `proxy.ts` (acepta sesión O API
-key), y verificar que el handler resuelva bien el `empresaId` en modo API key (mismo patrón que
-`POST /api/envios`). Revisar que un e-commerce solo pueda cancelar envíos de SU empresa (aislamiento).
+**Razón:** cancelar implica juicio operativo (¿el courier ya retiró el paquete?, ¿hay
+costo de cancelación?, ¿el saldo se acredita?). Eso no se delega a un sistema externo
+automático. El flujo es: e-commerce notifica al cliente → cliente cancela manualmente
+desde la plataforma.
 
-**Prioridad:** baja-media. Chico, pero necesario para un plugin completo. Registrar también que al abrirlo hay
-que confirmar el aislamiento per-empresa en la cancelación.
+**Impacto en plugins:** ninguno. Los plugins crean envíos y consultan estado. La
+cancelación queda fuera del contrato de la API externa deliberadamente.
 
 ---
 

@@ -1899,22 +1899,11 @@ Recon leído directo en el repo:
 
 ### Bug independiente detectado (arreglable YA, dashboard humano)
 
-La **fuga de dimensiones** del dashboard ya existe hoy, sin relación con plugins:
-- Formulario `/nuevo-envio` obliga a cargar largo/ancho/alto.
-- `/cotizar` los usa correctamente para el precio mostrado.
-- POST `/api/envios/manual` **NO los envía en el payload**.
-- `crear.ts` cae al 10×10×10 hardcoded → cotización interna y etiqueta divergen del precio mostrado.
-- Courier factura por peso volumétrico con dimensiones equivocadas → conciliación estropeada.
-
-**Fix mínimo** (independiente del plugin, sub-pieza temprana de CAPA 2):
-1. Extender `CrearEnvioInput` con `paquetes?: Paquete[]` (opcional; backward-compat).
-2. `POST /api/envios` + `POST /api/envios/manual`: leer `body.paquetes[]` y forwardear.
-3. `crear.ts:408-413`: si viene `input.paquetes`, usarlo; si no, sintetizar como hoy.
-4. UI `/cotizar` al confirmar: incluir `paquetes` en el payload de `/api/envios/manual` (los tiene desde URL params — sólo falta forwardearlos).
-5. `AndreaniAdapter.despachar`: leer dimensiones del `paquetePrincipal` correctamente (hoy caen a 10×10×10 en fallback también).
-6. Persistir `pesoReal = Σ pesoKg`, `pesoVolumetrico = Σ (largo×ancho×alto)/factor` (los campos ya existen en `Envio`).
-
-**Sin cambio de schema.** ~1 día real. **Prioridad: alta** — afecta conciliación y facturación real del dashboard actual.
+La fuga de dimensiones del dashboard (largo/ancho/alto se pierden al crear → 10×10×10
+hardcoded → descalce cotizado/despachado/facturado) está registrada en detalle como
+**DEUDA 132**. Es arreglable de forma independiente y ANTES del motor de reglas (CAPA 1),
+porque no bloquea el plugin. Ver DEUDA 132 para el problema completo, el fix en 5 pasos
+y los archivos afectados.
 
 ---
 

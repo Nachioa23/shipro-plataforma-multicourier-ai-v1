@@ -1956,6 +1956,8 @@ no un lujo.
 **Prioridad:** alta dentro del frente de plugins (es el desbloqueante del "tercer momento" — la trazabilidad
 publicada dentro del panel del e-commerce). ~1-2 días. Requiere diseño dedicado.
 
+**Nota (2026-08-06, verificado contra doc oficial Tiendanube):** para el plugin Tiendanube, el tracking hacia la tienda es **PUSH** (la app hace POST cuando cambia el estado; Tiendanube no hace polling). Se usa la nueva Fulfillment Events API multi-inventory: eventos asociados a la Fulfillment Order (`POST /orders/{order_id}/fulfillment-orders/{ffo_id}/tracking-events`), máx 100 eventos por FFO, rechaza duplicados <60s, un evento `delivered` cierra la FFO. Esto precisa cómo se construye el despachador de webhooks salientes: no es sólo Shipro→e-commerce genérico, sino que el adaptador de Tiendanube traduce los `EventoTracking` internos al contrato de tracking-events de la FFO.
+
 ---
 
 ## DEUDA 105 — Cancelación de envíos: decisión de producto — solo desde la plataforma (NO via plugin)
@@ -2033,9 +2035,9 @@ Un checkout que devuelve 5xx o tarda >5s se transforma en un **transporte bloque
 
 ---
 
-## DEUDA 130 — Requisitos de homologación de Tiendanube para la app de envíos (shipping carrier) — preparar para publicar en marketplace (scope grande, plugin Tiendanube)
+## DEUDA 130 — Plugin Tiendanube: spec de integración + homologación (documento maestro, verificado contra doc oficial 2026-08-06)
 
-**Status:** ABIERTA. Registrada 2026-08-05. **Spec reference del plugin Tiendanube.** Cuando se ataque el plugin de Tiendanube en una sesión dedicada, este documento manda: la app se construye desde el día uno cumpliendo TODOS los requisitos de homologación para no rehacer, aunque se lance antes de homologar.
+**Status:** ABIERTA. Reescrita 2026-08-06 con información verificada contra documentación oficial de Tiendanube (`dev.tiendanube.com` + `tiendanube.github.io`) + cruce en Gemini Notebook con los docs oficiales cargados. Documento maestro del plugin: manda sobre cualquier investigación previa.
 
 ---
 
@@ -2049,82 +2051,133 @@ Un checkout que devuelve 5xx o tarda >5s se transforma en un **transporte bloque
 
 ---
 
-### Hallazgos de la doc oficial (dev.tiendanube.com, consultado 2026-08-05)
+### ⚠️ Cronograma NubeSDK — fechas límite oficiales (VERIFICADO)
 
-**1. HOMOLOGACIÓN SÍNCRONA obligatoria.** Las apps tipo Envíos (junto con Pagos y ERP) requieren homologación **síncrona** — reunión de validación conjunta donde el equipo de Tiendanube revisa la app ítem por ítem contra la checklist técnica. Más exigente que la asíncrona (que otras categorías de apps usan). Fuente: `dev.tiendanube.com/docs/homologation/sync`.
+Fuente oficial: `dev.tiendanube.com/docs/applications/overview`.
 
-**2. ⚠️ NubeSDK OBLIGATORIO (impacta el stack).** Desde el **5-jun-2026**, la parte visual de la app (lo que el merchant ve dentro del panel de Tiendanube) DEBE construirse con **NubeSDK**, corriendo dentro de un **Web Worker**.
+- **5 de junio de 2026** — el NubeSDK es OBLIGATORIO en la homologación. Ninguna solicitud nueva se aprueba sin validación / adecuación al SDK. **Fecha ya pasada.**
+- **30 de agosto de 2026** — se BLOQUEAN las nuevas instalaciones de apps que no usen NubeSDK. Las tiendas que ya tienen la app instalada NO se ven afectadas.
+- **30 de octubre de 2026** — inicio de deprecación y desinstalación progresiva de apps legadas, con recomendación de app alternativa a los comerciantes.
 
-- **PROHIBIDO** (motivo directo de rechazo): `document`, `window`, `jQuery`, manipulación directa del DOM.
-- **OBLIGATORIO**: UI con componentes NubeSDK + sistema de diseño **Nimbus**. Stack React.
-- La fecha ya pasó → **aplica sí o sí** desde el momento en que empecemos la app.
-- Fuentes: `dev.tiendanube.com/docs/homologation/checklist` + `dev.tiendanube.com/applications/native`.
-
-**Impacto**: la sección de la app que vive dentro del panel de Tiendanube no puede ser una vista Next.js/React "normal" — tiene que compilarse contra NubeSDK y correr en un Web Worker. Todo lo que necesite acceder al DOM, a `window` o a librerías DOM-dependientes queda del lado de la NPMS/servidor Shipro, no del lado del panel del merchant.
-
-**3. WEBHOOKS NO DIFERIBLES.** La doc exige "uso eficiente de recursos" y explícita que hacer **GETs continuos para detectar cambios (polling)** en vez de escuchar un webhook es motivo de observación o rechazo. **Confirma que DEUDA 104 (webhooks salientes) es parte del core obligatorio para homologar, no diferible.** Sin webhooks Shipro→e-commerce, no hay homologación.
-
-**4. ARTEFACTOS OBLIGATORIOS de homologación (a producir para la reunión síncrona):**
-- **Diagrama de secuencia** — cómo la app interactúa con la API de Tiendanube: qué evento dispara qué llamado, con qué payload, y qué resultado esperado.
-- **Video demo** con escenarios específicos:
-  - Instalación desde Tiendanube vía URL `https://www.tiendanube.com/apps/{app_id}/authorize`.
-  - Registro de usuario nuevo (primer alta del comerciante).
-  - Login de usuario existente (que ya tiene cuenta Shipro).
-  - Reinstalación tras desinstalar (flujo de re-onboarding limpio).
-- **Cuenta demo** ya liberada de suscripciones/esperas: entregar credenciales de una tienda Tiendanube activa + cuenta Shipro asociada + saldo/config listos para que el revisor pruebe end-to-end sin fricción.
-- **Documento FAQ + contactos** de soporte: nivel 1 (comerciante), nivel 2 (técnico primer piso), nivel técnico avanzado, ventas. Ownership por nivel.
-
-**5. Mecanismo Shipping Carrier (API doc).** La app registra un carrier con:
-- `callback_url` — endpoint que Tiendanube llama para pedir rates durante el checkout. Debe responder rápido y sin 5xx (conecta con DEUDA 129: circuit breaker de Tiendanube corta a 5s con >50% 5xx).
-- `callback_labels_url` — endpoint asíncrono para la Labels API (crear etiqueta post-orden).
-- **`rates[]`** — JSON array con campos obligatorios (contrato exacto A CONFIRMAR con Tiendanube — ver pendientes).
-- Tipos de tarifa: `ship` (envío a domicilio) y `pickup` (retiro en sucursal).
-- **Fulfillment Events** para tracking bidireccional (Shipro emite eventos hacia Tiendanube; Tiendanube los muestra al comerciante y al comprador).
-- Fuente: `tiendanube.github.io/api-documentation/resources/shipping-carrier`.
+**Impacto en la estrategia link-directo:** el bloqueo del 30-ago aplica a instalaciones nuevas de apps que requieren NubeSDK (componente visual del comprador). **PENDIENTE CONFIRMAR con Poggi**: si una Shipping Carrier App que sólo registra carrier vía API (sin UI en checkout del comprador) queda alcanzada por el bloqueo, o si aplica sólo a apps con componente visual. La respuesta define el margen real de tiempo.
 
 ---
 
-### Pendientes de conseguir (Nacho lo pide vía WhatsApp a su contacto en Tiendanube AR, Franco Radavero)
+### Arquitectura de las DOS interfaces visuales (CORRECCIÓN IMPORTANTE)
 
-1. **Checklist técnico específico de apps de Envíos** — el que revisan en la reunión síncrona; no está público en la doc general.
-2. **Contrato exacto de `rates[]`** — schema completo con campos obligatorios / opcionales / tipos / rangos.
-3. **Especificación completa de la Labels API** — flujo asíncrono, timeouts, reintentos esperados, formato de etiqueta.
-4. **Webhooks obligatorios + requisitos de seguridad** — qué eventos de Tiendanube debemos escuchar sí o sí, firma HMAC (algoritmo, header, formato del secret), política de reintentos que hace Tiendanube.
-5. **Umbrales de performance/timeout evaluados** — más allá del corte de 5s conocido en checkout, qué otros SLAs miden en la homologación (Labels API, tracking events, disponibilidad).
-6. **Acceso a sandbox/testing** para apps de envíos — entorno específico donde probar sin afectar tiendas reales.
+La creencia previa ("la parte visual corre con NubeSDK") era incompleta. Hay **DOS interfaces distintas**, con **DOS stacks distintos**, para **DOS usuarios distintos**:
 
-Sin estas 6 respuestas, la implementación queda con huecos de contrato que van a salir en la reunión síncrona.
+- **NubeSDK → lo que ve el COMPRADOR** (storefront + checkout). Corre en Web Worker, sin acceso directo al DOM. Inyecta componentes en "slots" del checkout (ej. `before_cart_shipping_options`, `after_cart_shipping_options`). Paquetes: `@tiendanube/nube-sdk-types`, `-ui`, `-jsx`. CLI: `create-nube-app`. Build → `dist/main.min.js`. DevTools de Chrome con Local Mode. Dev server puerto 8080.
+- **Nimbus + Nexo → lo que ve el MERCHANT / cliente** (panel de administración). App integrada en iframe del Admin. Nimbus = sistema de diseño obligatorio para apps integradas (`@nimbus-ds/styles`, `@nimbus-ds/components`), stack React. Nexo = puente de comunicación Admin↔app integrada (`@tiendanube/nexo`, mensajes `iAmReady`, tokens de sesión).
+
+**Consecuencia de diseño:** el panel donde el cliente configura credenciales, reglas de empaquetado, imprime etiquetas, ve márgenes → **Nimbus + Nexo**. El selector de envío enriquecido o mapa de puntos de retiro que ve el comprador → **NubeSDK**. No se confunden.
 
 ---
 
-### Relación con otras DEUDAs del frente plugins
+### Flujo OAuth (VERIFICADO)
 
-- **DEUDA 103** (motor de reglas de empaquetado + multi-bulto + madre/hija): la CAPA 2 de 103 (creación multi-bulto) es lo que despacha las etiquetas que Tiendanube pide vía Labels API. Prerequisito duro.
-- **DEUDA 104** (webhooks salientes): **NO es diferible para homologar Tiendanube** (ver hallazgo 3). Cambia de "gap grande" a "prerequisito duro de homologación".
-- **DEUDA 105** (cancelar por API): **decisión de producto — NO se implementa** (RESUELTA por diseño 2026-08-05). Cancelar es platform-only por juicio operativo del cliente; la reunión síncrona debe reflejar que la app deliberadamente NO expone cancelación via API.
-- **DEUDA 128** (idempotencia): Tiendanube reintenta webhooks; sin idempotencia se duplican etiquetas en cada reintento (bloqueante).
-- **DEUDA 129** (resiliencia checkout / 4xx-vs-5xx / fallback rate): directamente contra el circuit breaker de Tiendanube (5s + >50% 5xx = 5 min bloqueado). Prerequisito duro para pasar la homologación.
-
-**Todas las 5 anteriores son necesarias para tener una app Tiendanube homologable.** DEUDA 130 es la envoltura que las une + lo específico de la plataforma (NubeSDK + Nimbus + artefactos + reunión síncrona).
-
----
-
-### Scope y prioridad
-
-**Scope:** grande. Estimación gruesa (pendiente de refinar cuando lleguen las respuestas de Radavero):
-- Componente NubeSDK + Web Worker + Nimbus (parte visual dentro del panel): ~2-3 semanas.
-- OAuth Tiendanube + instalación + `callback_url` (rates) + `callback_labels_url` (Labels): ~1-2 semanas.
-- Fulfillment Events (bidireccional con webhooks): depende de DEUDA 104.
-- Idempotencia (DEUDA 128) + resiliencia checkout (DEUDA 129) + multi-bulto (DEUDA 103 Capa 2) resueltas **antes** de la app Tiendanube.
-- Artefactos de homologación (diagrama, video, cuenta demo, FAQ): ~1 semana concentrada.
-
-**Total razonable para app homologable**: ~2-3 meses de trabajo enfocado, asumiendo que las 5 DEUDAS prerequisito ya están cerradas.
-
-**Prioridad:** el plugin Tiendanube es el primer canal comercial serio (mayor share de e-commerce en AR). Pero **no es urgente por el marketplace** (Nacho lanza por link directo). Lo urgente es que las DEUDAs prerequisito (103, 104, 105, 128, 129) se ataquen antes del plugin, y que cuando el plugin arranque, se construya cumpliendo estas specs.
+- **Instalación:** merchant entra a `https://www.tiendanube.com/apps/{app_id}/authorize`, autoriza scopes.
+- **Redirect** a la Redirection URL con `?code=xyz&state=...`. El `code` expira en **5 minutos**.
+- **Intercambio:** `POST https://www.tiendanube.com/apps/authorize/token` con body JSON: `client_id`, `client_secret`, `grant_type: "authorization_code"`, `code`.
+- **Respuesta:** `access_token` (Bearer, **PERMANENTE, sin expiración, sin refresh_token**) + `user_id` (store_id).
+- **Reinstalación:** regenerar token, **NO duplicar recursos** (no recrear el carrier).
+- **Scopes relevantes:** `write_shipping` (gestionar carriers), `write_fulfillment_orders` + `read_fulfillment_orders` (Labels API + fulfillment events modernos), `read_orders` (leer órdenes).
+- **Headers obligatorios en cada request a la API:** `Authorization: Bearer <token>`, `User-Agent: NombreApp (email_o_url)` (sin User-Agent → 400), `Content-Type: application/json` en POST/PUT (sin él → 415).
 
 ---
 
-**Próxima acción:** ejecutar por WhatsApp el pedido a Franco Radavero (6 puntos de "Pendientes de conseguir"), esperar respuesta, y con esa info recién arrancar la sesión de diseño dedicada al plugin.
+### Rates callback — cotización en checkout (VERIFICADO)
+
+- **Tiendanube hace POST al `callback_url`** con: `cart_id` (puede ser null), `store_id`, `currency`, `language`, `total_price`, `origin` (incluye `location_id` ULID del depósito), `destination`, `items[]` (cada item con `grams` = peso unitario, y `dimensions` `{width, height, depth}`), y `carrier` con sus `options[]`.
+- **Response:** array `rates[]`. Campos obligatorios por rate: `name`, `code`, `price`, `currency`, `type`. Opcionales relevantes: `price_merchant`, `min_delivery_date`, `max_delivery_date`, `id_required`, `phone_required`, `accepts_cod`, `reference`. Para `pickup` además: `address`, `hours`, `availability`.
+- **Regla de codes (type `ship`):** el `code` **NO puede repetirse**. Podés devolver varias rates con codes DISTINTOS (varias opciones de courier). Si mandás dos con el mismo code, sólo se procesa la primera. Para `pickup` sí se puede repetir code (varias sucursales bajo un code).
+- **Pre-registro obligatorio de carrier options:** hay que registrar cada opción con `POST /shipping_carriers/{id}/options` ANTES de cotizarla. Un code no registrado o inactivo en la rate se descarta (no se muestra al comprador). **NO hay codes dinámicos sin registro previo.**
+- **Campo `reference`:** el string que devolvés vuelve en la orden como `shipping_option_reference` (legacy) y `shipping.option_reference` (FFO). **Usarlo** para serializar qué courier + servicio eligió el comprador, y recuperarlo al crear la etiqueta sin consulta a BD.
+- **Caché server-side:** respuestas 200 se cachean **15 min**; 422 se cachean **1 min**; otras no se cachean. Cache key = `MD5(carrier_id + origin + destination + items_hash)`, `items_hash = MD5` de `{id}:{quantity}:{grams}:{width}:{height}:{depth}` por item. **Riesgo documentado:** si un courier cae y respondemos con tarifa de rescate (200), el comprador ve esa tarifa 15 min aunque el courier se recupere antes (mismo carrito + dirección). No es grave (la venta se concreta, premisa de Nacho), pero es comportamiento a tener presente.
+
+---
+
+### Circuit breaker de Tiendanube (VERIFICADO) — conecta con DEUDA 129
+
+- **Se abre con:** ≥500 requests en 30 min Y ≥50% de fallas (5xx o timeout >5s). Ventana móvil 30 min.
+- **Abierto:** 5 min sin tráfico, luego 10 requests de prueba. Timeout de respuesta: **5 segundos**.
+- **4xx = servicio vivo, request inválido** (CP no soportado, dimensiones inválidas). **NO cuenta** como falla del breaker, pero marca Unhealthy → dispara fallback del merchant si está configurado.
+- **5xx / timeout = falla técnica.** Cuenta para abrir el breaker. También dispara fallback.
+- **Recomendación oficial:** para errores de negocio conocidos, responder **4xx** (NO 200 con error en el body — eso se trata como éxito y NO muestra el fallback, dejando el checkout sin opciones). **Esto valida exactamente la clasificación 503/422 implementada en DEUDA 129.**
+
+---
+
+### Labels API — creación de etiquetas (VERIFICADO, asíncrono)
+
+- **Flujo:** se crea la orden → Tiendanube mapea 1+ Fulfillment Orders (FFO, id ULID). La app hace `POST /fulfillment-orders/labels` con los ids de FFO. Tiendanube responde `STARTED` y dispara `POST` a `{callback_labels_url}/generate` con snapshot completo de la FFO (`fulfillment_order_info`: line_items con dimensiones, recipient, shipping con el `reference`, destination, etc.).
+- La app responde 200/202 (acepta) → etiquetas pasan a `IN_PROGRESS`. Genera el PDF asíncrono.
+- Cuando está lista: `PATCH /fulfillment-orders/{ffo_id}/labels/{label_id}` con status `READY_TO_DOWNLOAD` + tracking code + `download_url`. Tiendanube descarga el PDF a su S3 → `READY_TO_USE`. El merchant descarga → `DOWNLOADED`.
+- **Estados:** `STARTED`, `IN_PROGRESS`, `READY_TO_DOWNLOAD` (interno, no notificado por webhook), `READY_TO_USE`, `DOWNLOADED`, `SUSPENDED`, `FAILED` (con reason: `AUTHORIZATION_ERROR`, `BALANCE_ERROR`, `LIMIT_ERROR`, `CARRIER_ERROR`, `CARRIER_DOCUMENT_ERROR`, `CARRIER_UNAVAILABLE_ERROR`, `OTHER_ERROR`), `CANCELED`.
+- **Timeouts:** `/generate` debe responder <5s. 3 reintentos con backoff 2s. Si se acepta pero no llega el PATCH en 30 min → `FAILED` automático. Respuesta **207 Multi-Status** para aceptar unos bultos y rechazar otros.
+
+---
+
+### Modelo multi-bulto en Tiendanube (VERIFICADO) — conecta con DEUDA 103
+
+- Una orden puede tener **múltiples Fulfillment Orders** (multi-inventory, envíos parciales, bultos pesados). `GET /orders/{id}` incluye `fulfillments: [ULID, ...]`.
+- Dos caminos para N bultos con tracking independiente: **(a)** N Fulfillment Orders separadas, o **(b)** hasta **20 etiquetas por una FFO** (límite estricto). Cada etiqueta con su `label_id`, estado asíncrono y tracking propio.
+- **Esto resuelve la incógnita de DEUDA 103** sobre cómo modelar N bultos en el checkout. Alinea con la decisión de producto: cliente configura la regla de empaquetado, N bultos → N envíos Shipro agrupados bajo el pedido.
+
+---
+
+### Tracking hacia Tiendanube — Fulfillment Events (VERIFICADO) — conecta con DEUDA 104
+
+- **Flujo PUSH:** la app hace POST cuando cambia el estado. Tiendanube NO hace polling.
+- Usar la **nueva Fulfillment Events API (multi-inventory)**: eventos asociados a la FFO (`POST /orders/{order_id}/fulfillment-orders/{ffo_id}/tracking-events`), no a la orden. Soporta geolocation. Rechaza eventos idénticos con <60s de diferencia. **Máx 100 eventos por FFO.** Un evento `delivered` mueve la FFO a `DELIVERED` automáticamente.
+
+---
+
+### Seguridad de webhooks (VERIFICADO)
+
+- **Header:** `x-linkedstore-hmac-sha256`. Algoritmo HMAC-SHA256. Secret = `client_secret`. Calcular sobre el **raw body** (bytes crudos, antes de parsear JSON), salida hex, comparación en tiempo constante (`timingSafeEqual`). Deduplicación de eventos obligatoria.
+- **Webhooks:** timeout 3s, hasta 16 reintentos en 48h con backoff exponencial.
+- El `callback_url` de rates **NO tiene firma / token / allowlist impuesto** por la doc — sólo exige HTTPS. La seguridad de ese endpoint queda a nuestro criterio (token compartido, etc.).
+
+---
+
+### Artefactos de homologación (VERIFICADO)
+
+- **Homologación SÍNCRONA** para apps de Envíos (junto con Pagos y ERP): reunión de validación conjunta.
+- **Artefactos:** diagrama de secuencia (cómo la app usa los permisos), video / screencast demo en español (instalación desde Tiendanube, escenario sin cuenta, escenario con cuenta / login), credenciales de login si integra con terceros, cuenta demo libre de fricciones (sin pantallas de pago ni esperas).
+- **Contacto de artefactos:** `publicacion@tiendanube.com`. Acceso a scopes de shipping: formulario `https://forms.gle/oqP1BrtwMzNb7xCM9` (Partners Portal → Platform Team aprueba manual).
+
+---
+
+### Testing / sandbox (VERIFICADO)
+
+- **NO hay sandbox específico de envíos.** Sí hay: **tienda demo gratuita** desde Partners Portal (OAuth, webhooks, app integrada). Para probar NubeSDK: pedir "tag de SDK" para la tienda demo vía formulario del DevHub (self-service, no esperar el rollout). Developer Mode para apps integradas. NubeSDK DevTools Local Mode.
+
+---
+
+### Estado de los 6 puntos que Nacho pidió a Poggi (mail enviado, esperando respuesta)
+
+1. **Checklist técnico de apps de Envíos** — PARCIAL (hay checklist de diseño / UX público; el específico de la reunión síncrona sigue pendiente).
+2. **Contrato exacto de `rates[]`** — RESUELTO por doc oficial (ver sección **Rates callback**).
+3. **Spec de Labels API** — RESUELTO por doc oficial (ver sección **Labels API**).
+4. **Webhooks obligatorios + HMAC** — RESUELTO por doc oficial (HMAC + privacidad; ver DEUDA 133).
+5. **Umbrales de performance / timeout** — RESUELTO por doc oficial (breaker + timeouts por endpoint).
+6. **Sandbox de envíos** — RESUELTO por doc oficial (no hay dedicado; tienda demo + tag SDK).
+
+**PENDIENTE de Poggi:** alcance exacto del bloqueo 30-ago para app **sin UI de comprador** (ver **Cronograma NubeSDK**).
+
+---
+
+### Prerequisitos (frente plugins)
+
+- **DEUDA 103** (multi-bulto): la Capa 2 despacha las etiquetas de la Labels API. **Prerequisito duro.**
+- **DEUDA 104** (webhooks salientes): tracking PUSH hacia Tiendanube. **Prerequisito duro de homologación.**
+- **DEUDA 128** (idempotencia) ✅ RESUELTA. **DEUDA 129** (resiliencia) ✅ RESUELTA — valida el contrato 4xx/5xx.
+- **DEUDA 105** (cancelar) — decisión de producto, platform-only.
+- **DEUDA 133** (webhooks de privacidad) — NUEVO, obligatorio para homologar cualquier app.
+
+---
+
+**Próxima acción:** esperar respuesta de Nicolás Poggi (mail enviado vía recomendación de Franco Radavero) sobre el alcance del bloqueo 30-ago + checklist síncrono. En paralelo, diseñar el backend (rates callback + OAuth + registro de carrier), que no depende de esas respuestas.
 
 ---
 
@@ -2187,6 +2240,27 @@ un bug de facturación que ya existe hoy. NO bloquea el desarrollo del plugin de
 (si se decide persistir dimensiones o `pesoVolumetrico` real).
 
 **Prioridad:** media-alta. Bug de facturación real, pero acotado. Diferible respecto al plugin.
+
+---
+
+## DEUDA 133 — Webhooks de privacidad de datos obligatorios de Tiendanube (LGPD/GDPR, prerequisito de homologación de CUALQUIER app) (registrada 2026-08-06, scope medio)
+
+**Status:** ABIERTA. Registrada 2026-08-06. Verificado contra doc oficial de Tiendanube.
+
+**Problema:** Tiendanube exige, para homologar CUALQUIER app (no sólo envíos), soporte síncrono de tres webhooks de privacidad de datos. Sin ellos no se homologa.
+
+**Los tres webhooks:**
+- `store/redact` — se dispara tras la desinstalación de la app. Hay que **purgar la info histórica** de esa tienda de nuestras bases. Payload: `{"store_id": 123}`.
+- `customers/redact` — derecho al olvido de un comprador (sin transacciones en los últimos 6 meses). Hay que **anonimizar / borrar** sus datos. Payload: tienda + cliente (id, email, phone, identification) + órdenes a anonimizar.
+- `customers/data_request` — portabilidad de datos de un comprador. Procesar y transmitir al merchant. Payload: cliente + referencias de órdenes / checkouts / draft_orders.
+
+**Seguridad:** validar HMAC-SHA256 (header `x-linkedstore-hmac-sha256`, secret = `client_secret`, sobre raw body, comparación en tiempo constante). Deduplicación obligatoria.
+
+**Relación:** es **transversal a cualquier app Tiendanube**, por eso es deuda propia y no una sub-sección de DEUDA 130. Pero es prerequisito de la homologación del plugin. Comparte el mecanismo HMAC + el sistema de webhooks entrantes que también necesita el plugin.
+
+**Archivos (a futuro):** endpoints nuevos para los tres webhooks + validador HMAC compartido.
+
+**Prioridad:** media. No bloquea el desarrollo del backend de cotización, pero sí la homologación.
 
 ---
 

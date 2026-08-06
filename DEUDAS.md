@@ -1877,7 +1877,7 @@ Recon leído directo en el repo:
   - La conciliación cierre por pedido, no por envío individual.
   - El plugin pueda mostrar el estado agregado al comprador en el panel Tiendanube.
 - **Modelo de datos requerido**: un modelo tipo `PedidoExterno` (o `AgrupacionEnvios`) que agrupe los N envíos, con `platformOrderId` (el ID del pedido en Tiendanube), `empresaId`, y relación 1:N a `Envio`. **NO se necesita `EnvioBulto`** en B2C — cada bulto ES un envío completo con su tracking; no hay sub-tabla.
-- **Sub-pieza temprana: arreglar la fuga de dimensiones del dashboard** (ver bug independiente abajo). Threading real de dimensiones desde el body hasta `crear.ts` + adapter + persistencia.
+- **Sub-pieza temprana — fuga de dimensiones del dashboard**: registrada como **DEUDA 132** (bug independiente, arreglable antes del motor de reglas). Ver esa deuda para el detalle.
 - **Adapters**: `AndreaniAdapter.despachar` sigue single-bulto (correcto para B2C — 1 orden = 1 bulto). `MocisAdapter.despachar` normal ya multi-items; PENDIENTE VERIFICAR si 1 tracking o N (ver "Modelo de dominio").
 
 **CAPA 3 — Multi-bulto B2B bajo un tracking (Andreani BIGGER) — POSPUESTA**
@@ -2158,6 +2158,46 @@ código Prisma `P2002` y hacer un segundo `findFirst` para devolver el envío ya
 creado con `replayed: true`. Patrón: try-create → catch P2002 → re-query → return.
 
 **Archivos:** `app/api/envios/route.ts`.
+
+---
+
+## DEUDA 132 — Fuga de dimensiones en la creación de envío del dashboard: largo/ancho/alto se pierden y caen a 10×10×10 hardcoded (bug de facturación real, scope chico-medio)
+
+**Status:** ABIERTA. Registrada 2026-08-07. Detectada durante el recon de DEUDA 103.
+Bug independiente del plugin — afecta al dashboard humano HOY.
+
+**Problema:** el formulario `/nuevo-envio` obliga al usuario a cargar peso + largo + ancho
++ alto (validación en `nuevo-envio/page.tsx:246`). Esas dimensiones viajan como URL params
+a `/cotizar` y se usan correctamente en `POST /api/cotizar` — **el precio que ve el usuario
+es correcto**. Pero al confirmar y crear (`cotizar/page.tsx:208-210`), el payload a
+`POST /api/envios/manual` **NO incluye las dimensiones**. `crear.ts:408-413` cae entonces
+a un `paquetes: [{ largoCm: 10, anchoCm: 10, altoCm: 10 }]` **hardcoded literal**.
+
+**Consecuencia (descalce silencioso):**
+- La cotización mostrada usa dimensiones reales → precio correcto en pantalla.
+- La re-cotización interna de `crear.ts` (para persistir en `FinanzasEnvio` y matchear la
+  opción elegida) usa 10×10×10 → puede diferir del precio mostrado si el peso volumétrico real es alto.
+- La etiqueta despachada al courier (`AndreaniAdapter.despachar` → `bultos[0]` con dims
+  hardcoded) usa 10×10×10 → el courier factura por SUS medidas reales al procesar el bulto,
+  no por las 10×10×10 → **cotizado ≠ despachado ≠ facturado**. Descalce que golpea la conciliación.
+
+**Fix:** threading de las dimensiones reales de punta a punta:
+1. `CrearEnvioInput`: agregar `largoCm?`, `anchoCm?`, `altoCm?` (o `paquetes?: Paquete[]`).
+2. `POST /api/envios/manual` + `POST /api/envios`: leer las dimensiones del body.
+3. `cotizar/page.tsx` (confirmación): incluir las dimensiones en el payload a `/manual`.
+4. `crear.ts:408-413`: usar las dimensiones del input si vienen; sintetizar 10×10×10 sólo
+   como último recurso (backward-compat).
+5. Persistir `pesoVolumetrico` calculado desde las dimensiones reales.
+
+**Relación con DEUDA 103:** es la "sub-pieza temprana de CAPA 2" mencionada en DEUDA 103.
+Se puede atacar de forma independiente y ANTES del motor de reglas (CAPA 1), porque arregla
+un bug de facturación que ya existe hoy. NO bloquea el desarrollo del plugin de Tiendanube.
+
+**Archivos:** `lib/envios/crear.ts`, `app/api/envios/manual/route.ts`, `app/api/envios/route.ts`,
+`app/(dashboard)/cotizar/page.tsx`, `lib/couriers/AndreaniAdapter.ts`, `prisma/schema.prisma`
+(si se decide persistir dimensiones o `pesoVolumetrico` real).
+
+**Prioridad:** media-alta. Bug de facturación real, pero acotado. Diferible respecto al plugin.
 
 ---
 

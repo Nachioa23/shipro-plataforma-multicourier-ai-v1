@@ -26,6 +26,7 @@ import {
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { obtenerCredencialesShipro } from "@/lib/couriers/credenciales";
 import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
+import type { ResultadoBulto } from "@/lib/couriers/CourierInterface";
 import { Prisma, EstadoLiquidacion, type DepositoCourierConfig } from "@prisma/client";
 
 export interface CrearEnvioInput {
@@ -121,6 +122,10 @@ export async function crearEnvio(input: CrearEnvioInput) {
     sucursalOrigenId?: number | null;
     sucursalDestinoId?: number | null;
   }[] = [];
+  // Molde multi-bulto paso 1b: carrier de bultos despachados hacia la tx (mismo
+  // patrón que dispatchTramos). dispatchResult es block-local al gate del despacho,
+  // así que hay que caché'ar los bultos acá para que estén en scope de la tx.
+  let dispatchBultos: ResultadoBulto[] = [];
 
   // =========================================================
   // RESOLVER COURIER CANÓNICO
@@ -717,6 +722,9 @@ export async function crearEnvio(input: CrearEnvioInput) {
 
     // DEUDA 29 Sub-fase 1.C.2: capturar snapshots de tramos para persistirlos en la tx.
     dispatchTramos = dispatchResult.tramos;
+    // Molde multi-bulto paso 1b: capturar bultos del despacho (fase 1a.1 los propaga
+    // desde el adapter a través de dispatch.ts). Hoy 1 bulto → 1 fila en EnvioBulto.
+    dispatchBultos = dispatchResult.bultos ?? [];
 
     if (dispatchResult.tracking) {
       // Despacho exitoso (caso A, B o C con todos los tramos OK).
@@ -835,6 +843,29 @@ export async function crearEnvio(input: CrearEnvioInput) {
           trackingExterno: t.trackingExterno,
           sucursalOrigenId: t.sucursalOrigenId ?? null,
           sucursalDestinoId: t.sucursalDestinoId ?? null,
+        })),
+      });
+    }
+
+    // Molde multi-bulto paso 1b: persistir los bultos despachados en EnvioBulto.
+    // Hoy 1 bulto → 1 fila. Predicción (peso/dims) a nivel envío (único bulto);
+    // cuando el motor de empaquetado genere N, cada bulto traerá sus propios dims.
+    // Solo en despacho exitoso (dispatchBultos poblado); paths bloqueados lo crean
+    // cuando se destraban (procesar-bloqueados*, fase futura).
+    if (dispatchBultos.length > 0) {
+      await tx.envioBulto.createMany({
+        data: dispatchBultos.map((b, i) => ({
+          envioId: envioCreado.id,
+          orden: i + 1,
+          pesoKg: parseFloat(String(pesoReal)) || 1.0,
+          largoCm: largoCm ?? null,
+          anchoCm: anchoCm ?? null,
+          altoCm: altoCm ?? null,
+          valorDeclarado: parseFloat(String(valorDeclarado)) || 0,
+          trackingExterno: b.tracking ?? null,
+          etiquetaUrl: b.etiquetaUrl ?? null,
+          numeroBulto: b.numeroBulto ?? null,
+          totalizador: b.totalizador ?? null,
         })),
       });
     }

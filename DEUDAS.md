@@ -2235,6 +2235,10 @@ La creencia previa ("la parte visual corre con NubeSDK") era incompleta. Hay **D
 
 **Refinamiento de la Capa 1 (empaquetado) por decisión de Nacho:** el motor es un **bin-packing**. El cliente define sus tipos de bolsa/caja con capacidad (ej. bolsa 30×30×20 → hasta 4kg y esas dimensiones). El motor toma los items del carrito (Tiendanube ya manda `grams` + `dimensions` por item), los acomoda en la **menor cantidad de bolsas**, y cotiza esa cantidad de bultos. Si el cliente al empaquetar consolida en menos bolsas, se ahorra la etiqueta sobrante (cotización referencial, facturación sobre lo físico real — principio ya vigente en Shipro). **NOTA TÉCNICA:** bin-packing 3D con límite de peso es un problema complejo; al construir la Capa 1 se arranca con **heurística pragmática** (la mayoría de los carritos tienen pocos productos), no con la solución óptima matemática. Detalle abierto para el diseño de la Capa 1: si el peso/volumen de la bolsa misma cuenta, y qué dimensiones se pasan al courier (la bolsa o el contenido).
 
+### Incógnita abierta — concurrencia del lado del courier (no verificable en nuestro código)
+
+Pregunta sin responder: **¿Andreani o Mocis se comportan mal si reciben dos pedidos de despacho SIMULTÁNEOS usando la misma credencial** (Rama A, credencial de Shipro compartida entre empresas)? Esto es comportamiento de la API del courier, NO está en nuestro código, y probablemente no esté documentado. Del lado de Shipro **no hay contador compartido que se pise** entre empresas (verificado — cada `CredencialCourier` es fila propia por empresa; `obtenerCredencialesShipro` lee de env vars, no de una fila DB compartida). El único punto de choque real es el `saldoActivo` per-empresa (ver **DEUDA 136**). A verificar en producción o consultando a cada courier al integrarlo. **Registrar como incógnita conocida, ni confirmada ni descartada.**
+
 ---
 
 ## DEUDA 131 — Race condition en idempotency check de POST /api/envios (scope pequeño, follow-up DEUDA 128)
@@ -2333,6 +2337,109 @@ un bug de facturación que ya existe hoy. NO bloquea el desarrollo del plugin de
 **Consecuencia:** `order/edited` no se puede diseñar en abstracto. Hay que resolverlo courier por courier, y para cada nueva integración de courier verificar si la edición es posible. Para couriers que no permiten editar (como Mocis), la única vía sería anular y recrear (si el estado lo permite) o rechazar la edición con un mensaje claro.
 
 **Acción:** al integrar cada courier, documentar sus capacidades de edición post-creación. Diseñar el manejo de `order/edited` recién cuando haya al menos un mapa claro de qué permite cada courier en producción.
+
+---
+
+## DEUDA 136 — Race condition en actualización de saldo (read-then-write no atómico) — riesgo de pérdida de movimientos financieros bajo concurrencia (scope medio, toca PLATA) (registrada 2026-08-06, VERIFICADA en código)
+
+**Status:** ABIERTA. Verificada en recon 2026-08-06. NO arreglar apurado — sesión dedicada.
+
+**Problema (verificado en código):** la actualización de saldo sigue un patrón **read-then-write**: se lee el saldo actual, se calcula el nuevo valor en código, se guarda. Entre la lectura y la escritura, dos operaciones concurrentes sobre la MISMA empresa pueden pisarse: la segunda sobrescribe el resultado de la primera, perdiéndose un movimiento financiero (**lost update** clásico).
+
+**Ubicación verificada — 3 call sites afectados**:
+
+1. **`lib/envios/crear.ts:737, 740, 855-857`** (path principal — creación de envío):
+   ```typescript
+   const empresaData = await tx.empresa.findUnique({ where: { id: empresaId } });
+   let nuevoSaldo: Prisma.Decimal = (empresaData?.saldoActivo ?? new Prisma.Decimal(0)).sub(montoDebito);
+   ...
+   await tx.empresa.update({
+     where: { id: empresaId },
+     data: { saldoActivo: nuevoSaldo }
+   });
+   ```
+
+2. **`app/api/conciliacion/route.ts:468`** (path de conciliación aforo vs virtual):
+   ```typescript
+   const nuevoSaldo = empFresh.saldoActivo.sub(aforoConIva);
+   ```
+   Seguido de `tx.empresa.update({ data: { saldoActivo: nuevoSaldo } })`.
+
+3. **`app/api/admin/finanzas/route.ts:63-68`** (path de recarga manual admin):
+   ```typescript
+   const nuevoSaldo = empresa.saldoActivo.add(montoDecimal);
+   await tx.empresa.update({
+     where: { id: parseInt(empresaId) },
+     data: { saldoActivo: nuevoSaldo }
+   });
+   ```
+
+Los tres siguen el mismo anti-patrón: `read → compute in JS → write`. Postgres default isolation (`Read Committed`) + `findUnique` sin `SELECT FOR UPDATE` no toman lock entre el read y el write dentro de la transacción → dos requests concurrentes leen el mismo valor y calculan sobre el mismo baseline.
+
+Además, los checks previos al debit (`lib/envios/crear.ts:641-646`) son también read-then-check-then-write no-atómicos, permitiendo que dos requests pasen el guard simultáneamente y despachen debitando más allá del límite.
+
+**Alcance:**
+- Afecta operaciones concurrentes sobre el saldo de la MISMA empresa (mismo `Empresa.id`).
+- NO afecta entre empresas distintas (cada una tiene su fila `Empresa` con su propio `saldoActivo`; no hay estado compartido mutable entre empresas — verificado).
+- Las credenciales compartidas de Rama A NO son el punto de choque: se comparten para hablar con el courier, pero no hay contador compartido en la DB que se pise entre empresas (verificado — `obtenerCredencialesShipro` lee de env vars, no de una fila DB compartida).
+
+**Probabilidad:** hoy baja (requiere dos operaciones en el mismo instante sobre la misma cuenta — improbable con un cliente humano operando desde el dashboard). **SUBE con el plugin de Tiendanube**: los webhooks reintentan (hasta 16 veces en 48h con backoff) y pueden gatillar operaciones concurrentes sobre la misma empresa. Un plugin con volumen puede exponer este bug rápidamente.
+
+**Fix identificado (para sesión dedicada):** reemplazar el read-then-write por una operación atómica a nivel base de datos. Opciones:
+- **(a)** Usar `{ decrement: montoDebito }` / `{ increment: montoRecarga }` (Prisma atomic ops) sobre `saldoActivo` en vez de leer-calcular-escribir. Cambio quirúrgico: `data: { saldoActivo: nuevoSaldo }` → `data: { saldoActivo: { decrement: montoDebito } }`. Postgres lo compila a `UPDATE ... SET saldoActivo = saldoActivo - $decrement`, atómico.
+- **(b)** Envolver la operación en una transacción con nivel de aislamiento `Serializable` (`prisma.$transaction([...], { isolationLevel: 'Serializable' })`). Más caro en performance, más simple conceptualmente.
+- **(c)** Lock optimista con campo `version` (o `saldoUpdatedAt`) — check-and-set condicional. Más código, más control.
+
+Evaluar cuál encaja con el patrón de asientos contables inversos ya vigente (`MovimientoFinanciero` + `LiquidacionMensual`). El check pre-debit (`saldoActivo.lt(montoDebito)`) también hay que rediseñar para no sufrir la misma race. **Requiere pruebas de concurrencia antes de deployar** (toca plata; nunca deployar un fix de concurrencia sin verificar con carga concurrente).
+
+**Relación:** conecta con **DEUDA 131** (race condition de idempotencia) — ambas son problemas de concurrencia que suben prioridad de cara al volumen del plugin. **Resolver ambas antes de volumen alto en Tiendanube.**
+
+**Prioridad:** **ALTA (toca plata)**, pero NO urgente al volumen actual. Atacar en sesión dedicada, idealmente como parte de preparar el plugin para producción.
+
+---
+
+## DEUDA 137 — Escalabilidad del cron de tracking bajo alto volumen (scope a futuro) (registrada 2026-08-06)
+
+**Status:** ABIERTA — a futuro, no urgente.
+
+**Contexto (verificado):** el cron de tracking (`app/api/cron/rastreo/route.ts`) consulta a los couriers en lotes de **200 envíos por corrida** (`LOTE_MAXIMO = 200`, línea 12) y excluye de las siguientes consultas los envíos en estado final. Filtro verbatim (línea 26):
+
+```typescript
+estadoActual: { notIn: ["ENTREGADO", "CANCELADO", "DEVUELTO", "DEVUELTO_AL_REMITENTE", "BLOQUEADO_SALDO", "BLOQUEADO_DEPOSITO", "BLOQUEADO_PARCIAL", "BLOQUEADO_OPERATIVIDAD", "BLOQUEADO_CREDENCIAL"] }
+```
+
+**Sutileza importante** (comentario del código, líneas 22-25):
+> *"INCIDENCIA y NO_ENTREGADO se sacaron [del notIn] porque son bidireccionales — paquete perdido puede aparecer y entregarse."*
+
+Es decir: **los estados de "incidencia" y "no entregado" SIGUEN consultándose** en cada corrida (no se consideran terminales). Sólo `ENTREGADO / CANCELADO / DEVUELTO*` y los 5 estados `BLOQUEADO_*` (sin tracking real) se sacan del loop.
+
+**Otros filtros del cron** (además del `notIn`):
+- `trackingNumber: { not: "" }` — solo envíos con tracking real.
+- `fechaImpresion: { gte: cutoffDate }` — **cutoff temporal de 45 días** (`DIAS_MAXIMO_RASTREO`); post-45d el envío sale del loop y sólo se actualiza manualmente desde la UI.
+- Runtime skip: `if (envio.trackingNumber.startsWith('SHP-')) continue` — envíos con tracking placeholder Shipro (nunca alcanzaron al courier) se saltan.
+- Ordering: `fechaUltimoRastreo ASC, NULLs primero` — garantiza fairness (ningún envío se queda sin rastreo en cada ventana).
+
+**Estado de wiring en producción** (ya documentado en `docs/CRONS.md` §2b): el cron **está implementado pero NO está enganchado en el crontab del servidor** (solo `sweep-6m` está wireado). Sin wiring, el tracking automático no corre en prod.
+
+**Dato de negocio (Nacho):** Andreani cobra extra por ENVIAR información (webhooks push) pero NO por consultarla (polling). Por eso Shipro usa polling. Esto es una razón para **NO migrar a webhooks a la ligera**: el push tiene costo por courier. Evaluar caso por caso.
+
+**Riesgo a futuro:** con miles de envíos activos, el cron de polling puede crecer en carga:
+- Tiempo de corrida (200 envíos × latencia por courier).
+- Cantidad de llamadas a couriers (posible rate limit sobre la cuenta compartida Rama A — ver "Incógnita abierta" en DEUDA 130).
+- Costo si el courier factura por consulta (no aplica a Andreani hoy per Nacho).
+
+No es problema al volumen actual.
+
+**Optimizaciones futuras (cuando haga falta):**
+- Paginación más fina (lote menor + frecuencia mayor).
+- Paralelización controlada (batch de N couriers concurrentes, no secuencial).
+- Priorizar envíos recientes (ya se hace por `fechaUltimoRastreo ASC`).
+- Backoff por envío según antigüedad (envíos viejos se consultan menos).
+- Webhooks selectivos donde el courier no cobre por push (evaluar costo/beneficio por courier).
+
+**Relación con el plugin:** el cron de tracking es la **fuente de los eventos** que el plugin reenvía a Tiendanube (Momento 3 — DEUDA 104). **Wire del cron es prerequisito para que el tracking del plugin funcione.**
+
+**Prioridad:** baja hoy, sube con el volumen.
 
 ---
 

@@ -2434,6 +2434,126 @@ No es problema al volumen actual.
 
 ---
 
+## DEUDA 139 — Modelo multi-bulto por courier: dos familias de despacho + mapeo verificado de APIs (base arquitectónica de la interfaz común, VERIFICADO 2026-08-07)
+
+**Status:** ABIERTA — base de diseño. Verificado contra documentación oficial de 4 couriers
+(Andreani, Mocis, OCA, Correo Argentino) vía Gemini Notebook de Nacho.
+
+**HALLAZGO CENTRAL — dos familias de despacho multi-bulto:**
+Los couriers se parten en dos familias según cómo declaran N bultos. La interfaz común de
+despacho DEBE abstraer esta diferencia: el sistema le dice al adapter "despachá estos N bultos"
+y cada adapter resuelve a su manera, pero SIEMPRE devuelve lo mismo al sistema: N etiquetas con
+N trackings (o el agrupador correspondiente). La complejidad queda ESCONDIDA en el adapter.
+
+- **Familia 1 — "un request, varios bultos":** Andreani, Mocis. Se manda un request con el array
+  de bultos; el courier devuelve tracking/agrupador + etiquetas.
+- **Familia 2 — "un request por bulto":** Correo Argentino (Paq.ar), probablemente OCA. Para N
+  bultos → N llamadas; el adapter junta los N trackings.
+- Cualquier courier futuro cae en una de estas familias (o agrega una tercera; el molde queda
+  preparado). Esto valida diseñar la interfaz común AHORA mirando ambas familias.
+
+**MAPEO VERIFICADO POR COURIER:**
+
+ANDREANI:
+- Tecnología: REST/JSON. Endpoint: POST /v2/ordenes-de-envio (prod: apis.andreani.com).
+- Multi-bulto: array `bultos`, hasta 300 por request. Cada bulto: kilos (obl), volumenCm (obl),
+  largoCm/altoCm/anchoCm (opc), valorDeclarado (opc).
+- B2C: estrictamente 1 bulto/orden, hasta 50kg. B2B/BIGGER: multi-bulto (requiere remito.numeroRemito
+  12díg+R y valorDeclaradoSinImpuestos). Mismo endpoint ambos canales.
+- Respuesta: B2C agrupa con `agrupadorDeBultos`; B2B con `numeroDeEnvio`. Cada bulto trae
+  numeroDeBulto + totalizador ("3/10"). Etiquetas: individual por bulto (linking ?bulto=) o PDF
+  consolidado (etiquetasPorAgrupador).
+- Etiqueta: código de barras 128b + QR. Formatos: PDF (default), ZPL (header Accept: application/zpl).
+
+MOCIS:
+- Tecnología: REST form-urlencoded (NO json crudo). Endpoint: POST /api/v1/shipping/new
+  (prod: mocis.akeron.net).
+- Multi-bulto: array `items` de strings, cada uno "peso,alto,largo,ancho" (kg,cm,cm,cm). Un request,
+  varios bultos.
+- Respuesta: UN código de tracking por orden (array result). NO documenta cómo se identifica cada
+  bulto individual en la respuesta.
+- Etiquetas: GET /api/v1/shipping/print/label/{code}, PDF. No documenta si es una por bulto o
+  consolidada, ni si es barras/QR.
+- Límites de dimensiones/peso y fórmula de aforado: no documentados.
+- CANCELACIÓN: SÍ permite. POST /api/v1/shipping/cancel, param `code`. NO permite editar. (Cierra
+  parte de DEUDA 134 para Mocis.)
+
+OCA:
+- Tecnología: SOAP/XML (NO REST/JSON). WSDL con ?wsdl. Operación: IngresoORMultiplesRetiros.
+  Param único String XML_Datos con el XML del pedido.
+- Bultos: nodo <Paquetes> con alto/ancho/largo (cm), peso (kg), valor, y campo fijo cant="1".
+  Cómo se repiten los nodos para multi-bulto NO está claro en la doc (probable Familia 2).
+- Identificación: idOrdenRetiro (orden) + nroEnvio (19 díg) + numeroBulto. Etiquetas: HTML/PDF
+  (Base64)/ZPL, tamaños A4 y 10x15. Barras + QR.
+- Límites y fórmula de aforado: no documentados.
+
+CORREO ARGENTINO:
+- Dos APIs. MiCorreo: REST form-encoded, JSON response, POST /shipping/import, UN bulto por request
+  (shipping.weight/height/length/width, sin array). Paq.ar v2.0: REST/JSON, POST /v1/orders, array
+  `parcels` PERO "solo toma el primero, ignora el resto" → multi-bulto = un request por bulto
+  (Familia 2).
+- Tracking: trackingNumber (cliente lo manda único, o CA lo genera). Etiquetas Paq.ar: POST /v1/labels
+  con sellerId+trackingNumber → PDF Base64 (fileBase64). labelFormat: "10x15" o "label". Barras+QR.
+- Límites MiCorreo: peso 1g–25kg, dims máx 150cm (cotizar) / 0–255cm (importar). Paq.ar: peso hasta
+  25kg según acuerdo comercial, dims hasta 3 díg / <255cm.
+- Fórmula de aforado: no documentada.
+
+**IMPLICANCIA PARA LA INTERFAZ COMÚN:** el molde debe soportar (a) REST/JSON, form-urlencoded y
+SOAP/XML; (b) ambas familias de despacho; (c) devolver siempre N etiquetas+trackings normalizados;
+(d) formatos de etiqueta heterogéneos (PDF, ZPL, HTML, Base64). Diseñar mirando los 4 evita rehacer
+el molde al integrar los próximos.
+
+---
+
+## DEUDA 140 — Peso aforado/volumétrico: ningún courier publica la fórmula — la métrica de volumetría se alimenta del dato expuesto, no de cálculo propio (VERIFICADO 2026-08-07)
+
+**Status:** ABIERTA — precisión de diseño para P3 (métrica de volumetría) y DEUDA 130.
+
+**Hallazgo (verificado en 4 couriers):** se consultó la fórmula de peso aforado a Andreani, Mocis,
+OCA y Correo Argentino. Los 4: "no está en la documentación". Andreani EXPONE el resultado ya
+calculado (campo `pesoAforado` en la respuesta del cotizador), pero no la fórmula. Ninguno publica
+factor/divisor.
+
+**Consecuencia:** Shipro NO puede calcular por sí mismo el peso aforado de cada courier desde una
+fórmula publicada (no existe). La métrica de volumetría (predicho vs facturado, P3) se alimenta del
+`pesoAforado` que el courier EXPONE cuando lo hace, y de lo efectivamente liquidado/facturado. No de
+una fórmula propia por courier.
+
+**Matiz para P3:** el valor de la tabla EnvioBulto sigue vigente (registra la predicción del motor de
+empaquetado), pero la comparación es contra el dato del courier (aforado expuesto + facturado real),
+no contra un cálculo propio. Ajusta la expectativa de "calcular peso aforado por courier" registrada
+antes.
+
+**A futuro:** si hace falta estimar aforado ANTES de despachar (para recomendar el courier más
+conveniente), habría que inferir el factor volumétrico de cada courier empíricamente (comparando
+dimensiones enviadas vs pesoAforado devuelto en muchos envíos) o consultarlo comercialmente a cada
+courier. Registrar como línea de investigación, no como algo con fórmula disponible hoy.
+
+---
+
+## DEUDA 141 — Roadmap de integración de couriers (lista abierta, se completa a demanda) (registrada 2026-08-07)
+
+**Status:** ABIERTA — roadmap vivo. Se suman couriers a medida que se necesiten y se consiga su doc.
+
+**En producción hoy:** Andreani (id 1), Mocis (id 2).
+
+**Con documentación analizada (listos para diseño de adapter):** Andreani, Mocis (ver DEUDA 139).
+OCA y Correo Argentino: documentación analizada como referencia para la interfaz común (ver DEUDA 139).
+
+**Pendientes de integrar (lista abierta, sin doc analizada aún):** OCA, Correo Argentino, DPD Argentina,
+Urbano Express, OCASA, Blue Mail, South Post, Saires, Moova, Pickit, Hop Envíos, Intralog, y otros que
+surjan. Nota (Nacho): la lista se irá sumando a medida que se necesite y se descubra; el ecosistema es
+muy heterogéneo (REST/JSON, form-urlencoded, SOAP/XML).
+
+**Criterio:** cada courier nuevo se mapea contra las dos familias de despacho de DEUDA 139 antes de
+construir su adapter. Blue Mail, Saires, South Post y Federal Pack requieren además confirmar si
+pertenecen al roadmap real o no.
+
+**Prioridad:** el roadmap original apuntaba a 15+ couriers empezando por OCA, Correo Argentino,
+Urbano Express, Hop Envíos, Pickit, Moova, Intralog.
+
+---
+
 **Nota de secuencia** (actualizada 2026-08-06)**:** el orden lógico de construcción antes de documentar la API
 externa es: DEUDA 103 (multi-bulto — el hueco que más muerde) y DEUDA 104 (webhooks — el desbloqueante
 grande). Ambas, más la redacción de la especificación OpenAPI, son el trabajo del frente de plugins. El

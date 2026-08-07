@@ -46,6 +46,14 @@ export interface CrearEnvioInput {
   destinatarioNombre: string;
   cpDestino: string | number;
   pesoReal: number | string;
+  // DEUDA 132 (fix 2026-08-07): dimensiones del paquete. Se threadean end-to-end
+  // igual que pesoReal para que la re-cotización interna + la etiqueta al courier
+  // usen las medidas reales (no el 10×10×10 hardcoded que causaba descalce
+  // cotizado ≠ despachado ≠ facturado). Opcionales por backward-compat: si un
+  // caller legacy no las manda, el synthetic paquetes[] cae al fallback 10.
+  largoCm?: number | null;
+  anchoCm?: number | null;
+  altoCm?: number | null;
   nombreCourier: string;
   calle?: string;
   altura?: string;
@@ -87,7 +95,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
   }
 
   const {
-    empresaId, depositoId: depositoIdInput, permitirBloqueoPorDeposito, destinatarioNombre, cpDestino, pesoReal, nombreCourier,
+    empresaId, depositoId: depositoIdInput, permitirBloqueoPorDeposito, destinatarioNombre, cpDestino, pesoReal, largoCm, anchoCm, altoCm, nombreCourier,
     calle, altura, piso, dpto, dni, email, telefono, localidad, modalidad,
     valorDeclarado, costoEnvio, costoProveedor, provinciaDestino, numeroOrden,
     idempotencyKey,
@@ -407,7 +415,11 @@ export async function crearEnvio(input: CrearEnvioInput) {
       provinciaDestino,
       paquetes: [{
         pesoKg: parseFloat(String(pesoReal)) || 1,
-        largoCm: 10, anchoCm: 10, altoCm: 10,
+        // DEUDA 132: usar las dims reales si vienen del caller; fallback a 10
+        // por backward-compat con callers legacy que sólo mandan pesoReal.
+        largoCm: largoCm ?? 10,
+        anchoCm: anchoCm ?? 10,
+        altoCm: altoCm ?? 10,
         valorDeclarado: parseFloat(String(valorDeclarado)) || 0,
         requiereSeguro: false
       }]

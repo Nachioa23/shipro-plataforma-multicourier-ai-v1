@@ -167,6 +167,11 @@ export async function POST(request: Request) {
       destinatarioNombre: body.destinatarioNombre,
       cpDestino: body.cpDestino,
       pesoReal: body.pesoReal,
+      // DEUDA 132: forwardear dims para no perderlas entre el POST del plugin
+      // y la etiqueta al courier (mismo patrón que pesoReal).
+      largoCm: body.largoCm ?? null,
+      anchoCm: body.anchoCm ?? null,
+      altoCm: body.altoCm ?? null,
       nombreCourier: body.nombreCourier,
       calle: body.calle,
       altura: body.altura,

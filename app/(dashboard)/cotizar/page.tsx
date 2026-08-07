@@ -195,6 +195,13 @@ function CotizadorContenido() {
       calle: calleDestino, altura: alturaDestino, piso: "", dpto: "",
       dni: dniDestino, email: emailDestino, telefono: telefonoDestino,
       pesoReal: peso,
+      // DEUDA 132 (fix 2026-08-07): forwardear las dims reales que el usuario cargó
+      // en /nuevo-envio (viajan por URL params y ya se usan bien en /api/cotizar arriba).
+      // Antes de este fix, el confirm-and-create dropeaba las dims y crear.ts caía al
+      // 10×10×10 hardcoded, causando descalce cotizado ≠ despachado ≠ facturado.
+      largoCm: parseFloat(largo),
+      anchoCm: parseFloat(ancho),
+      altoCm: parseFloat(alto),
       valorDeclarado: 0,
       costoEnvio: tarifaElegida.precioFinal,
       costoProveedor: tarifaElegida.precioProveedor,

@@ -32,6 +32,17 @@ model Empresa {
 
   ordenamientoDefault String @default("PRECIO_ASC") // PRECIO_ASC, SLA, HISTORICO
 
+  // Modo B — política de empaquetado de TARIFA FIJA (no es empaquetado físico real).
+  // Si empaqueModoBActivo=true, todos los envíos de la empresa cotizan como UN bulto con
+  // estos parámetros fijos, sin importar el contenido real del carrito. Es una regla
+  // COMERCIAL de tarifa, no un cálculo de bin-packing (eso es Modo A, futuro).
+  // Solo son STORAGE; toman efecto cuando el rates callback los lea y arme el bulto fijo.
+  empaqueModoBActivo  Boolean @default(false)
+  empaqueModoBPesoKg  Float?
+  empaqueModoBLargoCm Float?
+  empaqueModoBAnchoCm Float?
+  empaqueModoBAltoCm  Float?
+
   usuarios            Usuario[]
   envios              Envio[]
   manifiestos         Manifiesto[]

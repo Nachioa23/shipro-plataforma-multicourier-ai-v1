@@ -2340,61 +2340,29 @@ un bug de facturación que ya existe hoy. NO bloquea el desarrollo del plugin de
 
 ---
 
-## DEUDA 136 — Race condition en actualización de saldo (read-then-write no atómico) — riesgo de pérdida de movimientos financieros bajo concurrencia (scope medio, toca PLATA) (registrada 2026-08-06, VERIFICADA en código)
+## DEUDA 136 — Verificar que el bloqueo por saldo negativo se dispara correctamente cuando el negativo lo causa una concurrencia (scope chico, NO es pérdida de plata) (registrada 2026-08-06, reencuadrada por Nacho)
 
-**Status:** ABIERTA. Verificada en recon 2026-08-06. NO arreglar apurado — sesión dedicada.
+**Status:** ABIERTA. Reencuadrada 2026-08-06 con criterio de negocio de Nacho.
 
-**Problema (verificado en código):** la actualización de saldo sigue un patrón **read-then-write**: se lee el saldo actual, se calcula el nuevo valor en código, se guarda. Entre la lectura y la escritura, dos operaciones concurrentes sobre la MISMA empresa pueden pisarse: la segunda sobrescribe el resultado de la primera, perdiéndose un movimiento financiero (**lost update** clásico).
+**Reencuadre (Nacho):** el patrón read-then-write en la actualización de saldo puede dejar el saldo en un valor inconsistente bajo concurrencia (ej. dos débitos simultáneos que dejan `-1000` en vez de `0`). PERO **esto NO es pérdida de dinero**: el saldo queda negativo, el cliente queda debiendo esa diferencia, y el mecanismo de bloqueo por saldo negativo debe activarse hasta que transfiera. **El dinero no se evapora — queda registrado como deuda del cliente.** El "lost update" clásico no aplica como catástrofe financiera en este modelo.
 
-**Ubicación verificada — 3 call sites afectados**:
+**Lo que SÍ hay que verificar (la deuda real, más chica):**
+- Que el **bloqueo por saldo negativo se dispare correctamente** INCLUSO cuando el saldo negativo fue causado por una concurrencia (dos débitos que se pisaron), y no solo en el flujo normal.
+- Que el **monto negativo quede correctamente registrado** (el cliente debe exactamente lo que corresponde, sin importar el orden en que se aplicaron los débitos).
+- Que los **asientos contables inversos / movimientos financieros reflejen la realidad** aunque haya habido concurrencia (no que se pierda el REGISTRO de un movimiento, aunque el saldo tolere el negativo).
 
-1. **`lib/envios/crear.ts:737, 740, 855-857`** (path principal — creación de envío):
-   ```typescript
-   const empresaData = await tx.empresa.findUnique({ where: { id: empresaId } });
-   let nuevoSaldo: Prisma.Decimal = (empresaData?.saldoActivo ?? new Prisma.Decimal(0)).sub(montoDebito);
-   ...
-   await tx.empresa.update({
-     where: { id: empresaId },
-     data: { saldoActivo: nuevoSaldo }
-   });
-   ```
+**Referencias para la sesión que lo verifique:**
+- **Update de saldo (read-then-write)**: `lib/envios/crear.ts:737, 740, 855-857` (path principal — creación de envío, dentro de `prisma.$transaction`). Mismo patrón en `app/api/conciliacion/route.ts:468` (conciliación aforo vs virtual) y `app/api/admin/finanzas/route.ts:63-68` (recarga manual admin).
+- **Check pre-debit no-atómico**: `lib/envios/crear.ts:641-646` (`saldoActivo + limiteDescubierto < montoDebito` → estado `BLOQUEADO_SALDO`).
+- **Bloqueo blando (nivel 1)**: `lib/envios/crear.ts` bloque `bloqueadoPorSaldo` → estado `BLOQUEADO_SALDO`. El envío nace sin llamar al courier, se destraba automáticamente al recargar saldo (procesar-bloqueados).
+- **Bloqueo duro (nivel 2)**: `lib/utils/suspension-cuenta.ts` helpers `evaluarSuspension` + `suspenderEmpresa`. Threshold: `saldoActivo <= -(limiteDescubierto * MULTIPLICADOR_SUSPENSION)` con `MULTIPLICADOR_SUSPENSION = 1.5`. Reactivación: `saldoActivo >= -(limiteDescubierto * MULTIPLICADOR_REACTIVACION)` con `MULTIPLICADOR_REACTIVACION = 0.5`. Trigger desde `crear.ts` post-debit; reactivación desde `procesar-bloqueados.ts` post-pago. Ver DEUDA 22 para el diseño completo del mecanismo.
+- **Persistencia del movimiento**: `lib/envios/crear.ts:843` (`await tx.movimientoFinanciero.create(...)`) — está DENTRO de la misma transacción que el update del saldo, así que dos débitos concurrentes deberían generar dos `MovimientoFinanciero` distintos aunque colisionen en el `saldoActivo`. **Este es el punto crítico a verificar** en el matiz de abajo.
 
-2. **`app/api/conciliacion/route.ts:468`** (path de conciliación aforo vs virtual):
-   ```typescript
-   const nuevoSaldo = empFresh.saldoActivo.sub(aforoConIva);
-   ```
-   Seguido de `tx.empresa.update({ data: { saldoActivo: nuevoSaldo } })`.
+**Matiz a confirmar:** el reencuadre asume que **NO se pierde el REGISTRO del movimiento** (el `MovimientoFinanciero` queda asentado), solo que el saldo resultante podría calcularse con un orden distinto. Si el read-then-write pudiera hacer que un `MovimientoFinanciero` NO se asiente (se pierda el registro, no solo el cálculo del saldo), ESO sí sería grave y hay que verificarlo. Verificar en la sesión dedicada cuál de los dos casos es.
 
-3. **`app/api/admin/finanzas/route.ts:63-68`** (path de recarga manual admin):
-   ```typescript
-   const nuevoSaldo = empresa.saldoActivo.add(montoDecimal);
-   await tx.empresa.update({
-     where: { id: parseInt(empresaId) },
-     data: { saldoActivo: nuevoSaldo }
-   });
-   ```
+**Prioridad:** media-baja. Verificación, no arreglo urgente. El modelo tolera el saldo negativo por diseño.
 
-Los tres siguen el mismo anti-patrón: `read → compute in JS → write`. Postgres default isolation (`Read Committed`) + `findUnique` sin `SELECT FOR UPDATE` no toman lock entre el read y el write dentro de la transacción → dos requests concurrentes leen el mismo valor y calculan sobre el mismo baseline.
-
-Además, los checks previos al debit (`lib/envios/crear.ts:641-646`) son también read-then-check-then-write no-atómicos, permitiendo que dos requests pasen el guard simultáneamente y despachen debitando más allá del límite.
-
-**Alcance:**
-- Afecta operaciones concurrentes sobre el saldo de la MISMA empresa (mismo `Empresa.id`).
-- NO afecta entre empresas distintas (cada una tiene su fila `Empresa` con su propio `saldoActivo`; no hay estado compartido mutable entre empresas — verificado).
-- Las credenciales compartidas de Rama A NO son el punto de choque: se comparten para hablar con el courier, pero no hay contador compartido en la DB que se pise entre empresas (verificado — `obtenerCredencialesShipro` lee de env vars, no de una fila DB compartida).
-
-**Probabilidad:** hoy baja (requiere dos operaciones en el mismo instante sobre la misma cuenta — improbable con un cliente humano operando desde el dashboard). **SUBE con el plugin de Tiendanube**: los webhooks reintentan (hasta 16 veces en 48h con backoff) y pueden gatillar operaciones concurrentes sobre la misma empresa. Un plugin con volumen puede exponer este bug rápidamente.
-
-**Fix identificado (para sesión dedicada):** reemplazar el read-then-write por una operación atómica a nivel base de datos. Opciones:
-- **(a)** Usar `{ decrement: montoDebito }` / `{ increment: montoRecarga }` (Prisma atomic ops) sobre `saldoActivo` en vez de leer-calcular-escribir. Cambio quirúrgico: `data: { saldoActivo: nuevoSaldo }` → `data: { saldoActivo: { decrement: montoDebito } }`. Postgres lo compila a `UPDATE ... SET saldoActivo = saldoActivo - $decrement`, atómico.
-- **(b)** Envolver la operación en una transacción con nivel de aislamiento `Serializable` (`prisma.$transaction([...], { isolationLevel: 'Serializable' })`). Más caro en performance, más simple conceptualmente.
-- **(c)** Lock optimista con campo `version` (o `saldoUpdatedAt`) — check-and-set condicional. Más código, más control.
-
-Evaluar cuál encaja con el patrón de asientos contables inversos ya vigente (`MovimientoFinanciero` + `LiquidacionMensual`). El check pre-debit (`saldoActivo.lt(montoDebito)`) también hay que rediseñar para no sufrir la misma race. **Requiere pruebas de concurrencia antes de deployar** (toca plata; nunca deployar un fix de concurrencia sin verificar con carga concurrente).
-
-**Relación:** conecta con **DEUDA 131** (race condition de idempotencia) — ambas son problemas de concurrencia que suben prioridad de cara al volumen del plugin. **Resolver ambas antes de volumen alto en Tiendanube.**
-
-**Prioridad:** **ALTA (toca plata)**, pero NO urgente al volumen actual. Atacar en sesión dedicada, idealmente como parte de preparar el plugin para producción.
+**Relación:** DEUDA 131 (idempotencia) y **DEUDA 138** (stress-test / escalabilidad) son los otros frentes de concurrencia. La pregunta amplia de escalabilidad vive en DEUDA 138.
 
 ---
 
@@ -2440,6 +2408,29 @@ No es problema al volumen actual.
 **Relación con el plugin:** el cron de tracking es la **fuente de los eventos** que el plugin reenvía a Tiendanube (Momento 3 — DEUDA 104). **Wire del cron es prerequisito para que el tracking del plugin funcione.**
 
 **Prioridad:** baja hoy, sube con el volumen.
+
+---
+
+## DEUDA 138 — Escalabilidad y comportamiento bajo alta concurrencia: stress-test de BD, APIs y código (prerequisito de producción seria + ítem de homologación Tiendanube) (registrada 2026-08-06)
+
+**Status:** ABIERTA — prerequisito de producción a escala, no urgente al volumen actual.
+
+**La pregunta de fondo (Nacho):** ¿la base de datos, las APIs y el código aguantan múltiples consultas en el mismo instante? ¿Las procesa en fila (escalonado) o en paralelo? ¿Qué pasa con **~200.000 consultas por día** contemplando contingencias? Si la multiplicidad de consultas simultáneas rompe una acción, es un problema a resolver aunque hoy la probabilidad sea baja.
+
+**Distinción importante (dos tipos de análisis):**
+
+1. **Análisis estático (Claude Code puede):** revisar cómo está ESCRITO el código — uso de transacciones, locks, operaciones atómicas vs read-then-write, N+1 queries, connection pooling, índices. Detecta patrones riesgosos por lectura.
+2. **Prueba de carga real (requiere herramientas de stress-test):** simular el volumen objetivo (ej. Black Friday / Hot Sale) y MEDIR qué se rompe. Es la ÚNICA forma de saber el comportamiento real bajo concurrencia. No se puede deducir leyendo código.
+
+**Conexión con homologación:** la checklist de Tiendanube incluye, como ítem Awesome (5 pts), *"un test de rendimiento (stress-test) con parámetros basados en Black Friday/Hot Sale"*. Esta deuda cubre ese ítem.
+
+**Plan sugerido (sesión dedicada, antes de volumen alto):**
+- **Fase 1: análisis estático con Claude Code** — mapear los puntos de escritura concurrente (saldo, correlativos, idempotencia) y confirmar transacciones/atomicidad. Conecta con DEUDA 131 y DEUDA 136.
+- **Fase 2: connection pooling** de Prisma + Akamai PostgreSQL — verificar límites de conexiones concurrentes y configuración del pool.
+- **Fase 3: prueba de carga** con herramienta (k6, Artillery o similar) simulando el pico esperado, midiendo latencia, errores, y saturación de BD.
+- **Fase 4: resolver los cuellos que aparezcan.**
+
+**Prioridad:** alta ANTES de producción a escala / homologación; baja al volumen actual. Atacar como parte de "preparar el plugin para producción".
 
 ---
 

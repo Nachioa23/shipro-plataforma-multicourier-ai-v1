@@ -1,4 +1,5 @@
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
+import type { ResultadoBulto } from "@/lib/couriers/CourierInterface";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
 import { tieneSucursales } from "@/lib/couriers/serviciosSoportados";
@@ -88,6 +89,12 @@ export interface DispatchResult {
   // - 2 elementos → caso C con ambos tramos OK.
   // El caller persiste los TramoEnvio dentro de su propia transacción.
   tramos: TramoSnapshot[];
+
+  // Detalle por bulto del despacho (multi-bulto). Hoy 1 elemento; N cuando el motor de
+  // empaquetado genere varios. Propagado desde ICourierIntegrator.despachar().bultos.
+  // En caso C (consolidador) refleja el tramo de entrega (last-mile), NO el recolector:
+  // el tracking/etiquetaUrl del root ya es del last-mile, y bultos[] es coherente con eso.
+  bultos?: ResultadoBulto[];
 
   error?: string;
 }
@@ -244,6 +251,7 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
       const respuesta = await motorMain.despachar(paramsDespacho);
       const tracking = respuesta?.tracking || null;
       const etiquetaUrl = respuesta?.etiquetaUrl || null;
+      const bultos = respuesta?.bultos;
 
       if (!tracking) {
         return {
@@ -263,7 +271,7 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
         sucursalDestinoId: input.sucursalDestinoId ?? null,
       };
 
-      return { tracking, etiquetaUrl, tramos: [tramo] };
+      return { tracking, etiquetaUrl, tramos: [tramo], bultos };
     } catch (err: any) {
       console.warn(`[Shipro] Despacho drop_off_cliente falló para ${courierNombreCanonico}:`, err?.message || err);
       return { tracking: null, etiquetaUrl: null, tramos: [], error: err?.message || "Error en despacho drop_off_cliente" };
@@ -353,11 +361,13 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
     // ----- Tramo 2: Last-Mile -----
     let trackingMain: string | null = null;
     let etiquetaUrlMain: string | null = null;
+    let bultosMain: ResultadoBulto[] | undefined = undefined;
 
     try {
       const respuestaMain = await motorMain.despachar(paramsDespacho);
       trackingMain = respuestaMain?.tracking || null;
       etiquetaUrlMain = respuestaMain?.etiquetaUrl || null;
+      bultosMain = respuestaMain?.bultos;
     } catch (errMain: any) {
       // PARTIAL FAILURE: tramo 1 OK, tramo 2 falla. Persistir tramo 1.
       console.warn(`[Shipro] Tramo 2 (${courierMainNombreLimpio}) falló tras tramo 1 OK:`, errMain?.message || errMain);
@@ -417,6 +427,7 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
       tracking: trackingMain,
       etiquetaUrl: etiquetaUrlMain,
       tramos: [tramo1, tramo2],
+      bultos: bultosMain,
     };
   }
 
@@ -428,6 +439,7 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
     const respuesta = await motorMain.despachar(paramsDespacho);
     const tracking = respuesta?.tracking || null;
     const etiquetaUrl = respuesta?.etiquetaUrl || null;
+    const bultos = respuesta?.bultos;
 
     if (!tracking) {
       return {
@@ -446,7 +458,7 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
       sucursalDestinoId: input.sucursalDestinoId ?? null,
     };
 
-    return { tracking, etiquetaUrl, tramos: [tramo] };
+    return { tracking, etiquetaUrl, tramos: [tramo], bultos };
   } catch (err: any) {
     console.warn(`[Shipro] Despacho falló para courier ${courierNombreCanonico}:`, err?.message || err);
     return { tracking: null, etiquetaUrl: null, tramos: [], error: err?.message || "Error en despacho" };

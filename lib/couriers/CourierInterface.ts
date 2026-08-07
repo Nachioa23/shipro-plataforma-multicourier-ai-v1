@@ -90,6 +90,23 @@ export interface DespachoParams {
 }
 
 // ==========================================================
+// 3.b RESULTADO POR BULTO (multi-bulto, aditivo — DEUDA 139 P1 fase 1a)
+// ==========================================
+// Detalle por-bulto del despacho, para couriers que devuelven N trackings/etiquetas
+// (uno por bulto) o para exponer el desglose incluso cuando el courier agrupa. La
+// interfaz `despachar()` sigue devolviendo tracking/etiquetaUrl a nivel raíz (el
+// PRINCIPAL: agrupador del courier si lo da, o el del primer bulto) para preservar
+// los 5 callers actuales; `bultos[]` se agrega como campo OPCIONAL — cero cambio de
+// comportamiento hasta que un caller lo consuma.
+export interface ResultadoBulto {
+  tracking: string;
+  etiquetaBase64?: string;
+  etiquetaUrl?: string;
+  numeroBulto?: string;  // id del courier para este bulto (ej. Andreani numeroDeBulto)
+  totalizador?: string;  // posición del bulto, ej. "1/3" (Andreani)
+}
+
+// ==========================================================
 // 4. ESTRUCTURA DE UNA SUCURSAL (Para mostrar en el Checkout)
 // ==========================================
 export interface SucursalInfo {
@@ -137,7 +154,10 @@ export interface ICourierIntegrator {
   // AHORA DEVUELVE UN ARRAY DE OPCIONES
   cotizar(params: CotizacionParams): Promise<OpcionCotizacion[]>;
 
-  despachar(params: DespachoParams): Promise<{ tracking: string, etiquetaBase64?: string, etiquetaUrl?: string }>;
+  // El tracking/etiquetaUrl de la raíz es el PRINCIPAL (agrupador del courier si lo da, o
+  // el del primer bulto). bultos[] es el detalle por bulto (multi-bulto). Retrocompatible:
+  // callers que solo leen tracking/etiquetaUrl siguen funcionando.
+  despachar(params: DespachoParams): Promise<{ tracking: string, etiquetaBase64?: string, etiquetaUrl?: string, bultos?: ResultadoBulto[] }>;
   rastrear(tracking: string): Promise<string>;
   traducirEstado(estadoCrudo: string): string;
   obtenerSucursales(cp: string): Promise<SucursalInfo[]>;

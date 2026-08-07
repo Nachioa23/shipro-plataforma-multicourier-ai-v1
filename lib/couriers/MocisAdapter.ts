@@ -1,4 +1,4 @@
-import { ICourierIntegrator, CotizacionParams, DespachoParams, SucursalInfo } from './CourierInterface';
+import { ICourierIntegrator, CotizacionParams, DespachoParams, SucursalInfo, ResultadoBulto } from './CourierInterface';
 
 // DEUDA 129: timeout de outbound fetch al courier + reclasificación de AbortError
 // como CourierTimeout (crear.ts lo mapea a HTTP 503 al caller de la API pública).
@@ -244,7 +244,7 @@ export class MocisAdapter implements ICourierIntegrator {
   // ==========================================
   // 4. CREAR ENVÍO (Normal e Inversa)
   // ==========================================
-  async despachar(params: DespachoParams): Promise<{ tracking: string, etiquetaUrl?: string }> {
+  async despachar(params: DespachoParams): Promise<{ tracking: string, etiquetaBase64?: string, etiquetaUrl?: string, bultos?: ResultadoBulto[] }> {
     const token = await this.getToken();
     
     const provinciaId = await this.obtenerIdProvincia(params.provincia || "CABA");
@@ -319,7 +319,13 @@ export class MocisAdapter implements ICourierIntegrator {
 
       return {
         tracking: dataInversa.result[0],
-        etiquetaUrl: `/api/etiquetas/mocis?tracking=${dataInversa.result[0]}`
+        etiquetaUrl: `/api/etiquetas/mocis?tracking=${dataInversa.result[0]}`,
+        // DEUDA 139 P1 fase 1a: aditivo, un solo bulto = comportamiento idéntico al de hoy.
+        // Fase 1b va a mapear result[] completo (Akeron devuelve N codes para N items).
+        bultos: [{
+          tracking: dataInversa.result[0],
+          etiquetaUrl: `/api/etiquetas/mocis?tracking=${dataInversa.result[0]}`,
+        }],
       };
     }
 
@@ -366,7 +372,13 @@ export class MocisAdapter implements ICourierIntegrator {
 
     return {
       tracking: dataNormal.result[0],
-      etiquetaUrl: `/api/etiquetas/mocis?tracking=${dataNormal.result[0]}`
+      etiquetaUrl: `/api/etiquetas/mocis?tracking=${dataNormal.result[0]}`,
+      // DEUDA 139 P1 fase 1a: aditivo, un solo bulto = comportamiento idéntico al de hoy.
+      // Fase 1b va a mapear result[] completo (Akeron devuelve N codes para N items).
+      bultos: [{
+        tracking: dataNormal.result[0],
+        etiquetaUrl: `/api/etiquetas/mocis?tracking=${dataNormal.result[0]}`,
+      }],
     };
   }
 

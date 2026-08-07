@@ -2,7 +2,8 @@ import {
   ICourierIntegrator,
   CotizacionParams,
   DespachoParams,
-  SucursalInfo
+  SucursalInfo,
+  ResultadoBulto
 } from './CourierInterface';
 
 // DEUDA 129: timeout de outbound fetch al courier + reclasificación de AbortError
@@ -229,7 +230,7 @@ export class AndreaniAdapter implements ICourierIntegrator {
   // ==============================================================
   // PILAR 2: DESPACHAR (Crear Etiqueta)
   // ==============================================================
-  async despachar(params: DespachoParams): Promise<{ tracking: string, etiquetaBase64?: string, etiquetaUrl?: string }> {
+  async despachar(params: DespachoParams): Promise<{ tracking: string, etiquetaBase64?: string, etiquetaUrl?: string, bultos?: ResultadoBulto[] }> {
     const token = await this.getToken();
     const paquetePrincipal = params.paquetes[0];
 
@@ -330,7 +331,13 @@ export class AndreaniAdapter implements ICourierIntegrator {
     const nroTracking = data.numeroAndreani || (data.bultos && data.bultos[0].numeroDeEnvio) || "ANDREANI-PENDIENTE";
     const urlPdf = data.etiquetasPorAgrupador || null;
 
-    return { tracking: nroTracking, etiquetaUrl: urlPdf };
+    return {
+      tracking: nroTracking,
+      etiquetaUrl: urlPdf,
+      // DEUDA 139 P1 fase 1a: aditivo, un solo bulto = comportamiento idéntico al de hoy.
+      // Se poblarán N bultos cuando fase 1b haga N POSTs a /v2/ordenes-de-envio (multi-bulto real).
+      bultos: [{ tracking: nroTracking, etiquetaUrl: urlPdf ?? undefined }],
+    };
   }
 
   // ==============================================================

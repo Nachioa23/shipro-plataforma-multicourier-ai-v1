@@ -2035,6 +2035,20 @@ Un checkout que devuelve 5xx o tarda >5s se transforma en un **transporte bloque
 
 **Prioridad:** alta. Prerequisito duro. Scope medio (~1-2 semanas: auditar códigos de error en cotizar + envios, extender `tarifaPlanaRespaldo` al camino "courier timeout", tests de scenarios de fallo). Conecta con `tarifaPlanaRespaldo` existente (obligatoria per-cliente al alta desde DEUDA 10 Paso 5b) — es reutilización, no diseño nuevo.
 
+**Regresión detectada y resuelta 2026-08-10 (bug fetchConTimeout):** el mismo commit que resolvió
+esta deuda (9e4864d) introdujo un bug latente en el wrapper `fetchConTimeout` de ambos adapters
+(MocisAdapter + AndreaniAdapter): la llamada interna de la función se invocaba a sí misma
+(`fetchConTimeout(input, …)`) en vez de llamar al `fetch` nativo (`fetch(input, …)`) → recursión
+infinita → abort a los 8s → `CourierTimeout` en TODA operación real de courier (cotizar, despachar,
+rastrear, sucursales, cancelar, token, etiqueta). Descubierto en el recon del rates callback
+(2026-08-10). Verificado que NO estaba mordiendo en producción: prod corre commit 99af569 (que
+incluye 9e4864d), pero `grep -c CourierTimeout` en logs = 0 → el bug estaba deployado pero latente
+por falta de tráfico real a couriers. Era una bomba de tiempo que se habría activado con el primer
+tráfico del plugin. Fix quirúrgico (1 línea por adapter, `fetchConTimeout(input` → `fetch(input`)
+en commit 709d995 (2026-08-10). tsc 0. **PENDIENTE deploy a producción** (sin urgencia de incendio,
+pero antes del tráfico real del plugin). Toca solo los 2 adapters, sin proxy ni schema → deploy
+liviano (sin rebuild completo).
+
 ---
 
 ## DEUDA 130 — Plugin Tiendanube: spec de integración + homologación (documento maestro, verificado contra doc oficial 2026-08-06)
@@ -2551,6 +2565,83 @@ pertenecen al roadmap real o no.
 
 **Prioridad:** el roadmap original apuntaba a 15+ couriers empezando por OCA, Correo Argentino,
 Urbano Express, Hop Envíos, Pickit, Moova, Intralog.
+
+---
+
+## DEUDA 142 — Molde multi-bulto: plan maestro de construcción + estado (EN CONSTRUCCIÓN, registrada 2026-08-10)
+
+**Status:** EN CONSTRUCCIÓN. Cuatro escalones aditivos ya en `main`; el paso que mueve plata queda pendiente con prueba.
+
+**Qué es:** el "molde" común donde encastran los dos modos de empaquetado (DEUDA 143) y las dos familias de despacho de courier (DEUDA 139). Diseño maestro en `docs/DISENO-MOLDE-EMPAQUETADO-DESPACHO.md`. Modelo de datos: "un envío con varios bultos" (1 `Envio` = pedido, N `EnvioBulto` colgando).
+
+**Escalones construidos (todos aditivos, sin cambio de comportamiento, sin tocar plata):**
+- **Paso 1a** (commit cbca63f): abre el contrato de despacho. `ICourierIntegrator.despachar()` suma `bultos?: ResultadoBulto[]` al return (root = principal, retrocompat). Adapters devuelven `bultos[]` de 1 elemento = idéntico a hoy.
+- **Tabla EnvioBulto** (commit e5cc114): capa analítica, 1 fila por bulto. Predicción del motor + resultado del courier + estado de viaje + peso aforado.
+- **Paso 1a.1** (commit f1e23a7): propaga `bultos[]` por `dispatch.ts` (DispatchResult suma `bultos?`).
+- **Paso 1b** (commit 4c46d2a): `crear.ts` persiste `EnvioBulto` en despacho exitoso (hoy 1 bulto → 1 fila; espeja el patrón de TramoEnvio).
+
+**Pendiente (del otro lado del límite: mueve plata o requiere recon):**
+- **Paso 2 — adapters generan N de verdad:** Mocis devuelve los N trackings de `result[]`; Andreani hace N órdenes en B2C (Familia 2). CAMBIA COMPORTAMIENTO, genera etiquetas facturables → REQUIERE PRUEBA antes de deploy.
+- **Multi-bulto en flujo consolidador:** requiere recon del código del consolidador (cómo un bulto atraviesa 2 tramos) antes de habilitar. Ese flujo nunca corrió en prod.
+
+**⚠️ Aclaración de las DOS `EnvioBulto` (resuelve contradicción con DEUDA 103):** DEUDA 103 dice "NO se necesita EnvioBulto en B2C" — refiriéndose a una sub-tabla que parte un envío en N sub-bultos bajo UN tracking (modelo B2B Andreani BIGGER). La `EnvioBulto` que se construyó en esta sesión es OTRA cosa: una capa ANALÍTICA (1 fila por bulto = predicción del empaquetado + resultado real + peso aforado, para la métrica de volumetría de DEUDA 140 P3). Comparten nombre, son conceptos distintos. La construida NO es la que 103 rechazaba.
+
+**Relación:** DEUDA 103 (modelo multi-bulto, precursora), DEUDA 139 (dos familias de despacho), DEUDA 140 (peso aforado → métrica de volumetría que consume EnvioBulto), DEUDA 132 (fuga de dims, resuelta, precursora del threading correcto).
+
+---
+
+## DEUDA 143 — Motor de empaquetado (Opción C): Modo B = tarifa fija + Modo A = bin-packing físico (EN CONSTRUCCIÓN, registrada 2026-08-10)
+
+**Status:** EN CONSTRUCCIÓN. Modo B: campos de storage en Empresa ya en `main` (commit 72385da). Falta pantalla de config + consumo en el rates callback. Modo A: futuro, diseño pendiente.
+
+**Distinción clave (LOCKED, Nacho) — son DOS mecanismos distintos, no dos niveles del mismo:**
+- **Modo B = regla de TARIFA fija (comercial, NO empaquetado físico).** El cliente dice "cobrame siempre como UN bulto de X kg con estas dimensiones, a cualquier destino", sin importar el contenido real del carrito. Es simbólico: fija su tarifa. No hay cálculo. Ejemplo de Nacho: "en una bolsa de un formato dado podés poner 2 kg de plomo pero no 2 kg de plumas; lo que el cliente fija es la tarifa".
+- **Modo A = empaquetado físico calculado (bin-packing).** El cliente carga sus bolsas/cajas reales (chica/mediana/grande) con peso soportado TOTAL (bolsa incluida) y dimensiones. El sistema calcula cómo entran los productos: la suma de pesos ≤ capacidad de la bolsa, y ningún producto puede exceder las dimensiones de la bolsa.
+
+**Modo B — implementación:**
+- Storage: 5 campos en Empresa (commit 72385da): `empaqueModoBActivo` + `empaqueModoBPesoKg/LargoCm/AnchoCm/AltoCm`. Van en Empresa (no tabla) porque es UNA config por cliente. Switch default OFF.
+- Falta: pantalla de config (`EmpaquetadoTab.tsx`, espeja `RuteoTab`, endpoint `POST /api/configuracion/empaquetado`) + el rates callback que lee los campos y arma el bulto fijo.
+
+**Modo A — heurística de Nacho (registrada textual, para cuando se construya):** "Si el cliente tiene bolsas chica/mediana/grande y 4 productos en el carrito: primero elijo el producto más grande y veo en qué bolsa entra sin desperdiciar espacio. Si el más grande entra en la mediana, ya que voy a mandar una mediana sí o sí, intento meter TODOS los productos en la mediana; los que quedan afuera por capacidad física o por peso, los mando a la bolsa chica." Es una heurística pragmática, NO un optimizador perfecto (el bin-packing 3D + peso es NP-hard). Objetivo: resolver bien el ~95% de los carritos reales (pocos productos), no la solución matemática óptima. Requiere un modelo de datos para los tipos de bolsa del cliente (ej. `TipoEmpaque` con capacidad + dims + activo) — diseño pendiente.
+
+**Orden de construcción:** Modo B primero (simple, tarifa fija), Modo A después (bin-packing, el proyecto grande). Ambos se enchufan en el MISMO punto: upstream del cotizador, dentro del rates callback (DEUDA 144), donde el carrito de items se convierte en `paquetes[]`. Hoy ese punto de conversión items→paquetes NO existe (el cotizador recibe `paquetes[]` ya armado); nace con el rates callback.
+
+**Relación:** DEUDA 103 CAPA 1 (motor de reglas de empaquetado, precursora conceptual), DEUDA 144 (rates callback, donde el motor se enchufa), DEUDA 110/111 (inteligencia que a futuro puede calibrar las reglas con datos reales).
+
+---
+
+## DEUDA 144 — Rates callback de Tiendanube: plan de implementación del endpoint (ABIERTA, próxima construcción, registrada 2026-08-10)
+
+**Status:** ABIERTA — próxima pieza grande a construir. La ESPECIFICACIÓN vive en DEUDA 130 sección "Rates callback — cotización en checkout" (contrato del POST de Tiendanube, response `rates[]`, pre-registro de carrier options, caché, `reference`). Esta deuda es el PLAN DE IMPLEMENTACIÓN (los pasos concretos en el código), no re-especifica.
+
+**Qué hace el endpoint (resumen):** recibe POST de Tiendanube con el carrito (items[] con peso+dims), origen y destino → identifica la empresa por `store_id` → convierte items en `paquetes[]` (Modo B si activo, else 1 bulto default) → cotiza con `cotizar()` → mapea a `rates[]` de Tiendanube → todo en < 5s.
+
+**Piezas y orden de construcción (del recon 2026-08-10):**
+1. **Modelo `TiendaTiendanube`** (store↔empresa + accessToken OAuth) — NO existe, PREREQUISITO BLOQUEANTE. Sin él el endpoint no traduce `store_id` → `empresaId`. Mínimo: `storeId @unique`, `empresaId` FK, `accessToken`, `installedAt`, `activo`.
+2. **Endpoint `POST /api/tiendanube/rates`** — clasificado `public` en `proxy.ts` (agregar a `PUBLIC_API_EXACT`); se autoautentica resolviendo `store_id` contra `TiendaTiendanube` (espejo de cómo `/api/envios/corregir` valida su token). ⚠️ tocar `proxy.ts` → deploy requiere rebuild limpio (`rm -rf .next && npm run build`).
+3. **Conversión items→paquetes** — inline al principio (si `empaqueModoBActivo` → 1 bulto con los 4 fijos; else → 1 bulto default). Se refactoriza a helper `armarPaquetes()` cuando llegue Modo A.
+4. **Timeout < 5s** — ver DEUDA 145.
+5. **Persistir `CotizacionSnapshot`** — REQUISITO de DEUDA 111 (captura del embudo del checkout desde el día 1). El endpoint debe guardar el snapshot de cada cotización (opciones mostradas). No es opcional.
+
+**Piezas que YA existen (no bloquean):** `cotizar()` con el contrato correcto, `Paquete` como target shape, los campos `empaqueModoB*` en Empresa (DEUDA 143), el fallback per-courier (DEUDA 129), el motor de couriers SANO (post-fix fetchConTimeout).
+
+**No bloqueante hoy:** OAuth flow + env vars `TIENDANUBE_CLIENT_ID/_SECRET` (el rates callback es autoservicio vía `store_id`; el token OAuth se persiste en el install flow separado, Momento 1 de DEUDA 130). UI de Modo B (los campos se pueden setear por Prisma directo para dogfooding).
+
+**Relación:** DEUDA 130 (spec autoritativa), DEUDA 111 (snapshot obligatorio), DEUDA 143 (Modo B que consume), DEUDA 145 (timeout <5s), DEUDA 129 (resiliencia + fallback que el endpoint hereda de `cotizar()`).
+
+---
+
+## DEUDA 145 — Timeout de courier: bajar de 8s a <5s parametrizable por-call para el plugin (ABIERTA, prerequisito del rates callback, registrada 2026-08-10)
+
+**Status:** ABIERTA — prerequisito de calidad del rates callback (DEUDA 144).
+
+**Problema:** `COURIER_TIMEOUT_MS = 8000` está hardcodeado y DUPLICADO en ambos adapters (MocisAdapter + AndreaniAdapter), no parametrizable por-llamada. Tiendanube corta el rates callback a los 5s (circuit breaker, DEUDA 130). Con 8s de techo por courier, una cotización lenta puede pasarse de los 5s de Tiendanube.
+
+**Solución (diseño):** parametrizar el timeout como parámetro opcional del adapter (o del `fetchConTimeout`), para que el contexto "checkout" use < 5s sin bajar el global de 8s (que sirve al dashboard, donde 8s está bien). Opción (a) parametrizar per-call — preferida; opción (b) bajar la constante global — descartada (afecta dashboard).
+
+**Nota:** el wrapper `fetchConTimeout` ya quedó SANO post-fix del bug de recursión (ver suplemento de DEUDA 129, commit 709d995). Este cambio es sobre el VALOR del timeout, no sobre el wrapper roto (ya arreglado).
+
+**Relación:** DEUDA 129 (donde vive el timeout), DEUDA 144 (el rates callback que lo necesita <5s), DEUDA 130 (los 5s de Tiendanube).
 
 ---
 

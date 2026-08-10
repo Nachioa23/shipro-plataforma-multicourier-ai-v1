@@ -12,6 +12,7 @@ const PUBLIC_API_EXACT = [
   "/api/envios/rastreo-publico", // DEUDA 106 pieza 2 mov 1 — rastreo L1 público (sin PII).
   "/api/envios/corregir",
   "/api/geografia/buscar",
+  "/api/tiendanube/rates",       // Rates callback de Tiendanube — self-auth via store_id (DEUDA 144).
 ];
 const API_KEY_EXACT = [
   "/api/checkouts",

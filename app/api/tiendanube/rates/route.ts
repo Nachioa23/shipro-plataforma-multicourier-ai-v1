@@ -2,6 +2,15 @@ import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { cotizar } from "@/lib/cotizador";
 
+// Peso default (kg) cuando no hay peso disponible. Se usa en dos casos:
+// (1) Modo B activo pero SIN peso configurado (config a medias) → respeta la
+//     intención de tarifa fija con un peso de referencia, en vez de caer al peso real.
+// (2) Default path con un carrito que no trae peso alguno (caso raro / mala data).
+// 2kg es un piso conservador (protege de subcobrar). El peso del Modo B DEBERÍA ser
+// OBLIGATORIO en la pantalla de configuración (no poder activar el Modo B sin cargarlo,
+// decisión de Nacho — DEUDA 143); este default es la red de seguridad por si falla igual.
+const PESO_DEFAULT_KG = 2;
+
 // DEUDA 144 — Rates callback de Tiendanube (Momento 2 del plugin).
 //
 // Endpoint PUBLIC (registrado en proxy.ts PUBLIC_API_EXACT). Tiendanube NO firma
@@ -36,7 +45,22 @@ export async function POST(request: Request) {
 
     // Self-auth: la tienda tiene que estar vinculada y activa. Mismo mensaje
     // genérico para "no existe" y "no instalada" para no revelar existencia.
-    const tienda = await prisma.tiendaTiendanube.findUnique({ where: { storeId } });
+    // Include de empresa con los campos de Modo B (DEUDA 143) para evitar un
+    // segundo query al armar el/los bulto(s) más abajo.
+    const tienda = await prisma.tiendaTiendanube.findUnique({
+      where: { storeId },
+      include: {
+        empresa: {
+          select: {
+            empaqueModoBActivo: true,
+            empaqueModoBPesoKg: true,
+            empaqueModoBLargoCm: true,
+            empaqueModoBAnchoCm: true,
+            empaqueModoBAltoCm: true,
+          },
+        },
+      },
+    });
     if (!tienda || tienda.estado !== "instalada") {
       return NextResponse.json({ error: "Tienda no vinculada" }, { status: 422 });
     }
@@ -51,23 +75,41 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Destino sin código postal" }, { status: 422 });
     }
 
-    // STEP 1: armar UN bulto default sumando el peso de items[] (grams → kg,
-    // con quantity si viene). Dims default 10x10x10 — el motor de empaquetado
-    // (Modo B/A) se enchufa en el próximo paso.
-    const items: any[] = Array.isArray(body.items) ? body.items : [];
-    const gramsTotal = items.reduce(
-      (acc, it) => acc + (Number(it?.grams) || 0) * (Number(it?.quantity) || 1),
-      0,
-    );
-    const pesoKg = gramsTotal > 0 ? gramsTotal / 1000 : 1;
-    const paquetes = [{
-      pesoKg,
-      largoCm: 10,
-      anchoCm: 10,
-      altoCm: 10,
-      valorDeclarado: Number(body.total_price) || 0,
-      requiereSeguro: false,
-    }];
+    // Armar el/los bulto(s) a cotizar.
+    // Modo B (tarifa fija): si la empresa lo tiene activo, SIEMPRE 1 bulto de tarifa fija,
+    // sin importar el contenido real del carrito (regla comercial de tarifa — DEUDA 143). Si
+    // falta el peso configurado, se usa PESO_DEFAULT_KG (respeta la intención de tarifa fija
+    // en lugar de caer al peso real del carrito). Dims faltantes → valor chico (10) para que
+    // mande el peso en la cotización volumétrica.
+    // Modo A (bin-packing) se enchufará acá en el futuro.
+    const emp = tienda.empresa;
+    const modoBAplicable = !!emp?.empaqueModoBActivo;
+
+    let paquetes;
+    if (modoBAplicable) {
+      paquetes = [{
+        pesoKg: emp!.empaqueModoBPesoKg ?? PESO_DEFAULT_KG,
+        largoCm: emp!.empaqueModoBLargoCm ?? 10,
+        anchoCm: emp!.empaqueModoBAnchoCm ?? 10,
+        altoCm: emp!.empaqueModoBAltoCm ?? 10,
+        valorDeclarado: Number(body.total_price) || 0,
+        requiereSeguro: false,
+      }];
+    } else {
+      // Default (STEP 1): UN bulto sumando el peso de items[] (grams→kg), 1kg si no hay datos.
+      const items: any[] = Array.isArray(body.items) ? body.items : [];
+      const gramsTotal = items.reduce(
+        (acc, it) => acc + (Number(it?.grams) || 0) * (Number(it?.quantity) || 1),
+        0,
+      );
+      const pesoKg = gramsTotal > 0 ? gramsTotal / 1000 : PESO_DEFAULT_KG;
+      paquetes = [{
+        pesoKg,
+        largoCm: 10, anchoCm: 10, altoCm: 10,
+        valorDeclarado: Number(body.total_price) || 0,
+        requiereSeguro: false,
+      }];
+    }
 
     // Cotizar. Sin cpOrigen → cotizar() usa el depósito predeterminado de la
     // empresa (DEUDA 4). origen="checkout" para etiquetar bien el registro de

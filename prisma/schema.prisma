@@ -52,6 +52,7 @@ model Empresa {
   movimientos         MovimientoFinanciero[]
   liquidaciones       LiquidacionMensual[] // NUEVO: Agrupador de facturas a fin de mes
   depositos           Deposito[] // DEUDA 4: depósitos físicos del cliente
+  tiendasTiendanube   TiendaTiendanube[] // DEUDA 144: tiendas Tiendanube vinculadas (1 empresa → N tiendas)
 
   // DEUDA 29: si true, el cliente puede usar credenciales Shipro (Modelo A) al activar
   // couriers. Inmutabilidad direccional: gerente_cliente puede ir A→B (obtener
@@ -1592,4 +1593,51 @@ model AjusteMasivoFee {
 
   @@index([fechaAplicacion])
   @@index([aplicadoPorId])
+}
+
+// =============================================================================
+// DEUDA 144 — TiendaTiendanube: vinculación store↔empresa + credencial OAuth
+// =============================================================================
+// Registra cada tienda de Tiendanube conectada a una empresa Shipro. Prerequisito
+// bloqueante del rates callback (POST /api/tiendanube/rates lookup storeId→empresaId)
+// y consumida también por el flujo OAuth de instalación (Momento 1) y el frente de
+// etiquetas/tracking (Momento 3).
+//
+// Reinstalación: UPDATE existente por storeId (NO nueva fila, NO nuevo shippingCarrierId)
+// — regla Minimal de la checklist Poggi (1 carrier por app).
+//
+// El token de vinculación (link de instalación, un solo uso, expira) NO vive acá — es del
+// flujo OAuth/Momento 1 y se agrega cuando se construya ese endpoint. Esta tabla representa
+// la tienda YA VINCULADA post-OAuth.
+model TiendaTiendanube {
+  id Int @id @default(autoincrement())
+
+  empresaId Int
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  // storeId de Tiendanube. @unique: un storeId pertenece a UNA sola empresa.
+  // Una empresa puede tener varias tiendas (raro pero permitido): Empresa 1—N TiendaTiendanube.
+  storeId Int @unique
+
+  // accessToken OAuth permanente. Nace NULL (el flujo OAuth/Momento 1 aún no existe; se llena
+  // ahí). Cuando se construya el OAuth, se guarda ENCRIPTADO — la utilidad de encriptación
+  // reversible NO existe hoy (deuda a registrar); NUNCA se persiste en texto plano.
+  accessToken String?
+
+  // ID del carrier registrado en la tienda (1 por app, checklist Poggi). Se llena tras
+  // POST /shipping_carriers. Nullable hasta que se registre.
+  shippingCarrierId String?
+
+  // Lifecycle: "instalada" | "desinstalada" | "suspendida". Los webhooks app/uninstalled,
+  // app/suspended, app/resumed lo actualizan. String (consistente con el estilo del schema).
+  estado String @default("instalada")
+
+  instaladaEn    DateTime  @default(now())
+  desinstaladaEn DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([empresaId])
+  @@index([estado])
 }

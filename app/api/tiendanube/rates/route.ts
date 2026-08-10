@@ -57,6 +57,11 @@ export async function POST(request: Request) {
             empaqueModoBLargoCm: true,
             empaqueModoBAnchoCm: true,
             empaqueModoBAltoCm: true,
+            depositos: {
+              where: { eliminado: false, activo: true, esPredeterminado: true },
+              select: { id: true },
+              take: 1,
+            },
           },
         },
       },
@@ -151,6 +156,41 @@ export async function POST(request: Request) {
     const seen = new Set<string>();
     const shipUnique = ship.filter((r) => (seen.has(r.code) ? false : (seen.add(r.code), true)));
     const rates = [...shipUnique, ...pickup];
+
+    // DEUDA 111 — snapshot del embudo del checkout (captura desde día 1). BEST-EFFORT:
+    // si falla, NO rompe la respuesta al comprador. depositoOrigenId usa el depósito
+    // predeterminado de la empresa (Tiendanube manda un location_id propio que no mapea
+    // a nuestro Deposito; el mapeo fino queda para futuro). Los Decimal se convierten a
+    // number para un JSON limpio. Nota: agrega una escritura al camino (~límite 5s de
+    // Tiendanube); con volumen alto, evaluar moverlo a async (DEUDA 145 relacionada).
+    try {
+      const depositoPredId = emp?.depositos?.[0]?.id;
+      if (depositoPredId != null) {
+        const opcionesSnapshot = [
+          ...(resultado.domicilio ?? []).map((o) => ({
+            tipo: "domicilio", courier: o.courier, modalidad: o.modalidad,
+            precioFinal: Number(o.precioFinal), precioProveedor: Number(o.precioProveedor),
+            slaHs: o.slaHs, esFallback: !!o.esFallback,
+          })),
+          ...(resultado.sucursal ?? []).map((o) => ({
+            tipo: "sucursal", courier: o.courier, modalidad: o.modalidad,
+            precioFinal: Number(o.precioFinal), precioProveedor: Number(o.precioProveedor),
+            slaHs: o.slaHs, esFallback: !!o.esFallback,
+          })),
+        ];
+        await prisma.cotizacionSnapshot.create({
+          data: {
+            empresaId: tienda.empresaId,
+            depositoOrigenId: depositoPredId,
+            destinoSnapshotJson: JSON.stringify({ cpDestino, provinciaDestino: provinciaDestino ?? null }),
+            paqueteSnapshotJson: JSON.stringify(paquetes),
+            opcionesSnapshotJson: JSON.stringify(opcionesSnapshot),
+          },
+        });
+      }
+    } catch (snapErr) {
+      console.error("[/api/tiendanube/rates] snapshot best-effort falló (no afecta respuesta):", snapErr);
+    }
 
     // Empty rates[] con 200 es válido — Tiendanube simplemente no muestra
     // opciones. Refinamiento de política (cuándo 422 vs empty-200) queda para

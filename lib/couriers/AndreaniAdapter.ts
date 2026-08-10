@@ -16,7 +16,7 @@ async function fetchConTimeout(input: string | URL, init?: RequestInit): Promise
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), COURIER_TIMEOUT_MS);
   try {
-    return await fetchConTimeout(input, { ...init, signal: controller.signal });
+    return await fetch(input, { ...init, signal: controller.signal });
   } catch (e: any) {
     if (e?.name === "AbortError") {
       throw new Error("CourierTimeout: Andreani no respondió en " + COURIER_TIMEOUT_MS + "ms");

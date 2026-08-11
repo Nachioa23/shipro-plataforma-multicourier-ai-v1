@@ -13,6 +13,7 @@ const PUBLIC_API_EXACT = [
   "/api/envios/corregir",
   "/api/geografia/buscar",
   "/api/tiendanube/rates",       // Rates callback de Tiendanube — self-auth via store_id (DEUDA 144).
+  "/api/tiendanube/oauth/callback", // Callback OAuth de Tiendanube — self-auth via token de vinculación en state (DEUDA 144).
 ];
 const API_KEY_EXACT = [
   "/api/checkouts",

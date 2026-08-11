@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { exchangeCodeForToken } from "@/lib/tiendanube/oauth";
 import { encryptSecret } from "@/lib/utils/secret-crypto";
+import { enviarMailAlertaCruceTiendanube } from "@/lib/mailer";
 
 // DEUDA 144 — Callback OAuth de Tiendanube (Momento 1).
 //
@@ -83,6 +84,22 @@ export async function GET(request: Request) {
           },
         })
         .catch((e) => console.error("[/api/tiendanube/oauth/callback] no se pudo registrar el cruce:", e));
+
+      // Aviso al equipo Shipro (best-effort — no rompe la respuesta al cliente). Consultamos los
+      // nombres de las empresas para que el mail sea legible.
+      try {
+        const [empActual, empIntentada] = await Promise.all([
+          prisma.empresa.findUnique({ where: { id: tiendaExistente.empresaId }, select: { nombre: true } }),
+          prisma.empresa.findUnique({ where: { id: empresaId }, select: { nombre: true } }),
+        ]);
+        await enviarMailAlertaCruceTiendanube({
+          storeId,
+          empresaActual: { id: tiendaExistente.empresaId, nombre: empActual?.nombre ?? null },
+          empresaIntentada: { id: empresaId, nombre: empIntentada?.nombre ?? null },
+        });
+      } catch (e) {
+        console.error("[/api/tiendanube/oauth/callback] no se pudo avisar al equipo del cruce:", e);
+      }
 
       return NextResponse.json(
         { error: "Esta tienda ya está vinculada a otra cuenta de Shipro. Nuestro equipo fue notificado y se contactará con vos." },

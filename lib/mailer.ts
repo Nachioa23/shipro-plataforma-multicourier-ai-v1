@@ -598,3 +598,44 @@ export async function enviarMailEncuestaEmpresa(
     console.error("[Mailer] Error Mail 4 (NPS Empresa):", error);
   }
 }
+
+// ==============================================================
+// ALERTA AL EQUIPO SHIPRO — Cruce de vinculación Tiendanube
+// ==============================================================
+// Se dispara cuando el callback OAuth detecta que una tienda ya vinculada a la
+// empresa X recibió un intento de instalación con un link de la empresa Y (ver
+// DEUDA 144, callback STEP 2b). El callback rechaza el intento con 409 y NO
+// cambia data; este mail avisa al equipo para que resuelva manualmente.
+// Destinatario: SHIPRO_ALERT_EMAIL (fallback SMTP_USER para no perder el aviso
+// si la env var no está seteada).
+export async function enviarMailAlertaCruceTiendanube(datos: {
+  storeId: number;
+  empresaActual: { id: number; nombre: string | null };
+  empresaIntentada: { id: number; nombre: string | null };
+}) {
+  const destino = process.env.SHIPRO_ALERT_EMAIL || process.env.SMTP_USER;
+  const nombreActual = datos.empresaActual.nombre ?? `Empresa #${datos.empresaActual.id}`;
+  const nombreIntentada = datos.empresaIntentada.nombre ?? `Empresa #${datos.empresaIntentada.id}`;
+  await transporter.sendMail({
+    from: `"Shipro Alertas" <${process.env.SMTP_USER}>`,
+    to: destino,
+    subject: `[Shipro] Intento de vinculación cruzada — tienda ${datos.storeId}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #233b6b;">⚠️ Intento de vinculación cruzada en Tiendanube</h2>
+        <p>Una tienda que ya está vinculada a una empresa fue objeto de un intento de vinculación
+           desde un link de <strong>otra</strong> empresa. El sistema lo rechazó automáticamente y
+           no cambió nada. Requiere revisión del equipo.</p>
+        <table style="border-collapse: collapse; width: 100%; margin: 20px 0;">
+          <tr><td style="padding: 8px; border: 1px solid #eaeaea;"><strong>Tienda (store_id)</strong></td><td style="padding: 8px; border: 1px solid #eaeaea;">${datos.storeId}</td></tr>
+          <tr><td style="padding: 8px; border: 1px solid #eaeaea;"><strong>Vinculada actualmente a</strong></td><td style="padding: 8px; border: 1px solid #eaeaea;">${nombreActual} (id ${datos.empresaActual.id})</td></tr>
+          <tr><td style="padding: 8px; border: 1px solid #eaeaea;"><strong>Intentó vincularla</strong></td><td style="padding: 8px; border: 1px solid #eaeaea;">${nombreIntentada} (id ${datos.empresaIntentada.id})</td></tr>
+        </table>
+        <p style="color: #666; font-size: 13px;">Si fue un error operativo (link generado para la
+           empresa equivocada), regenerá el link correcto. Si la tienda de verdad cambió de dueño,
+           reasignala manualmente desde el panel del equipo.</p>
+      </div>
+      ${firmaShipro}
+    `,
+  });
+}

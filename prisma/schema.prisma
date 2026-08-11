@@ -53,6 +53,7 @@ model Empresa {
   liquidaciones       LiquidacionMensual[] // NUEVO: Agrupador de facturas a fin de mes
   depositos           Deposito[] // DEUDA 4: depósitos físicos del cliente
   tiendasTiendanube   TiendaTiendanube[] // DEUDA 144: tiendas Tiendanube vinculadas (1 empresa → N tiendas)
+  tokensVinculacionTiendanube TokenVinculacionTiendanube[] // Tokens de un solo uso para el link de instalación OAuth (Momento 1)
 
   // DEUDA 29: si true, el cliente puede usar credenciales Shipro (Modelo A) al activar
   // couriers. Inmutabilidad direccional: gerente_cliente puede ir A→B (obtener
@@ -1640,4 +1641,38 @@ model TiendaTiendanube {
 
   @@index([empresaId])
   @@index([estado])
+}
+
+// =============================================================================
+// DEUDA 144 — TokenVinculacionTiendanube: token de un solo uso del install-link
+// =============================================================================
+// Mecanismo del "link de instalación" de Tiendanube (Momento 1). El operador Shipro
+// genera un token para la empresa, el token viaja en el parámetro `state` del OAuth,
+// y el callback lo valida (existe + no expiró + no se usó) para saber a qué empresa
+// vincular la nueva tienda. Es tabla APARTE de TiendaTiendanube porque el token nace
+// ANTES de que exista la tienda (no hay storeId todavía).
+model TokenVinculacionTiendanube {
+  id Int @id @default(autoincrement())
+
+  empresaId Int
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  // Token aleatorio que viaja en el `state` del OAuth de Tiendanube. Se genera cuando el operador
+  // Shipro crea el link de instalación para una empresa (antes de que exista la tienda/storeId).
+  // El callback lo valida: existe + no expiró (expira) + no se usó (usadoEn == null). @unique para
+  // lookup O(1) en el callback. Reutiliza el patrón del correccionToken de Envio (randomBytes+base64url).
+  token String @unique
+
+  // Vencimiento del link de instalación (lo setea el endpoint que genera el link; el diseño sugiere
+  // ~7 días). Un link vencido no vincula (defensa si el link se filtra o queda viejo).
+  expira DateTime
+
+  // Single-use: NULL hasta que el callback lo consume; entonces se setea al timestamp de uso. Un
+  // token ya usado no vincula de nuevo. (A diferencia del correccionToken, que se auto-invalida por
+  // estado, este token NO tiene un estado análogo → necesita el campo explícito.)
+  usadoEn DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([empresaId])
 }

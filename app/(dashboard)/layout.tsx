@@ -191,9 +191,9 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
                   <Link href="/admin-auditoria-configuracion" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-rose-50 hover:text-rose-800 rounded-lg font-medium text-sm transition-all mt-2 bg-rose-50/50 border border-rose-100">
                     <ScrollText className="w-5 h-5 text-rose-600" /><span className="font-bold text-rose-800">Auditoría Config</span>
                   </Link>
-                  {/* DEUDA 144: Integraciones — plataformas e-commerce (Tiendanube y futuras) */}
-                  <Link href="/integraciones" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-sky-50 hover:text-sky-800 rounded-lg font-medium text-sm transition-all mt-2 bg-sky-50/50 border border-sky-100">
-                    <Plug className="w-5 h-5 text-sky-600" /><span className="font-bold text-sky-800">Integraciones</span>
+                  {/* DEUDA 144: Plataformas — e-commerce (Tiendanube y futuras) */}
+                  <Link href="/plataformas" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-sky-50 hover:text-sky-800 rounded-lg font-medium text-sm transition-all mt-2 bg-sky-50/50 border border-sky-100">
+                    <Plug className="w-5 h-5 text-sky-600" /><span className="font-bold text-sky-800">Plataformas</span>
                   </Link>
                 </>
               )}

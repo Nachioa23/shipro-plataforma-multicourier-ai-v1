@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { Plug, Store, ShieldAlert, Loader2, Building2, Clock } from "lucide-react";
 
-// DEUDA 144 — pantalla Integraciones (contenedora de plataformas e-commerce). Hoy:
+// DEUDA 144 — pantalla Plataformas (contenedora de plataformas e-commerce). Hoy:
 // sección Tiendanube con las tiendas vinculadas (solo lectura; la reasignación se
 // agrega en la pieza 3b). admin_shipro. La estructura de sección permite sumar
 // plataformas sin tocar el menú.
@@ -21,7 +21,7 @@ interface TiendaVinculada {
   empresa: { id: number; nombre: string; cuit: string; activo: boolean } | null;
 }
 
-export default function IntegracionesPage() {
+export default function PlataformasPage() {
   const { data: session, status } = useSession();
   const rol = session?.user?.rol;
 
@@ -77,7 +77,7 @@ export default function IntegracionesPage() {
         </div>
         <h2 className="text-3xl font-black text-gray-800 tracking-tight">Acceso Restringido</h2>
         <p className="text-gray-500 mt-3 max-w-md text-sm font-medium leading-relaxed">
-          Solo los administradores Shipro pueden gestionar las integraciones de plataformas e-commerce.
+          Solo los administradores Shipro pueden gestionar las plataformas de e-commerce conectadas.
         </p>
       </div>
     );
@@ -98,7 +98,7 @@ export default function IntegracionesPage() {
               <Plug className="w-6 h-6" />
             </div>
             <div>
-              <h2 className="text-2xl font-black text-gray-800 tracking-tight">Integraciones</h2>
+              <h2 className="text-2xl font-black text-gray-800 tracking-tight">Plataformas</h2>
               <p className="text-sm font-medium text-gray-500 mt-1">
                 Tiendas conectadas por plataforma.
               </p>

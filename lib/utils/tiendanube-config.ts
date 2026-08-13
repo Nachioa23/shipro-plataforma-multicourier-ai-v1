@@ -85,3 +85,20 @@ export function getTiendanubeUserAgent(): string {
 export function getTiendanubeTokenUrl(): string {
   return process.env.TIENDANUBE_TOKEN_URL || "https://www.tiendanube.com/apps/authorize/token";
 }
+
+/**
+ * URL base de la API REST de administración de Tiendanube (distinta del endpoint
+ * OAuth token). Default: la real. Override TIENDANUBE_API_URL para tests contra
+ * mock local.
+ */
+export function getTiendanubeApiBaseUrl(): string {
+  return process.env.TIENDANUBE_API_URL || "https://api.tiendanube.com";
+}
+
+/**
+ * Versión de la API de Tiendanube (path-based, formato fecha). Vigente hardcodeada;
+ * override TIENDANUBE_API_VERSION para migraciones futuras.
+ */
+export function getTiendanubeApiVersion(): string {
+  return process.env.TIENDANUBE_API_VERSION || "2025-03";
+}

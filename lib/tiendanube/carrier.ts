@@ -1,0 +1,185 @@
+// =============================================================================
+// DEUDA 144 — Módulo del Shipping Carrier de Tiendanube.
+// =============================================================================
+// Crea el carrier en la tienda del cliente y registra sus opciones (una por
+// servicio publicado, code = generarCodeServicio — MISMO slug estable que emite
+// el rates callback). Idempotente: un solo carrier por tienda (reutiliza el
+// shippingCarrierId ya guardado) y no duplica options (diff por code contra los
+// ya registrados). Contrato oficial verificado (DEUDA 130):
+//   POST {base}/{version}/{store_id}/shipping_carriers                → { id, ... }
+//   GET  {base}/{version}/{store_id}/shipping_carriers/{id}/options   → [ { code, ... }, ... ]
+//   POST {base}/{version}/{store_id}/shipping_carriers/{id}/options   → { id, ... }
+//
+// Las options se registran SIN additional_cost/days/free_shipping — esos son
+// atributos que el merchant configura desde su panel (recargo, tiempos de
+// entrega, umbral de envío gratis). Al carrier lo llamamos "Shipro" (visible
+// en el checkout como empresa de envíos; el courier real ya viene en el `name`
+// de cada option). Auth: Bearer del accessToken descifrado, pasado en cada call
+// (fetchTiendanube inyecta User-Agent + Content-Type pero NO Authorization).
+// =============================================================================
+
+import { fetchTiendanube } from "@/lib/tiendanube/http";
+import {
+  enumerarServiciosPublicados,
+} from "@/lib/tiendanube/servicios-publicados";
+import { decryptSecret } from "@/lib/utils/secret-crypto";
+import { getAppUrlOrThrow } from "@/lib/utils/app-url";
+import {
+  getTiendanubeApiBaseUrl,
+  getTiendanubeApiVersion,
+} from "@/lib/utils/tiendanube-config";
+
+const CARRIER_NAME = "Shipro";
+
+/**
+ * Arma la URL de un endpoint de la API de administración de Tiendanube.
+ * Formato: `{base}/{version}/{store_id}/{path}` (sin doble slash intermedio).
+ */
+function apiUrl(storeId: number, path: string): string {
+  return `${getTiendanubeApiBaseUrl()}/${getTiendanubeApiVersion()}/${storeId}/${path}`;
+}
+
+function authHeaders(accessToken: string): Record<string, string> {
+  return { Authorization: `Bearer ${accessToken}` };
+}
+
+/**
+ * Crea el shipping carrier "Shipro" en la tienda. Devuelve el `id` numérico
+ * asignado por Tiendanube (lo persistimos como shippingCarrierId string).
+ *
+ * @param types - CSV de types soportados por el carrier. "ship,pickup" | "ship" | "pickup".
+ * @throws Error si Tiendanube responde no-2xx.
+ */
+export async function crearCarrier(
+  storeId: number,
+  accessToken: string,
+  callbackUrl: string,
+  types: string,
+): Promise<number> {
+  const res = await fetchTiendanube(apiUrl(storeId, "shipping_carriers"), {
+    method: "POST",
+    headers: authHeaders(accessToken),
+    body: JSON.stringify({
+      name: CARRIER_NAME,
+      callback_url: callbackUrl,
+      types,
+    }),
+  });
+  if (!res.ok) {
+    const detalle = await res.text().catch(() => "");
+    throw new Error(`crearCarrier HTTP ${res.status}: ${detalle}`.slice(0, 300));
+  }
+  const data: any = await res.json();
+  return Number(data.id);
+}
+
+/**
+ * Lista las options ya registradas en el carrier. Se usa para diffear contra los
+ * servicios publicados y evitar POSTear duplicados (Tiendanube devolvería error).
+ */
+export async function listarOptions(
+  storeId: number,
+  accessToken: string,
+  carrierId: string,
+): Promise<{ code: string }[]> {
+  const res = await fetchTiendanube(
+    apiUrl(storeId, `shipping_carriers/${carrierId}/options`),
+    { method: "GET", headers: authHeaders(accessToken) },
+  );
+  if (!res.ok) {
+    const detalle = await res.text().catch(() => "");
+    throw new Error(`listarOptions HTTP ${res.status}: ${detalle}`.slice(0, 300));
+  }
+  const data: any = await res.json();
+  return Array.isArray(data) ? data.map((o) => ({ code: String(o.code) })) : [];
+}
+
+/**
+ * Registra UNA option del carrier. `code` DEBE ser exactamente el mismo slug
+ * que emite el rates callback (generarCodeServicio); si difieren, Tiendanube
+ * descarta silenciosamente las rates cuyo code no esté pre-registrado.
+ *
+ * NO se manda additional_cost/days/free_shipping — el merchant los configura.
+ */
+export async function registrarOption(
+  storeId: number,
+  accessToken: string,
+  carrierId: string,
+  code: string,
+  name: string,
+): Promise<void> {
+  const res = await fetchTiendanube(
+    apiUrl(storeId, `shipping_carriers/${carrierId}/options`),
+    {
+      method: "POST",
+      headers: authHeaders(accessToken),
+      body: JSON.stringify({ code, name }),
+    },
+  );
+  if (!res.ok) {
+    const detalle = await res.text().catch(() => "");
+    throw new Error(`registrarOption HTTP ${res.status}: ${detalle}`.slice(0, 300));
+  }
+}
+
+export interface RegistroCarrierResult {
+  /** id del carrier en Tiendanube (siempre presente al terminar; string para persistir). */
+  carrierId: string;
+  /** true si en esta corrida se creó el carrier (no existía shippingCarrierId previo). */
+  carrierCreado: boolean;
+  /** codes de las options recién registradas (vacío si todas ya existían). */
+  optionsNuevas: string[];
+}
+
+/**
+ * Orquesta el alta/reconciliación del carrier + options para una tienda.
+ * Idempotente:
+ *   - Si la tienda YA tiene shippingCarrierId → NO crea carrier de nuevo, solo
+ *     diffea options contra los servicios publicados.
+ *   - Si el carrier ya tiene una option con el mismo code → la saltea (no
+ *     duplica).
+ *
+ * El caller es responsable de:
+ *   (a) persistir carrierId en TiendaTiendanube.shippingCarrierId cuando
+ *       carrierCreado=true.
+ *   (b) manejar excepciones (network / no-2xx bubblean como Error).
+ *
+ * Se apoya en enumerarServiciosPublicados (3 gates: técnico + shipro + cliente)
+ * como fuente única de qué codes deben quedar registrados.
+ */
+export async function registrarCarrierParaTienda(tienda: {
+  storeId: number;
+  empresaId: number;
+  accessTokenCifrado: string;
+  shippingCarrierId: string | null;
+}): Promise<RegistroCarrierResult> {
+  const accessToken = decryptSecret(tienda.accessTokenCifrado);
+  const servicios = await enumerarServiciosPublicados(tienda.empresaId);
+
+  // "ship" y/o "pickup" según los servicios publicados; dedup + CSV. Fallback a
+  // "ship" si la lista está vacía para no mandar `types: ""` (Tiendanube exige
+  // al menos uno). Con servicios=[] el carrier queda creado pero sin options
+  // — no aparece en checkout hasta que la empresa habilite algún servicio.
+  const types = [...new Set(servicios.map((s) => s.type))].join(",") || "ship";
+  const callbackUrl = `${getAppUrlOrThrow()}/api/tiendanube/rates`;
+
+  let carrierId = tienda.shippingCarrierId;
+  let carrierCreado = false;
+  if (!carrierId) {
+    const id = await crearCarrier(tienda.storeId, accessToken, callbackUrl, types);
+    carrierId = String(id);
+    carrierCreado = true;
+  }
+
+  const existentes = await listarOptions(tienda.storeId, accessToken, carrierId);
+  const codesExistentes = new Set(existentes.map((o) => o.code));
+
+  const optionsNuevas: string[] = [];
+  for (const s of servicios) {
+    if (codesExistentes.has(s.code)) continue;
+    await registrarOption(tienda.storeId, accessToken, carrierId, s.code, s.name);
+    optionsNuevas.push(s.code);
+  }
+
+  return { carrierId, carrierCreado, optionsNuevas };
+}

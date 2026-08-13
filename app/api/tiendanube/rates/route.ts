@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { cotizar } from "@/lib/cotizador";
 import { generarCodeServicio } from "@/lib/tiendanube/servicios-publicados";
+import { geocodificarDireccion } from "@/lib/geo/geocodificar-direccion";
+import { resolverSucursalesCercanas } from "@/lib/tiendanube/sucursales-checkout";
 
 // Peso default (kg) cuando no hay peso disponible. Se usa en dos casos:
 // (1) Modo B activo pero SIN peso configurado (config a medias) → respeta la
@@ -81,6 +83,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Destino sin código postal" }, { status: 422 });
     }
 
+    // DEUDA 144: dirección completa del comprador para geocoding (pickup). Defensivo,
+    // mismo estilo que el CP. Puede venir incompleta (a veces solo CP); geocodificarDireccion
+    // geocodifica con lo que haya (peor caso: el CP → coords aproximadas de la zona).
+    const calleDestino = String(dest.address ?? dest.street ?? "").trim();
+    const alturaDestino = String(dest.number ?? dest.street_number ?? "").trim();
+    const localidadDestino = String(dest.locality ?? dest.city ?? "").trim();
+
     // Armar el/los bulto(s) a cotizar.
     // Modo B (tarifa fija): si la empresa lo tiene activo, SIEMPRE 1 bulto de tarifa fija,
     // sin importar el contenido real del carrito (regla comercial de tarifa — DEUDA 143). Si
@@ -117,17 +126,29 @@ export async function POST(request: Request) {
       }];
     }
 
-    // Cotizar. Sin cpOrigen → cotizar() usa el depósito predeterminado de la
-    // empresa (DEUDA 4). origen="checkout" para etiquetar bien el registro de
-    // cobertura vacía (DEUDA 32+37).
-    const resultado = await cotizar({
-      empresaId: tienda.empresaId,
-      cpDestino,
-      provinciaDestino,
-      paquetes,
-      valorCarrito: Number(body.total_price) || undefined,
-      origen: "checkout",
-    });
+    // DEUDA 144: cotizar + geocodificar EN PARALELO. El geocode del comprador se
+    // necesita para rankear sucursales de pickup; corre a la par de la cotización
+    // para NO sumar latencia (Tiendanube corta a ~10s). geocodificarDireccion nunca
+    // throwea (null en cualquier fallo) → un Google caído no rompe la cotización.
+    // cotizar(): sin cpOrigen → usa el depósito predeterminado de la empresa (DEUDA 4).
+    // origen="checkout" para etiquetar bien el registro de cobertura vacía (DEUDA 32+37).
+    const [resultado, coords] = await Promise.all([
+      cotizar({
+        empresaId: tienda.empresaId,
+        cpDestino,
+        provinciaDestino,
+        paquetes,
+        valorCarrito: Number(body.total_price) || undefined,
+        origen: "checkout",
+      }),
+      geocodificarDireccion({
+        direccionCalle: calleDestino,
+        direccionAltura: alturaDestino,
+        codigoPostal: cpDestino,
+        localidad: localidadDestino,
+        provincia: provinciaDestino ?? "",
+      }),
+    ]);
 
     // Mapear OpcionTarifa → rate de Tiendanube.
     // - code: viene de generarCodeServicio(courier, codigoServicio) — el MISMO slug
@@ -142,27 +163,67 @@ export async function POST(request: Request) {
     // - reference: se preserva para Momento 3, ahora con codigoServicio para
     //   trazabilidad (útil cuando Tiendanube devuelve el reference al crear label).
     const currency = body.currency ?? "ARS";
-    const mapOpcion = (o: any, type: "ship" | "pickup") => {
+
+    // SHIP (domicilio): sin cambios respecto al mapeo previo. Un rate por opción;
+    // dedup por code estable (mismo courier+servicio no publica dos veces).
+    const mapShip = (o: any) => {
       if (!o.codigoServicio) return null; // sin code estable → no se publica
       return {
         name: `${o.courier} - ${o.modalidad}`,
         code: generarCodeServicio(o.courier, o.codigoServicio),
         price: Number(o.precioFinal),
         currency,
-        type,
+        type: "ship" as const,
         reference: JSON.stringify({ courier: o.courier, modalidad: o.modalidad, codigoServicio: o.codigoServicio, id: o.id }),
       };
     };
-
     const ship = (resultado.domicilio ?? [])
-      .map((o) => mapOpcion(o, "ship"))
+      .map(mapShip)
       .filter((r): r is NonNullable<typeof r> => r !== null);
-    const pickup = (resultado.sucursal ?? [])
-      .map((o) => mapOpcion(o, "pickup"))
-      .filter((r): r is NonNullable<typeof r> => r !== null);
-
     const seen = new Set<string>();
     const shipUnique = ship.filter((r) => (seen.has(r.code) ? false : (seen.add(r.code), true)));
+
+    // PICKUP (sucursal): expansión por sucursal cercana (DEUDA 144).
+    // Cada opción de sucursal cotizada (una por courier con capacidad sucursal)
+    // se expande en N rates de pickup — una por sucursal cercana al comprador
+    // (resolver por Haversine sobre el BD local, coords del geocode). Todas
+    // comparten el MISMO code (Tiendanube lo permite en pickup) y el precio de
+    // la opción cotizada; difieren en address + hours + sucursalId (este viaja
+    // en reference para el Momento 3). Sin coords → NO se publican sucursales
+    // (mejor que un pickup sin address, que Tiendanube descarta). Best-effort:
+    // un fallo del resolver NO rompe la respuesta (el comprador conserva
+    // domicilio). Los pickup NO se dedupean por code — la fanning-out por
+    // sucursal es la razón de ser de este bloque.
+    const pickup: any[] = [];
+    if (coords) {
+      try {
+        for (const o of (resultado.sucursal ?? [])) {
+          if (!o.codigoServicio) continue;
+          const code = generarCodeServicio(o.courier, o.codigoServicio);
+          const sucursales = await resolverSucursalesCercanas({
+            courierNombre: o.courier,
+            lat: coords.latitud,
+            lng: coords.longitud,
+            topN: 5,
+          });
+          for (const suc of sucursales) {
+            pickup.push({
+              name: `${o.courier} - Retiro en ${suc.nombre}`,
+              code,
+              price: Number(o.precioFinal),
+              currency,
+              type: "pickup" as const,
+              address: suc.address,
+              hours: suc.hours,
+              reference: JSON.stringify({ courier: o.courier, modalidad: o.modalidad, codigoServicio: o.codigoServicio, sucursalId: suc.sucursalId, id: o.id }),
+            });
+          }
+        }
+      } catch (pickupErr) {
+        console.error("[/api/tiendanube/rates] expansión de sucursales best-effort falló (no afecta domicilio):", pickupErr);
+      }
+    }
+
     const rates = [...shipUnique, ...pickup];
 
     // DEUDA 111 — snapshot del embudo del checkout (captura desde día 1). BEST-EFFORT:

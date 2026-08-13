@@ -1629,6 +1629,12 @@ model TiendaTiendanube {
   // POST /shipping_carriers. Nullable hasta que se registre.
   shippingCarrierId String?
 
+  // Datos de la tienda traídos de GET /store (DEUDA 144). Nullable: se llenan best-effort al
+  // instalar (post-OAuth); si la llamada falla, la tienda igual queda vinculada. `nombre` es el
+  // nombre en español (multi-idioma en Tiendanube); `dominio` es el original_domain de la tienda.
+  nombre  String?
+  dominio String?
+
   // Lifecycle: "instalada" | "desinstalada" | "suspendida". Los webhooks app/uninstalled,
   // app/suspended, app/resumed lo actualizan. String (consistente con el estilo del schema).
   estado String @default("instalada")

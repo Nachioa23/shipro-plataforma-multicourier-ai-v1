@@ -35,6 +35,12 @@ export interface OpcionTarifa {
   id: string;
   courier: string;
   modalidad: string;
+  // DEUDA 144: código canónico del servicio del registry (ej. "entrega_domicilio_estandar").
+  // Lo puebla el cotizador resolviendo (courier, tipoEntrega) → el único ServicioCourier de
+  // grupo "entrega" activo con esa capacidad (1:1 hoy). El rates callback lo usa para emitir
+  // el code ESTABLE (generarCodeServicio) que matchea el pre-registrado como carrier option.
+  // Opcional: consumers legacy (crear.ts, dashboard) lo ignoran.
+  codigoServicio?: string;
   precioFinal: Prisma.Decimal;
   precioProveedor: Prisma.Decimal;
   slaHs: number;
@@ -325,6 +331,23 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
     }
   }
 
+  // DEUDA 144: preserva el codigoServicio canónico por (courier, tipoEntrega), que
+  // mapaCapacidades colapsa. 1:1 hoy (un servicio entrega_* activo por capacidad).
+  // Filtra grupo="entrega": la logística inversa también mapea a "sucursal" y NO debe
+  // resolverse acá. Si algún día hay 2+ entrega_* activos con la misma capacidad, toma
+  // el primero (determinista) — registrar deuda para desambiguar entonces.
+  const mapaCodigoServicio = new Map<string, { domicilio?: string; sucursal?: string }>();
+  for (const courier of couriersReales) {
+    const clave = normalizarParaComparacion(courier.nombre);
+    const bucket: { domicilio?: string; sucursal?: string } = {};
+    for (const s of courier.servicios) {
+      if (s.grupo !== "entrega") continue;
+      if (s.capacidadTecnicaMapeada === "domicilio" && !bucket.domicilio) bucket.domicilio = s.codigoServicio;
+      else if (s.capacidadTecnicaMapeada === "sucursal" && !bucket.sucursal) bucket.sucursal = s.codigoServicio;
+    }
+    mapaCodigoServicio.set(clave, bucket);
+  }
+
   // DEUDA 10 Paso 2 (fire-and-forget): persiste el ultimo precio CRUDO conocido por
   // (courier, cpOrigen, cpDestino, pesoKg entero, modalidad). Upsert = pisa la fila si existe.
   // No await, no rompe la cotizacion si falla (igual que registroCoberturaVacia).
@@ -503,6 +526,7 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
               id: `dom-${nombreNormalizado}-${op.servicio.replace(/\s/g, '')}`,
               courier: config.nombreCourier.toUpperCase(),
               modalidad: `Entrega a Domicilio (${op.servicio})`,
+              codigoServicio: mapaCodigoServicio.get(nombreNormalizado)?.domicilio,
               precioFinal: precios.precioFinal,
               precioProveedor: precios.precioProveedor,
               slaHs: slaHorasFinal,
@@ -526,7 +550,7 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
           // (per-courier > per-empresa) para que el comprador no perciba el fallo.
           console.warn("[cotizador] courier falló:", e instanceof Error ? e.message : String(e));
           const fb = await construirOpcionFallback(config, "domicilio");
-          if (fb) opcionesDomicilio.push(fb);
+          if (fb) { fb.codigoServicio = mapaCodigoServicio.get(nombreNormalizado)?.domicilio; opcionesDomicilio.push(fb); }
         }
       }
 
@@ -540,6 +564,7 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
               id: `suc-${nombreNormalizado}`,
               courier: config.nombreCourier.toUpperCase(),
               modalidad: `Retiro en Sucursal (${op.servicio})`,
+              codigoServicio: mapaCodigoServicio.get(nombreNormalizado)?.sucursal,
               precioFinal: precios.precioFinal,
               precioProveedor: precios.precioProveedor,
               slaHs: slaHorasFinal,
@@ -559,7 +584,7 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
           // el catch de domicilio: log + fallback con nombre real del courier.
           console.warn("[cotizador] courier falló:", e instanceof Error ? e.message : String(e));
           const fb = await construirOpcionFallback(config, "sucursal");
-          if (fb) opcionesSucursal.push(fb);
+          if (fb) { fb.codigoServicio = mapaCodigoServicio.get(nombreNormalizado)?.sucursal; opcionesSucursal.push(fb); }
         }
       }
     } catch (errorFatal: any) {
@@ -570,11 +595,11 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
       console.warn("[cotizador] courier falló:", errorFatal instanceof Error ? errorFatal.message : String(errorFatal));
       if (config.ofreceDomicilio !== false) {
         const fbDom = await construirOpcionFallback(config, "domicilio");
-        if (fbDom) opcionesDomicilio.push(fbDom);
+        if (fbDom) { fbDom.codigoServicio = mapaCodigoServicio.get(normalizarParaComparacion(config.nombreCourier))?.domicilio; opcionesDomicilio.push(fbDom); }
       }
       if (config.ofreceSucursal !== false) {
         const fbSuc = await construirOpcionFallback(config, "sucursal");
-        if (fbSuc) opcionesSucursal.push(fbSuc);
+        if (fbSuc) { fbSuc.codigoServicio = mapaCodigoServicio.get(normalizarParaComparacion(config.nombreCourier))?.sucursal; opcionesSucursal.push(fbSuc); }
       }
       continue;
     }

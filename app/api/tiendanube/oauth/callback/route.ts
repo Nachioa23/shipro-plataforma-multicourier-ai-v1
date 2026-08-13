@@ -4,6 +4,7 @@ import { exchangeCodeForToken } from "@/lib/tiendanube/oauth";
 import { encryptSecret } from "@/lib/utils/secret-crypto";
 import { enviarMailAlertaCruceTiendanube } from "@/lib/mailer";
 import { registrarCarrierParaTienda } from "@/lib/tiendanube/carrier";
+import { obtenerDatosTienda } from "@/lib/tiendanube/tienda";
 
 // DEUDA 144 — Callback OAuth de Tiendanube (Momento 1).
 //
@@ -122,6 +123,22 @@ export async function GET(request: Request) {
         data: { usadoEn: new Date() },
       }),
     ]);
+
+    // Enriquecer la tienda con su nombre + dominio (GET /store), best-effort. La tienda YA quedó
+    // vinculada; esto es un enriquecimiento posterior que NUNCA rompe la instalación. Si falla, la
+    // fila queda sin nombre/dominio (el panel muestra el storeId; se puede reintentar). accessToken
+    // en plaintext (obtenerDatosTienda lo usa directo, no el cifrado).
+    try {
+      const datosTienda = await obtenerDatosTienda(storeId, accessToken);
+      if (datosTienda && (datosTienda.nombre || datosTienda.dominio)) {
+        await prisma.tiendaTiendanube.update({
+          where: { storeId },
+          data: { nombre: datosTienda.nombre, dominio: datosTienda.dominio },
+        });
+      }
+    } catch (e) {
+      console.error("[/api/tiendanube/oauth/callback] enriquecer datos de la tienda best-effort falló (la tienda quedó vinculada igual):", e);
+    }
 
     // STEP 2b — Registrar el Shipping Carrier + sus options (best-effort). La tienda YA quedó
     // vinculada y el link consumido (arriba, atómico); esto es un paso posterior que NUNCA debe

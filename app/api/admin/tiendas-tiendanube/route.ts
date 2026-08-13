@@ -41,6 +41,8 @@ export async function GET(request: Request) {
       select: {
         id: true,
         storeId: true,
+        nombre: true,
+        dominio: true,
         empresaId: true,
         estado: true,
         shippingCarrierId: true,

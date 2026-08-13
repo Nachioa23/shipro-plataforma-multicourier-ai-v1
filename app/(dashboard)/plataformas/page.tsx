@@ -12,6 +12,8 @@ import { Plug, Store, ShieldAlert, Loader2, Building2, Clock, ArrowRightLeft, X 
 interface TiendaVinculada {
   id: number;
   storeId: number;
+  nombre: string | null;
+  dominio: string | null;
   empresaId: number;
   estado: string;
   shippingCarrierId: string | null;
@@ -218,7 +220,23 @@ export default function PlataformasPage() {
               {tiendas.map((t) => (
                 <div key={t.id} className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 flex flex-col gap-4">
                   <div className="flex items-start justify-between gap-3">
-                    <h4 className="text-base font-black text-gray-800 tracking-tight">Store #{t.storeId}</h4>
+                    <div className="min-w-0">
+                      <h4 className="text-base font-black text-gray-800 tracking-tight truncate">
+                        {t.nombre ?? `Store #${t.storeId}`}
+                      </h4>
+                      {t.dominio ? (
+                        <a
+                          href={`https://${t.dominio}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[11px] font-medium text-sky-600 hover:text-sky-700 hover:underline truncate block"
+                        >
+                          {t.dominio}
+                        </a>
+                      ) : (
+                        <p className="text-[11px] font-medium text-gray-400">Store #{t.storeId}</p>
+                      )}
+                    </div>
                     <span className={`text-[10px] font-black uppercase tracking-wider rounded-full px-2 py-1 border ${chipClasses(t.estado)}`}>
                       {t.estado}
                     </span>

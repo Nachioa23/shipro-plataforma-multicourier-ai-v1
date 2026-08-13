@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { cotizar } from "@/lib/cotizador";
+import { generarCodeServicio } from "@/lib/tiendanube/servicios-publicados";
 
 // Peso default (kg) cuando no hay peso disponible. Se usa en dos casos:
 // (1) Modo B activo pero SIN peso configurado (config a medias) → respeta la
@@ -129,29 +130,36 @@ export async function POST(request: Request) {
     });
 
     // Mapear OpcionTarifa → rate de Tiendanube.
-    // - code: slug estable único por courier+modalidad. Tiendanube ignora
-    //   codes duplicados en type="ship" (procesa solo el primero) — dedupimos
-    //   preservando el primero.
-    // - reference: string opaco con courier+modalidad+id, para recuperar la
-    //   elección del comprador cuando Tiendanube pida crear la etiqueta
-    //   (Momento 3) sin consultar BD.
+    // - code: viene de generarCodeServicio(courier, codigoServicio) — el MISMO slug
+    //   estable con que se pre-registra el carrier option. Tiendanube descarta rates
+    //   cuyo code no esté registrado, así que emitir el slug dinámico de modalidad
+    //   (como antes) era una bomba de tiempo: cambiaba con cada `servicio` que
+    //   devolviera el courier.
+    // - Sin codigoServicio → se descarta la opción (fallback fantasma DEUDA 129,
+    //   ver comment del mapOpcion abajo). Mejor no publicarla que emitir un code
+    //   no registrado que Tiendanube ignoraría igual.
+    // - name: humano/cosmético, no tiene que matchear el code.
+    // - reference: se preserva para Momento 3, ahora con codigoServicio para
+    //   trazabilidad (útil cuando Tiendanube devuelve el reference al crear label).
     const currency = body.currency ?? "ARS";
-    const normalizarCode = (o: { courier: string; modalidad: string }) =>
-      `${o.courier}-${o.modalidad}`
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-|-$/g, "");
-    const mapOpcion = (o: any, type: "ship" | "pickup") => ({
-      name: `${o.courier} - ${o.modalidad}`,
-      code: normalizarCode(o),
-      price: Number(o.precioFinal),
-      currency,
-      type,
-      reference: JSON.stringify({ courier: o.courier, modalidad: o.modalidad, id: o.id }),
-    });
+    const mapOpcion = (o: any, type: "ship" | "pickup") => {
+      if (!o.codigoServicio) return null; // sin code estable → no se publica
+      return {
+        name: `${o.courier} - ${o.modalidad}`,
+        code: generarCodeServicio(o.courier, o.codigoServicio),
+        price: Number(o.precioFinal),
+        currency,
+        type,
+        reference: JSON.stringify({ courier: o.courier, modalidad: o.modalidad, codigoServicio: o.codigoServicio, id: o.id }),
+      };
+    };
 
-    const ship = (resultado.domicilio ?? []).map((o) => mapOpcion(o, "ship"));
-    const pickup = (resultado.sucursal ?? []).map((o) => mapOpcion(o, "pickup"));
+    const ship = (resultado.domicilio ?? [])
+      .map((o) => mapOpcion(o, "ship"))
+      .filter((r): r is NonNullable<typeof r> => r !== null);
+    const pickup = (resultado.sucursal ?? [])
+      .map((o) => mapOpcion(o, "pickup"))
+      .filter((r): r is NonNullable<typeof r> => r !== null);
 
     const seen = new Set<string>();
     const shipUnique = ship.filter((r) => (seen.has(r.code) ? false : (seen.add(r.code), true)));

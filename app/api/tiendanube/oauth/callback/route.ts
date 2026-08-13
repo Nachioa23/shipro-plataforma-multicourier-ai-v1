@@ -3,6 +3,7 @@ import prisma from "@/lib/prisma";
 import { exchangeCodeForToken } from "@/lib/tiendanube/oauth";
 import { encryptSecret } from "@/lib/utils/secret-crypto";
 import { enviarMailAlertaCruceTiendanube } from "@/lib/mailer";
+import { registrarCarrierParaTienda } from "@/lib/tiendanube/carrier";
 
 // DEUDA 144 — Callback OAuth de Tiendanube (Momento 1).
 //
@@ -122,10 +123,36 @@ export async function GET(request: Request) {
       }),
     ]);
 
-    // STEP 2b: hasta acá la tienda quedó vinculada y el link consumido. El registro del carrier
-    // (POST /shipping_carriers) y el redirect a la página de éxito vienen en los pasos siguientes.
+    // STEP 2b — Registrar el Shipping Carrier + sus options (best-effort). La tienda YA quedó
+    // vinculada y el link consumido (arriba, atómico); esto es un paso posterior que NUNCA debe
+    // romper la instalación. Si falla (Tiendanube caído, APP_URL sin setear, etc.) la tienda sigue
+    // instalada y el carrier se puede reintentar más tarde. Idempotente: en reinstall reusa el
+    // shippingCarrierId previo y no duplica options.
+    let carrierRegistrado = false;
+    try {
+      const resultadoCarrier = await registrarCarrierParaTienda({
+        storeId,
+        empresaId,
+        accessTokenCifrado: accessTokenEnc,
+        shippingCarrierId: tiendaExistente?.shippingCarrierId ?? null,
+      });
+      // Persistir el carrierId SOLO si se creó uno nuevo (fresh install). En reinstall ya está.
+      if (resultadoCarrier.carrierCreado) {
+        await prisma.tiendaTiendanube.update({
+          where: { storeId },
+          data: { shippingCarrierId: resultadoCarrier.carrierId },
+        });
+      }
+      carrierRegistrado = true;
+      console.log(
+        `[/api/tiendanube/oauth/callback] carrier OK store=${storeId} creado=${resultadoCarrier.carrierCreado} optionsNuevas=${resultadoCarrier.optionsNuevas.length}`,
+      );
+    } catch (e) {
+      console.error("[/api/tiendanube/oauth/callback] registro del carrier best-effort falló (la tienda quedó vinculada igual):", e);
+    }
+
     return NextResponse.json(
-      { ok: true, storeId, empresaId, debug: "STEP 2b: tienda vinculada" },
+      { ok: true, storeId, empresaId, carrierRegistrado, debug: "STEP 2b: tienda vinculada + carrier best-effort" },
       { status: 200 },
     );
   } catch (e) {

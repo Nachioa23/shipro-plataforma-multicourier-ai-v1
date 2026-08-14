@@ -124,13 +124,16 @@ export async function GET(request: Request) {
       }),
     ]);
 
-    // Enriquecer la tienda con su nombre + dominio (GET /store), best-effort. La tienda YA quedó
-    // vinculada; esto es un enriquecimiento posterior que NUNCA rompe la instalación. Si falla, la
-    // fila queda sin nombre/dominio (el panel muestra el storeId; se puede reintentar). accessToken
-    // en plaintext (obtenerDatosTienda lo usa directo, no el cifrado).
+    // Enriquecer la tienda con su nombre + dominio (GET /store), best-effort. Capturamos nombre/dominio
+    // en variables del scope externo para pasarlos al redirect de la página de éxito. La tienda YA quedó
+    // vinculada; un fallo acá NO rompe la instalación (queda sin nombre/dominio, se puede reintentar).
+    let nombreTienda: string | null = null;
+    let dominioTienda: string | null = null;
     try {
       const datosTienda = await obtenerDatosTienda(storeId, accessToken);
       if (datosTienda && (datosTienda.nombre || datosTienda.dominio)) {
+        nombreTienda = datosTienda.nombre;
+        dominioTienda = datosTienda.dominio;
         await prisma.tiendaTiendanube.update({
           where: { storeId },
           data: { nombre: datosTienda.nombre, dominio: datosTienda.dominio },
@@ -166,12 +169,62 @@ export async function GET(request: Request) {
       );
     } catch (e) {
       console.error("[/api/tiendanube/oauth/callback] registro del carrier best-effort falló (la tienda quedó vinculada igual):", e);
+      // Visibilidad: dejar registrado el fallo del carrier para que el equipo Shipro lo vea y reintente.
+      await prisma.auditoriaConfiguracion
+        .create({
+          data: {
+            empresaId,
+            campo: "tiendanube:carrier_register_failed",
+            valorAnterior: JSON.stringify({ storeId, shippingCarrierIdPrevio: tiendaExistente?.shippingCarrierId ?? null }),
+            valorNuevo: JSON.stringify({ error: String(e).slice(0, 500) }),
+            motivo: "Tienda vinculada pero el registro del carrier en Tiendanube falló. Reintentar desde el panel.",
+            ipOrigen: request.headers.get("x-forwarded-for") ?? request.headers.get("x-real-ip") ?? null,
+          },
+        })
+        .catch((auditErr) => console.error("[/api/tiendanube/oauth/callback] no se pudo registrar el fallo del carrier:", auditErr));
     }
 
-    return NextResponse.json(
-      { ok: true, storeId, empresaId, carrierRegistrado, debug: "STEP 2b: tienda vinculada + carrier best-effort" },
-      { status: 200 },
-    );
+    // Calcular si la empresa puede OPERAR (para el estado de la página de éxito). Operable = empresa
+    // activa + no suspendida + onboarding completo + al menos un courier activo + al menos un depósito
+    // activo. Best-effort: ante cualquier error, config=pending (conservador — mejor pedir configurar
+    // de más que decir "listo" cuando no lo está).
+    let empresaOperativa = false;
+    try {
+      const emp = await prisma.empresa.findUnique({
+        where: { id: empresaId },
+        select: {
+          activo: true,
+          onboardingCompletado: true,
+          suspendida: true,
+          _count: {
+            select: {
+              credenciales: { where: { activo: true } },
+              depositos: { where: { activo: true, eliminado: false } },
+            },
+          },
+        },
+      });
+      empresaOperativa =
+        !!emp &&
+        emp.activo === true &&
+        emp.suspendida === false &&
+        emp.onboardingCompletado === true &&
+        emp._count.credenciales >= 1 &&
+        emp._count.depositos >= 1;
+    } catch (e) {
+      console.error("[/api/tiendanube/oauth/callback] no se pudo calcular operabilidad (config=pending):", e);
+    }
+
+    // Redirect a la página de éxito, MISMO ORIGEN (request.url) — no depende de APP_URL. nombre/dominio
+    // van encodeURIComponent (pueden traer espacios/acentos). carrier ok/fail + config ok/pending pintan
+    // el estado de la pantalla.
+    const params = new URLSearchParams();
+    params.set("store", String(storeId));
+    if (nombreTienda) params.set("nombre", nombreTienda);
+    if (dominioTienda) params.set("dominio", dominioTienda);
+    params.set("carrier", carrierRegistrado ? "ok" : "fail");
+    params.set("config", empresaOperativa ? "ok" : "pending");
+    return NextResponse.redirect(new URL(`/tiendanube/instalado?${params.toString()}`, request.url));
   } catch (e) {
     console.error("[/api/tiendanube/oauth/callback] Error:", e);
     return NextResponse.json({ error: "Error interno" }, { status: 500 });

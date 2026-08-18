@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
-import { AndreaniAdapter } from "@/lib/couriers/AndreaniAdapter";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 import QRCode from "qrcode";
 import fs from 'fs';
@@ -194,17 +193,17 @@ export async function POST(request: Request) {
           ? parsearCredencialesPropias(nombreNormalizado, credencial.credencialesJson)
           : obtenerCredencialesShipro(nombreNormalizado);
 
-        let pdfBuffer: ArrayBuffer | Uint8Array;
         const motor = CourierFactory.crear(nombreNormalizado, llaves);
 
-        if (nombreNormalizado === 'andreani') {
-           const bufferMotor = await (motor as AndreaniAdapter).obtenerEtiquetaBuffer(envio.etiquetaUrl as string);
-           // @ts-ignore
-           pdfBuffer = bufferMotor.buffer || bufferMotor;
-        } else {
-           const res = await fetch(envio.etiquetaUrl as string);
-           pdfBuffer = await res.arrayBuffer();
-        }
+        // Refactor-A (DEUDA 144 Momento 3): contrato unificado obtenerEtiquetaBuffer en
+        // ICourierIntegrator. Cualquier adapter descarga su PDF con la MISMA firma; el gate
+        // por-courier + cast + @ts-ignore que había acá desaparecen. Cada adapter usa lo
+        // que necesita (Andreani lee etiquetaUrl; Mocis usa trackingNumber; couriers
+        // futuros implementan lo suyo dentro del método).
+        const pdfBuffer: Uint8Array = await motor.obtenerEtiquetaBuffer({
+          trackingNumber: envio.trackingNumber,
+          etiquetaUrl: envio.etiquetaUrl,
+        });
 
         const pdfOriginal = await PDFDocument.load(pdfBuffer);
         const paginasOriginales = pdfOriginal.getPages();

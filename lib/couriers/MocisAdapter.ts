@@ -385,10 +385,10 @@ export class MocisAdapter implements ICourierIntegrator {
   // ==========================================
   // 5. OBTENER ETIQUETA (shipping/print/label)
   // ==========================================
-  async obtenerEtiquetaBuffer(tracking: string): Promise<Buffer> {
+  async obtenerEtiquetaBuffer(ref: { trackingNumber: string; etiquetaUrl: string | null }): Promise<Uint8Array> {
     const token = await this.getToken();
-    
-    const res = await fetchConTimeout(`${this.API_URL}/shipping/print/label/${tracking}`, {
+
+    const res = await fetchConTimeout(`${this.API_URL}/shipping/print/label/${ref.trackingNumber}`, {
       method: 'GET', 
       headers: { 'Authorization': `Bearer ${token}` }
     });

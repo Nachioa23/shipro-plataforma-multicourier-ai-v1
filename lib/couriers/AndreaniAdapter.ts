@@ -463,14 +463,15 @@ export class AndreaniAdapter implements ICourierIntegrator {
   // ==============================================================
   // PILAR EXTRA: DESCARGAR PDF
   // ==============================================================
-  async obtenerEtiquetaBuffer(urlEtiqueta: string): Promise<ArrayBuffer> {
+  async obtenerEtiquetaBuffer(ref: { trackingNumber: string; etiquetaUrl: string | null }): Promise<Uint8Array> {
+    if (!ref.etiquetaUrl) throw new Error("Andreani requiere la URL de la etiqueta (etiquetaUrl) para descargar el PDF.");
     const token = await this.getToken();
-    const res = await fetchConTimeout(urlEtiqueta, {
+    const res = await fetchConTimeout(ref.etiquetaUrl, {
       method: 'GET',
       headers: { 'Authorization': `Bearer ${token}`, 'x-authorization-token': token }
     });
 
     if (!res.ok) throw new Error("Andreani bloqueó la descarga del PDF");
-    return await res.arrayBuffer();
+    return new Uint8Array(await res.arrayBuffer());
   }
 }

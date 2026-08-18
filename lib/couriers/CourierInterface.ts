@@ -158,6 +158,14 @@ export interface ICourierIntegrator {
   // el del primer bulto). bultos[] es el detalle por bulto (multi-bulto). Retrocompatible:
   // callers que solo leen tracking/etiquetaUrl siguen funcionando.
   despachar(params: DespachoParams): Promise<{ tracking: string, etiquetaBase64?: string, etiquetaUrl?: string, bultos?: ResultadoBulto[] }>;
+
+  // Descarga el PDF de la etiqueta REAL del courier ya despachado. Contrato unificado
+  // (Refactor-A, DEUDA 144 Momento 3): recibe { trackingNumber, etiquetaUrl } y cada adapter
+  // usa lo que necesita (Andreani → etiquetaUrl firmada; Mocis → trackingNumber). Devuelve
+  // los bytes del PDF como Uint8Array (Buffer ya lo es; ArrayBuffer se envuelve). Permite al
+  // composer de etiquetas bajar la etiqueta de CUALQUIER courier sin lógica per-courier.
+  obtenerEtiquetaBuffer(ref: { trackingNumber: string; etiquetaUrl: string | null }): Promise<Uint8Array>;
+
   rastrear(tracking: string): Promise<string>;
   traducirEstado(estadoCrudo: string): string;
   obtenerSucursales(cp: string): Promise<SucursalInfo[]>;

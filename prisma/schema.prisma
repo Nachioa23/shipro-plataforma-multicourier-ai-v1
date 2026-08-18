@@ -705,6 +705,13 @@ model Envio {
   diasPrometidosCheckout Int?
   numeroOrden            String?
 
+  // DEUDA 144 (Momento 3 labels) — puente 1:1 al fulfillment order de Tiendanube.
+  // Nullable: sólo los envíos originados por el label callback de Tiendanube los tienen.
+  // tiendanubeFulfillmentOrderId es además la base de idempotencia del callback (mismo
+  // fulfillment order pedido 2 veces = mismo envío, no doble despacho + doble débito).
+  tiendanubeFulfillmentOrderId String?
+  tiendanubeStoreId            Int?
+
   // DEUDA 128: clave de idempotencia por plugin. Enviada como header Idempotency-Key.
   // Scope per-empresa: @@unique([empresaId, idempotencyKey]) previene duplicados
   // dentro de la misma empresa. NULL = creado sin clave (dashboard manual, no plugin).
@@ -797,9 +804,18 @@ model Envio {
   // aforado post-facturación. Nace vacío en envíos legacy 1-bulto.
   bultos EnvioBulto[]
 
+  // DEUDA 144 (Momento 3 labels) — etiquetas emitidas en Tiendanube para este envío
+  // (una fulfillment order admite hasta 20; típicamente 1 provisoria + 1 real).
+  etiquetasTiendanube EtiquetaTiendanube[]
+
   // STEP 1: la app usa fechaImpresion como "created at" del envío (no hay createdAt).
   // Este índice sirve al 6-month sweep + al wallet-por-empresa por fecha.
   @@index([empresaId, fechaImpresion])
+
+  // DEUDA 144: lookup del envío por fulfillment order de Tiendanube (idempotencia del
+  // label callback + cancel/re-emit al destrabar). Nullable → índice sirve sólo cuando
+  // hay valor; el resto queda irrelevante.
+  @@index([tiendanubeFulfillmentOrderId])
 
   // DEUDA 128: idempotencia per-empresa. Postgres permite múltiples NULL bajo la
   // unique constraint (cada NULL cuenta como distinto), así que envíos sin clave
@@ -1645,8 +1661,58 @@ model TiendaTiendanube {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // DEUDA 144 (Momento 3 labels) — etiquetas emitidas para esta tienda.
+  etiquetas EtiquetaTiendanube[]
+
   @@index([empresaId])
   @@index([estado])
+}
+
+// =============================================================================
+// DEUDA 144 (Momento 3 labels) — ciclo de vida de CADA etiqueta emitida en Tiendanube
+// =============================================================================
+// Un fulfillment order admite hasta 20 etiquetas (contrato Tiendanube): típicamente una
+// provisoria genérica de Shipro (esProvisoria=true) + luego la real del courier
+// (esProvisoria=false) tras destrabar el bloqueo. Esta tabla registra todas, con su
+// estado del ciclo Tiendanube (STARTED→IN_PROGRESS→READY_TO_USE→...→CANCELED).
+//
+// MOLDE PARA OTRAS PLATAFORMAS: cuando se integre Shopify/otro e-commerce, replicar esta
+// estructura como EtiquetaShopify/etc. (patrón por-plataforma, decisión de arquitectura Nacho).
+model EtiquetaTiendanube {
+  id Int @id @default(autoincrement())
+
+  envioId Int
+  envio   Envio @relation(fields: [envioId], references: [id], onDelete: Cascade)
+
+  tiendaTiendanubeId Int
+  tienda             TiendaTiendanube @relation(fields: [tiendaTiendanubeId], references: [id], onDelete: Cascade)
+
+  // id de la etiqueta que emite Tiendanube (pivot para PATCH cancelar/actualizar).
+  labelId String @unique
+
+  // id del fulfillment order al que pertenece (repetido cuando hay varias etiquetas).
+  fulfillmentOrderId String
+
+  // Ciclo Tiendanube: STARTED | IN_PROGRESS | READY_TO_DOWNLOAD | READY_TO_USE |
+  // DOWNLOADED | CANCELED | SUSPENDED | FAILED. String (consistente con el estilo del schema).
+  estado String @default("STARTED")
+
+  // true = etiqueta genérica provisoria de Shipro (placeholder, no imprimible al courier).
+  // false = etiqueta real del courier (definitiva). Distingue cuál cancelar al reemplazar.
+  esProvisoria Boolean @default(false)
+
+  // URL del PDF que servimos como download_url_from_app (nullable hasta generarlo).
+  documentoUrl String?
+
+  // tracking asociado a esta etiqueta (SHP-* si provisoria; real del courier si definitiva).
+  trackingAsociado String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([envioId])
+  @@index([fulfillmentOrderId])
+  @@index([tiendaTiendanubeId])
 }
 
 // =============================================================================

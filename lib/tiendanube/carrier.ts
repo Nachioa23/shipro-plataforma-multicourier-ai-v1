@@ -7,6 +7,7 @@
 // shippingCarrierId ya guardado) y no duplica options (diff por code contra los
 // ya registrados). Contrato oficial verificado (DEUDA 130):
 //   POST {base}/{version}/{store_id}/shipping_carriers                → { id, ... }
+//   PUT  {base}/{version}/{store_id}/shipping_carriers/{id}           → { id, ... }   (Momento 3 pieza 2)
 //   GET  {base}/{version}/{store_id}/shipping_carriers/{id}/options   → [ { code, ... }, ... ]
 //   POST {base}/{version}/{store_id}/shipping_carriers/{id}/options   → { id, ... }
 //
@@ -16,6 +17,11 @@
 // en el checkout como empresa de envíos; el courier real ya viene en el `name`
 // de cada option). Auth: Bearer del accessToken descifrado, pasado en cada call
 // (fetchTiendanube inyecta User-Agent + Content-Type pero NO Authorization).
+//
+// SCOPE DE RECONCILIACIÓN (DEUDA 144 Momento 3 pieza 2): al día de hoy sólo el
+// callback_labels_url se garantiza en carriers YA instalados (via PUT quirúrgico
+// dentro del orquestador). callback_url, types y name NO se reconcilian en
+// re-runs — queda para DEUDA 145 (patrón de reconciliación completa).
 // =============================================================================
 
 import { fetchTiendanube } from "@/lib/tiendanube/http";
@@ -47,13 +53,16 @@ function authHeaders(accessToken: string): Record<string, string> {
  * Crea el shipping carrier "Shipro" en la tienda. Devuelve el `id` numérico
  * asignado por Tiendanube (lo persistimos como shippingCarrierId string).
  *
- * @param types - CSV de types soportados por el carrier. "ship,pickup" | "ship" | "pickup".
+ * @param callbackUrl        - URL del rates callback (POST con destino/carrito).
+ * @param callbackLabelsUrl  - URL del labels callback (POST cuando el merchant emite etiqueta).
+ * @param types              - CSV de types soportados por el carrier. "ship,pickup" | "ship" | "pickup".
  * @throws Error si Tiendanube responde no-2xx.
  */
 export async function crearCarrier(
   storeId: number,
   accessToken: string,
   callbackUrl: string,
+  callbackLabelsUrl: string,
   types: string,
 ): Promise<number> {
   const res = await fetchTiendanube(apiUrl(storeId, "shipping_carriers"), {
@@ -62,6 +71,7 @@ export async function crearCarrier(
     body: JSON.stringify({
       name: CARRIER_NAME,
       callback_url: callbackUrl,
+      callback_labels_url: callbackLabelsUrl,
       types,
     }),
   });
@@ -71,6 +81,37 @@ export async function crearCarrier(
   }
   const data: any = await res.json();
   return Number(data.id);
+}
+
+/**
+ * PUT quirúrgico sobre un carrier ya existente: sólo actualiza callback_labels_url.
+ *
+ * DEUDA 144 Momento 3 pieza 2: garantiza el labels callback en carriers que fueron
+ * creados ANTES de que existiera este campo (o en cualquier re-install). Se envía un
+ * body mínimo con únicamente `callback_labels_url` — los demás campos del carrier
+ * (callback_url, types, name) NO se tocan aquí. La reconciliación general de esos
+ * otros campos queda para DEUDA 145 (patrón completo).
+ *
+ * @throws Error si Tiendanube responde no-2xx.
+ */
+export async function actualizarCallbackLabels(
+  storeId: number,
+  accessToken: string,
+  carrierId: string,
+  callbackLabelsUrl: string,
+): Promise<void> {
+  const res = await fetchTiendanube(
+    apiUrl(storeId, `shipping_carriers/${carrierId}`),
+    {
+      method: "PUT",
+      headers: authHeaders(accessToken),
+      body: JSON.stringify({ callback_labels_url: callbackLabelsUrl }),
+    },
+  );
+  if (!res.ok) {
+    const detalle = await res.text().catch(() => "");
+    throw new Error(`actualizarCallbackLabels HTTP ${res.status}: ${detalle}`.slice(0, 300));
+  }
 }
 
 /**
@@ -161,14 +202,22 @@ export async function registrarCarrierParaTienda(tienda: {
   // al menos uno). Con servicios=[] el carrier queda creado pero sin options
   // — no aparece en checkout hasta que la empresa habilite algún servicio.
   const types = [...new Set(servicios.map((s) => s.type))].join(",") || "ship";
-  const callbackUrl = `${getAppUrlOrThrow()}/api/tiendanube/rates`;
+  const appUrl = getAppUrlOrThrow();
+  const callbackUrl = `${appUrl}/api/tiendanube/rates`;
+  const callbackLabelsUrl = `${appUrl}/api/tiendanube/labels`;
 
   let carrierId = tienda.shippingCarrierId;
   let carrierCreado = false;
   if (!carrierId) {
-    const id = await crearCarrier(tienda.storeId, accessToken, callbackUrl, types);
+    // Fresh install: los dos callbacks van en el POST inicial.
+    const id = await crearCarrier(tienda.storeId, accessToken, callbackUrl, callbackLabelsUrl, types);
     carrierId = String(id);
     carrierCreado = true;
+  } else {
+    // Reinstall / re-run: PUT quirúrgico para garantizar callback_labels_url en carriers
+    // que fueron creados antes de que este campo se mandara en el POST (DEUDA 144 Momento 3
+    // pieza 2). Sólo este campo — el resto es DEUDA 145.
+    await actualizarCallbackLabels(tienda.storeId, accessToken, carrierId, callbackLabelsUrl);
   }
 
   const existentes = await listarOptions(tienda.storeId, accessToken, carrierId);

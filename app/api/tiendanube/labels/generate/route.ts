@@ -4,6 +4,8 @@ import prisma from "@/lib/prisma";
 import { crearEnvio, type CrearEnvioInput } from "@/lib/envios/crear";
 import { derivarServicioLabel } from "@/lib/tiendanube/derivar-servicio-label";
 import { getAppUrlOrThrow } from "@/lib/utils/app-url";
+import { decryptSecret } from "@/lib/utils/secret-crypto";
+import { patchLabelReadyToDownload } from "@/lib/tiendanube/labels-api";
 
 // El path Tiendanube-facing es {callback_labels_url}/generate. Por eso el archivo vive
 // en /api/tiendanube/labels/generate/route.ts — Tiendanube nos pega directo acá.
@@ -277,6 +279,7 @@ export async function POST(request: Request) {
           const downloadToken = randomBytes(24).toString("base64url");
           const documentoUrl = `${getAppUrlOrThrow()}/api/tiendanube/labels/download?token=${downloadToken}`;
 
+          let filaCreada = false;
           try {
             await prisma.etiquetaTiendanube.create({
               data: {
@@ -294,6 +297,7 @@ export async function POST(request: Request) {
                 documentoUrl,
               },
             });
+            filaCreada = true;
           } catch (persistErr) {
             // Race o retry: si el @unique de labelId dispara acá, el early guard no
             // frenó a tiempo (ok — el envío quedó creado, la etiqueta ya está en BD).
@@ -307,9 +311,49 @@ export async function POST(request: Request) {
             `[/api/tiendanube/labels/generate] label OK store=${storeIdSnapshot} ffo=${fulfillmentOrderId} labelId=${labelId} envioId=${envioId} tracking=${envioResult?.trackingNumber} estado=${estado} provisoria=${esProvisoria}`,
           );
 
-          // TODO(3b): generar PDF (genérico de Shipro si esProvisoria; real del
-          // courier si no) y PATCH a Tiendanube con download_url_from_app + estado
-          // READY_TO_DOWNLOAD sobre labelId.
+          // Cerrar el circuito: avisar a Tiendanube que la etiqueta está lista para descargar.
+          // El PDF NO se genera acá — el endpoint /labels/download lo produce on-the-fly cuando
+          // Tiendanube baja de documentoUrl (Parte 2). Best-effort: si el PATCH falla, el envío +
+          // la fila ya existen; Tiendanube marca la label FAILED tras 30min y el flujo de reemplazo
+          // (pieza posterior) reintenta/cancela. No rompemos el loop por un PATCH fallido.
+          // Gate por filaCreada: si el @unique falló arriba (row ya existía o error de BD), no
+          // pateamos — evita pisar el estado de una etiqueta que otro flow puede estar manejando.
+          if (filaCreada) {
+            try {
+              // Re-leer el accessToken fresco (la tienda pudo rotar credenciales durante el
+              // after()). Extra query pero más robusto que capturar el snapshot en el closure.
+              const tiendaAuth = await prisma.tiendaTiendanube.findUnique({
+                where: { id: tiendaTiendanubeId },
+                select: { accessToken: true },
+              });
+              if (!tiendaAuth?.accessToken) {
+                console.error(
+                  "[/api/tiendanube/labels/generate] sin accessToken para PATCH — skip:",
+                  { labelId, fulfillmentOrderId },
+                );
+              } else {
+                const trackingCode = String(envioResult?.trackingNumber ?? "");
+                await patchLabelReadyToDownload({
+                  storeId: storeIdSnapshot,
+                  accessToken: decryptSecret(tiendaAuth.accessToken),
+                  fulfillmentOrderId,
+                  labelId,
+                  trackingCode,
+                  trackingUrl: `${getAppUrlOrThrow()}/s/${trackingCode}`,
+                  downloadUrl: documentoUrl,
+                  fileName: `Etiqueta_${labelId}.pdf`,
+                });
+                console.log(
+                  `[/api/tiendanube/labels/generate] PATCH READY_TO_DOWNLOAD OK labelId=${labelId} ffo=${fulfillmentOrderId}`,
+                );
+              }
+            } catch (patchErr) {
+              console.error(
+                "[/api/tiendanube/labels/generate] PATCH a Tiendanube falló (envío + fila OK; reintento post — pieza posterior):",
+                { labelId, fulfillmentOrderId, err: String(patchErr).slice(0, 300) },
+              );
+            }
+          }
         } catch (loopErr) {
           // Nunca romper el for-loop por un item — la falla de uno no debe
           // arrastrar a los demás.

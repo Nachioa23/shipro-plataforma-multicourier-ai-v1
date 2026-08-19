@@ -25,29 +25,14 @@
 // =============================================================================
 
 import { fetchTiendanube } from "@/lib/tiendanube/http";
+import { apiUrl, authHeaders } from "@/lib/tiendanube/api";
 import {
   enumerarServiciosPublicados,
 } from "@/lib/tiendanube/servicios-publicados";
 import { decryptSecret } from "@/lib/utils/secret-crypto";
 import { getAppUrlOrThrow } from "@/lib/utils/app-url";
-import {
-  getTiendanubeApiBaseUrl,
-  getTiendanubeApiVersion,
-} from "@/lib/utils/tiendanube-config";
 
 const CARRIER_NAME = "Shipro";
-
-/**
- * Arma la URL de un endpoint de la API de administración de Tiendanube.
- * Formato: `{base}/{version}/{store_id}/{path}` (sin doble slash intermedio).
- */
-function apiUrl(storeId: number, path: string): string {
-  return `${getTiendanubeApiBaseUrl()}/${getTiendanubeApiVersion()}/${storeId}/${path}`;
-}
-
-function authHeaders(accessToken: string): Record<string, string> {
-  return { Authorization: `Bearer ${accessToken}` };
-}
 
 /**
  * Crea el shipping carrier "Shipro" en la tienda. Devuelve el `id` numérico

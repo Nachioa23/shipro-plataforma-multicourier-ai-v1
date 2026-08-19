@@ -712,6 +712,13 @@ model Envio {
   tiendanubeFulfillmentOrderId String?
   tiendanubeStoreId            Int?
 
+  // DEUDA 104 — order_id de Tiendanube (el system id de la orden, NO el numeroOrden de display).
+  // Se rellena vía el webhook fulfillment_order/* (que trae order_id + fulfillment_id juntos), matcheando
+  // por tiendanubeFulfillmentOrderId. Necesario para el tracking push (URL /orders/{order_id}/...) y el
+  // matching confiable de los LGPD customers/*. Nullable: sólo los envíos Tiendanube que ya recibieron un
+  // webhook fulfillment_order lo tienen.
+  tiendanubeOrderId String?
+
   // DEUDA 128: clave de idempotencia por plugin. Enviada como header Idempotency-Key.
   // Scope per-empresa: @@unique([empresaId, idempotencyKey]) previene duplicados
   // dentro de la misma empresa. NULL = creado sin clave (dashboard manual, no plugin).

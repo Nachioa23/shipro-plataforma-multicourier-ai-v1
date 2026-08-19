@@ -1,7 +1,9 @@
 import { NextResponse, after } from "next/server";
+import { randomBytes } from "crypto";
 import prisma from "@/lib/prisma";
 import { crearEnvio, type CrearEnvioInput } from "@/lib/envios/crear";
 import { derivarServicioLabel } from "@/lib/tiendanube/derivar-servicio-label";
+import { getAppUrlOrThrow } from "@/lib/utils/app-url";
 
 // El path Tiendanube-facing es {callback_labels_url}/generate. Por eso el archivo vive
 // en /api/tiendanube/labels/generate/route.ts — Tiendanube nos pega directo acá.
@@ -267,6 +269,14 @@ export async function POST(request: Request) {
           // por el tracking real). Cubre los 5 BLOQUEADO_* + RETENIDO + cualquier estado futuro sin despacho.
           const esProvisoria = trackingNum.startsWith("SHP-");
 
+          // Token opaco para el endpoint de descarga público (DEUDA 144 Momento 3 Parte 2).
+          // 192 bits de entropía vía randomBytes(24) → base64url = 32 chars URL-safe.
+          // Sin expiración por tiempo (Nacho lock): la URL vive hasta que la etiqueta se
+          // cancele. El single-use NO se enforcea acá (Tiendanube guarda el PDF en su S3).
+          // El guard de idempotencia por labelId (arriba) garantiza un solo token por etiqueta.
+          const downloadToken = randomBytes(24).toString("base64url");
+          const documentoUrl = `${getAppUrlOrThrow()}/api/tiendanube/labels/download?token=${downloadToken}`;
+
           try {
             await prisma.etiquetaTiendanube.create({
               data: {
@@ -280,6 +290,8 @@ export async function POST(request: Request) {
                   typeof envioResult?.trackingNumber === "string"
                     ? envioResult.trackingNumber
                     : null,
+                downloadToken,
+                documentoUrl,
               },
             });
           } catch (persistErr) {

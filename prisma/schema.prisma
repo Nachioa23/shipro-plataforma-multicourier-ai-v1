@@ -1704,6 +1704,14 @@ model EtiquetaTiendanube {
   // URL del PDF que servimos como download_url_from_app (nullable hasta generarlo).
   documentoUrl String?
 
+  // Token opaco para el endpoint de descarga público (Tiendanube baja el PDF sin sesión).
+  // @unique nullable — Postgres permite múltiples NULL bajo unique (cada NULL distinto), así
+  // que sólo las etiquetas con token tienen valor y el índice sirve para lookup O(1) al validar.
+  // Sin expiración por tiempo (decisión Nacho): la URL vive hasta que la etiqueta se cancele o
+  // Tiendanube confirme READY_TO_USE (webhook, pieza posterior). El single-use NO se controla acá
+  // (Tiendanube guarda el PDF en su S3 y reimprime desde ahí; esa regla vive en la NPMS).
+  downloadToken String? @unique
+
   // tracking asociado a esta etiqueta (SHP-* si provisoria; real del courier si definitiva).
   trackingAsociado String?
 

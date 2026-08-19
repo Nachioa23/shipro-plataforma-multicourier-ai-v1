@@ -261,10 +261,11 @@ export async function POST(request: Request) {
           }
 
           const estado = String(envioResult?.estado ?? "");
-          // esProvisoria = envío quedó BLOQUEADO (SHP-* placeholder). Distingue en
-          // Tiendanube cuál es la etiqueta genérica de la real cuando en 3b se
-          // reemplace por la definitiva post-desbloqueo.
-          const esProvisoria = estado.startsWith("BLOQUEADO");
+          const trackingNum = String(envioResult?.trackingNumber ?? "");
+          // PROVISORIA = el envío NO se emitió en el courier (regla Nacho). Señal robusta cross-courier:
+          // el tracking sigue siendo el placeholder SHP-* (un despacho OK — cualquier courier — lo reemplaza
+          // por el tracking real). Cubre los 5 BLOQUEADO_* + RETENIDO + cualquier estado futuro sin despacho.
+          const esProvisoria = trackingNum.startsWith("SHP-");
 
           try {
             await prisma.etiquetaTiendanube.create({

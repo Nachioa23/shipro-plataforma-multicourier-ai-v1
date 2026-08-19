@@ -308,6 +308,145 @@ export async function dibujarPaginaEtiqueta(
   }
 }
 
+// =============================================================================
+// ETIQUETA PROVISORIA (DEUDA 144 Momento 3 pieza 3b Parte 1)
+// =============================================================================
+// Placeholder Shipro-branded para envíos que NO se emitieron en el courier
+// (regla Nacho: toda etiqueta no emitida es provisoria y requiere una acción en
+// la NPMS). Cross-courier, cross-state: cubre los 5 BLOQUEADO_* + RETENIDO +
+// cualquier futuro estado sin despacho (default). Se entrega a Tiendanube como
+// READY_TO_DOWNLOAD transitorio; se cancela + reemplaza por la real cuando el
+// envío se destraba en la NPMS (Momento 3 pieza siguiente).
+//
+// SIN QR (decisión Nacho): un QR escaneable sobre una etiqueta no-despachable es
+// una trampa (implica al operador que es escaneable en la red del courier). El
+// SHP-* va como TEXTO — visible, no accionable.
+// =============================================================================
+
+interface MotivoProvisoria {
+  titulo: string;
+  detalle: string[]; // Una línea por elemento (renderizado línea por línea con y offset).
+}
+
+/**
+ * Traduce el `estadoActual` del envío al motivo humano-legible de por qué la
+ * etiqueta es provisoria. El default garantiza que un estado futuro sin
+ * despacho (nuevo BLOQUEADO_X, etc.) siga produciendo una etiqueta válida en
+ * vez de caer a un branch equivocado.
+ */
+function motivoProvisoria(estado: string): MotivoProvisoria {
+  switch (estado) {
+    case "BLOQUEADO_SALDO":
+      return {
+        titulo: "PENDIENTE DE SALDO",
+        detalle: [
+          "Cargá saldo en Shipro para destrabar",
+          "el envío. La etiqueta real se emite",
+          "automáticamente al recargar.",
+        ],
+      };
+    case "BLOQUEADO_DEPOSITO":
+      return {
+        titulo: "PENDIENTE DE DEPÓSITO",
+        detalle: [
+          "Configurá un depósito predeterminado",
+          "en Shipro para destrabar el envío.",
+        ],
+      };
+    case "BLOQUEADO_CREDENCIAL":
+      return {
+        titulo: "PENDIENTE DE CREDENCIAL",
+        detalle: [
+          "El courier requiere configuración de",
+          "credenciales. Resolver en Shipro.",
+        ],
+      };
+    case "BLOQUEADO_OPERATIVIDAD":
+      return {
+        titulo: "PENDIENTE DE OPERATIVIDAD",
+        detalle: [
+          "El par depósito/courier no está",
+          "operativo. Revisar configuración en Shipro.",
+        ],
+      };
+    case "BLOQUEADO_PARCIAL":
+      return {
+        titulo: "DESPACHO PARCIAL O FALLIDO",
+        detalle: [
+          "El courier rechazó la etiqueta.",
+          "El operador debe resolver manualmente.",
+        ],
+      };
+    case "RETENIDO":
+      return {
+        titulo: "DIRECCIÓN A CORREGIR",
+        detalle: [
+          "La dirección del comprador necesita",
+          "corrección antes de despachar.",
+          "Resolver en Shipro.",
+        ],
+      };
+    default:
+      // Red de seguridad: cualquier futuro estado sin despacho (nuevo BLOQUEADO_X
+      // que aparezca sin actualizar este switch) sigue produciendo una etiqueta
+      // provisoria válida en vez de fallar o mostrar un mensaje engañoso.
+      return {
+        titulo: "REQUIERE REVISIÓN",
+        detalle: [
+          "El envío requiere una acción en la",
+          "NPMS antes de poder despacharse.",
+        ],
+      };
+  }
+}
+
+/**
+ * Dibuja UNA página de "etiqueta provisoria de Shipro" para un envío que NO se
+ * emitió en el courier (regla Nacho: toda etiqueta no emitida en el courier es
+ * provisoria y requiere una acción en la NPMS). Cubre TODOS los estados sin
+ * despacho (BLOQUEADO_* + RETENIDO + default). Banner "PROVISORIA — NO
+ * DESPACHAR" + motivo específico + SHP-* como TEXTO (sin QR: no debe confundirse
+ * con una etiqueta escaneable real). Se entrega a Tiendanube como
+ * READY_TO_DOWNLOAD transitorio; se cancela + reemplaza por la real cuando el
+ * envío se destraba en la NPMS.
+ */
+export async function dibujarEtiquetaProvisoria(
+  ctx: EtiquetaCtx,
+  envio: EnvioParaEtiqueta,
+): Promise<void> {
+  const { pdfDoc, fontB, fontN } = ctx;
+  const colorRojo = rgb(0.85, 0.15, 0.15);
+  const page = pdfDoc.addPage([288, 432]);
+
+  // Banner PROVISORIA (prominente, arriba).
+  page.drawText("PROVISORIA — NO DESPACHAR", { x: 20, y: 400, size: 14, font: fontB, color: colorRojo });
+  page.drawLine({ start: { x: 20, y: 392 }, end: { x: 268, y: 392 }, thickness: 2, color: colorRojo });
+
+  // Motivo específico por estado (para saber qué acción tomar en la NPMS).
+  const motivo = motivoProvisoria(envio.estadoActual);
+  page.drawText("MOTIVO:", { x: 20, y: 365, size: 9, font: fontB, color: colorGris });
+  page.drawText(motivo.titulo, { x: 20, y: 350, size: 12, font: fontB, color: colorShipro });
+  // Sub-líneas de instrucción (una por elemento del array, con offset vertical fijo).
+  let yDet = 332;
+  for (const linea of motivo.detalle) {
+    page.drawText(linea, { x: 20, y: yDet, size: 9, font: fontN, color: colorGris });
+    yDet -= 14;
+  }
+
+  // Datos del envío (SHP-* como TEXTO, sin QR).
+  page.drawText(`Tracking provisorio: ${envio.trackingNumber}`, { x: 20, y: 250, size: 10, font: fontB });
+  page.drawText(`Destinatario: ${truncar(envio.destino?.nombre, 35)}`, { x: 20, y: 232, size: 9, font: fontN });
+  page.drawText(truncar(`${envio.destino?.calle || ''} ${envio.destino?.altura || ''}, ${envio.destino?.localidad || ''}`, 45), { x: 20, y: 218, size: 9, font: fontN });
+  page.drawText(`CP: ${envio.destino?.cp || '-'}`, { x: 20, y: 204, size: 9, font: fontN });
+  page.drawText(`Courier previsto: ${truncar(envio.courier?.nombre, 30)}`, { x: 20, y: 186, size: 9, font: fontN });
+
+  // Footer Shipro Flow (mismo estilo que el resto).
+  page.drawText("Generado por", { x: 20, y: 20, size: 6, font: fontN, color: colorGris });
+  page.drawText("SHIPRO", { x: 59, y: 20, size: 7, font: fontB, color: colorShipro });
+  page.drawText("FLOW", { x: 87, y: 20, size: 7, font: fontN, color: colorFlow });
+  page.drawText(" | Etiqueta provisoria — resolver en NPMS", { x: 110, y: 20, size: 6, font: fontN, color: colorGris });
+}
+
 // Re-export selectivo para que consumers (batch + Tiendanube worker) puedan
 // crear el PDFDocument + fonts sin agregar dependencia directa a pdf-lib.
 // Todos los consumers pasan por acá → si algún día cambiamos pdf-lib por otra

@@ -3,7 +3,10 @@ import { getToken } from "next-auth/jwt";
 import prisma from "@/lib/prisma";
 import { hashApiKey } from "@/lib/utils/apikey-hash";
 
-const PUBLIC_API_PREFIXES = ["/api/auth/"];
+const PUBLIC_API_PREFIXES = [
+  "/api/auth/",
+  "/api/tiendanube/webhooks/", // Webhooks Tiendanube — self-auth via HMAC x-linkedstore-hmac-sha256 (DEUDA 104).
+];
 const PUBLIC_API_EXACT = [
   "/api/nps",
   "/api/nps/comentario",

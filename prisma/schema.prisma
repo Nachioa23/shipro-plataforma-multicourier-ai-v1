@@ -844,6 +844,11 @@ model EventoTracking {
   observacion         String?
   fecha               DateTime @default(now())
 
+  // DEUDA 104 (Movimiento 2/3) — timestamp de cuándo este evento se empujó al timeline de Tiendanube
+  // (POST tracking-events). NULL = no se pusheó todavía (o el envío no es de Tiendanube, o el push falló y
+  // espera el barrido de reintento del Movimiento 3). Idempotencia: el push sólo corre si esto es NULL.
+  sincronizadoTiendanubeEn DateTime?
+
   envioId Int
   envio   Envio @relation(fields: [envioId], references: [id], onDelete: Cascade)
 }

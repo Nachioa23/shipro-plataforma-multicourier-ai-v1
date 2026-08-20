@@ -5,7 +5,10 @@ import { enviarMailColecta, enviarMailEntregadoNPS } from "@/lib/mailer";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
 import { getAppUrlOrThrow } from "@/lib/utils/app-url";
-import { ESTADOS_COURIER_REPETIBLES, DIAS_MAXIMO_RASTREO } from "@/lib/utils/estados";
+import { ESTADOS_COURIER_REPETIBLES, DIAS_MAXIMO_RASTREO, displayCourier } from "@/lib/utils/estados";
+import { pushTrackingEvent } from "@/lib/tiendanube/tracking-api";
+import { estadoTiendanube } from "@/lib/tiendanube/tracking-map";
+import { decryptSecret } from "@/lib/utils/secret-crypto";
 
 export async function GET(request: Request) {
   try {
@@ -116,7 +119,7 @@ export async function GET(request: Request) {
           // Torre de Control Metrica 1.1 (2026-06-04): poblar estadoCrudoOriginal
           // con el estado raw del courier antes del mapeo via Nomenclador.
           if (estadoCambio || esRepetible) {
-            await prisma.eventoTracking.create({
+            const nuevoEvento = await prisma.eventoTracking.create({
               data: {
                 estado: estadoShiproLimpio,
                 estadoCrudoOriginal: nuevoEstadoCrudo,
@@ -124,6 +127,52 @@ export async function GET(request: Request) {
                 envioId: envio.id
               }
             });
+
+            // ---- PUSH a Tiendanube (best-effort, sólo envíos Tiendanube) ----
+            // DEUDA 104 Movimiento 2/3: si el envío está linkeado a Tiendanube, empujar el evento al
+            // timeline del comprador. Self-contained: cualquier fallo se loguea y el evento queda con
+            // sincronizadoTiendanubeEn=null para que el barrido de reintento (Movimiento 3) lo levante.
+            // Nunca rompe el for-loop del cron ni la lógica existente de tracking/mails.
+            const esEnvioTiendanube =
+              envio.tiendanubeOrderId != null &&
+              envio.tiendanubeFulfillmentOrderId != null &&
+              envio.tiendanubeStoreId != null;
+            if (esEnvioTiendanube) {
+              const statusTn = estadoTiendanube(estadoShiproLimpio);
+              if (statusTn) {
+                try {
+                  const tiendaAuth = await prisma.tiendaTiendanube.findUnique({
+                    where: { storeId: envio.tiendanubeStoreId! },
+                    select: { accessToken: true },
+                  });
+                  if (tiendaAuth?.accessToken) {
+                    await pushTrackingEvent({
+                      storeId: envio.tiendanubeStoreId!,
+                      orderId: envio.tiendanubeOrderId!,
+                      fulfillmentOrderId: envio.tiendanubeFulfillmentOrderId!,
+                      accessToken: decryptSecret(tiendaAuth.accessToken),
+                      status: statusTn,
+                      description: displayCourier(estadoShiproLimpio as any),
+                      happenedAt: nuevoEvento.fecha,
+                    });
+                    await prisma.eventoTracking.update({
+                      where: { id: nuevoEvento.id },
+                      data: { sincronizadoTiendanubeEn: new Date() },
+                    });
+                    console.log("[cron rastreo] tracking pusheado a Tiendanube:", {
+                      envioId: envio.id, eventoId: nuevoEvento.id, status: statusTn,
+                    });
+                  } else {
+                    console.warn("[cron rastreo] envío Tiendanube sin accessToken — skip push:", { envioId: envio.id });
+                  }
+                } catch (pushErr) {
+                  console.error("[cron rastreo] push a Tiendanube falló (se reintentará):", {
+                    envioId: envio.id, eventoId: nuevoEvento.id,
+                    err: pushErr instanceof Error ? pushErr.message : String(pushErr).slice(0, 200),
+                  });
+                }
+              }
+            }
           }
 
           if (estadoCambio) {

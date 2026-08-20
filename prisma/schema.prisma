@@ -1727,6 +1727,15 @@ model EtiquetaTiendanube {
   // tracking asociado a esta etiqueta (SHP-* si provisoria; real del courier si definitiva).
   trackingAsociado String?
 
+  // DEUDA 104 (/cancel) — veredicto del courier ante un pedido de cancelación de Tiendanube. SEPARADO de `estado`
+  // (que es el ciclo de vida de cara a Tiendanube). Estos 4 campos son el veredicto REAL del courier, persistido
+  // para responder idempotente en los reintentos de Tiendanube: en el retry ya sabemos si el courier canceló o no
+  // y no re-invocamos al courier — devolvemos el veredicto guardado.
+  cancelacionEstado        String?   // null = sin pedido / en proceso; "OK" = courier canceló; "FAILED" = courier rechazó
+  cancelacionReasonCode    String?   // reason.code cuando FAILED (LABEL_IN_TRANSIT, CARRIER_CANCELLATION_REJECTED, etc.)
+  cancelacionReasonMessage String?   // mensaje humano del courier (data.message / data.msg) para ticket + auditoría
+  cancelacionResueltaEn    DateTime? // cuándo el courier respondió (null = todavía no resuelto → aún puede correr el worker)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

@@ -19,6 +19,7 @@ const PUBLIC_API_EXACT = [
   "/api/tiendanube/oauth/callback", // Callback OAuth de Tiendanube — self-auth via token de vinculación en state (DEUDA 144).
   "/api/tiendanube/labels/generate", // Labels callback de Tiendanube — self-auth via store_id (DEUDA 144 Momento 3).
   "/api/tiendanube/labels/download", // Descarga del PDF de etiqueta — self-auth via downloadToken (DEUDA 144 Momento 3).
+  "/api/tiendanube/labels/cancel",   // Labels callback /cancel de Tiendanube — self-auth via DB lookup del labelId, sin HMAC (DEUDA 104).
 ];
 const API_KEY_EXACT = [
   "/api/checkouts",

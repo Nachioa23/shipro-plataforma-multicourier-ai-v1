@@ -639,3 +639,57 @@ export async function enviarMailAlertaCruceTiendanube(datos: {
     `,
   });
 }
+
+// ==============================================================
+// MAIL GENÉRICO (DEUDA 104 LGPD + futuros usos ad-hoc)
+// ==============================================================
+// Sender reusable para casos que NO tienen un template específico:
+// - Reportes LGPD (customers/data_request) con attachment Excel.
+// - Notificaciones admin puntuales.
+// - Emails puente donde el body ya viene armado como HTML.
+//
+// Live en este archivo (y no en otro módulo) para acceder a los internos
+// module-private `transporter` + `firmaShipro` + `fontImport` sin exportarlos
+// (siguen siendo privados; el pattern es "el módulo mailer sabe cómo mandar
+// mails, cualquier caller le pide envíos, nunca la infraestructura").
+//
+// El body va envuelto en el mismo container div + fontImport de los otros
+// templates para look-and-feel uniforme. La firma Shipro se agrega por
+// default; opts.conFirma=false la omite (útil para reenvíos a compradores
+// donde la firma Shipro puede confundir).
+//
+// Attachments: pass-through directo al transporter. Nodemailer acepta Buffer
+// en el field `content` — perfecto para xlsx/pdf generados en memoria sin
+// tocar disco.
+export async function enviarMailGenerico(
+  to: string | string[],
+  subject: string,
+  htmlBody: string,
+  opts?: {
+    attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>;
+    conFirma?: boolean;
+  },
+): Promise<boolean> {
+  try {
+    const mailOptions: any = {
+      from: `"Shipro" <${process.env.SMTP_USER}>`,
+      to,
+      subject,
+      html: `
+        <style>${fontImport}</style>
+        <div style="font-family: Arial, sans-serif; color: #333; max-w: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eaeaea; border-radius: 10px;">
+          ${htmlBody}
+          ${opts?.conFirma === false ? "" : firmaShipro}
+        </div>
+      `,
+    };
+    if (opts?.attachments && opts.attachments.length > 0) {
+      mailOptions.attachments = opts.attachments;
+    }
+    await transporter.sendMail(mailOptions);
+    return true;
+  } catch (error) {
+    console.error("[Mailer] Error enviarMailGenerico:", error);
+    return false;
+  }
+}

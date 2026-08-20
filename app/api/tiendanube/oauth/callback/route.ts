@@ -4,6 +4,7 @@ import { exchangeCodeForToken } from "@/lib/tiendanube/oauth";
 import { encryptSecret } from "@/lib/utils/secret-crypto";
 import { enviarMailAlertaCruceTiendanube } from "@/lib/mailer";
 import { registrarCarrierParaTienda } from "@/lib/tiendanube/carrier";
+import { registrarWebhooksParaTienda } from "@/lib/tiendanube/webhooks-registro";
 import { obtenerDatosTienda } from "@/lib/tiendanube/tienda";
 
 // DEUDA 144 — Callback OAuth de Tiendanube (Momento 1).
@@ -182,6 +183,29 @@ export async function GET(request: Request) {
           },
         })
         .catch((auditErr) => console.error("[/api/tiendanube/oauth/callback] no se pudo registrar el fallo del carrier:", auditErr));
+    }
+
+    // ---- Registro de webhooks (best-effort, silencioso al comerciante, observable para soporte) ----
+    // DEUDA 104: esto es lo que hace que Tiendanube efectivamente DISPARE los webhooks (fulfillment_order/* +
+    // app/uninstalled). Los 3 de LGPD se configuran a mano en el Partners Portal, NO acá. Si falla, la tienda
+    // queda vinculada igual; el fallo va a auditoría para reintentar/diagnosticar.
+    try {
+      const rw = await registrarWebhooksParaTienda({ storeId, accessTokenCifrado: accessTokenEnc });
+      console.log(`[/api/tiendanube/oauth/callback] webhooks OK store=${storeId} nuevos=${rw.registrados.length}/${rw.total} yaExistentes=${rw.yaExistentes} eventos=[${rw.registrados.join(", ")}]`);
+    } catch (e) {
+      console.error("[/api/tiendanube/oauth/callback] registro de webhooks best-effort falló (la tienda quedó vinculada igual):", e);
+      await prisma.auditoriaConfiguracion
+        .create({
+          data: {
+            empresaId,
+            campo: "tiendanube:webhooks_register_failed",
+            valorAnterior: JSON.stringify({ storeId }),
+            valorNuevo: JSON.stringify({ error: e instanceof Error ? e.message : String(e).slice(0, 500) }),
+            motivo: "Tienda vinculada pero el registro de webhooks en Tiendanube falló. Reintentar desde el panel.",
+            ipOrigen: request.headers.get("x-forwarded-for") ?? request.headers.get("x-real-ip") ?? null,
+          },
+        })
+        .catch((auditErr) => console.error("[/api/tiendanube/oauth/callback] no se pudo registrar el fallo de webhooks:", auditErr));
     }
 
     // Calcular si la empresa puede OPERAR (para el estado de la página de éxito). Operable = empresa

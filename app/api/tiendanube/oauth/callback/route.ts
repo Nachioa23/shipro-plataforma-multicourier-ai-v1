@@ -6,6 +6,7 @@ import { enviarMailAlertaCruceTiendanube } from "@/lib/mailer";
 import { registrarCarrierParaTienda } from "@/lib/tiendanube/carrier";
 import { registrarWebhooksParaTienda } from "@/lib/tiendanube/webhooks-registro";
 import { obtenerDatosTienda } from "@/lib/tiendanube/tienda";
+import { getAppUrlOrThrow } from "@/lib/utils/app-url";
 
 // DEUDA 144 — Callback OAuth de Tiendanube (Momento 1).
 //
@@ -239,16 +240,18 @@ export async function GET(request: Request) {
       console.error("[/api/tiendanube/oauth/callback] no se pudo calcular operabilidad (config=pending):", e);
     }
 
-    // Redirect a la página de éxito, MISMO ORIGEN (request.url) — no depende de APP_URL. nombre/dominio
-    // van encodeURIComponent (pueden traer espacios/acentos). carrier ok/fail + config ok/pending pintan
-    // el estado de la pantalla.
+    // Redirect a la página de éxito usando APP_URL como base. NO usar request.url: detrás de nginx el host de
+    // request.url es localhost:3000 (nginx proxya pm.shipro.pro → localhost:3000 internamente), lo que redirigía
+    // al merchant a localhost. getAppUrlOrThrow() lee APP_URL del .env (falla fuerte si no está seteada).
+    // nombre/dominio van encodeURIComponent (pueden traer espacios/acentos). carrier ok/fail + config ok/pending
+    // pintan el estado de la pantalla.
     const params = new URLSearchParams();
     params.set("store", String(storeId));
     if (nombreTienda) params.set("nombre", nombreTienda);
     if (dominioTienda) params.set("dominio", dominioTienda);
     params.set("carrier", carrierRegistrado ? "ok" : "fail");
     params.set("config", empresaOperativa ? "ok" : "pending");
-    return NextResponse.redirect(new URL(`/tiendanube/instalado?${params.toString()}`, request.url));
+    return NextResponse.redirect(new URL(`/tiendanube/instalado?${params.toString()}`, getAppUrlOrThrow()));
   } catch (e) {
     console.error("[/api/tiendanube/oauth/callback] Error:", e);
     return NextResponse.json({ error: "Error interno" }, { status: 500 });

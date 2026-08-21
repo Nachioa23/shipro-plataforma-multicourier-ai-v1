@@ -201,13 +201,26 @@ export class MocisAdapter implements ICourierIntegrator {
     formData.append('postal_code', cpAkeron);
     formData.append('items', JSON.stringify(itemsArray)); 
 
-    const res = await fetchConTimeout(`${this.API_URL}/shipping/price`, { 
-      method: 'POST', headers: { 'Authorization': `Bearer ${token}` }, body: formData 
+    const res = await fetchConTimeout(`${this.API_URL}/shipping/price`, {
+      method: 'POST', headers: { 'Authorization': `Bearer ${token}` }, body: formData
     });
-    
+
+    // HTTP-level failure (5xx, 4xx) es una FALLA REAL — throwear para que el cotizador use la tarifa de
+    // rescate (DEUDA 129 refinement). Sin este check, un 5xx con body JSON {status:false,...} caería en el
+    // gate de negocio de abajo y se confundiría con "no cobertura" (return [] silencioso).
+    if (!res.ok) {
+      throw new Error(`Moci's HTTP ${res.status} al cotizar`);
+    }
+
     const data = await res.json();
+    // Akeron respondió (HTTP 200) pero dice que no tiene tarifa para este pedido: es una RESPUESTA VÁLIDA
+    // NEGATIVA (no cobertura / no presta servicio para este destino), NO una falla. Devolvemos [] para que el
+    // cotizador OCULTE Moci's del checkout en vez de mostrar la tarifa de rescate. Las fallas reales (timeout,
+    // red, HTTP no-2xx, body malformado) ya throwean antes (fetchConTimeout / !res.ok / res.json()) y ésas SÍ
+    // caen al fallback de rescate. Ver DEUDA 129 refinement.
     if (!data.status || !data.result || data.result.length === 0) {
-      throw new Error(data.msg || "Moci's no cotiza esta zona.");
+      console.info(`[Moci's] sin tarifa para CP ${cpAkeron} (respuesta válida negativa, se oculta del checkout): ${data.msg ?? "sin msg"}`);
+      return [];
     }
     
     return data.result.map((opcionAkeron: any, index: number) => {

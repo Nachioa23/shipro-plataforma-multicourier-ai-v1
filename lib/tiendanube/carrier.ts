@@ -202,7 +202,25 @@ export async function registrarCarrierParaTienda(tienda: {
     // Reinstall / re-run: PUT quirúrgico para garantizar callback_labels_url en carriers
     // que fueron creados antes de que este campo se mandara en el POST (DEUDA 144 Momento 3
     // pieza 2). Sólo este campo — el resto es DEUDA 145.
-    await actualizarCallbackLabels(tienda.storeId, accessToken, carrierId, callbackLabelsUrl);
+    try {
+      await actualizarCallbackLabels(tienda.storeId, accessToken, carrierId, callbackLabelsUrl);
+    } catch (e) {
+      // Caso reinstalación tras desinstalar (DEUDA 104): Tiendanube borra el carrier al desinstalar la app,
+      // pero nuestra fila TiendaTiendanube conservó el shippingCarrierId viejo (el upsert del callback no lo
+      // nullea). El PUT sobre un carrier inexistente da 404 → creamos uno nuevo y marcamos carrierCreado=true
+      // para que el caller persista el id nuevo (si no, la próxima reinstalación caería en el mismo 404).
+      // Cualquier OTRO error (5xx, red, 4xx no-404) se re-lanza y lo maneja el best-effort del caller.
+      // Detección por string en el message: los primitives throwean Error(`... HTTP ${status}: ...`) sin campo
+      // estructurado. Es frágil pero es la única forma de mirar el status sin cambiar el contrato del primitive.
+      const es404 = e instanceof Error && /HTTP 404\b/.test(e.message);
+      if (!es404) throw e;
+      console.warn(
+        `[carrier] PUT dio 404 (carrier ${carrierId} ya no existe en Tiendanube, probable reinstalación); recreando…`,
+      );
+      const id = await crearCarrier(tienda.storeId, accessToken, callbackUrl, callbackLabelsUrl, types);
+      carrierId = String(id);
+      carrierCreado = true;
+    }
   }
 
   const existentes = await listarOptions(tienda.storeId, accessToken, carrierId);

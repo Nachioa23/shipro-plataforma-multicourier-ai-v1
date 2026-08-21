@@ -1,5 +1,6 @@
 import * as andreani from './andreani';
 import * as mocis from './mocis';
+import * as oca from './oca';
 
 /**
  * Devuelve credenciales master de Shipro para el courier indicado.
@@ -15,6 +16,7 @@ export function obtenerCredencialesShipro(courier: string): unknown {
   switch (c) {
     case 'andreani': return andreani.obtenerShipro();
     case 'mocis':    return mocis.obtenerShipro();
+    case 'oca':      return oca.obtenerShipro();
     default:         return {};
   }
 }
@@ -32,9 +34,11 @@ export function parsearCredencialesPropias(courier: string, json: string | null 
   switch (c) {
     case 'andreani': return andreani.parsearPropias(json);
     case 'mocis':    return mocis.parsearPropias(json);
+    case 'oca':      return oca.parsearPropias(json);
     default:         return {};
   }
 }
 
 export type { CredencialesAndreani } from './andreani';
 export type { CredencialesMocis } from './mocis';
+export type { CredencialesOca } from './oca';

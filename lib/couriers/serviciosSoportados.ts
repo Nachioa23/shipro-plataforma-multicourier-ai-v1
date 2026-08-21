@@ -33,6 +33,7 @@ import { normalizarParaComparacion } from "./normalizar";
 export const NOMBRES_DISPLAY: Record<string, string> = {
   andreani: "Andreani",
   mocis: "Moci's",
+  oca: "OCA",
 };
 
 // Helper: devuelve el nombre de display de un courier, con fallback a la
@@ -100,6 +101,16 @@ export const SERVICIOS_SOPORTADOS: Record<string, Partial<Record<CodigoServicio,
     inversa_cambio: "cambio",
     inversa_devolucion_retiro_domicilio: "devolucion",
     inversa_devolucion_dropoff_sucursal: null,
+  },
+  oca: {
+    entrega_domicilio_estandar: "domicilio",
+    entrega_domicilio_express: null,
+    entrega_sucursal: "sucursal",
+    entrega_punto_retiro: null,
+    entrega_elocker: null,
+    inversa_cambio: "cambio",
+    inversa_devolucion_retiro_domicilio: "devolucion",
+    inversa_devolucion_dropoff_sucursal: "sucursal",
   },
 };
 

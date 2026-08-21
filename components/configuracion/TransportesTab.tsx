@@ -81,6 +81,7 @@ export default function TransportesTab({ empresaActivaId, embeddedInWizard = fal
               let credsPorDefecto: Record<string, string> = {};
               if (globalCourier.nombre === 'Andreani') credsPorDefecto = { username: "", password: "", cliente: "", contrato_domicilio: "", contrato_sucursal: "", contrato_cambio: "", contrato_devolucion: "", id_sucursal_origen: "" };
               else if (globalCourier.nombre === "Moci's") credsPorDefecto = { client_api: "", client_secret: "" };
+              else if (globalCourier.nombre === "OCA") credsPorDefecto = { usuario: "", password: "", cuit: "", nrocuenta: "", operativa_domicilio: "", operativa_sucursal: "", operativa_inversa: "" };
               else credsPorDefecto = { api_key: "", api_secret: "" };
 
               if (configCliente) {

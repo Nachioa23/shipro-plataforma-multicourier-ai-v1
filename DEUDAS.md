@@ -1378,7 +1378,7 @@ TS_NODE_BASEURL=./ npx ts-node -r tsconfig-paths/register --compiler-options '{"
 cotiza "entrega en sucursal" que NO ofrece (y que ROMPERÍA la creación del envío si se
 elige), y no se distingue "Same Day" de "Next Day".
 **Estado:** PENDIENTE. Insumo de NotebookLM YA OBTENIDO (ver tablas de mapeo abajo).
-Bloqueante parcial: falta confirmar los service id de Moci's (sub-tarea M-1).
+Bloqueante parcial: falta confirmar los service id de Moci's (sub-tarea M-1). OCA: cableado al nacer junto con el adapter (2026-08-21) — alta en BD pendiente de credenciales.
 
 ---
 
@@ -2549,6 +2549,8 @@ courier. Registrar como línea de investigación, no como algo con fórmula disp
 
 **Status:** ABIERTA — roadmap vivo. Se suman couriers a medida que se necesiten y se consiga su doc.
 
+**OCA:** adapter implementado (lib/couriers/OcaAdapter.ts), registrado en serviciosSoportados.ts y CourierFactory.ts. Alta en BD pendiente de credenciales de producción — ejecutar desde /admin-couriers una vez disponibles. UI de credenciales del cliente lista en TransportesTab.tsx.
+
 **En producción hoy:** Andreani (id 1), Mocis (id 2).
 
 **Con documentación analizada (listos para diseño de adapter):** Andreani, Mocis (ver DEUDA 139).
@@ -2642,6 +2644,20 @@ Urbano Express, Hop Envíos, Pickit, Moova, Intralog.
 **Nota:** el wrapper `fetchConTimeout` ya quedó SANO post-fix del bug de recursión (ver suplemento de DEUDA 129, commit 709d995). Este cambio es sobre el VALOR del timeout, no sobre el wrapper roto (ya arreglado).
 
 **Relación:** DEUDA 129 (donde vive el timeout), DEUDA 144 (el rates callback que lo necesita <5s), DEUDA 130 (los 5s de Tiendanube).
+
+---
+
+## DEUDA 146 — sendMail bloqueante alarga el request del cruce cuando el SMTP falla (registrada 2026-08-11, scope chico, prioridad baja)
+
+**Status:** ABIERTA — no urgente, no bloquea el plugin.
+
+**Contexto:** en el callback OAuth de Tiendanube (commit 5c8acfe), el aviso de cruce (`enviarMailAlertaCruceTiendanube`) usa `transporter.sendMail` con `await` y SIN timeout. Verificado en prueba local: si el SMTP no responde (mal configurado o caído), el `sendMail` tarda ~6s (connect/auth timeout de nodemailer) antes de que el `try/catch` best-effort lo absorba. El cliente ya recibió su 409 correcto y la auditoría ya se registró, pero el request del callback queda colgado esos ~6s de más.
+
+**Impacto:** BAJO hoy. El cruce es un evento raro (los links los genera el operador Shipro; el escenario B "distraído" del diseño OAuth es marginal mientras el lanzamiento sea por link directo). En producción con SMTP sano, el `sendMail` toma ~100-500ms y no se nota. El riesgo aparece solo si el SMTP tiene problemas transitorios en prod Y los cruces escalan — ahí cada cruce tardaría 6s+ y podría acumularse.
+
+**Posible solución:** envolver el `sendMail` en un timeout corto (patrón `AbortController`, ver DEUDA 145 — timeout parametrizable per-call), o hacer el aviso fire-and-forget (sin `await`, dejando que el catch capture async). Generalizable al resto de los mailers si se decide unificar el timeout de mail.
+
+**Relación:** DEUDA 144 (el callback que usa el mailer), DEUDA 145 (patrón de timeout parametrizable — potencialmente compartible).
 
 ---
 

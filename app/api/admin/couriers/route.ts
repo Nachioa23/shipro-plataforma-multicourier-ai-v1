@@ -187,7 +187,12 @@ export async function POST(request: Request) {
     const nuevo = await prisma.$transaction(async (tx) => {
       const courier = await tx.courier.create({
         data: {
-          nombre,
+          // TransportesTab.tsx compara por nombre de display exacto (case-sensitive)
+          // — guardar el canonico ("oca", "andreani") dejaba el matching de creds
+          // roto y el bloque per-courier caía al fallback genérico. Persistimos el
+          // display name (NOMBRES_DISPLAY del registry) para mantener consistencia
+          // con las filas seeded (Andreani, Moci's).
+          nombre: displayCourier(nombre),
           activo: true,
           ...(body.emailSoporte ? { emailSoporte: body.emailSoporte } : {}),
           ...(body.telefonoSoporte ? { telefonoSoporte: body.telefonoSoporte } : {}),

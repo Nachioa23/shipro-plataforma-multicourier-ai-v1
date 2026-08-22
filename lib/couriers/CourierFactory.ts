@@ -2,6 +2,7 @@ import { ICourierIntegrator } from './CourierInterface';
 import { AndreaniAdapter } from './AndreaniAdapter';
 import { MocisAdapter } from './MocisAdapter';
 import { OcaAdapter, CredencialesOca } from './OcaAdapter';
+import { CorreoArgentinoAdapter, CredencialesCorreoArgentino } from './CorreoArgentinoAdapter';
 import { normalizarParaComparacion } from './normalizar';
 import { SERVICIOS_SOPORTADOS } from './serviciosSoportados';
 
@@ -19,7 +20,7 @@ export const COURIERS_SOPORTADOS = Object.keys(SERVICIOS_SOPORTADOS);
 // Los switches de JS no son reflectables, asi que esta lista se mantiene a mano
 // junto al switch — misma disciplina que agregar un case. verificarConsistencia-
 // Couriers() la compara contra el registry para detectar desincronizacion.
-const COURIERS_CON_CASE = ['andreani', 'mocis', 'oca'];
+const COURIERS_CON_CASE = ['andreani', 'mocis', 'oca', 'correoargentino'];
 
 // Detecta drift entre el registry (COURIERS_SOPORTADOS) y el switch
 // (COURIERS_CON_CASE). Devuelve los desalineados en cada direccion.
@@ -96,6 +97,22 @@ export class CourierFactory {
           throw new Error("Faltan credenciales de OCA: se requieren usuario, password, cuit, nrocuenta y operativa_domicilio");
         }
         return new OcaAdapter(oca);
+      }
+
+      case 'correoargentino': {
+        const ca: CredencialesCorreoArgentino = {
+          apiKey:     credenciales.apiKey     || "",
+          agreement:  credenciales.agreement  || "",
+          sellerId:   credenciales.sellerId   || "",
+          customerId: credenciales.customerId || "",
+          sandbox:    credenciales.sandbox === true,
+        };
+        if (!ca.apiKey || !ca.agreement || !ca.sellerId || !ca.customerId) {
+          throw new Error(
+            "Faltan credenciales de Correo Argentino: se requieren apiKey, agreement, sellerId y customerId",
+          );
+        }
+        return new CorreoArgentinoAdapter(ca);
       }
 
       // Para sumar un nuevo courier: (1) agregar su entrada al registry

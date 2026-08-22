@@ -2549,7 +2549,7 @@ courier. Registrar como línea de investigación, no como algo con fórmula disp
 
 **Status:** ABIERTA — roadmap vivo. Se suman couriers a medida que se necesiten y se consiga su doc.
 
-**OCA:** adapter implementado (lib/couriers/OcaAdapter.ts), registrado en serviciosSoportados.ts y CourierFactory.ts. Alta en BD pendiente de credenciales de producción — ejecutar desde /admin-couriers una vez disponibles. UI de credenciales del cliente lista en TransportesTab.tsx.
+**OCA:** adapter implementado (lib/couriers/OcaAdapter.ts), registrado en serviciosSoportados.ts y CourierFactory.ts. Módulo de credenciales completo (lib/couriers/credenciales/oca.ts). UI de credenciales del cliente lista en TransportesTab.tsx. Alta en BD ejecutar desde /admin-couriers una vez disponibles las credenciales reales. Pendiente: smoke test end-to-end con credenciales QA reales de OCA (cotización + despacho + etiqueta + tracking) — las credenciales genéricas de la documentación devuelven HTTP 500 en todos los endpoints SOAP; OCA debe habilitar una cuenta de prueba con CUIT y operativas válidas en su sandbox.
 
 **En producción hoy:** Andreani (id 1), Mocis (id 2).
 

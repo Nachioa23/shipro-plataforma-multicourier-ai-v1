@@ -35,6 +35,7 @@ export const NOMBRES_DISPLAY: Record<string, string> = {
   mocis: "Moci's",
   oca: "OCA",
   correoargentino: "Correo Argentino",
+  hopenvios: "Hop Envíos",
 };
 
 // Helper: devuelve el nombre de display de un courier, con fallback a la
@@ -122,6 +123,16 @@ export const SERVICIOS_SOPORTADOS: Record<string, Partial<Record<CodigoServicio,
     inversa_cambio: null,
     inversa_devolucion_retiro_domicilio: null,
     inversa_devolucion_dropoff_sucursal: null,
+  },
+  hopenvios: {
+    entrega_domicilio_estandar: null,
+    entrega_domicilio_express: null,
+    entrega_sucursal: "sucursal",
+    entrega_punto_retiro: "sucursal",
+    entrega_elocker: null,
+    inversa_cambio: null,
+    inversa_devolucion_retiro_domicilio: null,
+    inversa_devolucion_dropoff_sucursal: "sucursal",
   },
 };
 

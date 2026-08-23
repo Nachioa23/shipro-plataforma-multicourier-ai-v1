@@ -2553,6 +2553,8 @@ courier. Registrar como línea de investigación, no como algo con fórmula disp
 
 **En producción hoy:** Andreani (id 1), Mocis (id 2).
 
+**Hop Envíos:** adapter implementado (lib/couriers/HopEnviosAdapter.ts), registrado en serviciosSoportados.ts y CourierFactory.ts. Módulo de credenciales completo (lib/couriers/credenciales/hopenvios.ts). Red exclusivamente PUDO (puntos de entrega) — sin entrega a domicilio. Token Bearer con re-login automático en 401. Familia 2 (un request por bulto). Alta en BD ejecutar desde /admin-couriers una vez disponibles las credenciales. Pendiente: smoke test end-to-end (sandbox cerrado — solicitar client_id, client_secret, email, password y seller_code al equipo de integraciones de Hop).
+
 **Correo Argentino (Paq.ar API 2.0):** adapter implementado (lib/couriers/CorreoArgentinoAdapter.ts), registrado en serviciosSoportados.ts y CourierFactory.ts. Módulo de credenciales completo (lib/couriers/credenciales/correoargentino.ts). Alta en BD ejecutar desde /admin-couriers una vez disponibles las credenciales reales. Pendiente: smoke test end-to-end con credenciales QA reales (Paq.ar sandbox cerrado — requiere solicitar agreement y ApiKey de QA a CA comercialmente). Nota: cotización usa MiCorreo /rates (customerId) + despacho/etiqueta/rastreo usan Paq.ar v2.0 (apiKey + agreement). Sin soporte de logística inversa documentado.
 
 **Con documentación analizada (listos para diseño de adapter):** Andreani, Mocis (ver DEUDA 139).

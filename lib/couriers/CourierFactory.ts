@@ -3,6 +3,7 @@ import { AndreaniAdapter } from './AndreaniAdapter';
 import { MocisAdapter } from './MocisAdapter';
 import { OcaAdapter, CredencialesOca } from './OcaAdapter';
 import { CorreoArgentinoAdapter, CredencialesCorreoArgentino } from './CorreoArgentinoAdapter';
+import { HopEnviosAdapter, CredencialesHopEnvios } from './HopEnviosAdapter';
 import { normalizarParaComparacion } from './normalizar';
 import { SERVICIOS_SOPORTADOS } from './serviciosSoportados';
 
@@ -20,7 +21,7 @@ export const COURIERS_SOPORTADOS = Object.keys(SERVICIOS_SOPORTADOS);
 // Los switches de JS no son reflectables, asi que esta lista se mantiene a mano
 // junto al switch — misma disciplina que agregar un case. verificarConsistencia-
 // Couriers() la compara contra el registry para detectar desincronizacion.
-const COURIERS_CON_CASE = ['andreani', 'mocis', 'oca', 'correoargentino'];
+const COURIERS_CON_CASE = ['andreani', 'mocis', 'oca', 'correoargentino', 'hopenvios'];
 
 // Detecta drift entre el registry (COURIERS_SOPORTADOS) y el switch
 // (COURIERS_CON_CASE). Devuelve los desalineados en cada direccion.
@@ -113,6 +114,23 @@ export class CourierFactory {
           );
         }
         return new CorreoArgentinoAdapter(ca);
+      }
+
+      case 'hopenvios': {
+        const hop: CredencialesHopEnvios = {
+          clientId:     credenciales.clientId     || "",
+          clientSecret: credenciales.clientSecret || "",
+          email:        credenciales.email        || "",
+          password:     credenciales.password     || "",
+          sellerCode:   credenciales.sellerCode   || "",
+          baseUrl:      credenciales.baseUrl,
+        };
+        if (!hop.clientId || !hop.clientSecret || !hop.email || !hop.password || !hop.sellerCode) {
+          throw new Error(
+            "Faltan credenciales de Hop Envíos: se requieren clientId, clientSecret, email, password y sellerCode",
+          );
+        }
+        return new HopEnviosAdapter(hop);
       }
 
       // Para sumar un nuevo courier: (1) agregar su entrada al registry

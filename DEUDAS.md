@@ -2560,6 +2560,8 @@ courier. Registrar como línea de investigación, no como algo con fórmula disp
 **Con documentación analizada (listos para diseño de adapter):** Andreani, Mocis (ver DEUDA 139).
 OCA y Correo Argentino: documentación analizada como referencia para la interfaz común (ver DEUDA 139).
 
+**Bloqueados por documentación insuficiente (requieren acceso partner/UAT):** OCASA y Pickit. La documentación pública no expone los payloads JSON ni las URLs completas de los endpoints de despacho, etiquetas, cancelación y webhook — solo describen la arquitectura general y listan nombres de endpoints. Para Pickit: confirmado contra el portal oficial developers.pickit.net (2026-08-21) — solo lista el menú de endpoints (budget=/apiV2.1/budget, sucursales=apiV2/map/point, auth headers token+apikey), sin esquemas de payload. Para OCASA: modelo B2B cerrado, sin portal público. Ambos requieren solicitar acceso UAT y el manual de integración detallado por vía comercial antes de construir el adapter. Cuando llegue la doc real, se carga al Gemini Notebook y el adapter sale en una sesión (mismo patrón que OCA/CA/Hop). Contactos: Pickit integraciones@pickit.net; OCASA vía representante comercial B2B.
+
 **Pendientes de integrar (lista abierta, sin doc analizada aún):** OCA, Correo Argentino, DPD Argentina,
 Urbano Express, OCASA, Blue Mail, South Post, Saires, Moova, Pickit, Hop Envíos, Intralog, y otros que
 surjan. Nota (Nacho): la lista se irá sumando a medida que se necesite y se descubra; el ecosistema es

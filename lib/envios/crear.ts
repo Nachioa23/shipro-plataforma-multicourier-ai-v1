@@ -790,6 +790,12 @@ export async function crearEnvio(input: CrearEnvioInput) {
         idempotencyKey: idempotencyKey ?? null,
         etiquetaUrl: urlEtiquetaFinal,
         pesoReal: parseFloat(String(pesoReal)) || 1.0,
+        // DEUDA 132 (2026-08-24): dims gemelas de pesoReal. Se persisten al crear
+        // (incluso si el envío nace bloqueado) para que sobrevivan al re-despacho.
+        // Threading al courier queda en Paso 2; guardarail en Paso 3.
+        largoCm: largoCm ?? null,
+        anchoCm: anchoCm ?? null,
+        altoCm: altoCm ?? null,
         estadoActual: estadoInicialEnvio,
         modalidad: modalidadCanonica,
         // DEUDA 106 pieza 2 mov 2: token de corrección (RETENIDO only). null si

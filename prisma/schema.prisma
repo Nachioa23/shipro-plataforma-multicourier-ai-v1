@@ -732,6 +732,12 @@ model Envio {
   etiquetaUrl String?
 
   pesoReal        Float
+  // DEUDA 132 (2026-08-24): dimensiones del envío, gemelas de pesoReal. Nullable
+  // porque un envío puede nacer sin ellas (queda BLOQUEADO_DATOS_PAQUETE en Paso 3).
+  // Persistidas al crear y leídas al re-despachar, para que sobrevivan a un bloqueo.
+  largoCm Float?
+  anchoCm Float?
+  altoCm  Float?
   pesoVolumetrico Float?
   pesoFacturado   Float?
   fragil          Boolean @default(false)

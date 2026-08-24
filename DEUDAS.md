@@ -2667,6 +2667,34 @@ Urbano Express, Hop Envíos, Pickit, Moova, Intralog.
 
 ---
 
+## DEUDA 147 — Switch sandbox/producción ausente en AndreaniAdapter (y Mocis): las credenciales de test fallan auth porque el adapter pega siempre a la URL de producción (registrada 2026-08-24, scope chico-medio, entorno/couriers)
+
+**Status:** ABIERTA — no bloquea producción. Bloquea la capacidad de testear integraciones contra ambientes QA sin tocar prod.
+
+**Síntoma (verificado en prod por Nacho):** con credenciales de TEST de Andreani, `cotizar`/`despachar` loguea `"Falló la autenticación con Andreani"` y el flujo cae al fallback de tarifa de respaldo (tracking genérico `SHP-*`). Con credenciales de PRODUCCIÓN funciona: trackings reales de Andreani. El mecanismo de fallback (protección financiera + "el cliente vende siempre") funcionó correctamente — pero el resultado es que un tester que quiere validar la integración contra el ambiente de QA de Andreani nunca puede autenticar y termina probando contra prod, o queda ciego con el fallback.
+
+**Causa (verificada en código):** `lib/couriers/AndreaniAdapter.ts:46` → `private API_URL = 'https://apis.andreani.com'` hardcodeada a producción, sin flag `sandbox` ni consumo de env var. La env var `ANDREANI_URL` existe en `.env.local` pero está huérfana: el código NO la lee (documentado en la nota del preámbulo, L131). Todas las llamadas del adapter pegan a este mismo `API_URL`:
+- `login` (L133)
+- `/v1/tarifas` (L207)
+- `/v2/ordenes-de-envio` (L318)
+- `/v2/envios/{tracking}` (L349)
+- `/v2/sucursales` (L414)
+- `/v2/nueva-accion` (L452)
+
+Las credenciales de TEST de Andreani viven en un host QA distinto (tipo `apisqa.andreani.com` — confirmar el host exacto contra la doc del Gemini Notebook de Nacho), así que nunca autentican contra prod → 401 → cascada al fallback.
+
+`MocisAdapter.ts` tiene la misma forma: `private API_URL = 'https://mocis.akeron.net/api/v1'` (L25), sin switch de ambiente. Mismo patrón, mismo síntoma si algún día se prueba con credenciales test de Mocis.
+
+**Precedente ya resuelto en otro adapter:** el `OcaAdapter` (integrado 2026-08) YA implementa el patrón — `sandbox?: boolean` en `CredencialesOca` que switchea entre `OCA_URL_PROD` y `OCA_URL_QA` en el constructor. Y `HopEnviosAdapter` (integrado 2026-08-23) también trae `baseUrl?: string` en sus credenciales con fallback a sandbox si no viene. Y `CorreoArgentinoAdapter` también usa `sandbox?: boolean`. Adicionalmente, `lib/couriers/credenciales/tipos.ts:10` ya declara el placeholder `EntornoCredenciales: 'sandbox' | 'live'` reservado a futuro para couriers con dual environment. **El molde existe, ya se usa en 3 adapters — falta aplicarlo a los 2 legacy (Andreani y Mocis).**
+
+**Fix propuesto (no ejecutar):** en `CredencialesAndreani` (y `CredencialesMocis`) agregar `sandbox?: boolean` opcional (mismo patrón que `CredencialesOca`). En el constructor del adapter, resolver `this.API_URL` entre una constante `ANDREANI_URL_PROD` y `ANDREANI_URL_QA` (o `MOCIS_URL_QA`) según el flag. Confirmar los hosts QA reales contra la doc de cada courier antes de hardcodearlos (Nacho tiene la doc de Andreani en el Gemini Notebook; Mocis probablemente requiere consulta comercial). Actualizar `TransportesTab.tsx` para exponer el switch al cargar credenciales del cliente (mismo pattern que se documentó para OCA). Alinear con el patrón que ya existe en OCA/CA/Hop.
+
+**Impacto / prioridad:** NO bloquea producción (prod funciona; el fallback cubre el caso test). Importante para poder TESTEAR integraciones sin tocar el ambiente productivo y sin arriesgar débitos reales. Scope chico-medio (2 archivos por adapter + UI de credenciales). Los adapters legacy son 2 (Andreani, Mocis); los nuevos ya tienen el patrón.
+
+**Relación:** Nota del preámbulo L131 (URLs de couriers hardcoded en adapters, decisión de postponer el refactor general — esta deuda registra el SÍNTOMA específico que Nacho vio en prod, distinto del refactor genérico). DEUDA 88 (credenciales de servicios externos). DEUDA 141 (roadmap couriers — los adapters nuevos ya nacen con el patrón; esto es paridad con los legacy).
+
+---
+
 **Nota de secuencia** (actualizada 2026-08-06)**:** el orden lógico de construcción antes de documentar la API
 externa es: DEUDA 103 (multi-bulto — el hueco que más muerde) y DEUDA 104 (webhooks — el desbloqueante
 grande). Ambas, más la redacción de la especificación OpenAPI, son el trabajo del frente de plugins. El

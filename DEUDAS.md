@@ -229,7 +229,7 @@ destrabar a mano (no crear la ficha por API por la puerta de atrás) sino diseñ
 La Fase 4b (que escribe en el corazón del sistema) se partió en 3 pasos con dry-run primero para verificar
 el cálculo antes de tocar la escritura. Zona sensible: diagnóstico read-only antes de cada cambio.
 
-## DEUDA 39 — Torre de Control: sistema integral de metricas estrategicas (DISEÑO COMPLETO 2026-06-04 — implementacion en progreso: Metricas 1.1, 2.1, 2.3, 3.3 cerradas. 12 metricas restantes.)
+## DEUDA 39 — Torre de Control: sistema integral de metricas estrategicas (DISEÑO COMPLETO 2026-06-04 — implementacion avanzada: la mayoria de las 16 metricas ya codeadas end-to-end; PENDIENTE confirmar metricas exactas restantes + UI integral — se audita en el carril Torre)
 
 **Status:** Abierta 2026-06-02. Diseno profesional completo el 2026-06-04 documentado en `docs/TORRE-DE-CONTROL.md`. Implementacion pendiente, sesion dedicada por metrica.
 
@@ -1979,26 +1979,6 @@ desde la plataforma.
 cancelación queda fuera del contrato de la API externa deliberadamente.
 
 **EXCEPCIÓN aprobada por Nacho (2026-08-06) — plugin Tiendanube:** exclusivamente para el plugin de Tiendanube, se permite cancelar desde el e-commerce, para que el usuario no tenga que hacer dos acciones para un mismo fin (cancelar en Tiendanube + cancelar en Shipro). La regla general (cancelar es solo-plataforma) se mantiene para todos los demás canales; el plugin de Tiendanube es la **única excepción**, y es una decisión consciente de UX. Implementación: escuchar el webhook `order/cancelled` de Tiendanube y anular el envío correspondiente en Shipro.
-
----
-
-## DEUDA 128 — Idempotencia en creación de etiquetas por API (prerequisito plugins, ticket to play) (registrada 2026-08-05, scope medio)
-
-**Status:** RESUELTA. Commit 99af569 (2026-08-05). Deployada a producción 2026-08-05.
-Header Idempotency-Key en POST /api/envios. @@unique([empresaId, idempotencyKey])
-en Envio. Migración 20260805230917. Race condition menor registrada como DEUDA 131.
-
-**Problema:** `POST /api/envios` hoy NO tiene mecanismo de idempotencia. Si un e-commerce reintenta la creación de una etiqueta por latencia de red, timeout, o reintento de su propio webhook interno ("orden pagada"), Shipro **crea DOS etiquetas y cobra dos veces**. Es el modo de falla clásico de una API de e-commerce sin idempotencia. Un plugin no puede confiar en un reintento seguro sin este contrato.
-
-**Fix — token de idempotencia derivado de un identificador ESTABLE del pedido:**
-- **Identificador estable** = `platform + store_id + order_id + fulfillment_id` (ej. `tiendanube:store42:order123:ful1`). Es la clave que identifica UN despacho específico dentro de un pedido específico dentro de una tienda específica de una plataforma específica.
-- **Comportamiento en el handler:** si el token ya generó una etiqueta, devolver la EXISTENTE (misma response — mismo `trackingNumber`, misma `etiquetaUrl`). NO crear otra. Si el token es nuevo, crear + persistir la asociación token→envío.
-- **Refuerzo en DB:** constraint `UNIQUE` sobre la clave de idempotencia en `Envio` (o tabla puente si preferimos separar). Race-condition-safe: dos requests paralelos con el mismo token → uno crea, el otro obtiene `UniqueConstraintViolation` y lee el existente. Devuelve la misma response.
-- **Estándar de industria (EasyPost / Stripe):** header `Idempotency-Key` recibido en la request; respuesta cacheada por (key, endpoint) durante ~24h; lock para requests concurrentes con el mismo key. Shipro puede seguir el mismo pattern (header + fallback al body si el plugin no lo maneja).
-
-**Por qué importa para plugins:** los webhooks de e-commerces reintentan (Tiendanube hasta 5 veces con backoff; Shopify hasta 19). Sin idempotencia, cada reintento nos hace **despachar de nuevo → cobrar de nuevo → duplicar tracking → romper la conciliación del cliente**. **Es prerequisito de TODOS los plugins.** No es opcional.
-
-**Prioridad:** alta. Prerequisito duro. Scope medio (~2-3 días: schema + handler + tests de race conditions + documentación del header). Coordinar con DEUDA 103 (misma capa de creación); pueden atacarse juntas o secuenciadas.
 
 ---
 

@@ -971,3 +971,16 @@ en Envio. Migración 20260805230917. Race condition menor registrada como DEUDA 
 
 ---
 
+## DEUDA 123 — `CredencialCourier.tarifaIncluyeIva` default `true` es un footgun de SUBCOBRO (mordió en prod 2026-08-03) (registrada 2026-08-03, scope chico, PRIORIDAD ALTA, pricing/schema)
+
+**Status:** RESUELTA 2026-08-03 (verificado 2026-08-24). El footgun se eliminó de raíz: la columna CredencialCourier.tarifaIncluyeIva fue DROPEADA (mov 3); la bandera vive ahora en el adapter (ICourierIntegrator.tarifaApiIncluyeIva = false en los 5 adapters) y el único path de alta de credencial (app/api/configuracion/couriers/route.ts) ya no la toca — no puede volver a nacer mal. El schema declara `tarifaIncluyeIva Boolean @default(true)` en `prisma/schema.prisma:438`, pero los adapters de Andreani y Moci's devuelven tarifa NETA (Andreani lee `data.tarifaSinIva.total` con fail-loud si falta; Moci's confirmado empíricamente 2026-07-21 que `opcionAkeron.price` viene sin IVA — ver `prisma/seed.ts:154-159`). El seed corrige las credenciales existentes con `prisma.credencialCourier.updateMany({ where: { nombreCourier: { in: ["Andreani", "Moci's"] } }, data: { tarifaIncluyeIva: false } })` (`prisma/seed.ts:161-163`), pero **cualquier credencial creada FUERA del seed nace en `true`** — típicamente vía el wizard de onboarding (`app/api/clientes/route.ts`, path que no toca `tarifaIncluyeIva`). Efecto: `aplicarMarkup` en `lib/cotizador.ts:156` toma la rama `secoNeto = seco.div(IVA_AR_MULTIPLIER)` sobre una tarifa que YA es neta → todos los precios cotizados quedan un factor `1/1.21 ≈ 0.826` más bajos: **SUBCOBRO de ~17.36%** (`1 - 1/1.21`) en cotización y en creación de envío (montoDebito y precioFactura).
+
+**Confirmado en producción durante el deploy de FASE 2 (2026-08-03):** las 2 credenciales de Argenshipro SAS estaban en `true` (creadas fuera del seed) y cotizaban ~17% por debajo del valor esperado. Se corrigió a mano en la BD de prod con un `UPDATE "CredencialCourier" SET "tarifaIncluyeIva" = false WHERE "nombreCourier" IN ('Andreani', 'Moci''s')`. Sin envíos reales todavía, así que no hubo pérdida — pero el próximo cliente onboardeado lo dispararía otra vez.
+
+**Alcance del fix:**
+1. **Cambiar el default del schema** a `tarifaIncluyeIva Boolean @default(false)` en `prisma/schema.prisma:438` + migración de rename del default. No requiere backfill (los rows existentes conservan su valor).
+2. **Endurecer el onboarding** (`app/api/clientes/route.ts` — la ruta que crea la CredencialCourier inicial) para setear explícitamente `tarifaIncluyeIva: false` al crear una credencial de Andreani o Moci's; opcionalmente extenderlo a todo `nombreCourier` conocido cuyo adapter devuelve neto (registry en `lib/couriers/serviciosSoportados.ts` o similar).
+3. **Documentar la política**: el flag describe el SHAPE del número que devuelve el adapter (¿la API del courier ya sumó IVA?), NO una decisión comercial. Su valor debe ser conocido en el momento de dar de alta el courier — no es negociable por empresa. Este comentario ya vive en `lib/cotizador.ts:151-155` y en `prisma/seed.ts:154-159`; conviene consolidarlo en el schema.
+
+---
+

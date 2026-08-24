@@ -6,6 +6,10 @@ import { tieneSucursales } from "@/lib/couriers/serviciosSoportados";
 import type { CredencialCourier, Deposito, DepositoCourierConfig } from "@prisma/client";
 import prisma from "@/lib/prisma";
 
+// DEUDA 132: placeholder EXPLÍCITO para dims ausentes. Reemplaza el viejo 10 mágico.
+// Temporal — Paso 3 lo vuelve inalcanzable (el envío ni llega al despacho sin dims).
+const DIMS_PLACEHOLDER_CM = 10;
+
 export interface DispatchInput {
   credencial: CredencialCourier;
   courierNombreCanonico: string;
@@ -21,6 +25,14 @@ export interface DispatchInput {
   email: string;
   telefono: string;
   pesoReal: number;
+  // DEUDA 132 Paso 2: dimensiones reales del envío (gemelas de pesoReal). Opcionales
+  // porque un caller legacy podría no mandarlas; en ese caso construirParamsDespacho
+  // registra una ADVERTENCIA y usa un placeholder — nunca envía dims inventadas en
+  // silencio. El placeholder se elimina en Paso 3 (BLOQUEADO_DATOS_PAQUETE garantiza
+  // que ningún envío sin dims llega al despacho).
+  largoCm?: number | null;
+  anchoCm?: number | null;
+  altoCm?: number | null;
   valorDeclarado: number;
   modalidad?: string;
   numeroOrden?: string | null;
@@ -480,6 +492,20 @@ function construirParamsDespacho(
   if (mod.includes('inversa') || mod.includes('devolucion')) tipoEntregaFormateado = "inversa";
   if (mod.includes('cambio')) tipoEntregaFormateado = "cambio";
 
+  // DEUDA 132 Paso 2: si el input llega sin alguna dimensión, NO despachamos en
+  // silencio con 10×10×10. Registramos ADVERTENCIA con tracking/orden para
+  // trazabilidad y caemos al placeholder EXPLÍCITO. Paso 3 elimina este camino
+  // por completo (BLOQUEADO_DATOS_PAQUETE ni llega acá).
+  const faltanDims = input.largoCm == null || input.anchoCm == null || input.altoCm == null;
+  if (faltanDims) {
+    console.warn(
+      `[DEUDA 132] ADVERTENCIA: despacho sin dimensiones reales ` +
+      `(orden=${input.numeroOrden ?? "s/n"}, courier=${input.courierNombreCanonico}). ` +
+      `Se usa placeholder ${DIMS_PLACEHOLDER_CM}×${DIMS_PLACEHOLDER_CM}×${DIMS_PLACEHOLDER_CM}. ` +
+      `Esto debe desaparecer tras Paso 3 (BLOQUEADO_DATOS_PAQUETE).`
+    );
+  }
+
   return {
     destinatarioNombre: input.destinatarioNombre,
     calle: input.calle,
@@ -495,9 +521,12 @@ function construirParamsDespacho(
     peso: input.pesoReal || 1,
     paquetes: [{
       pesoKg: input.pesoReal || 1,
-      largoCm: 10,
-      anchoCm: 10,
-      altoCm: 10,
+      // DEUDA 132 Paso 2: usar las dims reales. Si faltan (no debería pasar tras Paso 3),
+      // logueamos ADVERTENCIA con el tracking/orden para trazabilidad, y usamos un
+      // placeholder explícito. NO es silencioso.
+      largoCm: input.largoCm ?? DIMS_PLACEHOLDER_CM,
+      anchoCm: input.anchoCm ?? DIMS_PLACEHOLDER_CM,
+      altoCm:  input.altoCm  ?? DIMS_PLACEHOLDER_CM,
       valorDeclarado: input.valorDeclarado || 0,
       requiereSeguro: input.credencial.requiereSeguro,
     }],

@@ -703,6 +703,10 @@ export async function crearEnvio(input: CrearEnvioInput) {
       email: email || "",
       telefono: telefono || "",
       pesoReal: parseFloat(String(pesoReal)) || 1,
+      // DEUDA 132 Paso 2: dims reales al despacho (threading punta a punta).
+      largoCm,
+      anchoCm,
+      altoCm,
       valorDeclarado: parseFloat(String(valorDeclarado)) || 0,
       modalidad,
       numeroOrden,

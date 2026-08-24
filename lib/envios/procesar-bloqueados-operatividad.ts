@@ -211,6 +211,10 @@ export async function procesarEnviosBloqueadosPorOperatividad(
       email: envio.destino.email || "",
       telefono: envio.destino.telefono || "",
       pesoReal: envio.pesoReal,
+      // DEUDA 132 Paso 2: dims persistidas al crear (Paso 1) llegan al re-despacho.
+      largoCm: envio.largoCm,
+      anchoCm: envio.anchoCm,
+      altoCm: envio.altoCm,
       valorDeclarado: envio.finanzas?.valorDeclarado?.toNumber() ?? 0,
       modalidad: envio.modalidad,
       numeroOrden: envio.numeroOrden,

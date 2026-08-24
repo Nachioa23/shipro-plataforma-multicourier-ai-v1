@@ -20,6 +20,34 @@ Este bloque captura decisiones de principio que guian futuras decisiones de scop
 
 ---
 
+## ROADMAP ESTRATÉGICO Y DIVISIÓN DE TRABAJO (acordado 2026-08-24)
+
+Esta sección es el mapa que cada chat de trabajo lee al arrancar. Fuente de verdad del ORDEN; el detalle de cada deuda vive en su bloque.
+
+**Estado verificado al 2026-08-24** (auditoría de reconciliación código+git+body):
+- RESUELTAS y en producción: DEUDA 128 (movida a DEUDAS-RESUELTAS.md). DEUDA 73, 107, 105, 10 resueltas en su núcleo pero se quedan acá por colas menores pendientes (se mueven al saldarlas).
+- RESUELTA EN CÓDIGO, FALTA DEPLOY A PRODUCCIÓN: DEUDA 129 (arreglo de regresión fetchConTimeout en commit 709d995, compila, nunca deployado). Semáforo localhost↔prod: queda en pendientes hasta subir a prod.
+- BUGS DE PLATA VIVOS (prioridad): DEUDA 123 (subcobro ~17% por tarifaIncluyeIva en credenciales creadas fuera del seed) + DEUDA 132 (dimensiones caen a 10×10×10, factura mal).
+
+**Convención de entorno por deuda** (cuánto llegó, no sólo cuánto está hecha): SIN EMPEZAR → EN LOCALHOST → EN PRODUCCIÓN. Una deuda no es RESUELTA hasta estar EN PRODUCCIÓN verificada.
+
+**Orden de fases (rumbo: plugins vivos → primeros clientes):**
+- FASE 0 — Base limpia (docs). Reconciliación del backlog + este roadmap. HECHA (commits f101c27 + este).
+- FASE 1 — Parar la gotera: DEUDA 123 + 132 + deploy de 129. Deja el cotizador correcto antes de que los plugins se apoyen en él.
+- FASE 2 — Cimientos de plugins (lado servidor): DEUDA 104 (webhooks salientes) + 145 (timeout <5s) + 144 (rates callback) + 103/142/143 (motor de bultos) + 91 (cableado couriers).
+- FASE 3 — Primer plugin no-Tiendanube end-to-end (WooCommerce o Shopify), una vez viva la FASE 2.
+- FASE 4 — Mercado Flex (el más complejo): arranca con recon/spec propio, como se hizo con Tiendanube (DEUDA 130).
+- CARRILES LATERALES (en paralelo, no tocan el núcleo): seguridad/infra (108, 126, 113, 127, 109), Torre de Control restante (39, 62 Phase 3, 8, 65), auth (96, 97, 70), soporte/NPS (59, 60, 85, 90, 53, 54).
+
+**División en dos chats (regla física: dos chats NUNCA editan el mismo archivo):**
+- CHAT A — "Núcleo Shipro": dueño único de lib/cotizador.ts, lib/envios/crear.ts, prisma/schema.prisma y el pipeline de cotización/despacho. Hace FASES 0/1/2. ÚNICO que corre migraciones de base de datos.
+- CHAT B — "Plugins, Guías y Documentación": documentación de la API REST externa, spec/diseño de plugins (WooCommerce, Shopify, Magento, PrestaShop, VTEX), recon de Mercado Flex, y los paquetes de plugin (repos separados del core). NUNCA edita el núcleo de shipro-2.0.
+- PUNTO DE ENCUENTRO: para conectar el primer plugin real, Chat B necesita que Chat A tenga vivos DEUDA 104 + 144. Hasta entonces Chat B avanza en docs/diseño/esqueletos.
+
+**Regla de migraciones:** sólo Chat A (Núcleo) toca prisma/schema.prisma y corre migraciones. Si un carril lateral necesita la base de datos, espera su turno en el Núcleo.
+
+**Deuda de higiene registrada:** ~18 documentos de diseño de plugins en docs/ están sin versionar (untracked). Ordenarlos y versionarlos es trabajo de Chat B.
+
 ## DEUDA 1 — Implementar estado REQUIERE_SOPORTE (REDEFINIDA — POSPUESTA a SUB-PASO 9)
 
 **Status:** Originalmente identificada el 2026-04-28 como "fix de catch en `crear.ts` para usar RETENIDO". REDEFINIDA el 2026-04-28 tras consideración de producto que reveló que son dos estados conceptualmente distintos. POSPUESTA a SUB-PASO 9 (o sesión dedicada).

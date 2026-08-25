@@ -98,7 +98,18 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { trackingNumber, calle, altura, cp, localidad, provincia, piso, dpto, token } = body;
+    const {
+      trackingNumber,
+      calle, altura, cp, localidad, provincia, piso, dpto,
+      // DEUDA 132 Paso 4a: campos opcionales de paquete. La UI de corrección los
+      // manda cuando el operador destraba un BLOQUEADO_DATOS_PAQUETE. Para una
+      // corrección address-only pueden venir undefined — se ignoran, no se null-outea.
+      pesoReal: pesoRealBody,
+      largoCm: largoCmBody,
+      anchoCm: anchoCmBody,
+      altoCm:  altoCmBody,
+      token,
+    } = body;
 
     if (!trackingNumber || !calle || !altura || !cp) {
       return NextResponse.json({ error: "Faltan datos obligatorios" }, { status: 400 });
@@ -173,25 +184,39 @@ export async function POST(request: Request) {
         includeTree,
       );
       // verificarAccesoEnvio hace ownership + existencia. El scope RETENIDO
-      // se re-chequea acá (el helper no filtra por estado). Mismo 404 que
-      // el buyer path — nunca revelamos si el envío existe pero salió de
-      // RETENIDO vs no existe vs es de otra empresa.
+      // o BLOQUEADO_DATOS_PAQUETE se re-chequea acá (el helper no filtra por
+      // estado). Mismo 404 que el buyer path — nunca revelamos si el envío
+      // existe pero salió del scope válido vs no existe vs es de otra empresa.
+      // DEUDA 132 Paso 4a: el path cliente/Shipro también destraba envíos que
+      // nacieron BLOQUEADO_DATOS_PAQUETE (barrier de datos del paquete). El
+      // buyer/token path NO acepta este estado — los compradores nunca cargan
+      // dims/peso, sólo dirección.
       const esRetenido =
         envio?.estadoActual === "RETENIDO" || envio?.estadoActual === "Retenido";
-      if (!envio || !esRetenido) {
+      const esBloqueadoDatosPaquete =
+        envio?.estadoActual === "BLOQUEADO_DATOS_PAQUETE";
+      if (!envio || (!esRetenido && !esBloqueadoDatosPaquete)) {
         return NextResponse.json({ error: "Envío no encontrado" }, { status: 404 });
       }
     }
 
-    // A este punto envío existe, está RETENIDO, y el caller es autorizado.
+    // A este punto envío existe (en RETENIDO o BLOQUEADO_DATOS_PAQUETE en el
+    // path cliente/Shipro; RETENIDO-only en el path buyer), y el caller es
+    // autorizado.
     if (!envio.destino || !envio.courier) {
       return NextResponse.json({ error: "Envío no encontrado o inválido para corrección" }, { status: 404 });
     }
 
+    // DEUDA 132 Paso 4a: bandera consolidada. Sólo puede ser true en el path
+    // cliente/Shipro (el buyer path filtra RETENIDO-only). Sirve para ramificar
+    // observaciones + comportamiento del fallo total sin cambiar el resto.
+    const esCorreccionDatosPaquete =
+      envio.estadoActual === "BLOQUEADO_DATOS_PAQUETE";
+
     // Defense in depth: este endpoint solo soporta envíos sin tramos previos.
-    // El filtro de estado RETENIDO garantiza esto hoy (los envíos RETENIDO
-    // nunca tuvieron despacho exitoso → no tienen tramos), pero defendemos
-    // contra futuros cambios del filtro.
+    // Los filtros de estado (RETENIDO y BLOQUEADO_DATOS_PAQUETE) garantizan esto
+    // hoy (ambos son pre-dispatch — nunca tuvieron despacho exitoso, así que no
+    // tienen tramos), pero defendemos contra futuros cambios del filtro.
     if (envio.tramos.length > 0) {
       return NextResponse.json({
         error: "Este envío ya tiene tramos despachados. Usar otro endpoint para corrección post-despacho.",
@@ -233,6 +258,68 @@ export async function POST(request: Request) {
         dpto: dpto || "",
       },
     });
+
+    // ==============================================================
+    // 2.b — DEUDA 132 Paso 4a: persistir peso/dims si el body los trae.
+    // Sólo escribimos las columnas que vinieron con valor parseable (nunca
+    // null-outeamos existentes en un save address-only). Después del update
+    // refrescamos `envio` en memoria para que la barrera y el dispatch de
+    // abajo lean los valores nuevos, no los viejos.
+    // ==============================================================
+    const parseDim = (v: unknown): number | null => {
+      if (v === undefined || v === null || v === "") return null;
+      const n = parseFloat(String(v));
+      return Number.isFinite(n) ? n : null;
+    };
+    const datosPaqueteUpdate: {
+      pesoReal?: number;
+      largoCm?: number;
+      anchoCm?: number;
+      altoCm?: number;
+    } = {};
+    const pesoParsed = parseDim(pesoRealBody);
+    if (pesoParsed !== null) datosPaqueteUpdate.pesoReal = pesoParsed;
+    const largoParsed = parseDim(largoCmBody);
+    if (largoParsed !== null) datosPaqueteUpdate.largoCm = largoParsed;
+    const anchoParsed = parseDim(anchoCmBody);
+    if (anchoParsed !== null) datosPaqueteUpdate.anchoCm = anchoParsed;
+    const altoParsed = parseDim(altoCmBody);
+    if (altoParsed !== null) datosPaqueteUpdate.altoCm = altoParsed;
+
+    if (Object.keys(datosPaqueteUpdate).length > 0) {
+      const envioActualizado = await prisma.envio.update({
+        where: { id: envio.id },
+        data: datosPaqueteUpdate,
+      });
+      envio.pesoReal = envioActualizado.pesoReal;
+      envio.largoCm  = envioActualizado.largoCm;
+      envio.anchoCm  = envioActualizado.anchoCm;
+      envio.altoCm   = envioActualizado.altoCm;
+    }
+
+    // ==============================================================
+    // 2.c — DEUDA 132 Paso 4a: BARRERA DE DATOS DEL PAQUETE (mirror crear.ts
+    // Paso 3a). Un envío sin peso o sin las 3 dimensiones NUNCA llega al
+    // courier. Si el operador guardó una corrección incompleta, la respuesta
+    // es 422 y el envío queda en el mismo estado (BLOQUEADO_DATOS_PAQUETE en
+    // el caso 4a; para RETENIDO con dims válidas al crear la corrida es
+    // no-op). NO despachamos ni cambiamos estado.
+    // ==============================================================
+    const pesoNum = parseFloat(String(envio.pesoReal));
+    const datosPaqueteCompletos =
+      Number.isFinite(pesoNum) && pesoNum > 0 &&
+      envio.largoCm != null && envio.largoCm > 0 &&
+      envio.anchoCm != null && envio.anchoCm > 0 &&
+      envio.altoCm  != null && envio.altoCm  > 0;
+    if (!datosPaqueteCompletos) {
+      return NextResponse.json(
+        {
+          error: "DatosPaqueteIncompletos",
+          detalle: "Faltan peso y/o dimensiones (todos deben ser mayores a 0) para poder despachar.",
+        },
+        { status: 422 },
+      );
+    }
 
     // 3. Cargar credencial principal y validar que esté activa.
     const credencialMain = await obtenerCredencialCourier(envio.empresaId, envio.courier.nombre);
@@ -347,7 +434,11 @@ export async function POST(request: Request) {
             data: {
               envioId: envio.id,
               estado: "Pendiente",
-              observacion: `Dirección corregida. Tracking oficial asignado: ${dispatchResult.tracking}.`,
+              // DEUDA 132 Paso 4a: observación distinta según el estado del que
+              // veníamos, para que el evento cuente qué acción destrabó el envío.
+              observacion: esCorreccionDatosPaquete
+                ? `Datos del paquete completados. Tracking oficial asignado: ${dispatchResult.tracking}.`
+                : `Dirección corregida. Tracking oficial asignado: ${dispatchResult.tracking}.`,
             },
           });
         });
@@ -405,11 +496,29 @@ export async function POST(request: Request) {
       }, { status: 502 });
     }
 
-    // ---------- RAMA 3: partial failure SIN tramos → mantener RETENIDO ----------
+    // ---------- RAMA 3: partial failure SIN tramos → mantener estado origen ----------
     // Caso A/B falló o caso C tramo 1 falló desde el inicio. No hay tramos
     // despachados → no hay tramos huérfanos en couriers. Dejamos el envío en
-    // RETENIDO para que el cliente pueda reintentar la corrección con datos
-    // diferentes desde el link público.
+    // su estado de origen para que se pueda reintentar la corrección con datos
+    // diferentes.
+    //   - RETENIDO   → sigue RETENIDO (comprador puede reintentar desde link).
+    //   - BLOQUEADO_DATOS_PAQUETE → sigue en ese estado (operador puede volver
+    //     a la pantalla de corrección y ajustar peso/dims/dirección).
+    // No inventamos un estado nuevo — usamos el mismo del que veníamos.
+    if (esCorreccionDatosPaquete) {
+      await prisma.eventoTracking.create({
+        data: {
+          envioId: envio.id,
+          estado: "BLOQUEADO_DATOS_PAQUETE",
+          observacion: `Datos del paquete completados pero el courier rechazó la etiqueta: ${dispatchResult.error || "no devolvió tracking"}. El envío sigue en BLOQUEADO_DATOS_PAQUETE; reintentá con datos distintos.`,
+        },
+      });
+
+      return NextResponse.json({
+        error: `Datos guardados, pero el courier rechazó la etiqueta: ${dispatchResult.error || "no devolvió tracking"}. Verificá los datos e intentá nuevamente.`,
+      }, { status: 502 });
+    }
+
     await prisma.eventoTracking.create({
       data: {
         envioId: envio.id,

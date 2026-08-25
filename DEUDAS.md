@@ -2287,7 +2287,25 @@ creado con `replayed: true`. Patrón: try-create → catch P2002 → re-query �
 
 ## DEUDA 132 — Fuga de dimensiones en la creación de envío del dashboard: largo/ancho/alto se pierden y caen a 10×10×10 hardcoded (bug de facturación real, scope chico-medio)
 
-**Status:** ABIERTA. Registrada 2026-08-07. Detectada durante el recon de DEUDA 103.
+**Status:** EN CONSTRUCCIÓN (parcial) — al 2026-08-24. Barrier de datos mínimos levantada; faltan la pantalla de carga/destrabe (Paso 4) y el caso e-commerce sin datos (Paso 5).
+
+**Decisiones de producto (Nacho, 2026-08-24):**
+- Datos suficientes para despachar = peso + las 3 dimensiones (largo, ancho, alto), todos > 0. Estándar único normalizado para todos los couriers (el piso; si un courier exige más, se suma arriba). PENDIENTE de verificar el set exacto por-courier contra Gemini Notebook.
+- Precedencia: "faltan datos del paquete" gana sobre credencial/operatividad/saldo/despacho, pero por debajo de RETENIDO (dirección) y BLOQUEADO_DEPOSITO.
+- Sin retroactividad: la NPMS no está en producción con clientes reales; todo mira hacia adelante.
+
+**Avance:**
+- Paso 1 ✅ (commit b4f45bb) — columnas largoCm/anchoCm/altoCm en Envio (gemelas de pesoReal), cargadas al crear, disponibles en re-despacho.
+- Paso 2 ✅ (commit cf5d486) — dims reales threadeadas a construirParamsDespacho + los 6 callers de despacharCourier.
+- Paso 3a ✅ (commit b1f7e3d) — estado BLOQUEADO_DATOS_PAQUETE (exige peso + 3 dims) + eliminación de los fallbacks silenciosos 10×10×10 y 1kg (ahora hard-throw defensivo en dispatch.ts).
+- Paso 4 ⬜ PENDIENTE — pantalla en NPMS para que el operador cargue peso/dims y destrabe (molde: procesar-bloqueados*.ts + flujo cliente/Shipro de /corregir). Requisito de Nacho: la pantalla muestra TODOS los campos corregibles, no sólo el que disparó el bloqueo.
+- Paso 5 ⬜ PENDIENTE — e-commerce sin datos: publicar tarifaPlanaRespaldo (tarifa de rescate) y nacer BLOQUEADO_DATOS_PAQUETE. Parte depende del canal del plugin (Fase 2).
+
+**Follow-up técnico registrado:** crear.ts re-cotización interna aún usa `?? 10` / `|| 1` (paths L437/L440-442/L588). Son el path de cotización interno, no el despacho. Se aprietan sólo cuando TODO caller de crearEnvio cumpla el barrier.
+
+**⚠️ DEPLOY:** hay 5 commits locales sin pushear (129 + los 4 de DEUDA 132). NO deployar la 132 a producción hasta terminar el Paso 4 — si no, un envío bloqueado por datos queda sin forma de destrabarse desde la UI. La migración de Paso 1 exige rebuild limpio en el deploy (prisma generate + rm -rf .next + build + pm2 restart --update-env).
+
+**Registrada:** 2026-08-07. Detectada durante el recon de DEUDA 103.
 Bug independiente del plugin — afecta al dashboard humano HOY.
 
 **Problema:** el formulario `/nuevo-envio` obliga al usuario a cargar peso + largo + ancho

@@ -3159,3 +3159,23 @@ y lo devuelve en el response como `magicLinkGenerado` (`route.ts:93`). PERO **no
 **Prioridad:** baja. No es una vulnerabilidad activa (el URL no lleva a nada), pero es un dangling emission que confunde a integradores y es una superficie de riesgo si en el futuro alguien construye la página sin auth.
 
 ---
+
+## DEUDA 148 — URL de marca para la doc pública de la API (docs.shipro.pro) (registrada 2026-08-24)
+
+**Status:** ABIERTA — diferida hasta necesidad real.
+
+**Contexto:** La documentación pública de la API v1 vive en un repo separado
+(shipro-api-docs, GitHub Pages) y hoy se sirve en
+https://nachioa23.github.io/shipro-api-docs/. Funciona y es pública, pero la URL
+no es de marca.
+
+**Qué falta:** apuntar un dominio propio (docs.shipro.pro o developers.shipro.pro)
+al GitHub Pages del repo shipro-api-docs vía CNAME + registro DNS. Tarea de infra (Fran).
+
+**Decisión de producto (Nacho):** no es prioridad. Se resuelve JUNTO con el alta de
+api.shipro.pro (subdominio de la API pública, hoy declarado en el servers: del OpenAPI),
+en la misma sesión de DNS con Fran — dos registros del mismo tipo, no molestar dos veces.
+
+**No bloquea nada:** la doc ya es pública y navegable. Puramente branding.
+
+---

@@ -85,11 +85,10 @@ model Empresa {
   // Middleware redirect a /onboarding mientras sea false.
   onboardingCompletado Boolean @default(false)
 
-  // DEUDA 10 (D-10-4): tarifa plana de respaldo. Ultimo recurso cuando el
-  // courier falla Y no hay historico de precio para el trayecto. La fija el
-  // admin Shipro en el alta del cliente. Nullable: si null, no hay respaldo
-  // configurado (cae a comportamiento por defecto). Float -> Decimal en DEUDA 66.
-  tarifaPlanaRespaldo Decimal? @db.Decimal(12, 2)
+  // DEUDA 132 Paso 5a (2026-08-25): campo tarifaPlanaRespaldo per-empresa
+  // DROPEADO. Reemplazado por CredencialCourier.tarifaPlanaRespaldoCourier
+  // (per-courier). El rescate ya no es un default de empresa; se configura por
+  // courier al armar el mix. Ver DEUDA 132.
 
   createdAt               DateTime                 @default(now())
   reglasRuteo             ReglaRuteo[]
@@ -484,7 +483,16 @@ model CredencialCourier {
 
   // Tarifa plana de rescate per-courier. Si null, cae al campo homónimo de Empresa.
   // Mismo patrón que slaPromedioHs: override per-courier del default de empresa.
+  // DEUDA 132 Paso 5a (2026-08-25): campo LEGACY — reemplazado por
+  // tarifaPlanaRespaldoCourier abajo. Ningún reader lo consume ya; drop en cleanup aparte.
   tarifaPlanaRespaldo Decimal? @db.Decimal(12, 2)
+
+  // DEUDA 132 Paso 5a (2026-08-25): tarifa de rescate POR courier — reemplaza la
+  // vieja Empresa.tarifaPlanaRespaldo. Se publica cuando el courier no puede cotizar
+  // (fallback DEUDA 129) o cuando el e-commerce no manda datos (Paso 5c). Nullable:
+  // un courier sin tarifa configurada NO emite fallback (no hay default mágico
+  // per-empresa; skip explícito, más honesto que un placeholder de 1kg×10cm×etc).
+  tarifaPlanaRespaldoCourier Decimal? @db.Decimal(12, 2)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

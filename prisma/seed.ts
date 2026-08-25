@@ -242,7 +242,9 @@ async function main() {
       onboardingCompletado: true,
       saldoActivo: new Prisma.Decimal('0'),
       limiteDescubierto: new Prisma.Decimal('50000.00'),
-      tarifaPlanaRespaldo: new Prisma.Decimal('11858.00'),
+      // DEUDA 132 Paso 5a (2026-08-25): la tarifa plana de respaldo ahora vive per-courier
+      // en CredencialCourier.tarifaPlanaRespaldoCourier. La empresa demo empieza sin rescate;
+      // el operador la carga por courier al configurar el mix.
     },
   });
 

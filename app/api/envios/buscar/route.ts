@@ -74,7 +74,7 @@ export async function GET(request: Request) {
     //
     // Explícitamente EXCLUIDO:
     //   empresa: saldoActivo, limiteDescubierto, apiKeyHash, apiKeyActiva, cuit,
-    //     direccionFiscal*, modalidadPago, tarifaPlanaRespaldo, suspendida,
+    //     direccionFiscal*, modalidadPago, suspendida,
     //     onboardingCompletado.
     //   destino: documento (DNI).
     //   courier: emailSoporte, telefonoSoporte, contactoComercial, smo*, puede*, etc.

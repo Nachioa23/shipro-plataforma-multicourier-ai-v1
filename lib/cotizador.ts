@@ -388,26 +388,21 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
   const feeResult = await calcularFeeOperacion(empresaId, new Prisma.Decimal(0));
   const feeShiproNeto = feeResult?.feePreIva ?? new Prisma.Decimal(0);
 
-  // DEUDA 129 (per-courier fallback): construye una OpcionTarifa de rescate para
-  // un courier que no pudo cotizar. Resolución de tarifa: override per-courier
-  // (CredencialCourier.tarifaPlanaRespaldo) > default per-empresa
-  // (Empresa.tarifaPlanaRespaldo) > null (no push). SLA vía el mismo helper
-  // calibrado que el path real (calcularPromesaCalibrada); si el helper también
-  // rompe, cae a 72h (nivel 4 del cuádruple fallback de Torre de Control).
+  // DEUDA 129 + DEUDA 132 Paso 5a (per-courier fallback): construye una OpcionTarifa
+  // de rescate para un courier que no pudo cotizar. Resolución de tarifa:
+  // CredencialCourier.tarifaPlanaRespaldoCourier > null (no push).
+  // SIN fallback a un default per-empresa (el campo legacy per-empresa fue
+  // dropeado en Paso 5a): si el courier no tiene tarifa configurada, NO emitimos una opción
+  // de rescate para él — skip explícito, más honesto que un placeholder.
+  // SLA vía el mismo helper calibrado que el path real (calcularPromesaCalibrada);
+  // si el helper también rompe, cae a 72h (nivel 4 del cuádruple fallback).
   // El comprador ve el nombre real del courier — nunca sabe que falló la cotización.
   const construirOpcionFallback = async (
     config: any,
     tipo: "domicilio" | "sucursal"
   ): Promise<OpcionTarifa | null> => {
-    const tarifaCourier = config.tarifaPlanaRespaldo as Prisma.Decimal | null | undefined;
-    const tarifaEmpresa = empresa?.tarifaPlanaRespaldo;
-    const tarifa =
-      tarifaCourier && tarifaCourier.gt(0)
-        ? tarifaCourier
-        : tarifaEmpresa && tarifaEmpresa.gt(0)
-        ? tarifaEmpresa
-        : null;
-    if (!tarifa) return null;
+    const tarifa = config.tarifaPlanaRespaldoCourier as Prisma.Decimal | null | undefined;
+    if (!tarifa || !tarifa.gt(0)) return null;
 
     let slaHorasFallback: number;
     try {

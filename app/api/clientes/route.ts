@@ -56,7 +56,6 @@ export async function POST(request: Request) {
       modeloAHabilitado,
       gerente,
       notasInternas,
-      tarifaPlanaRespaldo,
       operacionFeeTipo,
       operacionFeeValor,
     } = body;
@@ -114,18 +113,14 @@ export async function POST(request: Request) {
       );
     }
 
-    // DEUDA 10 Paso 5a (D-10-ONBOARDING-RESPALDO): tarifaPlanaRespaldo OBLIGATORIA.
-    // Es el ultimo recurso de precio del fallback (la venta nunca se cae). Nullable
-    // en BD por compat, pero obligatoria aca (mismo patron que direccion fiscal).
-    const tarifaRespaldoNum = parseFloat(tarifaPlanaRespaldo);
-    if (!tarifaRespaldoNum || tarifaRespaldoNum <= 0) {
-      return NextResponse.json(
-        { error: "Tarifa plana de respaldo obligatoria (mayor a cero). Es el precio de ultimo recurso si el courier falla." },
-        { status: 400 }
-      );
-    }
+    // DEUDA 132 Paso 5a (2026-08-25): la tarifa plana de respaldo YA NO se carga
+    // en el onboarding de la empresa. Ahora es per-courier y se configura al dar
+    // de alta cada CredencialCourier (CredencialCourier.tarifaPlanaRespaldoCourier).
+    // El bloque legacy D-10-ONBOARDING-RESPALDO se removió con el drop del campo
+    // per-empresa. Una empresa nueva empieza sin rescate configurado;
+    // el rescate se completa por courier al armar el mix de couriers.
 
-    // DEUDA 10 Paso 5a (D-10-ONBOARDING-FEE): OperacionFee del cliente.
+// DEUDA 10 Paso 5a (D-10-ONBOARDING-FEE): OperacionFee del cliente.
     // tipo FIJO (default) o PORCENTAJE. valor PRE-IVA (el sistema suma 21% al debitar).
     // Default 1600 (estandar); el admin lo baja a 800 por convenio de descuento.
     // El motor de actualizacion global y descuentos con vencimiento son DEUDA 72.
@@ -158,7 +153,6 @@ export async function POST(request: Request) {
         limiteDescubierto: limiteFinal,
         modeloAHabilitado: modeloAHabilitado === true,
         notasInternas: notasInternas || null,
-        tarifaPlanaRespaldo: tarifaRespaldoNum,
         usuarios: {
           create: {
             nombre: gerente.nombre,

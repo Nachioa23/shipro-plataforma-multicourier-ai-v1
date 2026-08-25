@@ -613,7 +613,10 @@ export async function crearEnvio(input: CrearEnvioInput) {
             cpDestino: String(cpDestino),
             pesoKg: parseFloat(String(pesoReal)) || 1,
             modalidad: modalidadSimpleA,
-            tarifaPlanaRespaldo: empresaConData.tarifaPlanaRespaldo,
+            // DEUDA 132 Paso 5a: tarifa de rescate ahora POR courier
+            // (CredencialCourier.tarifaPlanaRespaldoCourier). Reemplaza el
+            // campo legacy per-empresa. Sin fallback a empresa-level.
+            tarifaPlanaRespaldoCourier: credencialMain.tarifaPlanaRespaldoCourier,
             configMarkup: {
               usaCredencialesPropias: credencialMain.usaCredencialesPropias,
               ajusteTarifaPorcentaje: markupShiproPorcentajeFB,

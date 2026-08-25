@@ -6,10 +6,6 @@ import { tieneSucursales } from "@/lib/couriers/serviciosSoportados";
 import type { CredencialCourier, Deposito, DepositoCourierConfig } from "@prisma/client";
 import prisma from "@/lib/prisma";
 
-// DEUDA 132: placeholder EXPLÍCITO para dims ausentes. Reemplaza el viejo 10 mágico.
-// Temporal — Paso 3 lo vuelve inalcanzable (el envío ni llega al despacho sin dims).
-const DIMS_PLACEHOLDER_CM = 10;
-
 export interface DispatchInput {
   credencial: CredencialCourier;
   courierNombreCanonico: string;
@@ -492,17 +488,16 @@ function construirParamsDespacho(
   if (mod.includes('inversa') || mod.includes('devolucion')) tipoEntregaFormateado = "inversa";
   if (mod.includes('cambio')) tipoEntregaFormateado = "cambio";
 
-  // DEUDA 132 Paso 2: si el input llega sin alguna dimensión, NO despachamos en
-  // silencio con 10×10×10. Registramos ADVERTENCIA con tracking/orden para
-  // trazabilidad y caemos al placeholder EXPLÍCITO. Paso 3 elimina este camino
-  // por completo (BLOQUEADO_DATOS_PAQUETE ni llega acá).
+  // DEUDA 132 Paso 3a: invariante. El barrier de crear.ts (BLOQUEADO_DATOS_PAQUETE)
+  // garantiza que ningún envío sin peso o sin las 3 dimensiones llega acá. Si
+  // llegara, es un bug de arquitectura — abortamos el despacho antes de fabricar
+  // dims. Defense-in-depth: no debería dispararse jamás.
   const faltanDims = input.largoCm == null || input.anchoCm == null || input.altoCm == null;
   if (faltanDims) {
-    console.warn(
-      `[DEUDA 132] ADVERTENCIA: despacho sin dimensiones reales ` +
+    throw new Error(
+      `[DEUDA 132] Invariante violada: se intentó despachar sin dimensiones reales ` +
       `(orden=${input.numeroOrden ?? "s/n"}, courier=${input.courierNombreCanonico}). ` +
-      `Se usa placeholder ${DIMS_PLACEHOLDER_CM}×${DIMS_PLACEHOLDER_CM}×${DIMS_PLACEHOLDER_CM}. ` +
-      `Esto debe desaparecer tras Paso 3 (BLOQUEADO_DATOS_PAQUETE).`
+      `El barrier de crear.ts debió bloquearlo. Abortando despacho.`
     );
   }
 
@@ -518,15 +513,16 @@ function construirParamsDespacho(
     dni: input.dni,
     email: input.email,
     telefono: input.telefono,
-    peso: input.pesoReal || 1,
+    // DEUDA 132 Paso 3a: pesoReal viene garantizado > 0 (barrier de crear.ts).
+    // Sin fallback `|| 1` — si algo llega en 0 acá es un bug, no un default a inventar.
+    peso: input.pesoReal,
     paquetes: [{
-      pesoKg: input.pesoReal || 1,
-      // DEUDA 132 Paso 2: usar las dims reales. Si faltan (no debería pasar tras Paso 3),
-      // logueamos ADVERTENCIA con el tracking/orden para trazabilidad, y usamos un
-      // placeholder explícito. NO es silencioso.
-      largoCm: input.largoCm ?? DIMS_PLACEHOLDER_CM,
-      anchoCm: input.anchoCm ?? DIMS_PLACEHOLDER_CM,
-      altoCm:  input.altoCm  ?? DIMS_PLACEHOLDER_CM,
+      pesoKg: input.pesoReal,
+      // DEUDA 132 Paso 3a: dims garantizadas por el barrier de crear.ts. Los cast
+      // a `number` son safe porque el faltanDims guard de arriba abortó si eran null.
+      largoCm: input.largoCm as number,
+      anchoCm: input.anchoCm as number,
+      altoCm:  input.altoCm  as number,
       valorDeclarado: input.valorDeclarado || 0,
       requiereSeguro: input.credencial.requiereSeguro,
     }],

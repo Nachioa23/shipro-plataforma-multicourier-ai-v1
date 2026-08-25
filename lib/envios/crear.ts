@@ -108,6 +108,10 @@ export async function crearEnvio(input: CrearEnvioInput) {
   let estadoInicialEnvio = "Pendiente";
   let falloPorPeaje = false;
   let motivoRetencion = "";
+  // DEUDA 132 Paso 3a: barrier de datos del paquete. Un envío sin peso o sin
+  // las 3 dimensiones NO puede despacharse (Shipro nunca inventa dims al courier).
+  // Precedencia: RETENIDO/DEPOSITO > DATOS_PAQUETE > CREDENCIAL/OPERATIVIDAD/SALDO/DISPATCH.
+  let bloqueadoPorDatosPaquete = false;
 
   // DEUDA 29 Sub-fase 1.C.2: si despacho parcial/total falla → BLOQUEADO_PARCIAL.
   // dispatchTramos contiene los snapshots de los tramos efectivamente despachados
@@ -282,6 +286,42 @@ export async function crearEnvio(input: CrearEnvioInput) {
   }
 
   // ==============================================================
+  // DEUDA 132 Paso 3a — BARRIER DE DATOS DEL PAQUETE.
+  // Estándar único para todos los couriers: piso mínimo = peso > 0 y las 3
+  // dimensiones > 0. Un courier que exija más se estratifica más tarde.
+  //
+  // Dual-mode (mirror de DEPOSITO/CREDENCIAL/OPERATIVIDAD):
+  //   - dashboard (permitirBloqueoPorDeposito=false): throw claro para que el
+  //     humano complete el formulario antes de crear.
+  //   - e-commerce (true): crear en BLOQUEADO_DATOS_PAQUETE. Se destraba desde
+  //     la NPMS cuando el operador complete peso + largo + ancho + alto
+  //     (procesador de desbloqueo es Paso 4, no incluido acá).
+  //
+  // Precedencia: gateado por !bloqueadoPorDeposito y !falloPorPeaje para que
+  // RETENIDO (peaje) y BLOQUEADO_DEPOSITO — más fundamentales — no se pisen.
+  // Los guards de CREDENCIAL/OPERATIVIDAD/SALDO/DISPATCH abajo suman
+  // !bloqueadoPorDatosPaquete para que ninguno pise este estado ni ejecute
+  // el despacho sin datos completos.
+  // ==============================================================
+  const pesoNum = parseFloat(String(pesoReal));
+  const datosPaqueteCompletos =
+    Number.isFinite(pesoNum) && pesoNum > 0 &&
+    largoCm != null && Number(largoCm) > 0 &&
+    anchoCm != null && Number(anchoCm) > 0 &&
+    altoCm  != null && Number(altoCm)  > 0;
+
+  if (!datosPaqueteCompletos && !bloqueadoPorDeposito && !falloPorPeaje) {
+    if (permitirBloqueoPorDeposito) {
+      bloqueadoPorDatosPaquete = true;
+      estadoInicialEnvio = "BLOQUEADO_DATOS_PAQUETE";
+    } else {
+      throw new Error(
+        "DatosPaqueteIncompletos: el envío requiere peso y las tres dimensiones (largo, ancho, alto) mayores a 0 para poder despacharse."
+      );
+    }
+  }
+
+  // ==============================================================
   // CARGAR CREDENCIAL Y EMPRESA (necesarios para validación de saldo)
   // courierReal.nombre es la capitalización canónica de BD (ya resuelto por
   // obtenerCourier arriba). NO refactorear a obtenerCredencialCourier aquí:
@@ -314,6 +354,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
   let bloqueadoPorCredencial = false;
   if (
     !bloqueadoPorDeposito &&
+    !bloqueadoPorDatosPaquete &&
     credencialMain &&
     credencialMain.usaCredencialesPropias === false &&
     !credencialMain.propietarioTipo
@@ -354,7 +395,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
   let motivosOperatividad: string[] = [];
   let detalleOperatividad: string[] = [];
 
-  if (deposito && credencialMain && !bloqueadoPorDeposito && !bloqueadoPorCredencial && !falloPorPeaje) {
+  if (deposito && credencialMain && !bloqueadoPorDeposito && !bloqueadoPorCredencial && !bloqueadoPorDatosPaquete && !falloPorPeaje) {
     const operatividad = await validarOperatividadPar({
       prisma,
       deposito,
@@ -669,13 +710,14 @@ export async function crearEnvio(input: CrearEnvioInput) {
   // en los reintentos: cada procesar-bloqueados-* revalida saldo y transiciona
   // a BLOQUEADO_SALDO si no alcanza. FASE 2 pieza 1 sub 3 agregó CREDENCIAL
   // entre DEPOSITO y OPERATIVIDAD.
-  if (bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorCredencial && !bloqueadoPorOperatividad) {
+  if (bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorCredencial && !bloqueadoPorOperatividad && !bloqueadoPorDatosPaquete) {
     estadoInicialEnvio = "BLOQUEADO_SALDO";
   }
 
-  // DESPACHO AL COURIER (solo si NO falló el peaje, NO está bloqueado por saldo
-  // ni por depósito, y hay credencial + depósito disponibles).
-  if (!falloPorPeaje && !bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorCredencial && !bloqueadoPorOperatividad && credencialMain && credencialMain.activo && deposito) {
+  // DESPACHO AL COURIER (solo si NO falló el peaje, NO está bloqueado por saldo,
+  // ni por depósito, ni por datos-de-paquete incompletos, y hay credencial +
+  // depósito disponibles).
+  if (!falloPorPeaje && !bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorCredencial && !bloqueadoPorOperatividad && !bloqueadoPorDatosPaquete && credencialMain && credencialMain.activo && deposito) {
     const dispatchResult = await despacharCourier({
       credencial: credencialMain,
       courierNombreCanonico: courierReal.nombre,
@@ -934,6 +976,8 @@ export async function crearEnvio(input: CrearEnvioInput) {
       await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_PARCIAL", observacion: `Bloqueado por falla en despacho del courier: ${errorTramo}. Tramos persistidos: ${dispatchTramos.length}. El operador debe resolver la falla manualmente.`, envioId: envioCreado.id } });
     } else if (bloqueadoPorDeposito) {
       await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_DEPOSITO", observacion: `Bloqueado: la empresa no tiene depósito predeterminado configurado. Se desbloqueará automáticamente cuando se configure uno en /configuracion/depositos.`, envioId: envioCreado.id } });
+    } else if (bloqueadoPorDatosPaquete) {
+      await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_DATOS_PAQUETE", observacion: "Bloqueado: faltan datos del paquete (peso y/o dimensiones). Completá peso, largo, ancho y alto en la NPMS para poder despacharlo.", envioId: envioCreado.id } });
     } else if (bloqueadoPorCredencial) {
       await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_CREDENCIAL", observacion: `Credencial de ${courierReal.nombre} es Rama A pero no tiene dueño configurado. Se desbloqueará automáticamente cuando admin_shipro asigne el dueño en /configuracion/transportes.`, envioId: envioCreado.id } });
     } else if (bloqueadoPorOperatividad) {
@@ -1004,6 +1048,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
     bloqueadoPorTramoFallido,
     bloqueadoPorOperatividad,
     bloqueadoPorCredencial,
+    bloqueadoPorDatosPaquete,
     estado: estadoInicialEnvio
   };
 }

@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
 import * as XLSX from "xlsx";
-import { Search, Package, Clock, Inbox, Download, Loader2, Calendar, DollarSign, ChevronLeft, ChevronRight, CheckSquare, Square, Building2, AlertTriangle, MapPin, SearchCode, X, Check, SlidersHorizontal, ChevronDown, Truck, LifeBuoy, MessageSquare, Wallet, Warehouse } from 'lucide-react';
+import { Search, Package, Clock, Inbox, Download, Loader2, Calendar, DollarSign, ChevronLeft, ChevronRight, CheckSquare, Square, Building2, AlertTriangle, MapPin, SearchCode, X, Check, SlidersHorizontal, ChevronDown, Truck, LifeBuoy, MessageSquare, Wallet, Warehouse, Lock, Unlock } from 'lucide-react';
 import AccionesEnvio from '@/components/AccionesEnvio';
 
 declare global {
@@ -68,9 +68,22 @@ export default function BandejaPedidos() {
   // ESTADOS DEL POP-UP DE AUDITORÍA (PEAJE)
   // ==========================================
   const [envioACorregir, setEnvioACorregir] = useState<any>(null);
-  const [formCorreccion, setFormCorreccion] = useState({ calle: "", altura: "", cp: "", localidad: "", provincia: "" });
+  // DEUDA 132 Paso 4b: formCorreccion unifica dirección + datos de paquete.
+  // El backend (Paso 4a) ignora campos vacíos → mismo payload sirve para ambos
+  // casos. Los campos numéricos son strings acá (inputs controlados).
+  const [formCorreccion, setFormCorreccion] = useState({
+    calle: "", altura: "", cp: "", localidad: "", provincia: "",
+    pesoReal: "", largoCm: "", anchoCm: "", altoCm: "",
+  });
   const [guardandoCorreccion, setGuardandoCorreccion] = useState(false);
   const [busquedaGoogleMaps, setBusquedaGoogleMaps] = useState("");
+  // DEUDA 132 Paso 4b: candado por sección. NADA hardcoded — el estado inicial
+  // se deriva del estadoActual del envío al abrir el modal (ver abrirModalCorreccion):
+  //   - RETENIDO (dirección)                → dirección unlock; paquete lock.
+  //   - BLOQUEADO_DATOS_PAQUETE (peso/dims) → paquete unlock; dirección lock.
+  // El operador puede togglear cualquier candado si necesita corregir ambos.
+  const [desbloqueoDireccion, setDesbloqueoDireccion] = useState(false);
+  const [desbloqueoPaquete, setDesbloqueoPaquete] = useState(false);
 
   const autocompleteModalInputRef = useRef<HTMLInputElement>(null);
   const autocompleteModalInstanceRef = useRef<any>(null);
@@ -243,20 +256,46 @@ export default function BandejaPedidos() {
   // ==========================================
   const abrirModalCorreccion = (envio: any) => {
     setEnvioACorregir(envio);
+    // DEUDA 132 Paso 4b: prefill dirección + datos de paquete. String-casting
+    // porque los inputs son controlados; valores null quedan como "" y no se
+    // envían (el backend 4a ignora undefined/null/"" y no null-outea columnas).
     setFormCorreccion({
       calle: envio.destino?.calle || "",
       altura: envio.destino?.altura || "",
       cp: envio.destino?.cp || "",
       localidad: envio.destino?.localidad || "",
-      provincia: envio.destino?.provincia || ""
+      provincia: envio.destino?.provincia || "",
+      pesoReal: envio.pesoReal != null ? String(envio.pesoReal) : "",
+      largoCm:  envio.largoCm  != null ? String(envio.largoCm)  : "",
+      anchoCm:  envio.anchoCm  != null ? String(envio.anchoCm)  : "",
+      altoCm:   envio.altoCm   != null ? String(envio.altoCm)   : "",
     });
+    // DEUDA 132 Paso 4b: unlock inicial derivado del estado. Sin hardcodes.
+    const esDatosPaquete = envio.estadoActual === "BLOQUEADO_DATOS_PAQUETE";
+    setDesbloqueoDireccion(!esDatosPaquete);
+    setDesbloqueoPaquete(esDatosPaquete);
     setBusquedaGoogleMaps("");
     autocompleteModalInstanceRef.current = null;
   };
 
   const cerrarModal = () => {
     setEnvioACorregir(null);
+    setDesbloqueoDireccion(false);
+    setDesbloqueoPaquete(false);
     autocompleteModalInstanceRef.current = null;
+  };
+
+  // DEUDA 132 Paso 4b: toggle del candado. Al LOCKEAR dirección se limpia la
+  // instancia del autocomplete de Google — el input DOM se desmonta y el
+  // próximo unlock necesita re-init sobre el nuevo ref (guard del useEffect).
+  const toggleDesbloqueoDireccion = () => {
+    setDesbloqueoDireccion((prev) => {
+      if (prev) autocompleteModalInstanceRef.current = null;
+      return !prev;
+    });
+  };
+  const toggleDesbloqueoPaquete = () => {
+    setDesbloqueoPaquete((prev) => !prev);
   };
 
   useEffect(() => {
@@ -324,7 +363,10 @@ export default function BandejaPedidos() {
     } else {
       setTimeout(initAutocomplete, 100);
     }
-  }, [envioACorregir]);
+    // DEUDA 132 Paso 4b: desbloqueoDireccion en deps para re-inicializar el
+    // autocomplete cuando el operador desbloquea la sección dirección después
+    // de haber abierto el modal (caso BLOQUEADO_DATOS_PAQUETE).
+  }, [envioACorregir, desbloqueoDireccion]);
 
   const handleKeyDownGoogle = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') e.preventDefault();
@@ -436,64 +478,162 @@ export default function BandejaPedidos() {
         .pac-item:hover { background-color: #eff6ff; }
       `}} />
 
-      {/* POP-UP DE AUDITORÍA (PEAJE) */}
-      {envioACorregir && (
+      {/* POP-UP DE CORRECCIÓN — dirección + datos de paquete, unificado (DEUDA 132 Paso 4b). */}
+      {envioACorregir && (() => {
+        // NADA hardcoded — todo deriva de estadoActual.
+        const esDatosPaquete = envioACorregir.estadoActual === "BLOQUEADO_DATOS_PAQUETE";
+        const headerBg   = esDatosPaquete ? "bg-purple-600" : "bg-red-600";
+        const headerHov  = esDatosPaquete ? "hover:bg-purple-700" : "hover:bg-red-700";
+        const headerSub  = esDatosPaquete ? "text-purple-100" : "text-red-100";
+        const headerTit  = esDatosPaquete ? "Completar datos del paquete" : "Corrección de Dirección (Peaje)";
+        const headerHint = esDatosPaquete
+          ? <>El envío <strong>{envioACorregir.trackingNumber}</strong> necesita peso y dimensiones para poder despacharse.</>
+          : <>El envío <strong>{envioACorregir.trackingNumber}</strong> rebotó en la validación inicial.</>;
+        const leftBg     = esDatosPaquete ? "bg-purple-50/50" : "bg-red-50/50";
+        const leftLabel  = esDatosPaquete ? "text-purple-800" : "text-red-800";
+        const leftBorder = esDatosPaquete ? "border-purple-100" : "border-red-100";
+        const leftIcon   = esDatosPaquete ? <Package className="w-4 h-4"/> : <MapPin className="w-4 h-4"/>;
+        const leftTitulo = esDatosPaquete ? "Datos del paquete actuales" : "Lo que ingresó el comprador";
+        const leftMotivo = esDatosPaquete
+          ? "Motivo: falta peso o alguna de las 3 dimensiones (largo, ancho, alto). Todas deben ser mayores a 0 para poder despachar."
+          : "Motivo: Falta altura, calle inexistente o el CP no coincide con la zona logística en el mapa.";
+
+        // Requisitos dinámicos: sólo pedimos completitud sobre los bloques desbloqueados.
+        const pesoNum  = parseFloat(formCorreccion.pesoReal);
+        const largoNum = parseFloat(formCorreccion.largoCm);
+        const anchoNum = parseFloat(formCorreccion.anchoCm);
+        const altoNum  = parseFloat(formCorreccion.altoCm);
+        const dirOK = !desbloqueoDireccion || (!!formCorreccion.calle && !!formCorreccion.altura && !!formCorreccion.cp);
+        const pkgOK = !desbloqueoPaquete || (
+          Number.isFinite(pesoNum)  && pesoNum  > 0 &&
+          Number.isFinite(largoNum) && largoNum > 0 &&
+          Number.isFinite(anchoNum) && anchoNum > 0 &&
+          Number.isFinite(altoNum)  && altoNum  > 0
+        );
+        const canSubmit = dirOK && pkgOK && (desbloqueoDireccion || desbloqueoPaquete);
+
+        // Classes reusadas para los inputs (mismo look que el modal address-only original).
+        const inputBase = "w-full border border-gray-300 rounded-lg p-2.5 text-sm outline-none focus:border-green-500";
+        const inputLocked = "opacity-50 cursor-not-allowed bg-gray-50";
+
+        return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl overflow-hidden animate-in zoom-in-95 duration-200">
-            <div className="bg-red-600 p-5 flex justify-between items-center text-white">
+            <div className={`${headerBg} p-5 flex justify-between items-center text-white`}>
               <div>
-                <h2 className="text-xl font-black flex items-center gap-2"><AlertTriangle className="w-6 h-6" /> Corrección de Dirección (Peaje)</h2>
-                <p className="text-red-100 text-sm font-medium mt-1">El envío <strong>{envioACorregir.trackingNumber}</strong> rebotó en la validación inicial.</p>
+                <h2 className="text-xl font-black flex items-center gap-2"><AlertTriangle className="w-6 h-6" /> {headerTit}</h2>
+                <p className={`${headerSub} text-sm font-medium mt-1`}>{headerHint}</p>
               </div>
-              <button onClick={cerrarModal} className="p-2 hover:bg-red-700 rounded-lg transition-colors"><X className="w-6 h-6" /></button>
+              <button onClick={cerrarModal} className={`p-2 ${headerHov} rounded-lg transition-colors`}><X className="w-6 h-6" /></button>
             </div>
-            
+
             <div className="grid grid-cols-1 md:grid-cols-2">
-              <div className="p-6 bg-red-50/50 border-r border-gray-200 flex flex-col justify-between">
+              {/* IZQUIERDA — vista actual (deriva del estado). Same card look que el modal legacy. */}
+              <div className={`p-6 ${leftBg} border-r border-gray-200 flex flex-col justify-between`}>
                 <div>
-                  <h3 className="text-xs font-black text-red-800 uppercase tracking-wider mb-4 flex items-center gap-2"><MapPin className="w-4 h-4"/> Lo que ingresó el comprador</h3>
-                  <div className="bg-white p-4 rounded-xl border border-red-100 shadow-sm space-y-3 mb-4">
-                    <div><span className="text-[10px] font-bold text-gray-400 uppercase">Comprador</span><p className="text-sm font-bold text-gray-800">{envioACorregir.destino?.nombre}</p></div>
-                    <div><span className="text-[10px] font-bold text-gray-400 uppercase">Dirección Cruda (Checkout)</span><p className="text-sm font-bold text-gray-800 break-words">{envioACorregir.destino?.calle || "Calle desconocida"} {envioACorregir.destino?.altura}</p></div>
-                    <div className="flex gap-4">
-                      <div><span className="text-[10px] font-bold text-gray-400 uppercase">CP</span><p className="text-sm font-bold text-gray-800">{envioACorregir.destino?.cp || "0000"}</p></div>
-                      <div><span className="text-[10px] font-bold text-gray-400 uppercase">Localidad</span><p className="text-sm font-bold text-gray-800">{envioACorregir.destino?.localidad || "Faltante"}</p></div>
+                  <h3 className={`text-xs font-black ${leftLabel} uppercase tracking-wider mb-4 flex items-center gap-2`}>{leftIcon} {leftTitulo}</h3>
+                  {esDatosPaquete ? (
+                    <div className={`bg-white p-4 rounded-xl border ${leftBorder} shadow-sm space-y-3 mb-4`}>
+                      <div><span className="text-[10px] font-bold text-gray-400 uppercase">Tracking</span><p className="text-sm font-bold text-gray-800">{envioACorregir.trackingNumber}</p></div>
+                      <div className="flex gap-4">
+                        <div><span className="text-[10px] font-bold text-gray-400 uppercase">Peso (kg)</span><p className="text-sm font-bold text-gray-800">{envioACorregir.pesoReal != null ? String(envioACorregir.pesoReal) : "Sin datos"}</p></div>
+                        <div><span className="text-[10px] font-bold text-gray-400 uppercase">Largo (cm)</span><p className="text-sm font-bold text-gray-800">{envioACorregir.largoCm != null ? String(envioACorregir.largoCm) : "Sin datos"}</p></div>
+                      </div>
+                      <div className="flex gap-4">
+                        <div><span className="text-[10px] font-bold text-gray-400 uppercase">Ancho (cm)</span><p className="text-sm font-bold text-gray-800">{envioACorregir.anchoCm != null ? String(envioACorregir.anchoCm) : "Sin datos"}</p></div>
+                        <div><span className="text-[10px] font-bold text-gray-400 uppercase">Alto (cm)</span><p className="text-sm font-bold text-gray-800">{envioACorregir.altoCm != null ? String(envioACorregir.altoCm) : "Sin datos"}</p></div>
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className={`bg-white p-4 rounded-xl border ${leftBorder} shadow-sm space-y-3 mb-4`}>
+                      <div><span className="text-[10px] font-bold text-gray-400 uppercase">Comprador</span><p className="text-sm font-bold text-gray-800">{envioACorregir.destino?.nombre}</p></div>
+                      <div><span className="text-[10px] font-bold text-gray-400 uppercase">Dirección Cruda (Checkout)</span><p className="text-sm font-bold text-gray-800 break-words">{envioACorregir.destino?.calle || "Calle desconocida"} {envioACorregir.destino?.altura}</p></div>
+                      <div className="flex gap-4">
+                        <div><span className="text-[10px] font-bold text-gray-400 uppercase">CP</span><p className="text-sm font-bold text-gray-800">{envioACorregir.destino?.cp || "0000"}</p></div>
+                        <div><span className="text-[10px] font-bold text-gray-400 uppercase">Localidad</span><p className="text-sm font-bold text-gray-800">{envioACorregir.destino?.localidad || "Faltante"}</p></div>
+                      </div>
+                    </div>
+                  )}
                   <div className="bg-orange-50 border border-orange-200 text-orange-800 p-3 rounded-lg text-xs font-bold flex gap-2">
                     <SearchCode className="w-4 h-4 shrink-0" />
-                    Motivo: Falta altura, calle inexistente o el CP no coincide con la zona logística en el mapa.
+                    {leftMotivo}
                   </div>
                 </div>
               </div>
 
+              {/* DERECHA — DOS secciones apiladas con candado. Highlight visual sobre la desbloqueada. */}
               <div className="p-6 bg-white space-y-5">
-                <h3 className="text-xs font-black text-green-700 uppercase tracking-wider mb-2 flex items-center gap-2"><Check className="w-4 h-4"/> Normalizar Dirección</h3>
-                
-                <div className="flex items-center gap-3 w-full border-2 border-blue-100 bg-blue-50/30 rounded-xl px-3 py-1 focus-within:border-blue-500 transition-colors relative">
-                  <Search className="w-5 h-5 text-blue-500 shrink-0" />
-                  <input ref={autocompleteModalInputRef} type="text" onKeyDown={handleKeyDownGoogle} placeholder="Buscá en Google Maps..." className="w-full bg-transparent text-sm font-bold focus:outline-none py-2 placeholder:text-blue-300" />
-                </div>
-                <p className="text-[9px] text-blue-500 font-bold uppercase mt-1 text-right">Powered by Google Places API</p>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="col-span-2 sm:col-span-1"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Calle</label><input type="text" value={formCorreccion.calle} onChange={e => setFormCorreccion({...formCorreccion, calle: e.target.value})} className="w-full border border-gray-300 rounded-lg p-2.5 text-sm outline-none focus:border-green-500" /></div>
-                  <div className="col-span-2 sm:col-span-1"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Altura</label><input type="text" value={formCorreccion.altura} onChange={e => setFormCorreccion({...formCorreccion, altura: e.target.value})} className="w-full border border-gray-300 rounded-lg p-2.5 text-sm outline-none focus:border-green-500" /></div>
-                  <div className="col-span-2 sm:col-span-1"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Código Postal</label><input type="text" value={formCorreccion.cp} onChange={e => setFormCorreccion({...formCorreccion, cp: e.target.value.replace(/\D/g, '')})} className="w-full border border-gray-300 rounded-lg p-2.5 text-sm outline-none focus:border-green-500" /></div>
-                  <div className="col-span-2 sm:col-span-1"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Localidad</label><input type="text" value={formCorreccion.localidad} onChange={e => setFormCorreccion({...formCorreccion, localidad: e.target.value})} className="w-full border border-gray-300 rounded-lg p-2.5 text-sm outline-none focus:border-green-500" /></div>
-                  <div className="col-span-2"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Provincia</label><input type="text" value={formCorreccion.provincia} onChange={e => setFormCorreccion({...formCorreccion, provincia: e.target.value})} className="w-full border border-gray-300 rounded-lg p-2.5 text-sm outline-none focus:border-green-500" /></div>
+                {/* Sección DIRECCIÓN */}
+                <div className={`rounded-xl border p-4 transition-colors ${desbloqueoDireccion ? 'border-green-300 ring-1 ring-green-100' : 'border-gray-200'}`}>
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className={`text-xs font-black uppercase tracking-wider flex items-center gap-2 ${desbloqueoDireccion ? 'text-green-700' : 'text-gray-500'}`}>
+                      <MapPin className="w-4 h-4"/> Dirección
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={toggleDesbloqueoDireccion}
+                      className={`p-1.5 rounded-lg border transition-colors ${desbloqueoDireccion ? 'text-green-700 border-green-200 hover:bg-green-50' : 'text-gray-400 border-gray-200 hover:bg-gray-50'}`}
+                      title={desbloqueoDireccion ? "Bloquear edición de dirección" : "Desbloquear para editar dirección"}
+                    >
+                      {desbloqueoDireccion ? <Unlock className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
+                    </button>
+                  </div>
+
+                  {desbloqueoDireccion && (
+                    <>
+                      <div className="flex items-center gap-3 w-full border-2 border-blue-100 bg-blue-50/30 rounded-xl px-3 py-1 focus-within:border-blue-500 transition-colors relative mb-2">
+                        <Search className="w-5 h-5 text-blue-500 shrink-0" />
+                        <input ref={autocompleteModalInputRef} type="text" onKeyDown={handleKeyDownGoogle} placeholder="Buscá en Google Maps..." className="w-full bg-transparent text-sm font-bold focus:outline-none py-2 placeholder:text-blue-300" />
+                      </div>
+                      <p className="text-[9px] text-blue-500 font-bold uppercase mb-3 text-right">Powered by Google Places API</p>
+                    </>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="col-span-2 sm:col-span-1"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Calle</label><input type="text" disabled={!desbloqueoDireccion} value={formCorreccion.calle} onChange={e => setFormCorreccion({...formCorreccion, calle: e.target.value})} className={`${inputBase} ${!desbloqueoDireccion ? inputLocked : ''}`} /></div>
+                    <div className="col-span-2 sm:col-span-1"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Altura</label><input type="text" disabled={!desbloqueoDireccion} value={formCorreccion.altura} onChange={e => setFormCorreccion({...formCorreccion, altura: e.target.value})} className={`${inputBase} ${!desbloqueoDireccion ? inputLocked : ''}`} /></div>
+                    <div className="col-span-2 sm:col-span-1"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Código Postal</label><input type="text" disabled={!desbloqueoDireccion} value={formCorreccion.cp} onChange={e => setFormCorreccion({...formCorreccion, cp: e.target.value.replace(/\D/g, '')})} className={`${inputBase} ${!desbloqueoDireccion ? inputLocked : ''}`} /></div>
+                    <div className="col-span-2 sm:col-span-1"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Localidad</label><input type="text" disabled={!desbloqueoDireccion} value={formCorreccion.localidad} onChange={e => setFormCorreccion({...formCorreccion, localidad: e.target.value})} className={`${inputBase} ${!desbloqueoDireccion ? inputLocked : ''}`} /></div>
+                    <div className="col-span-2"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Provincia</label><input type="text" disabled={!desbloqueoDireccion} value={formCorreccion.provincia} onChange={e => setFormCorreccion({...formCorreccion, provincia: e.target.value})} className={`${inputBase} ${!desbloqueoDireccion ? inputLocked : ''}`} /></div>
+                  </div>
+                </div>
+
+                {/* Sección DATOS DEL PAQUETE */}
+                <div className={`rounded-xl border p-4 transition-colors ${desbloqueoPaquete ? 'border-purple-300 ring-1 ring-purple-100' : 'border-gray-200'}`}>
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className={`text-xs font-black uppercase tracking-wider flex items-center gap-2 ${desbloqueoPaquete ? 'text-purple-700' : 'text-gray-500'}`}>
+                      <Package className="w-4 h-4"/> Datos del paquete
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={toggleDesbloqueoPaquete}
+                      className={`p-1.5 rounded-lg border transition-colors ${desbloqueoPaquete ? 'text-purple-700 border-purple-200 hover:bg-purple-50' : 'text-gray-400 border-gray-200 hover:bg-gray-50'}`}
+                      title={desbloqueoPaquete ? "Bloquear edición de datos del paquete" : "Desbloquear para editar peso y dimensiones"}
+                    >
+                      {desbloqueoPaquete ? <Unlock className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="col-span-2 sm:col-span-1"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Peso (kg)</label><input type="number" min="0" step="0.01" disabled={!desbloqueoPaquete} value={formCorreccion.pesoReal} onChange={e => setFormCorreccion({...formCorreccion, pesoReal: e.target.value})} className={`${inputBase} ${!desbloqueoPaquete ? inputLocked : ''}`} /></div>
+                    <div className="col-span-2 sm:col-span-1"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Largo (cm)</label><input type="number" min="0" step="0.1" disabled={!desbloqueoPaquete} value={formCorreccion.largoCm} onChange={e => setFormCorreccion({...formCorreccion, largoCm: e.target.value})} className={`${inputBase} ${!desbloqueoPaquete ? inputLocked : ''}`} /></div>
+                    <div className="col-span-2 sm:col-span-1"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Ancho (cm)</label><input type="number" min="0" step="0.1" disabled={!desbloqueoPaquete} value={formCorreccion.anchoCm} onChange={e => setFormCorreccion({...formCorreccion, anchoCm: e.target.value})} className={`${inputBase} ${!desbloqueoPaquete ? inputLocked : ''}`} /></div>
+                    <div className="col-span-2 sm:col-span-1"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Alto (cm)</label><input type="number" min="0" step="0.1" disabled={!desbloqueoPaquete} value={formCorreccion.altoCm} onChange={e => setFormCorreccion({...formCorreccion, altoCm: e.target.value})} className={`${inputBase} ${!desbloqueoPaquete ? inputLocked : ''}`} /></div>
+                  </div>
                 </div>
 
                 <div className="pt-2">
-                  <button onClick={guardarCorreccionAuditoria} disabled={guardandoCorreccion || !formCorreccion.calle || !formCorreccion.altura || !formCorreccion.cp} className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-green-600 text-white font-bold rounded-xl shadow-md hover:bg-green-700 transition-colors text-sm disabled:opacity-50">
-                    {guardandoCorreccion ? <Loader2 className="w-5 h-5 animate-spin" /> : "Guardar y Liberar Etiqueta"}
+                  <button onClick={guardarCorreccionAuditoria} disabled={guardandoCorreccion || !canSubmit} className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-green-600 text-white font-bold rounded-xl shadow-md hover:bg-green-700 transition-colors text-sm disabled:opacity-50">
+                    {guardandoCorreccion ? <Loader2 className="w-5 h-5 animate-spin" /> : "Guardar y Despachar"}
                   </button>
                 </div>
               </div>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* POP-UP DE CREACIÓN DE TICKET (NUEVO) */}
       {envioTicket && (
@@ -785,10 +925,12 @@ export default function BandejaPedidos() {
                       const esRetenido = envio.estadoActual === "RETENIDO" || envio.estadoActual === "Retenido";
                       const esBloqueadoSaldo = envio.estadoActual === "BLOQUEADO_SALDO";
                       const esBloqueadoDeposito = envio.estadoActual === "BLOQUEADO_DEPOSITO";
-                      const esBloqueado = esBloqueadoSaldo || esBloqueadoDeposito;
+                      // DEUDA 132 Paso 4b: nuevo estado — envío nacido sin peso/dims (barrier Paso 3a).
+                      const esBloqueadoDatosPaquete = envio.estadoActual === "BLOQUEADO_DATOS_PAQUETE";
+                      const esBloqueado = esBloqueadoSaldo || esBloqueadoDeposito || esBloqueadoDatosPaquete;
 
                       return (
-                        <tr key={envio.id} className={`transition-colors hover:bg-gray-50 group ${seleccionadas.includes(envio.id) ? 'bg-blue-50/50' : ''} ${esRetenido ? 'bg-red-50/20' : ''} ${esBloqueadoSaldo ? 'bg-amber-50/30' : ''} ${esBloqueadoDeposito ? 'bg-indigo-50/30' : ''}`}>
+                        <tr key={envio.id} className={`transition-colors hover:bg-gray-50 group ${seleccionadas.includes(envio.id) ? 'bg-blue-50/50' : ''} ${esRetenido ? 'bg-red-50/20' : ''} ${esBloqueadoSaldo ? 'bg-amber-50/30' : ''} ${esBloqueadoDeposito ? 'bg-indigo-50/30' : ''} ${esBloqueadoDatosPaquete ? 'bg-purple-50/30' : ''}`}>
                           
                           <td className="px-6 py-4 cursor-pointer text-center" onClick={() => toggleSeleccion(envio.id)}>
                             {seleccionadas.includes(envio.id) ? <CheckSquare className="w-4 h-4 text-[#233b6b] mx-auto" /> : <Square className="w-4 h-4 text-gray-300 group-hover:text-gray-400 transition-colors mx-auto" />}
@@ -837,7 +979,7 @@ export default function BandejaPedidos() {
                                 esBloqueadoDeposito ? 'bg-indigo-50 text-indigo-800 border-indigo-300 animate-pulse' :
                                 'bg-gray-50 text-gray-600 border-gray-200'
                             }`}>
-                                {esBloqueadoSaldo ? 'BLOQUEADO POR SALDO' : esBloqueadoDeposito ? 'BLOQUEADO POR DEPÓSITO' : envio.estadoActual.replace(/_/g, ' ')}
+                                {esBloqueadoSaldo ? 'BLOQUEADO POR SALDO' : esBloqueadoDeposito ? 'BLOQUEADO POR DEPÓSITO' : esBloqueadoDatosPaquete ? 'FALTAN DATOS DEL PAQUETE' : envio.estadoActual.replace(/_/g, ' ')}
                             </span>
                           </td>
                           
@@ -845,6 +987,8 @@ export default function BandejaPedidos() {
                             <div className="flex items-center justify-end gap-2">
                               {esRetenido ? (
                                 <button onClick={() => abrirModalCorreccion(envio)} className="px-4 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-lg shadow-sm transition-colors">Corregir</button>
+                              ) : esBloqueadoDatosPaquete ? (
+                                <button onClick={() => abrirModalCorreccion(envio)} className="px-4 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-lg shadow-sm transition-colors">Completar datos</button>
                               ) : esBloqueadoDeposito ? (
                                 <Link href="/configuracion/depositos" className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg shadow-sm transition-colors">Configurar depósito</Link>
                               ) : esBloqueadoSaldo ? (

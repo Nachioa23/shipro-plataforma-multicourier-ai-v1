@@ -189,7 +189,7 @@ export async function registrarCarrierParaTienda(tienda: {
   const types = [...new Set(servicios.map((s) => s.type))].join(",") || "ship";
   const appUrl = getAppUrlOrThrow();
   const callbackUrl = `${appUrl}/api/tiendanube/rates`;
-  const callbackLabelsUrl = `${appUrl}/api/tiendanube/labels`;
+  const callbackLabelsUrl = `${appUrl}/api/tiendanube/labels/generate`;
 
   let carrierId = tienda.shippingCarrierId;
   let carrierCreado = false;

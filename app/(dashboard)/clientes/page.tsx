@@ -30,8 +30,10 @@ export default function GestionClientes() {
   const [modalidadPago, setModalidadPago] = useState<"PREPAGO" | "POSTPAGO">("PREPAGO");
   const [limiteDescubierto, setLimiteDescubierto] = useState("");
   const [modeloAHabilitado, setModeloAHabilitado] = useState(false);
-  // DEUDA 10 Paso 5b: tarifa plana de respaldo (obligatoria) + OperacionFee.
-  const [tarifaPlanaRespaldo, setTarifaPlanaRespaldo] = useState("");
+  // DEUDA 132 Paso 5a (2026-08-25): tarifa plana de respaldo YA NO se carga en
+  // el alta de empresa — ahora es per-courier (CredencialCourier.tarifaPlanaRespaldoCourier).
+  // El input viejo, su validación y su payload key fueron removidos de este wizard.
+  // DEUDA 10 Paso 5b: OperacionFee sigue acá (fee de plataforma por operación).
   const [operacionFeeTipo, setOperacionFeeTipo] = useState<"FIJO" | "PORCENTAJE">("FIJO");
   const [operacionFeeValor, setOperacionFeeValor] = useState("1600");
   // Datos gerente
@@ -90,11 +92,10 @@ export default function GestionClientes() {
         setGuardando(false);
         return;
       }
-      if ((parseFloat(tarifaPlanaRespaldo) || 0) <= 0) {
-        setError("Tarifa plana de respaldo obligatoria (mayor a cero). Es el precio de último recurso si el courier falla.");
-        setGuardando(false);
-        return;
-      }
+      // DEUDA 132 Paso 5a: validación de tarifa plana de respaldo removida —
+      // el campo se carga per-courier en TransportesTab (paso 5b), no en el alta
+      // de empresa. La UX de "obligatoria al onboarding" migró a "obligatoria al
+      // activar un courier".
       if ((parseFloat(operacionFeeValor) || 0) <= 0) {
         setError("Fee de operación inválido (sin IVA, mayor a cero).");
         setGuardando(false);
@@ -115,7 +116,6 @@ export default function GestionClientes() {
           modalidadPago,
           limiteDescubierto: parseFloat(limiteDescubierto) || 0,
           modeloAHabilitado,
-          tarifaPlanaRespaldo: parseFloat(tarifaPlanaRespaldo),
           operacionFeeTipo,
           operacionFeeValor: operacionFeeValor.trim() === "" ? undefined : parseFloat(operacionFeeValor),
           gerente: {
@@ -145,7 +145,6 @@ export default function GestionClientes() {
         setModalidadPago("PREPAGO");
         setLimiteDescubierto("");
         setModeloAHabilitado(false);
-        setTarifaPlanaRespaldo("");
         setOperacionFeeTipo("FIJO");
         setOperacionFeeValor("1600");
         setGerenteNombre("");
@@ -316,12 +315,9 @@ export default function GestionClientes() {
                     )}
                   </div>
 
-                  {/* DEUDA 10 Paso 5b: tarifa plana de respaldo (obligatoria) */}
-                  <div>
-                    <label className="block text-xs font-bold text-gray-500 mb-1">Tarifa plana de respaldo * <span className="text-gray-400 font-normal">(en pesos)</span></label>
-                    <input type="number" value={tarifaPlanaRespaldo} onChange={(e) => setTarifaPlanaRespaldo(e.target.value)} placeholder="11858" required min="1" className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-[#233b6b] outline-none" />
-                    <p className="text-[10px] text-gray-500 mt-1">Precio de último recurso si el courier falla y no hay histórico. Es un precio final completo (incluye courier + fee + impuestos). La venta nunca se cae.</p>
-                  </div>
+                  {/* DEUDA 132 Paso 5a (2026-08-25): input "Tarifa plana de respaldo"
+                      removido del wizard. Ahora se carga per-courier al activar cada
+                      CredencialCourier en TransportesTab (paso 5b). */}
 
                   {/* DEUDA 10 Paso 5b: OperacionFee (fee + IVA al emitir etiqueta, Modelo B) */}
                   <div>

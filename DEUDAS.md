@@ -2287,7 +2287,7 @@ creado con `replayed: true`. Patrón: try-create → catch P2002 → re-query �
 
 ## DEUDA 132 — Fuga de dimensiones en la creación de envío del dashboard: largo/ancho/alto se pierden y caen a 10×10×10 hardcoded (bug de facturación real, scope chico-medio)
 
-**Status:** CONSTRUIDA COMPLETA — verificada en localhost (parcial por diseño) al 2026-08-26. Pendiente: prueba e2e del modal de destrabe vía ingreso de e-commerce, y deploy a producción.
+**Status:** EN PRODUCCIÓN desde 2026-08-26 (commit 6df8920) — núcleo verificado en prod. Deploy con rebuild limpio + 3 migraciones aplicadas OK. Verificado en producción: clientes carga, tarifa de rescate por courier visible, ciclo crear/despachar/cancelar con Andreani+Mocis OK. PENDIENTE única: prueba e2e del modal de destrabe (Paso 4) — requiere ingreso de e-commerce sin datos, lo dispara el chat de plugins cuando Tiendanube esté vivo. El Admin Link de Tiendanube (chat B, commit 385ab77) subió en el mismo deploy, aprobado por ese chat.
 
 **Modelo final (dos puertas de entrada):**
 - DASHBOARD (humano): el formulario EXIGE peso + 3 dimensiones antes de crear. Nunca nace un envío bloqueado por datos desde acá — el operador tiene la caja delante y carga el dato en el momento.

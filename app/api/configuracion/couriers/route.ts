@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import {
   registrarCambioConfiguracion,
   MotivoRequeridoError,
@@ -211,6 +212,27 @@ export async function POST(request: Request) {
       const nuevoAjuste = parseFloat(courier.markupClientePorcentaje) || 0;
       const nuevoMarkup = parseFloat(courier.markupClienteFijo) || 0;
       const nuevoSeguro = courier.seguroActivado || false;
+      // DEUDA 132 Paso 5b: tarifa de rescate por courier. parseFloat defensivo;
+      // Decimal se construye desde String() para no arrastrar imprecisión de float
+      // (money convention). El validate abajo garantiza que activo=true ⇒ tarifa > 0.
+      const nuevoTarifaRespaldo = parseFloat(courier.tarifaPlanaRespaldoCourier);
+
+      // DEUDA 132 Paso 5b: tarifa de rescate OBLIGATORIA cuando el courier está activo.
+      // Mirror del enforcement legacy D-10-RESPALDO-OBLIGATORIO (que gobernaba el
+      // campo per-empresa dropeado en 5a). Server-side es SOURCE OF TRUTH — la UI
+      // puede ser bypasseada (API pública/plugin en el futuro); acá se garantiza el
+      // invariante "courier activo ⇒ rescate > 0". Un courier inactivo puede quedar
+      // sin rescate (nullable en DB) — la venta no se cae porque el courier no cotiza.
+      if (nuevoActivo === true && (!Number.isFinite(nuevoTarifaRespaldo) || nuevoTarifaRespaldo <= 0)) {
+        return NextResponse.json(
+          {
+            error: "La tarifa de rescate es obligatoria y debe ser mayor a 0 (garantiza que la venta no se caiga si el courier no cotiza).",
+            code: "RESCATE_OBLIGATORIO",
+            courierNombre: courier.id,
+          },
+          { status: 400 }
+        );
+      }
 
       // FASE 2 pieza 1 (2026-07-30): propiedad de credenciales.
       // Rama B (usaCredencialesPropias=true) FUERZA CLIENTE + FK null — defense
@@ -272,6 +294,17 @@ export async function POST(request: Request) {
       const propietarioCourierIdPatch = puedeEditarCampo(rol, "propietarioCourierId")
         ? { propietarioCourierId: nuevoPropietarioCourierId }
         : {};
+      // DEUDA 132 Paso 5b: patch de tarifa de rescate. Piggyback del permiso de
+      // markupFijo (misma clase de config comercial monetaria; ambos editables por
+      // admin_shipro + gerente_cliente). Un permiso dedicado en lib/permisos.ts
+      // (fuera del scope de este commit) refinaría esto; por ahora el semantic
+      // más cercano preserva la matriz existente sin ampliar el archivo permisos.
+      // Prisma.Decimal desde String() preserva money precision.
+      const tarifaRespaldoPatch = puedeEditarCampo(rol, "markupFijo")
+        ? { tarifaPlanaRespaldoCourier: Number.isFinite(nuevoTarifaRespaldo) && nuevoTarifaRespaldo > 0
+              ? new Prisma.Decimal(String(nuevoTarifaRespaldo))
+              : null }
+        : {};
 
       // DEUDA 21: si el rol no puede editar NINGUN campo de este item, retornar
       // 403 (deny by default). Evita upsert no-op + senal clara para el cliente.
@@ -285,7 +318,8 @@ export async function POST(request: Request) {
         Object.keys(seguroPatch).length > 0 ||
         Object.keys(tipoCuentaPatch).length > 0 ||
         Object.keys(propietarioTipoPatch).length > 0 ||
-        Object.keys(propietarioCourierIdPatch).length > 0;
+        Object.keys(propietarioCourierIdPatch).length > 0 ||
+        Object.keys(tarifaRespaldoPatch).length > 0;
 
       if (!tieneAlgunPermiso) {
         return NextResponse.json(
@@ -316,6 +350,7 @@ export async function POST(request: Request) {
           ...tipoCuentaPatch,
           ...propietarioTipoPatch,
           ...propietarioCourierIdPatch,
+          ...tarifaRespaldoPatch,
         },
         create: {
           empresaId: empresaIdNum,
@@ -330,6 +365,7 @@ export async function POST(request: Request) {
           ...tipoCuentaPatch,
           ...propietarioTipoPatch,
           ...propietarioCourierIdPatch,
+          ...tarifaRespaldoPatch,
         }
       });
 

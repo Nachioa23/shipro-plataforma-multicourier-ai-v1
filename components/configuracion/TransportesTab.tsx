@@ -93,6 +93,12 @@ export default function TransportesTab({ empresaActivaId, embeddedInWizard = fal
                   // FASE 2 pieza 1: propiedad de credenciales (mirror lectura de usaCredencialesPropias arriba).
                   propietarioTipo: configCliente.propietarioTipo || null,
                   propietarioCourierId: configCliente.propietarioCourierId ?? null,
+                  // DEUDA 132 Paso 5b: tarifa de rescate por courier (obligatoria en activación — patrón D-10).
+                  // Number() convierte Decimal serializado → number para el input controlado.
+                  tarifaPlanaRespaldoCourier:
+                    configCliente.tarifaPlanaRespaldoCourier != null
+                      ? Number(configCliente.tarifaPlanaRespaldoCourier)
+                      : 0,
                 };
               } else {
                 return {
@@ -102,6 +108,9 @@ export default function TransportesTab({ empresaActivaId, embeddedInWizard = fal
                   // FASE 2 pieza 1: default en la fila fresca — Rama B implica CLIENTE.
                   propietarioTipo: "CLIENTE",
                   propietarioCourierId: null,
+                  // DEUDA 132 Paso 5b: default 0 → falla la validación obligatoria hasta que el gerente
+                  // cargue el valor. Un courier no puede activarse sin tarifa de rescate cargada.
+                  tarifaPlanaRespaldoCourier: 0,
                 };
               }
             });
@@ -243,6 +252,23 @@ export default function TransportesTab({ empresaActivaId, embeddedInWizard = fal
     if (sinDueño.length > 0) {
       setMensaje({
         texto: `Falta elegir dueño de las credenciales para: ${sinDueño.join(", ")}. Como es Rama A (Cuenta Corriente Shipro), tenés que indicar quién presta las credenciales.`,
+        tipo: "error",
+      });
+      return;
+    }
+    // DEUDA 132 Paso 5b: tarifa de rescate obligatoria por courier ACTIVO. Mirror
+    // del enforcement legacy D-10-RESPALDO-OBLIGATORIO (que gobernaba el campo
+    // per-empresa dropeado en 5a). El backend re-valida en su endpoint (server es
+    // source of truth); esta net es la UX cercana al usuario.
+    const sinRescate = couriers
+      .filter((c) => {
+        const t = Number(c.tarifaPlanaRespaldoCourier);
+        return c.activo && (!Number.isFinite(t) || t <= 0);
+      })
+      .map((c) => c.id);
+    if (sinRescate.length > 0) {
+      setMensaje({
+        texto: `Falta cargar tarifa de rescate para: ${sinRescate.join(", ")}. La tarifa de rescate es obligatoria y debe ser mayor a 0 (garantiza que la venta no se caiga si el courier no cotiza).`,
         tipo: "error",
       });
       return;
@@ -487,6 +513,12 @@ export default function TransportesTab({ empresaActivaId, embeddedInWizard = fal
                           <label className="block text-xs font-bold text-blue-900 mb-1">Costo Fijo Adicional</label>
                           <div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold">$</span><input type="number" value={courier.markupClienteFijo} onChange={e => handleUpdateCourier(courier.id, 'markupClienteFijo', parseFloat(e.target.value))} className="w-full pl-7 pr-3 py-2 border border-blue-200 rounded-lg text-sm font-bold text-blue-900 outline-none focus:border-blue-500 bg-white" /></div>
                         </div>
+                      </div>
+                      {/* DEUDA 132 Paso 5b: tarifa de rescate por courier — OBLIGATORIA para activar. */}
+                      <div className="mt-4">
+                        <label className="block text-xs font-bold text-blue-900 mb-1">Tarifa de rescate (neto, $) <span className="text-red-600">*</span></label>
+                        <div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold">$</span><input type="number" value={courier.tarifaPlanaRespaldoCourier} onChange={e => handleUpdateCourier(courier.id, 'tarifaPlanaRespaldoCourier', parseFloat(e.target.value))} required min="1" className="w-full pl-7 pr-3 py-2 border border-blue-200 rounded-lg text-sm font-bold text-blue-900 outline-none focus:border-blue-500 bg-white" /></div>
+                        <p className="text-[10px] text-gray-500 mt-1">Se publica cuando el courier no puede cotizar o el e-commerce no manda peso/dims. Garantiza que la venta no se caiga.</p>
                       </div>
                     </div>
                   </div>

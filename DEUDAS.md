@@ -2287,23 +2287,32 @@ creado con `replayed: true`. Patrón: try-create → catch P2002 → re-query �
 
 ## DEUDA 132 — Fuga de dimensiones en la creación de envío del dashboard: largo/ancho/alto se pierden y caen a 10×10×10 hardcoded (bug de facturación real, scope chico-medio)
 
-**Status:** EN CONSTRUCCIÓN (parcial) — al 2026-08-24. Barrier de datos mínimos levantada; faltan la pantalla de carga/destrabe (Paso 4) y el caso e-commerce sin datos (Paso 5).
+**Status:** CONSTRUIDA COMPLETA — verificada en localhost (parcial por diseño) al 2026-08-26. Pendiente: prueba e2e del modal de destrabe vía ingreso de e-commerce, y deploy a producción.
 
-**Decisiones de producto (Nacho, 2026-08-24):**
-- Datos suficientes para despachar = peso + las 3 dimensiones (largo, ancho, alto), todos > 0. Estándar único normalizado para todos los couriers (el piso; si un courier exige más, se suma arriba). PENDIENTE de verificar el set exacto por-courier contra Gemini Notebook.
-- Precedencia: "faltan datos del paquete" gana sobre credencial/operatividad/saldo/despacho, pero por debajo de RETENIDO (dirección) y BLOQUEADO_DEPOSITO.
-- Sin retroactividad: la NPMS no está en producción con clientes reales; todo mira hacia adelante.
+**Modelo final (dos puertas de entrada):**
+- DASHBOARD (humano): el formulario EXIGE peso + 3 dimensiones antes de crear. Nunca nace un envío bloqueado por datos desde acá — el operador tiene la caja delante y carga el dato en el momento.
+- E-COMMERCE (Tiendanube y cualquier plugin, sin humano): si el pedido entra sin peso/dims, el envío nace BLOQUEADO_DATOS_PAQUETE, se publica la tarifa de rescate por courier (no se frena la venta), y un operador completa los datos después desde el modal de la NPMS.
+- La barrera (Paso 3), el estado BLOQUEADO_DATOS_PAQUETE y el modal de destrabe (Paso 4) son para la puerta de e-commerce, no para el dashboard.
 
-**Avance:**
-- Paso 1 ✅ (commit b4f45bb) — columnas largoCm/anchoCm/altoCm en Envio (gemelas de pesoReal), cargadas al crear, disponibles en re-despacho.
-- Paso 2 ✅ (commit cf5d486) — dims reales threadeadas a construirParamsDespacho + los 6 callers de despacharCourier.
-- Paso 3a ✅ (commit b1f7e3d) — estado BLOQUEADO_DATOS_PAQUETE (exige peso + 3 dims) + eliminación de los fallbacks silenciosos 10×10×10 y 1kg (ahora hard-throw defensivo en dispatch.ts).
-- Paso 4 ⬜ PENDIENTE — pantalla en NPMS para que el operador cargue peso/dims y destrabe (molde: procesar-bloqueados*.ts + flujo cliente/Shipro de /corregir). Requisito de Nacho: la pantalla muestra TODOS los campos corregibles, no sólo el que disparó el bloqueo.
-- Paso 5 ⬜ PENDIENTE — e-commerce sin datos: publicar tarifaPlanaRespaldo (tarifa de rescate) y nacer BLOQUEADO_DATOS_PAQUETE. Parte depende del canal del plugin (Fase 2).
+**Avance final (todos los commits locales, sin pushear):**
+- Paso 1 (b4f45bb) — columnas largoCm/anchoCm/altoCm en Envio.
+- Paso 2 (cf5d486) — dims reales a los 6 callers de despacharCourier.
+- Paso 3a (b1f7e3d) — barrera BLOQUEADO_DATOS_PAQUETE + eliminación de fallbacks silenciosos 10×10×10 y 1kg (hard-throw defensivo).
+- Paso 4a (433eb35, hecho por chat Tiendanube) — /corregir acepta BLOQUEADO_DATOS_PAQUETE, persiste peso/dims, aplica la barrera antes de despachar, re-despacha.
+- Paso 4b — modal unificado de corrección (dirección + datos de paquete) con candado por bloque, título/carteles derivados del estado (nada hardcodeado).
+- Paso 5a — tarifa de rescate por courier en CredencialCourier; reemplaza y DROPEA Empresa.tarifaPlanaRespaldo.
+- Paso 5a-bis — restaura el escalón de HistoricoCotizaciones (180d) antes de la tarifa plana, que el 5a había salteado.
+- Paso 5b — campo de tarifa de rescate en TransportesTab + validación obligatoria (>0) cliente Y servidor (patrón D-10).
+- Paso 5c — RESUELTO por arquitectura: el ingreso de Tiendanube ya usa crearEnvio (barrera) y el rates callback ya usa la cascada del cotizador. No requirió código nuevo en el Núcleo. Cabo de UX (mensaje al comprador "tarifa de referencia, se ajusta al despachar") queda anotado para el chat de plugins.
+- Fix post-migración — eliminadas 2 referencias colgadas a Empresa.tarifaPlanaRespaldo (columna dropeada) que causaban 500 en runtime (no las agarró tsc; aparecieron en verificación localhost).
 
-**Follow-up técnico registrado:** crear.ts re-cotización interna aún usa `?? 10` / `|| 1` (paths L437/L440-442/L588). Son el path de cotización interno, no el despacho. Se aprietan sólo cuando TODO caller de crearEnvio cumpla el barrier.
+**Verificación en localhost (2026-08-26):**
+- ✅ Prueba dashboard exige datos (form frena sin peso/dims).
+- ✅ Prueba medidas reales al courier (40×40×40 llega correcto — subcobro resuelto).
+- ✅ Prueba tarifa de rescate obligatoria (rechaza guardar courier sin tarifa >0).
+- ⬜ PENDIENTE e2e: el modal de destrabe (Paso 4) no se pudo probar en localhost porque desde el dashboard nunca nace un envío bloqueado; requiere un pedido de e-commerce sin datos. Se prueba cuando el chat de plugins tenga vivo el ingreso de Tiendanube. Código correcto (tsc 0) pero sin ejecución e2e.
 
-**⚠️ DEPLOY:** hay 5 commits locales sin pushear (129 + los 4 de DEUDA 132). NO deployar la 132 a producción hasta terminar el Paso 4 — si no, un envío bloqueado por datos queda sin forma de destrabarse desde la UI. La migración de Paso 1 exige rebuild limpio en el deploy (prisma generate + rm -rf .next + build + pm2 restart --update-env).
+**⚠️ DEPLOY:** la 132 toca schema (3 migraciones: dims en Envio, tarifa por courier add, drop tarifa empresa) → rebuild limpio obligatorio (prisma generate + rm -rf .next + build + pm2 restart --update-env). Plan de deploy commit-por-commit a definir antes de subir (hay commits de otros frentes entre producción y HEAD). Recordar cargar tarifa de rescate a los couriers de prueba tras deploy.
 
 **Registrada:** 2026-08-07. Detectada durante el recon de DEUDA 103.
 Bug independiente del plugin — afecta al dashboard humano HOY.

@@ -3259,3 +3259,22 @@ body, sin UI). Debería haber un botón en el panel admin de Shipro que genere e
 con un click. Fricción inaceptable para un cliente real.
 
 ---
+
+## DEUDA 150 — Centro de conexiones del cliente: UI para que las empresas administren sus plugins/apps/conectores y su API Key (registrada 2026-08-26)
+
+**Status:** ABIERTA — prerequisito de homologación de plugins self-service. Bloquea la validación e2e del plugin de WooCommerce (el cliente no tiene hoy dónde generar su API Key).
+
+**Contexto de descubrimiento:** Al conectar el plugin de WooCommerce se necesitó una API Key real de una empresa (Argenshipro). Se confirmó que: (a) el endpoint `/api/empresa/api-key` existe pero NO tiene UI (ningún botón lo dispara); (b) ese endpoint rechaza a usuarios Shipro por diseño (solo rol `gerente_cliente`); (c) la sección `/plataformas` existe SOLO para usuarios Shipro, no para clientes. Resultado: hoy un cliente no tiene ninguna pantalla para generar su key ni administrar sus conexiones.
+
+**Alcance (por capas — Capa 3 es el norte, Capa 1 el mínimo entregable):**
+- **Capa 1 (mínimo que desbloquea WooCommerce):** pantalla de cara al cliente (rol `gerente_cliente`) donde la empresa genera y copia su API Key (`shipro_live_...`). Es lo único imprescindible para que el plugin cotice.
+- **Capa 2 (gestión de la key):** rotar la key, ver fecha de creación / últimos 4, revocar. El endpoint de rotación ya existe (POST `/api/empresa/api-key`, valida rol + motivo de auditoría D-19); falta la UI.
+- **Capa 3 (centro de conexiones completo — objetivo):** sección de cara al cliente donde la empresa ve y administra TODAS sus plataformas (Tiendanube, WooCommerce, Shopify, etc.): instalar/conectar, desconectar, estado de cada conexión, y su API Key, en un solo lugar. Equivalente cliente de la `/plataformas` que hoy solo ve Shipro.
+
+**Decisión de producto (Nacho):** el objetivo es la Capa 3 (centro de conexiones completo, la cara de Shipro para el cliente). Se puede construir por capas, entregando la Capa 1 primero para no frenar la prueba de WooCommerce.
+
+**Dependencia:** el frente de plugins (WooCommerce) no puede validar la Etapa 2 (cotizar e2e) hasta que exista al menos la Capa 1. El código del plugin sí puede construirse en paralelo.
+
+**Pertenece a:** Núcleo (toca UI del panel + permisos de rol en shipro-2.0). NO lo construye el chat de plugins.
+
+---

@@ -3206,3 +3206,56 @@ en la misma sesión de DNS con Fran — dos registros del mismo tipo, no molesta
 **No bloquea nada:** la doc ya es pública y navegable. Puramente branding.
 
 ---
+
+## DEUDA 149 — Circuito de generación de etiqueta Tiendanube: callback corregido + bloqueado por feature fulfillment_order_label_api no habilitada en la tienda (registrada 2026-08-26)
+
+**Contexto:** sesión de debugging end-to-end en producción del circuito de Labels
+API de Tiendanube. Se compró en la tienda demo y la etiqueta nunca se generó (ni
+envío, ni etiqueta, ni logs). Recon en producción reveló dos causas.
+
+**Causa 1 (RESUELTA) — callback mal apuntado.** El carrier registraba
+callback_labels_url = /api/tiendanube/labels, pero el handler real es
+/api/tiendanube/labels/generate. Tiendanube postea directo a la callback_labels_url
+registrada (sin sufijo, confirmado en doc oficial), así que pegaba en 404 → la
+etiqueta nunca se generaba, sin logs. Por esto el /generate (completo desde hace
+sesiones) nunca se ejecutó en producción. Fix en lib/tiendanube/carrier.ts
+(callbackLabelsUrl ahora termina en /generate); afecta crearCarrier (alta) y
+actualizarCallbackLabels (reinstalación) porque ambos consumen la misma variable.
+Deployado 2026-08-26. App reinstalada en la demo → carrier nuevo id 5276416 con el
+callback corregido.
+
+**Causa 2 (BLOQUEANTE EXTERNO, pendiente de Tiendanube) — feature no habilitada.**
+La tienda demo (storeId 915777, plan enterprise/Evolución) NO tiene la feature
+"fulfillment_order_label_api". Verificado con GET /store (HTTP 200, feature ausente
+en la respuesta). Según doc oficial de Tiendanube, sin esta feature toda llamada a
+la Labels API devuelve 403 y el admin no muestra la acción de generar etiqueta (por
+eso no aparece el botón). La feature la habilita Tiendanube MANUALMENTE por tienda —
+el plan enterprise por sí solo NO la incluye. Escalado a Poggi por mail pidiendo
+activación en la tienda 915777.
+
+**Estado:** la generación de etiqueta NO se puede validar end-to-end hasta que
+Tiendanube habilite la feature. Todo lo de Shipro está listo (callback corregido,
+/generate completo, Admin Link deployado). Si existe un tercer problema oculto detrás
+del bloqueante de la feature es DESCONOCIDO hasta que se encienda y la generación
+pueda dispararse de verdad.
+
+**Aprendizaje de método:** una integración con un tercero no está terminada hasta que
+el circuito completo corre contra el tercero real. Cada pieza puede compilar (tsc 0) y
+deployar bien y aun así el circuito estar roto por (a) un bug propio invisible en
+localhost (el callback) y (b) un candado del lado del tercero (la feature). El
+"tsc 0 + deploy" valida que el código no explota, no que el otro lado lo acepta.
+Aplicable a los plugins en desarrollo (WooCommerce, Shopify, Mercado Flex): reservar
+una fase de validación real contra la plataforma antes de dar por cerrada la integración.
+
+**Próximo paso:** cuando Tiendanube habilite fulfillment_order_label_api en la 915777,
+disparar la generación (compra + trigger, o el botón que aparecerá en el admin) y
+validar el circuito completo: envío creado + EtiquetaTiendanube + PATCH READY_TO_DOWNLOAD
++ descarga por el Admin Link. Recién ahí se confirma si el circuito cierra o si hay un
+tercer problema.
+
+**Deuda de UX relacionada (registrar aparte si se prioriza):** el link de instalación
+OAuth se genera hoy por POST a /api/tiendanube/install/link (requiere empresaId en el
+body, sin UI). Debería haber un botón en el panel admin de Shipro que genere el link
+con un click. Fricción inaceptable para un cliente real.
+
+---

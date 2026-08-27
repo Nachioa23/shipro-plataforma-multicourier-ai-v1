@@ -54,21 +54,16 @@ function extraerLabels(body: any): any[] {
   return [];
 }
 
-// storeId: shape REAL confirmada 2026-08-26 en producción (TN-LABELS-DEBUG log).
-// Tiendanube manda store_id en el TOP-LEVEL de cada objeto label, no anidado bajo
-// fulfillment_order_info (que ni siquiera existe como wrapper — ver comment del loop
-// abajo). Preferimos top-level; caemos al path viejo por defensa y por último a body.
-function extraerStoreId(body: any, labels: any[]): number | null {
+// Shape REAL confirmada 2026-08-26 v2 (payload completo TN-LABELS-DEBUG en prod):
+// el callback NO trae store_id en ningún lado. Resolvemos la tienda por
+// shipping.carrier.carrier_id — la id del carrier que registramos al conectar la
+// app en la tienda (ver TiendaTiendanube.shippingCarrierId).
+function extraerCarrierId(labels: any[]): string | null {
   for (const it of labels) {
-    // Real shape: store_id is top-level on each label object.
-    const s = Number(it?.store_id);
-    if (Number.isInteger(s)) return s;
-    // Legacy/defensive: also try the previously-assumed nested path.
-    const n = Number(it?.fulfillment_order_info?.store_id);
-    if (Number.isInteger(n)) return n;
+    const cid = it?.shipping?.carrier?.carrier_id;
+    if (typeof cid === "string" && cid.length > 0) return cid;
   }
-  const t = Number(body?.store_id);
-  return Number.isInteger(t) ? t : null;
+  return null;
 }
 
 export async function POST(request: Request) {
@@ -85,23 +80,24 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "labels vacío" }, { status: 422 });
     }
 
-    const storeId = extraerStoreId(body, labels);
-    if (storeId === null) {
-      return NextResponse.json({ error: "store_id inválido" }, { status: 422 });
+    // Self-auth: el payload NO trae store_id (shape v2 confirmada 2026-08-26).
+    // La única señal para identificar la tienda es shipping.carrier.carrier_id — el
+    // shippingCarrierId que Tiendanube devolvió al crear el carrier durante el install
+    // OAuth. Ese id es único por par (tienda, app), así que basta para la lookup.
+    const carrierId = extraerCarrierId(labels);
+    if (!carrierId) {
+      return NextResponse.json({ error: "carrier_id ausente en el payload" }, { status: 422 });
     }
-
-    // Self-auth: mirror de rates route. Mismo mensaje genérico para "no existe"
-    // y "no instalada" para no revelar existencia. Empresa se selecciona mínima
-    // — el after() la re-lee si necesita más campos.
-    const tienda = await prisma.tiendaTiendanube.findUnique({
-      where: { storeId },
+    const tienda = await prisma.tiendaTiendanube.findFirst({
+      where: { shippingCarrierId: carrierId, estado: "instalada" },
       select: {
         id: true,
         empresaId: true,
         estado: true,
+        storeId: true,
       },
     });
-    if (!tienda || tienda.estado !== "instalada") {
+    if (!tienda) {
       return NextResponse.json({ error: "Tienda no vinculada" }, { status: 422 });
     }
 
@@ -109,7 +105,7 @@ export async function POST(request: Request) {
     // Prisma Row completo con todos sus campos.
     const tiendaTiendanubeId = tienda.id;
     const empresaId = tienda.empresaId;
-    const storeIdSnapshot = storeId;
+    const storeIdSnapshot = tienda.storeId;
 
     // ===============================================================
     // Trabajo pesado — corre DESPUÉS de responder 200 a Tiendanube.
@@ -117,23 +113,18 @@ export async function POST(request: Request) {
     after(async () => {
       for (const item of labels) {
         try {
-          // Shape REAL confirmada 2026-08-26 (TN-LABELS-DEBUG). Los tres campos "raíz"
-          // del label vienen TOP-LEVEL, no anidados bajo fulfillment_order_info:
-          //   - id                     → labelId
-          //   - fulfillment_order_id   → ffo_id (flat string, no `.id` sobre un objeto)
-          //   - store_id               → integer, ver extraerStoreId arriba
-          const labelId = typeof item?.id === "string" || typeof item?.id === "number" ? String(item.id) : "";
-          const fulfillmentOrderId =
-            typeof item?.fulfillment_order_id === "string" || typeof item?.fulfillment_order_id === "number"
-              ? String(item.fulfillment_order_id)
-              : "";
-          // TEMP shim — mientras se confirma el shape del RESTO de los campos (recipient,
-          // destination, line_items, total_price, number), seguimos leyendo por el path
-          // legacy `fulfillment_order_info`. En la mayoría de callbacks reales quedará ??={}
-          // (no existe la key) y los reads defensivos devuelven undefined → el envío
-          // igual se crea con datos mínimos y el server frena por BLOQUEADO_DATOS_PAQUETE
-          // si corresponde. La corrección de estos paths viene en el próximo debug round.
+          // Shape REAL confirmada 2026-08-26 v2 (payload completo TN-LABELS-DEBUG):
+          //   - label_id                              → labelId  (¡NO `id`!)
+          //   - fulfillment_order_info.id             → ffo_id
+          //   - fulfillment_order_info.number         → numeroOrden
+          //   - fulfillment_order_info.total_weight   → peso (kg)
+          //   - shipping.carrier.carrier_id           → identifica la tienda (resuelto arriba)
+          //   - shipping.option.{code,reference,type} → derivar servicio
+          //   - recipient / destination / line_items  → TOP-LEVEL en el label (no bajo ffoInfo)
+          const labelId = typeof item?.label_id === "string" || typeof item?.label_id === "number" ? String(item.label_id) : "";
           const ffoInfo = item?.fulfillment_order_info ?? {};
+          const fulfillmentOrderId =
+            typeof ffoInfo?.id === "string" || typeof ffoInfo?.id === "number" ? String(ffoInfo.id) : "";
 
           if (!labelId || !fulfillmentOrderId) {
             console.error(
@@ -182,29 +173,32 @@ export async function POST(request: Request) {
             continue;
           }
 
-          // ---- Mapping fulfillment_order_info → CrearEnvioInput (mirror de /api/envios) ----
-          const recipient = ffoInfo?.recipient ?? {};
-          const destination = ffoInfo?.destination ?? {};
-          const items: any[] = Array.isArray(ffoInfo?.line_items) ? ffoInfo.line_items : [];
+          // ---- Mapping del payload real → CrearEnvioInput ----
+          // recipient / destination / line_items son TOP-LEVEL en el label (shape v2 confirmada).
+          const recipient = item?.recipient ?? {};
+          const destination = item?.destination ?? {};
+          const lineItems: any[] = Array.isArray(item?.line_items) ? item.line_items : [];
 
-          // Peso: suma de line_items[].unit_dimension.weight × quantity. Fallback 1 kg
-          // si el pedido no trae gramaje (mismo criterio conservador que rates route).
-          const gramsTotal = items.reduce(
-            (acc, li) =>
-              acc + (Number(li?.unit_dimension?.weight) || 0) * (Number(li?.quantity) || 1),
+          // Peso: fulfillment_order_info.total_weight (kg, autoritativo — el server ya sumó).
+          // Fallback defensivo: computar de line_items[].unit_dimension.weight (también en kg —
+          // payload real 2026-08-26 confirmó unidades kg: 0.24 unit × 3 = 0.72 total_weight).
+          // Sin data → 0 → la barrera de crear.ts (DEUDA 132) lo marca BLOQUEADO_DATOS_PAQUETE,
+          // que es el comportamiento correcto (no inventamos peso).
+          const totalWeightFfo = Number(ffoInfo?.total_weight);
+          const computedWeight = lineItems.reduce(
+            (acc, li) => acc + (Number(li?.unit_dimension?.weight) || 0) * (Number(li?.quantity) || 1),
             0,
           );
-          const pesoReal = gramsTotal > 0 ? gramsTotal / 1000 : 1;
+          const pesoReal = Number.isFinite(totalWeightFfo) && totalWeightFfo > 0
+            ? totalWeightFfo
+            : (computedWeight > 0 ? computedWeight : 0);
 
-          // Dims: si algún item las trae, se toma el primero como aproximación.
-          // TODO(3b): bin-packing real / Modo B (mismos TODOs que rates route).
-          // TODO(empaquetado real — DEUDA relacionada 143): hoy se toman las dims de UN SOLO
-          // line_item (el primero con medidas) como aproximación del bulto. Un pedido con varios
-          // items queda subdimensionado. El peso SÍ suma todos los items (gramsTotal arriba), pero
-          // las dims no se consolidan. Verificado contra el contrato Tiendanube: cada line_item trae
-          // su propio unit_dimension{weight,height,width,depth}; el empaquetado real (bin-packing /
-          // Modo B) debe consolidarlos. Mismo gap que el rates callback (bulto default 10×10×10).
-          const primeroConDims = items.find(
+          // Dims: primer line_item con medidas > 0. Unit: cm (payload real trae 10, 20 — coherente).
+          // TODO(empaquetado real — DEUDA 143): hoy se toman las dims de UN SOLO line_item (el
+          // primero con medidas) como aproximación del bulto. Un pedido con varios items queda
+          // subdimensionado. El peso SÍ suma todos los items (computedWeight/total_weight arriba),
+          // pero las dims no se consolidan.
+          const primeroConDims = lineItems.find(
             (li) =>
               Number(li?.unit_dimension?.width) > 0 ||
               Number(li?.unit_dimension?.height) > 0 ||
@@ -243,6 +237,9 @@ export async function POST(request: Request) {
             telefono: recipient?.phone != null ? String(recipient.phone) : undefined,
             localidad: destination?.locality ?? destination?.city ?? undefined,
             modalidad,
+            // valorDeclarado: el payload real (shape v2) NO trae total_price ni ningún campo
+            // de valor declarado. El read defensivo devuelve undefined y el server aplica
+            // su política server-side de seguro (contrato: insurance es 100% del server).
             valorDeclarado: Number(ffoInfo?.total_price?.value) || undefined,
             provinciaDestino:
               typeof destination?.province?.name === "string"

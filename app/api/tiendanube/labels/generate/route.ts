@@ -72,20 +72,25 @@ export async function POST(request: Request) {
     console.log("[TN-LABELS-DEBUG] raw body:", JSON.stringify(body));
     console.log("[TN-LABELS-DEBUG] content-type:", request.headers.get("content-type"));
     if (!body) {
+      console.log("[TN-DBG] 422 body-invalido");
       return NextResponse.json({ error: "Body inválido" }, { status: 422 });
     }
 
     const labels = extraerLabels(body);
     if (labels.length === 0) {
+      console.log("[TN-DBG] 422 labels-vacio, body es array?", Array.isArray(body), "typeof body:", typeof body);
       return NextResponse.json({ error: "labels vacío" }, { status: 422 });
     }
+    console.log("[TN-DBG] labels.length:", labels.length);
 
     // Self-auth: el payload NO trae store_id (shape v2 confirmada 2026-08-26).
     // La única señal para identificar la tienda es shipping.carrier.carrier_id — el
     // shippingCarrierId que Tiendanube devolvió al crear el carrier durante el install
     // OAuth. Ese id es único por par (tienda, app), así que basta para la lookup.
     const carrierId = extraerCarrierId(labels);
+    console.log("[TN-DBG] carrierId extraido:", carrierId);
     if (!carrierId) {
+      console.log("[TN-DBG] 422 carrier-ausente, primer label shipping:", JSON.stringify(labels[0]?.shipping));
       return NextResponse.json({ error: "carrier_id ausente en el payload" }, { status: 422 });
     }
     const tienda = await prisma.tiendaTiendanube.findFirst({
@@ -97,7 +102,9 @@ export async function POST(request: Request) {
         storeId: true,
       },
     });
+    console.log("[TN-DBG] tienda encontrada:", tienda ? tienda.storeId : "NULL");
     if (!tienda) {
+      console.log("[TN-DBG] 422 tienda-no-vinculada, carrierId=", carrierId, "encontrada?", !!tienda);
       return NextResponse.json({ error: "Tienda no vinculada" }, { status: 422 });
     }
 

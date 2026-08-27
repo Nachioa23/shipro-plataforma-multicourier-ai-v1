@@ -54,13 +54,18 @@ function extraerLabels(body: any): any[] {
   return [];
 }
 
-// storeId: puede venir en cada item.fulfillment_order_info.store_id o en top-level.
-// TODO(3b/homologación): confirmar ubicación exacta contra la request real. Leer
-// defensivamente y quedarnos con el primer candidato válido.
+// storeId: shape REAL confirmada 2026-08-26 en producción (TN-LABELS-DEBUG log).
+// Tiendanube manda store_id en el TOP-LEVEL de cada objeto label, no anidado bajo
+// fulfillment_order_info (que ni siquiera existe como wrapper — ver comment del loop
+// abajo). Preferimos top-level; caemos al path viejo por defensa y por último a body.
 function extraerStoreId(body: any, labels: any[]): number | null {
   for (const it of labels) {
-    const s = Number(it?.fulfillment_order_info?.store_id);
+    // Real shape: store_id is top-level on each label object.
+    const s = Number(it?.store_id);
     if (Number.isInteger(s)) return s;
+    // Legacy/defensive: also try the previously-assumed nested path.
+    const n = Number(it?.fulfillment_order_info?.store_id);
+    if (Number.isInteger(n)) return n;
   }
   const t = Number(body?.store_id);
   return Number.isInteger(t) ? t : null;
@@ -112,10 +117,23 @@ export async function POST(request: Request) {
     after(async () => {
       for (const item of labels) {
         try {
+          // Shape REAL confirmada 2026-08-26 (TN-LABELS-DEBUG). Los tres campos "raíz"
+          // del label vienen TOP-LEVEL, no anidados bajo fulfillment_order_info:
+          //   - id                     → labelId
+          //   - fulfillment_order_id   → ffo_id (flat string, no `.id` sobre un objeto)
+          //   - store_id               → integer, ver extraerStoreId arriba
           const labelId = typeof item?.id === "string" || typeof item?.id === "number" ? String(item.id) : "";
-          const ffoInfo = item?.fulfillment_order_info ?? {};
           const fulfillmentOrderId =
-            typeof ffoInfo?.id === "string" || typeof ffoInfo?.id === "number" ? String(ffoInfo.id) : "";
+            typeof item?.fulfillment_order_id === "string" || typeof item?.fulfillment_order_id === "number"
+              ? String(item.fulfillment_order_id)
+              : "";
+          // TEMP shim — mientras se confirma el shape del RESTO de los campos (recipient,
+          // destination, line_items, total_price, number), seguimos leyendo por el path
+          // legacy `fulfillment_order_info`. En la mayoría de callbacks reales quedará ??={}
+          // (no existe la key) y los reads defensivos devuelven undefined → el envío
+          // igual se crea con datos mínimos y el server frena por BLOQUEADO_DATOS_PAQUETE
+          // si corresponde. La corrección de estos paths viene en el próximo debug round.
+          const ffoInfo = item?.fulfillment_order_info ?? {};
 
           if (!labelId || !fulfillmentOrderId) {
             console.error(
@@ -139,9 +157,11 @@ export async function POST(request: Request) {
             continue;
           }
 
-          const option = ffoInfo?.shipping?.option ?? {};
+          // shipping.option/type — TOP-LEVEL en el label real (confirmado 2026-08-26).
+          // Antes se leía anidado bajo fulfillment_order_info (que no existe en el shape real).
+          const option = item?.shipping?.option ?? {};
           const shippingType: string | null =
-            typeof ffoInfo?.shipping?.type === "string" ? ffoInfo.shipping.type : null;
+            typeof item?.shipping?.type === "string" ? item.shipping.type : null;
 
           const derivado = await derivarServicioLabel(
             empresaId,

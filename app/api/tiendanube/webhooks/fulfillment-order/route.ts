@@ -1,5 +1,8 @@
 import prisma from "@/lib/prisma";
 import { handleTiendanubeWebhook } from "@/lib/tiendanube/webhook-handler";
+import { apiUrl, authHeaders } from "@/lib/tiendanube/api";
+import { fetchTiendanube } from "@/lib/tiendanube/http";
+import { decryptSecret } from "@/lib/utils/secret-crypto";
 
 export const runtime = "nodejs";
 
@@ -73,6 +76,61 @@ export async function POST(request: Request) {
           orderId,
           event,
           count: res.count,
+        });
+      }
+
+      // numeroOrden backfill: el número de venta visible (#108) sólo lo da GET /orders/{id}.
+      // Best-effort: si falla el GET, no rompemos el webhook (el order_id ya se backfilleó).
+      try {
+        const tienda = await prisma.tiendaTiendanube.findUnique({
+          where: { storeId },
+          select: { accessToken: true },
+        });
+        if (tienda?.accessToken) {
+          const token = decryptSecret(tienda.accessToken);
+          const ordUrl = apiUrl(storeId, `orders/${orderId}?fields=id,number`);
+          const ordRes = await fetchTiendanube(ordUrl, {
+            method: "GET",
+            headers: authHeaders(token),
+          });
+          if (ordRes.ok) {
+            const ord: any = await ordRes.json().catch(() => null);
+            const numero = ord?.number != null ? String(ord.number) : "";
+            if (numero) {
+              const resNum = await prisma.envio.updateMany({
+                where: {
+                  tiendanubeFulfillmentOrderId: fulfillmentId,
+                  tiendanubeStoreId: storeId,
+                  OR: [
+                    { numeroOrden: null },
+                    { numeroOrden: { not: numero } },
+                  ],
+                },
+                data: { numeroOrden: numero },
+              });
+              if (resNum.count > 0) {
+                console.log("[webhook fulfillment-order] numeroOrden backfilled:", {
+                  storeId,
+                  fulfillmentId,
+                  orderId,
+                  numero,
+                  count: resNum.count,
+                });
+              }
+            }
+          } else {
+            console.warn("[webhook fulfillment-order] GET /orders para numeroOrden no-ok:", {
+              storeId,
+              orderId,
+              status: ordRes.status,
+            });
+          }
+        }
+      } catch (e) {
+        console.warn("[webhook fulfillment-order] numeroOrden backfill falló (best-effort):", {
+          storeId,
+          orderId,
+          err: e instanceof Error ? e.message : String(e).slice(0, 200),
         });
       }
     } else {

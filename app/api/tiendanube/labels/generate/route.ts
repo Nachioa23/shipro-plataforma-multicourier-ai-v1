@@ -82,6 +82,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "labels vacío" }, { status: 422 });
     }
     console.log("[TN-DBG] labels.length:", labels.length);
+    console.log("[TN-DBG] labels[0] keys:", labels[0] && typeof labels[0] === "object" ? Object.keys(labels[0]) : "no-es-objeto");
+    console.log("[TN-DBG] labels[0] shipping type:", typeof labels[0]?.shipping, "| carrier type:", typeof labels[0]?.shipping?.carrier);
+    console.log("[TN-DBG] labels[0] full:", JSON.stringify(labels[0]).slice(0, 800));
 
     // Self-auth: el payload NO trae store_id (shape v2 confirmada 2026-08-26).
     // La única señal para identificar la tienda es shipping.carrier.carrier_id — el

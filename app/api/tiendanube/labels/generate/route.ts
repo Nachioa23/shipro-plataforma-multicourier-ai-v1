@@ -69,6 +69,8 @@ function extraerStoreId(body: any, labels: any[]): number | null {
 export async function POST(request: Request) {
   try {
     const body: any = await request.json().catch(() => null);
+    console.log("[TN-LABELS-DEBUG] raw body:", JSON.stringify(body));
+    console.log("[TN-LABELS-DEBUG] content-type:", request.headers.get("content-type"));
     if (!body) {
       return NextResponse.json({ error: "Body inválido" }, { status: 422 });
     }

@@ -255,7 +255,10 @@ export async function POST(request: Request) {
                 : typeof destination?.province === "string"
                 ? destination.province
                 : undefined,
-            numeroOrden: ffoInfo?.number != null ? String(ffoInfo.number) : null,
+            // numeroOrden: el número de VENTA (#108) NO viene en el callback de labels
+            // (ffoInfo.number es el número del FULFILLMENT, ="1"). Lo backfillea el webhook
+            // fulfillment_order vía GET /orders/{id}. Nace null (honesto) hasta ese backfill.
+            numeroOrden: null,
             // Ancla de idempotencia — mismo ffo pedido dos veces = mismo envío,
             // sin doble despacho ni doble débito (schema @@unique).
             idempotencyKey: fulfillmentOrderId,

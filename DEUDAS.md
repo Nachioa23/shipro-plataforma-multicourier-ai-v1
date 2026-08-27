@@ -25,7 +25,7 @@ Este bloque captura decisiones de principio que guian futuras decisiones de scop
 Esta sección es el mapa que cada chat de trabajo lee al arrancar. Fuente de verdad del ORDEN; el detalle de cada deuda vive en su bloque.
 
 **Estado verificado al 2026-08-24** (auditoría de reconciliación código+git+body):
-- RESUELTAS y en producción: DEUDA 128 (movida a DEUDAS-RESUELTAS.md). DEUDA 73, 107, 105, 10, 149 resueltas en su núcleo pero se quedan acá por colas menores pendientes (se mueven al saldarlas).
+- RESUELTAS y en producción: DEUDA 128 (movida a DEUDAS-RESUELTAS.md). DEUDA 73, 107, 105, 10, 149, 151 resueltas en su núcleo pero se quedan acá por colas menores pendientes (se mueven al saldarlas).
 - RESUELTA EN CÓDIGO, FALTA DEPLOY A PRODUCCIÓN: DEUDA 129 (arreglo de regresión fetchConTimeout en commit 709d995, compila, nunca deployado). Semáforo localhost↔prod: queda en pendientes hasta subir a prod.
 - BUGS DE PLATA VIVOS (prioridad): DEUDA 123 (subcobro ~17% por tarifaIncluyeIva en credenciales creadas fuera del seed) + DEUDA 132 (dimensiones caen a 10×10×10, factura mal).
 
@@ -3342,5 +3342,67 @@ WooCommerce/Shopify/Mercado Flex).
 **Dependencia:** el frente de plugins (WooCommerce) no puede validar la Etapa 2 (cotizar e2e) hasta que exista al menos la Capa 1. El código del plugin sí puede construirse en paralelo.
 
 **Pertenece a:** Núcleo (toca UI del panel + permisos de rol en shipro-2.0). NO lo construye el chat de plugins.
+
+---
+
+## DEUDA 151 — Trigger automático de etiqueta Tiendanube: "venta pagada = etiqueta creada" (RESUELTA 2026-08-27)
+
+**Status:** RESUELTA 2026-08-27 — validado en producción (compra en la demo → marcar pagada → etiqueta real de Andreani generada SOLA, sin script, vínculo Tiendanube persistido y numeroOrden correcto). Cola pendiente no bloqueante delegada al chat Núcleo (costo $0 en precioMostrado/precioProveedor) — se queda acá con tag RESUELTA hasta saldarla.
+
+**Contexto.** La app Tiendanube tiene que hacer 3 cosas: (1) publicar tarifa en tiempo
+real en el checkout [hecho], (2) crear la etiqueta elegida en NPMS + dashboard de
+Tiendanube [esta deuda], (3) consumir y publicar la trazabilidad al comprador y al
+merchant [pendiente, futuro]. El punto 2 tenía la maquinaria (/generate crea el envío
++ etiqueta) pero le faltaba el DISPARADOR automático: la etiqueta solo se generaba si
+alguien hacía manualmente el POST /fulfillment-orders/labels. Sin trigger, un merchant
+real compraba y la etiqueta no se creaba sola.
+
+**Solución — trigger sobre order/paid (4 piezas).** El evento order/paid de Tiendanube
+(confirmado vía doc: se dispara tanto en pago electrónico automático como en confirmación
+manual de transferencia por el merchant) dispara la generación:
+1. Helper lib/tiendanube/disparar-generacion.ts (commit 6dc03be): dado un order pagado,
+   hace GET de sus fulfillment-orders, matchea el de Shipro por shippingCarrierId
+   (por-tienda, no hardcoded), y dispara POST /fulfillment-orders/labels. Tres resultados:
+   disparado / no_es_shipro (otra transportadora) / ffo_ausente (caso borde documentado
+   de Tiendanube: el ffo se crea diferido tras un error de procesamiento).
+2. Handler app/api/tiendanube/webhooks/order/route.ts (commit ea05580): recibe order/paid,
+   filtra por carrier de Shipro, traduce el resultado a retry-semantics — ffo_ausente →
+   500 → Tiendanube reintenta (hasta 16× en 48h, sin cola propia — Opción A). Idempotente:
+   /generate dedup por fulfillmentOrderId, un order/paid duplicado no crea doble envío.
+3. Registro del webhook order/paid (commit 6fc961c): de 6 a 7 webhooks, idempotente
+   (GET-then-diff). Requiere re-registrar en tiendas existentes (reinstalar).
+4. Persistencia del vínculo Tiendanube en el envío (commit aa93790): CrearEnvioInput
+   acepta tiendanubeStoreId/FulfillmentOrderId/OrderId; /generate los pasa. Sin esto el
+   Admin Link no encontraba el envío y el webhook fulfillment_order no podía backfillear
+   el order_id.
+
+**Fix de numeroOrden (commits 07cf39d + 9f84037).** El /generate guardaba
+fulfillment_order_info.number (número del FULFILLMENT = "1"), no el número de venta
+(#108). El #108 no viaja en el callback de labels ni en order/paid — solo en
+GET /orders/{id}. Solución: /generate nace con numeroOrden=null; el webhook
+fulfillment_order lo backfillea con el número real via GET /orders/{id}?fields=id,number
+(best-effort, mismo patrón idempotente que el backfill de tiendanubeOrderId).
+Verificado en prod: envío de la orden #109 nació con numeroOrden="109".
+
+**Validado en producción (2026-08-27).** Compra en la demo → marcar pagada → la etiqueta
+se generó SOLA (sin script), con etiqueta real de Andreani, vínculo Tiendanube persistido
+y numeroOrden correcto. El punto 2 (crear la etiqueta automáticamente) funciona end-to-end.
+
+**Decisión técnica — retry Opción A.** Se aprovecha el retry nativo de Tiendanube (16×/48h)
+en vez de construir una cola propia. Menos partes móviles, más confiable. El caso borde del
+ffo diferido se cubre con 500 → retry.
+
+**COLA PENDIENTE (no bloqueante, delegada al chat Núcleo):**
+- costo $0: los envíos de Tiendanube nacen con precioMostrado=0 y precioProveedor=0
+  (el /generate no pasa costoEnvio/costoProveedor y crear.ts cae a ||0). El precioFactura
+  SÍ está correcto (re-cotización interna). Fix en crear.ts (territorio Núcleo, toca
+  conciliación): poblar precioMostrado con matchedA.precioFinal y precioProveedor con
+  matchedA.precioProveedor (seco) cuando el caller no los pasa. Beneficia a todos los
+  flujos. precioProveedor=0 envenena la métrica de fuga (DEUDA 76). Diagnóstico y decisión
+  de negocio ya traspasados al Núcleo.
+- Botón de impresión en el dashboard de Tiendanube (Admin Link): el link funciona y sirve
+  el PDF, pero el botón no está surfaceado en el admin de Tiendanube. Nacho lo deprioritizó.
+- Punto 3 (consumir + publicar trazabilidad al comprador y merchant): no empezado. El link
+  de tracking puede quedar apuntando al SHP-* provisorio si el envío nació bloqueado.
 
 ---

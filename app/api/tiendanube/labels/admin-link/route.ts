@@ -7,6 +7,7 @@ import {
   StandardFonts,
   type EnvioParaEtiqueta,
 } from "@/lib/etiquetas/armar-etiqueta";
+import { getAppUrlOrThrow } from "@/lib/utils/app-url";
 
 // pdf-lib + posible fs.readFileSync del logo (branch Mocis-puro) necesitan Node runtime.
 export const runtime = "nodejs";
@@ -269,10 +270,14 @@ export async function GET(request: Request) {
 
     // CASO A — un solo pedido pedido con una etiqueta encontrada: redirect al /download
     // existente. Reusa todo el gating por token + render + Content-Type.
+    // Base: la URL PÚBLICA (getAppUrlOrThrow), NO request.url — detrás de nginx
+    // request.url apunta a http://localhost:3000 (URL interna de Next), y el navegador
+    // del merchant caería en localhost → ERR_SSL_PROTOCOL_ERROR. Mismo patrón que el
+    // fix del OAuth callback.
     if (ids.length === 1 && encontrados.length === 1) {
       const dest = new URL(
         `/api/tiendanube/labels/download?token=${encodeURIComponent(encontrados[0].downloadToken)}`,
-        request.url,
+        getAppUrlOrThrow(),
       );
       return NextResponse.redirect(dest, 302);
     }

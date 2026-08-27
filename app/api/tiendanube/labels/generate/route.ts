@@ -271,6 +271,11 @@ export async function POST(request: Request) {
             // Ancla de idempotencia — mismo ffo pedido dos veces = mismo envío,
             // sin doble despacho ni doble débito (schema @@unique).
             idempotencyKey: fulfillmentOrderId,
+            // Vínculo Tiendanube: el store lo resolvimos por carrier_id; el ffo id es la ancla.
+            // tiendanubeOrderId NO viene en el payload de labels — lo backfillea el webhook
+            // fulfillment_order matcheando por (tiendanubeFulfillmentOrderId, tiendanubeStoreId).
+            tiendanubeStoreId: storeIdSnapshot,
+            tiendanubeFulfillmentOrderId: fulfillmentOrderId,
             sucursalDestinoId: derivado.sucursalId,
             // e-commerce path: si falta depósito/credencial/operatividad/saldo, el envío
             // se crea BLOQUEADO_* con SHP-* (no rompe la venta) y se destraba solo cuando

@@ -71,6 +71,15 @@ export interface CrearEnvioInput {
   provinciaDestino?: string;
   numeroOrden?: string | null;
 
+  // Vínculo Tiendanube (labels API). Los persiste el /generate para que el
+  // webhook fulfillment_order pueda backfillear tiendanubeOrderId (matchea por
+  // tiendanubeFulfillmentOrderId + tiendanubeStoreId) y para que el Admin Link
+  // encuentre el envío por tiendanubeOrderId. Opcionales: sólo el flujo Tiendanube
+  // los manda; dashboard/plugin/manual los dejan undefined.
+  tiendanubeStoreId?: number | null;
+  tiendanubeFulfillmentOrderId?: string | null;
+  tiendanubeOrderId?: string | null;
+
   // DEUDA 128: clave de idempotencia. La produce el plugin (Idempotency-Key header),
   // se persiste en Envio.idempotencyKey. El check de duplicados vive en la ruta
   // (POST /api/envios); acá sólo se almacena. Null → creación sin clave (dashboard
@@ -99,6 +108,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
     empresaId, depositoId: depositoIdInput, permitirBloqueoPorDeposito, destinatarioNombre, cpDestino, pesoReal, largoCm, anchoCm, altoCm, nombreCourier,
     calle, altura, piso, dpto, dni, email, telefono, localidad, modalidad,
     valorDeclarado, costoEnvio, costoProveedor, provinciaDestino, numeroOrden,
+    tiendanubeStoreId, tiendanubeFulfillmentOrderId, tiendanubeOrderId,
     idempotencyKey,
     tipoOrigen, sucursalOrigenId, sucursalDestinoId
   } = input;
@@ -834,6 +844,11 @@ export async function crearEnvio(input: CrearEnvioInput) {
         diasPrometidosCheckout: diasPrometidosCalculados,
         // TODO DEUDA 29 Sub-fase 3: tracking del first-mile ahora vive en TramoEnvio.trackingExterno.
         numeroOrden: numeroOrden || null,
+        // Vínculo Tiendanube: persistido al crear para que el webhook fulfillment_order
+        // backfillee tiendanubeOrderId y el Admin Link resuelva el envío.
+        tiendanubeStoreId: tiendanubeStoreId ?? null,
+        tiendanubeFulfillmentOrderId: tiendanubeFulfillmentOrderId ?? null,
+        tiendanubeOrderId: tiendanubeOrderId ?? null,
         // DEUDA 128: persistir la clave del plugin para que la ruta pueda
         // detectar reintentos y devolver la etiqueta existente sin re-crear.
         idempotencyKey: idempotencyKey ?? null,

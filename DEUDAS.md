@@ -25,7 +25,7 @@ Este bloque captura decisiones de principio que guian futuras decisiones de scop
 Esta sección es el mapa que cada chat de trabajo lee al arrancar. Fuente de verdad del ORDEN; el detalle de cada deuda vive en su bloque.
 
 **Estado verificado al 2026-08-24** (auditoría de reconciliación código+git+body):
-- RESUELTAS y en producción: DEUDA 128 (movida a DEUDAS-RESUELTAS.md). DEUDA 73, 107, 105, 10 resueltas en su núcleo pero se quedan acá por colas menores pendientes (se mueven al saldarlas).
+- RESUELTAS y en producción: DEUDA 128 (movida a DEUDAS-RESUELTAS.md). DEUDA 73, 107, 105, 10, 149 resueltas en su núcleo pero se quedan acá por colas menores pendientes (se mueven al saldarlas).
 - RESUELTA EN CÓDIGO, FALTA DEPLOY A PRODUCCIÓN: DEUDA 129 (arreglo de regresión fetchConTimeout en commit 709d995, compila, nunca deployado). Semáforo localhost↔prod: queda en pendientes hasta subir a prod.
 - BUGS DE PLATA VIVOS (prioridad): DEUDA 123 (subcobro ~17% por tarifaIncluyeIva en credenciales creadas fuera del seed) + DEUDA 132 (dimensiones caen a 10×10×10, factura mal).
 
@@ -3207,7 +3207,9 @@ en la misma sesión de DNS con Fran — dos registros del mismo tipo, no molesta
 
 ---
 
-## DEUDA 149 — Circuito de generación de etiqueta Tiendanube: callback corregido + bloqueado por feature fulfillment_order_label_api no habilitada en la tienda (registrada 2026-08-26)
+## DEUDA 149 — Circuito de generación de etiqueta Tiendanube: callback corregido + bloqueado por feature fulfillment_order_label_api no habilitada en la tienda (registrada 2026-08-26, RESUELTA 2026-08-27)
+
+**Status:** RESUELTA 2026-08-27 — circuito validado end-to-end en producción (etiqueta real de Andreani generada + descargada por el Admin Link). El falso bloqueante de la feature quedó aclarado por Poggi. Se conservan colas menores no bloqueantes (ver RESOLUCIÓN al final).
 
 **Contexto:** sesión de debugging end-to-end en producción del circuito de Labels
 API de Tiendanube. Se compró en la tienda demo y la etiqueta nunca se generó (ni
@@ -3257,6 +3259,70 @@ tercer problema.
 OAuth se genera hoy por POST a /api/tiendanube/install/link (requiere empresaId en el
 body, sin UI). Debería haber un botón en el panel admin de Shipro que genere el link
 con un click. Fricción inaceptable para un cliente real.
+
+---
+
+**RESOLUCIÓN (2026-08-27) — circuito validado end-to-end en producción.**
+
+El circuito de generación + descarga de etiquetas de Tiendanube funciona de punta
+a punta (verificado en prod: etiqueta real de Andreani generada vía POST
+/fulfillment-orders/labels, y descargada por el Admin Link). Se encontró y corrigió
+una CADENA de 4 bugs, más la aclaración del falso bloqueante de la feature:
+
+1. **Callback mal apuntado (commit c091ced).** El carrier registraba
+   callback_labels_url = /api/tiendanube/labels; el handler real es
+   /api/tiendanube/labels/generate. Tiendanube postea directo a la URL registrada
+   (sin sufijo), pegaba en 404 → la etiqueta nunca se generaba. Fix en carrier.ts.
+   Requirió reinstalar la app en la demo para re-registrar el carrier (nuevo
+   carrier id 5276416 con el callback corregido).
+
+2. **Falso bloqueante de la feature fulfillment_order_label_api.** GET /store no
+   devolvía la feature en el array para la tienda demo, lo que sugería un 403. Poggi
+   (Tiendanube) confirmó que el array estaba mal para esa tienda y que con plan
+   Escala/Evolución se opera sin problema. NO era un bloqueante real — el POST
+   /fulfillment-orders/labels devolvió 201.
+
+3. **Formato del trigger.** El POST /fulfillment-orders/labels espera un ARRAY de
+   items con { id: fulfillmentOrderId } a secas. Otras variantes (fulfillment_order_id,
+   con carrier explícito) dan 422 del lado de Tiendanube.
+
+4. **Parseo del payload del callback — nesting (commits 2be8211 WRONG, b1677f6,
+   2db3f57 FINAL).** El payload del callback es un array; cada label tiene solo 3
+   keys en root: label_id, requested_by, fulfillment_order_info. TODO lo demás
+   (shipping.carrier.carrier_id, recipient, destination, line_items) vive ANIDADO
+   dentro de fulfillment_order_info, no en el root. El código leía del root →
+   carrier_id null → 422 "carrier-ausente". Además: la tienda se resuelve por
+   shipping.carrier.carrier_id (el payload NO trae store_id), y el labelId es
+   label_id (no id). Fix final: todos los accesos pasan por fulfillment_order_info.
+
+5. **Vínculo Tiendanube no persistido (commit aa93790).** El /generate creaba el
+   Envio sin tiendanubeStoreId/FulfillmentOrderId → quedaban null → el webhook
+   fulfillment_order no podía backfillear tiendanubeOrderId (matchea por esos
+   campos) y el Admin Link no encontraba el envío. Fix: CrearEnvioInput acepta los
+   3 campos tiendanube (aditivo; toca crear.ts, territorio Núcleo, avisado) y el
+   /generate los pasa. tiendanubeOrderId lo backfillea el webhook.
+
+6. **Admin Link redirigía a localhost (commit b9e1629).** El redirect 302 al
+   /download usaba request.url como base, que detrás de nginx es localhost:3000 →
+   ERR_SSL_PROTOCOL_ERROR en el navegador del merchant. Fix: getAppUrlOrThrow()
+   (mismo patrón que el fix del OAuth callback).
+
+Logs temporales de diagnóstico removidos (commit 5e1bf57).
+
+**Aprendizaje confirmado:** una integración con un tercero no está terminada hasta
+que el circuito completo corre contra el tercero real. Cada pieza compilaba (tsc 0)
+y deployaba, y aun así el circuito estuvo roto meses por 6 problemas encadenados
+invisibles en localhost. La validación end-to-end contra el sandbox real es
+obligatoria antes de dar por cerrada cualquier integración (aplicable a los plugins
+WooCommerce/Shopify/Mercado Flex).
+
+**Pendientes menores (no bloqueantes, registrar si se priorizan):**
+- El link de trazabilidad que ve el merchant en Tiendanube puede quedar apuntando
+  al tracking provisorio (SHP-*) si el envío nació bloqueado y se destrabó después;
+  falta re-sincronizar el tracking real post-destrabe.
+- El costo de un envío de prueba salió $0 — verificar si es artefacto de la prueba
+  o un caso a revisar en la cotización del flujo labels.
+- UX: el link de instalación OAuth se genera por POST sin UI (ya registrado).
 
 ---
 

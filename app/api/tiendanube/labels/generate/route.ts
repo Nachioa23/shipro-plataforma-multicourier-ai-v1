@@ -54,7 +54,7 @@ function extraerLabels(body: any): any[] {
   return [];
 }
 
-// Shape REAL confirmada 2026-08-26 v3 (logs [TN-DBG] en prod — keys de labels[0]):
+// Shape REAL confirmada 2026-08-26 v3 (validada en prod — keys de labels[0]):
 // el label sólo tiene 3 keys en el root — label_id, requested_by, fulfillment_order_info.
 // TODO lo demás (shipping, recipient, destination, line_items) vive ANIDADO dentro de
 // fulfillment_order_info. El carrier_id que identifica la tienda vive en
@@ -70,32 +70,22 @@ function extraerCarrierId(labels: any[]): string | null {
 export async function POST(request: Request) {
   try {
     const body: any = await request.json().catch(() => null);
-    console.log("[TN-LABELS-DEBUG] raw body:", JSON.stringify(body));
-    console.log("[TN-LABELS-DEBUG] content-type:", request.headers.get("content-type"));
     if (!body) {
-      console.log("[TN-DBG] 422 body-invalido");
       return NextResponse.json({ error: "Body inválido" }, { status: 422 });
     }
 
     const labels = extraerLabels(body);
     if (labels.length === 0) {
-      console.log("[TN-DBG] 422 labels-vacio, body es array?", Array.isArray(body), "typeof body:", typeof body);
       return NextResponse.json({ error: "labels vacío" }, { status: 422 });
     }
-    console.log("[TN-DBG] labels.length:", labels.length);
-    console.log("[TN-DBG] labels[0] keys:", labels[0] && typeof labels[0] === "object" ? Object.keys(labels[0]) : "no-es-objeto");
-    console.log("[TN-DBG] labels[0] shipping type:", typeof labels[0]?.shipping, "| carrier type:", typeof labels[0]?.shipping?.carrier);
-    console.log("[TN-DBG] labels[0] full:", JSON.stringify(labels[0]).slice(0, 800));
 
-    // Self-auth: el payload NO trae store_id (shape v3 confirmada 2026-08-26 por logs).
+    // Self-auth: el payload NO trae store_id (shape v3 confirmada 2026-08-26).
     // La única señal para identificar la tienda es
     // fulfillment_order_info.shipping.carrier.carrier_id — el shippingCarrierId que
     // Tiendanube devolvió al crear el carrier durante el install OAuth. Ese id es
     // único por par (tienda, app), así que basta para la lookup.
     const carrierId = extraerCarrierId(labels);
-    console.log("[TN-DBG] carrierId extraido:", carrierId);
     if (!carrierId) {
-      console.log("[TN-DBG] 422 carrier-ausente, primer label shipping:", JSON.stringify(labels[0]?.shipping));
       return NextResponse.json({ error: "carrier_id ausente en el payload" }, { status: 422 });
     }
     const tienda = await prisma.tiendaTiendanube.findFirst({
@@ -107,9 +97,7 @@ export async function POST(request: Request) {
         storeId: true,
       },
     });
-    console.log("[TN-DBG] tienda encontrada:", tienda ? tienda.storeId : "NULL");
     if (!tienda) {
-      console.log("[TN-DBG] 422 tienda-no-vinculada, carrierId=", carrierId, "encontrada?", !!tienda);
       return NextResponse.json({ error: "Tienda no vinculada" }, { status: 422 });
     }
 
@@ -125,7 +113,7 @@ export async function POST(request: Request) {
     after(async () => {
       for (const item of labels) {
         try {
-          // Shape REAL confirmada 2026-08-26 v3 (logs [TN-DBG] en prod — keys de labels[0]):
+          // Shape REAL confirmada 2026-08-26 v3 (validada en prod — keys de labels[0]):
           // El label sólo tiene 3 keys en root:
           //   - label_id      → labelId (¡NO `id`!)
           //   - requested_by  (no consumido)
@@ -167,8 +155,8 @@ export async function POST(request: Request) {
           }
 
           // shipping.option/type — ANIDADOS dentro de fulfillment_order_info (shape v3
-          // confirmada por logs [TN-DBG] en prod). El label root sólo tiene 3 keys;
-          // shipping vive junto con recipient/destination/line_items bajo ffoInfo.
+          // confirmada en prod). El label root sólo tiene 3 keys; shipping vive junto
+          // con recipient/destination/line_items bajo ffoInfo.
           const option = ffoInfo?.shipping?.option ?? {};
           const shippingType: string | null =
             typeof ffoInfo?.shipping?.type === "string" ? ffoInfo.shipping.type : null;
@@ -194,7 +182,7 @@ export async function POST(request: Request) {
 
           // ---- Mapping del payload real → CrearEnvioInput ----
           // recipient / destination / line_items viven DENTRO de fulfillment_order_info
-          // (shape v3 confirmada por logs [TN-DBG] en prod: el label root sólo tiene 3 keys).
+          // (shape v3 confirmada en prod: el label root sólo tiene 3 keys).
           const recipient = ffoInfo?.recipient ?? {};
           const destination = ffoInfo?.destination ?? {};
           const lineItems: any[] = Array.isArray(ffoInfo?.line_items) ? ffoInfo.line_items : [];

@@ -6,13 +6,14 @@
 // lado nuestro (verify HMAC, handleTiendanubeWebhook, rutas dispatcher) queda
 // dormido — Tiendanube no sabe a qué URL avisar.
 //
-// SCOPE (6 eventos programáticos):
+// SCOPE (7 eventos programáticos):
 //   fulfillment_order/status_updated          → /api/tiendanube/webhooks/fulfillment-order
 //   fulfillment_order/label_status_updated    → (misma URL)
 //   fulfillment_order/tracking_event_created  → (misma URL)
 //   fulfillment_order/tracking_event_updated  → (misma URL)
 //   fulfillment_order/tracking_event_deleted  → (misma URL)
 //   app/uninstalled                           → /api/tiendanube/webhooks/app-uninstalled
+//   order/paid                                → /api/tiendanube/webhooks/order
 //
 // Los 3 webhooks de LGPD (customers/redact, store/redact, customers/data_request)
 // se configuran a mano en el Partners Portal — Tiendanube exige URLs fijas
@@ -96,16 +97,16 @@ async function registrarWebhook(
 }
 
 export interface RegistrarWebhooksResult {
-  /** Cuántos de los 6 deseados YA estaban registrados con la misma url (skip). */
+  /** Cuántos de los 7 deseados YA estaban registrados con la misma url (skip). */
   yaExistentes: number;
   /** Eventos recién registrados en esta corrida (los que faltaban). */
   registrados: string[];
-  /** Total de eventos deseados (constante = 6). Facilita "nuevos/total" en logs. */
+  /** Total de eventos deseados (constante = 7). Facilita "nuevos/total" en logs. */
   total: number;
 }
 
 /**
- * Orquesta el registro de los 6 webhooks programáticos para una tienda.
+ * Orquesta el registro de los 7 webhooks programáticos para una tienda.
  * Idempotente (GET-then-diff). El caller es responsable de:
  *   (a) envolver en try/catch best-effort (network / no-2xx bubblean como Error).
  *   (b) auditar el fallo si le importa dejar rastro (patrón carrier).
@@ -118,6 +119,7 @@ export async function registrarWebhooksParaTienda(input: {
   const appUrl = getAppUrlOrThrow();
   const urlFulfillment = `${appUrl}/api/tiendanube/webhooks/fulfillment-order`;
   const urlUninstalled = `${appUrl}/api/tiendanube/webhooks/app-uninstalled`;
+  const urlOrder = `${appUrl}/api/tiendanube/webhooks/order`;
 
   const deseados: Array<{ event: string; url: string }> = [
     { event: "fulfillment_order/status_updated", url: urlFulfillment },
@@ -126,6 +128,7 @@ export async function registrarWebhooksParaTienda(input: {
     { event: "fulfillment_order/tracking_event_updated", url: urlFulfillment },
     { event: "fulfillment_order/tracking_event_deleted", url: urlFulfillment },
     { event: "app/uninstalled", url: urlUninstalled },
+    { event: "order/paid", url: urlOrder },
   ];
 
   const existentes = await listarWebhooks(input.storeId, accessToken);

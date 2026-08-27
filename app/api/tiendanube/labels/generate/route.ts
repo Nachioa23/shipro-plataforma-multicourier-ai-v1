@@ -54,13 +54,14 @@ function extraerLabels(body: any): any[] {
   return [];
 }
 
-// Shape REAL confirmada 2026-08-26 v2 (payload completo TN-LABELS-DEBUG en prod):
-// el callback NO trae store_id en ningún lado. Resolvemos la tienda por
-// shipping.carrier.carrier_id — la id del carrier que registramos al conectar la
-// app en la tienda (ver TiendaTiendanube.shippingCarrierId).
+// Shape REAL confirmada 2026-08-26 v3 (logs [TN-DBG] en prod — keys de labels[0]):
+// el label sólo tiene 3 keys en el root — label_id, requested_by, fulfillment_order_info.
+// TODO lo demás (shipping, recipient, destination, line_items) vive ANIDADO dentro de
+// fulfillment_order_info. El carrier_id que identifica la tienda vive en
+// fulfillment_order_info.shipping.carrier.carrier_id, no en el root.
 function extraerCarrierId(labels: any[]): string | null {
   for (const it of labels) {
-    const cid = it?.shipping?.carrier?.carrier_id;
+    const cid = it?.fulfillment_order_info?.shipping?.carrier?.carrier_id;
     if (typeof cid === "string" && cid.length > 0) return cid;
   }
   return null;
@@ -86,10 +87,11 @@ export async function POST(request: Request) {
     console.log("[TN-DBG] labels[0] shipping type:", typeof labels[0]?.shipping, "| carrier type:", typeof labels[0]?.shipping?.carrier);
     console.log("[TN-DBG] labels[0] full:", JSON.stringify(labels[0]).slice(0, 800));
 
-    // Self-auth: el payload NO trae store_id (shape v2 confirmada 2026-08-26).
-    // La única señal para identificar la tienda es shipping.carrier.carrier_id — el
-    // shippingCarrierId que Tiendanube devolvió al crear el carrier durante el install
-    // OAuth. Ese id es único por par (tienda, app), así que basta para la lookup.
+    // Self-auth: el payload NO trae store_id (shape v3 confirmada 2026-08-26 por logs).
+    // La única señal para identificar la tienda es
+    // fulfillment_order_info.shipping.carrier.carrier_id — el shippingCarrierId que
+    // Tiendanube devolvió al crear el carrier durante el install OAuth. Ese id es
+    // único por par (tienda, app), así que basta para la lookup.
     const carrierId = extraerCarrierId(labels);
     console.log("[TN-DBG] carrierId extraido:", carrierId);
     if (!carrierId) {
@@ -123,14 +125,20 @@ export async function POST(request: Request) {
     after(async () => {
       for (const item of labels) {
         try {
-          // Shape REAL confirmada 2026-08-26 v2 (payload completo TN-LABELS-DEBUG):
-          //   - label_id                              → labelId  (¡NO `id`!)
-          //   - fulfillment_order_info.id             → ffo_id
-          //   - fulfillment_order_info.number         → numeroOrden
-          //   - fulfillment_order_info.total_weight   → peso (kg)
-          //   - shipping.carrier.carrier_id           → identifica la tienda (resuelto arriba)
-          //   - shipping.option.{code,reference,type} → derivar servicio
-          //   - recipient / destination / line_items  → TOP-LEVEL en el label (no bajo ffoInfo)
+          // Shape REAL confirmada 2026-08-26 v3 (logs [TN-DBG] en prod — keys de labels[0]):
+          // El label sólo tiene 3 keys en root:
+          //   - label_id      → labelId (¡NO `id`!)
+          //   - requested_by  (no consumido)
+          //   - fulfillment_order_info (contiene TODO lo demás nested)
+          // Los campos que usamos abajo viven dentro de fulfillment_order_info:
+          //   - fulfillment_order_info.id                              → ffo_id
+          //   - fulfillment_order_info.number                          → numeroOrden
+          //   - fulfillment_order_info.total_weight                    → peso (kg)
+          //   - fulfillment_order_info.shipping.carrier.carrier_id     → identifica la tienda
+          //   - fulfillment_order_info.shipping.option.{code,ref,type} → derivar servicio
+          //   - fulfillment_order_info.recipient                        → destinatario/DNI/email/tel
+          //   - fulfillment_order_info.destination                      → CP/calle/altura/etc
+          //   - fulfillment_order_info.line_items                       → dims/quantity por item
           const labelId = typeof item?.label_id === "string" || typeof item?.label_id === "number" ? String(item.label_id) : "";
           const ffoInfo = item?.fulfillment_order_info ?? {};
           const fulfillmentOrderId =
@@ -158,11 +166,12 @@ export async function POST(request: Request) {
             continue;
           }
 
-          // shipping.option/type — TOP-LEVEL en el label real (confirmado 2026-08-26).
-          // Antes se leía anidado bajo fulfillment_order_info (que no existe en el shape real).
-          const option = item?.shipping?.option ?? {};
+          // shipping.option/type — ANIDADOS dentro de fulfillment_order_info (shape v3
+          // confirmada por logs [TN-DBG] en prod). El label root sólo tiene 3 keys;
+          // shipping vive junto con recipient/destination/line_items bajo ffoInfo.
+          const option = ffoInfo?.shipping?.option ?? {};
           const shippingType: string | null =
-            typeof item?.shipping?.type === "string" ? item.shipping.type : null;
+            typeof ffoInfo?.shipping?.type === "string" ? ffoInfo.shipping.type : null;
 
           const derivado = await derivarServicioLabel(
             empresaId,
@@ -184,10 +193,11 @@ export async function POST(request: Request) {
           }
 
           // ---- Mapping del payload real → CrearEnvioInput ----
-          // recipient / destination / line_items son TOP-LEVEL en el label (shape v2 confirmada).
-          const recipient = item?.recipient ?? {};
-          const destination = item?.destination ?? {};
-          const lineItems: any[] = Array.isArray(item?.line_items) ? item.line_items : [];
+          // recipient / destination / line_items viven DENTRO de fulfillment_order_info
+          // (shape v3 confirmada por logs [TN-DBG] en prod: el label root sólo tiene 3 keys).
+          const recipient = ffoInfo?.recipient ?? {};
+          const destination = ffoInfo?.destination ?? {};
+          const lineItems: any[] = Array.isArray(ffoInfo?.line_items) ? ffoInfo.line_items : [];
 
           // Peso: fulfillment_order_info.total_weight (kg, autoritativo — el server ya sumó).
           // Fallback defensivo: computar de line_items[].unit_dimension.weight (también en kg —

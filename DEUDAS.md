@@ -3406,3 +3406,52 @@ ffo diferido se cubre con 500 → retry.
   de tracking puede quedar apuntando al SHP-* provisorio si el envío nació bloqueado.
 
 ---
+
+## DEUDA 152 — Homogeneizar el IVA de precioProveedor entre couriers (medir peras con peras) (registrada 2026-08-28, scope medio-alto, prioridad media)
+
+**Status:** ABIERTA — no bloquea producción. Bloquea comparaciones cross-courier confiables sobre `precioProveedor`.
+
+**Problema:** `FinanzasEnvio.precioProveedor` se persiste en la forma NATIVA que cada courier devuelve — Andreani lo devuelve **CON IVA** (`tarifaApiIncluyeIva = true`), Mocis lo devuelve **SIN IVA** (`tarifaApiIncluyeIva = false`). Confirmado en `lib/cotizador.ts:210` — retorna `precioProveedor: seco` sin normalizar, y el comentario mismo dice literalmente `"raw, sin cambios: la conciliación depende de este significado."`. La construcción está en L161-172: `const seco = costoSecoCourier ...; const secoNeto = config.tarifaIncluyeIva ? seco.div(IVA_AR_MULTIPLIER) : seco;` — el `seco` que se persiste como `precioProveedor` **NO** pasa por el strip de IVA (eso se hace sólo para `secoNeto` interno).
+
+Consecuencia: `precioProveedor` NO es homogéneo entre couriers. Cualquier métrica o dashboard que agregue/promedie/compare este campo a través de couriers mezcla peras con manzanas (Andreani con IVA + Mocis sin IVA). El fix de precios del 2026-08-27 (commit `ea3e989`) preservó la forma nativa deliberadamente y dejó esto pendiente.
+
+**Objetivo:** normalizar `precioProveedor` a una forma única (todos con IVA, o todos sin IVA — decisión de negocio) para que las métricas y comparaciones crucen couriers de forma homogénea.
+
+**CUIDADO CRÍTICO (por qué NO se hizo junto al fix del 2026-08-27):** la **conciliación depende de la forma nativa actual**. `app/api/conciliacion/route.ts:244` lee `costoEsperado = envio.finanzas.precioProveedor ?? 0` y en L245 lo compara contra `costoFactRaw = fila.costo` — donde `fila.costo` viene del Excel de factura del courier **en la MISMA forma nativa** (Andreani factura con IVA, Mocis factura sin IVA). Hoy compara peras con peras porque ambas puntas están en forma nativa. Cambiar `precioProveedor` a una forma normalizada SIN ajustar simultáneamente el parseo del Excel de conciliación **rompería la comparación cotizado-vs-facturado de forma SILENCIOSA** (falsos SOBREPRECIO_RECLAMAR / falsos rowsSospechosasIva por el chequeo `>1.15×` de L253). No es un cambio aislable de un campo — requiere el pipeline entero de conciliación en el mismo movimiento.
+
+**Fix propuesto (no ejecutar, esbozo):**
+1. Decidir la forma canónica (con IVA vs sin IVA — Nacho define).
+2. Cambiar la construcción en `lib/cotizador.ts:210` para normalizar a la forma elegida.
+3. Ajustar `conciliacion/route.ts` para normalizar `fila.costo` a la misma forma antes de comparar (usando la bandera `tarifaApiIncluyeIva` del adapter del courier del envío — misma técnica ya usada en el fallback de `crear.ts` L634).
+4. Backfill considerado: los envíos históricos quedan con la forma vieja mixta. Si la métrica cross-courier necesita historia, agregar un one-off script que re-normaliza; si sólo se aplica hacia adelante, dejar el legacy como está (documentado).
+5. Deploy con verificación: correr una conciliación piloto sobre una factura conocida y comparar delta.
+
+**Scope:** medio-alto — cotizador + conciliación + posiblemente el import de facturas + decisión sobre backfill histórico. **Prioridad:** media (no bloquea, pero cualquier métrica cross-courier sobre `precioProveedor` es engañosa hasta resolverla).
+
+**Relación:** commit `ea3e989` (fix de precios 2026-08-27 que dejó explícitamente pendiente esta homogenización). Métrica de desvío de peso (`lib/utils/desvio-peso.ts`) no se afecta (usa `precioFactura - precioMostrado`, ambos ya IVA-consistentes por diseño). Métrica de fuga (DEUDA 76 / `lib/utils/fuga-ruteo.ts`) tampoco (usa `fugaFinanciera` pre-computada de `precioFinal`). El problema es específico de `precioProveedor` como campo comparable cross-courier.
+
+**Origen:** surgió en la sesión del fix de precios (2026-08-27). Nacho decidió separarla del bug porque requiere análisis de impacto en conciliación y su propio deploy con verificación — no es aislable a un campo.
+
+---
+
+## DEUDA 153 — Campo fantasma `precioProveedorReal`: definido en schema, sin ningún uso en el código (registrada 2026-08-28, scope bajo/medio, prioridad baja)
+
+**Status:** ABIERTA — no bloquea nada. Es un ghost field que requiere decisión de rumbo antes de tocar.
+
+**Problema:** `FinanzasEnvio.precioProveedorReal` (Decimal?) existe en `prisma/schema.prisma:596` con el comentario `"costo real esperado = base + markup intermediario"` y contexto en L591 `"La conciliación prefiere precioProveedorReal cuando existe; si no, cae a precioProveedor (legacy)."` — PERO `grep -rn "precioProveedorReal" --include="*.ts" .` en TODO el código TypeScript del repo retorna **CERO usos**: ni se lee ni se escribe en ningún lado. Ni `crear.ts` lo puebla, ni `conciliacion/route.ts` lo consulta, ni ninguna métrica lo referencia.
+
+**Interpretación:** probablemente un diseño a medio hacer. No parece basura pura — el comentario en el schema sugiere una función pensada (guardar "el costo real esperado = base + markup intermediario", distinto del `precioProveedor` crudo del courier) que nunca se cableó en código. Consistente con la existencia hoy de `CourierIntermediario` (DEUDA 107 capa 1) — el markup del intermediario ya vive en el modelo, pero el "costo real esperado" derivado nunca se persiste.
+
+**Decisión pendiente (de Nacho):**
+- **(a) CONECTARLO** — poblarlo al crear el envío desde `matchedA.desglose.cascadaNeto` (que ya incluye base + markup intermediario) y hacer que la conciliación lo prefiera cuando exista, cayendo a `precioProveedor` (legacy) para envíos históricos. Cierra el diseño original.
+- **(b) ELIMINARLO** — si la intención ya no aplica (ej. la conciliación evolucionó a otro criterio), dropear la columna vía migración destructiva. Limpia el schema.
+
+Requiere que Nacho defina el rumbo antes de tocar. Probablemente un recon corto para ver qué asumía el diseño original y si el criterio actual de conciliación (que hoy usa `precioProveedor` como `costoEsperado`) haría uso real del campo si se poblara.
+
+**Scope:** **bajo** si se elimina (una migración destructiva + drop de la columna del schema). **Medio** si se conecta (populate en `crear.ts` + branching en `conciliacion/route.ts` + política de fallback a `precioProveedor` para envíos históricos). **Prioridad:** baja — no bloquea; es cleanup arquitectónico + posible cierre de un diseño abierto.
+
+**Relación:** DEUDA 107 (modelo `CourierIntermediario`, capa 1 — la base sobre la que el campo tendría sentido). DEUDA 152 (homogeneización de IVA de `precioProveedor`) — si se conecta este campo, la decisión de forma canónica (con/sin IVA) debería aplicarse al mismo tiempo.
+
+**Origen:** hallazgo colateral del recon del fix de precios (2026-08-27) mientras se auditaba `prisma/schema.prisma` L568-596 para confirmar nullabilidad de `precioMostrado`/`precioProveedor`/`precioFactura`.
+
+---

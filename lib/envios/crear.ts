@@ -522,6 +522,16 @@ export async function crearEnvio(input: CrearEnvioInput) {
   let precioMostradoPersist: Prisma.Decimal | null = null;
   let precioProveedorPersist: Prisma.Decimal | null = null;
 
+  // DEUDA 153: audit trail interno del desglose de pricing. Valores que el motor
+  // ya calcula (en aplicarMarkup), persistidos para análisis (ej. costo del
+  // intermediario → decisión credenciales directas vs tercero). NO altera ningún
+  // precio. Se pueblan desde matched.desglose.* en cada rama/match; quedan null
+  // en fallback / no-match (consistente con el pattern del fix money).
+  let tarifaCourierBasePersist: Prisma.Decimal | null = null;
+  let markupIntermediarioAplicadoPersist: Prisma.Decimal | null = null;
+  let precioProveedorRealPersist: Prisma.Decimal | null = null;
+  let seguroAplicadoPersist: Prisma.Decimal | null = null;
+
   let montoDebito: Prisma.Decimal;
   if (credencialMain?.usaCredencialesPropias === true) {
     // Rama B: el flete lo factura el courier directo al cliente; Shipro solo cobra Fee.
@@ -563,6 +573,15 @@ export async function crearEnvio(input: CrearEnvioInput) {
       precioMostradoPersist = matchedB.precioFinal;
       // esFallback=true → OpcionFallback (tarifa plana), el courier no cotizó → null honesto.
       precioProveedorPersist = matchedB.esFallback === true ? null : matchedB.precioProveedor;
+      // DEUDA 153: audit trail. esFallback → todo null (no hay desglose real).
+      // Rama B: markupIntermediarioAplicado siempre null (sin intermediario).
+      // precioProveedorReal en Rama B = secoNeto (baseConIntermediario === secoNeto
+      // por el hoist en aplicarMarkup con interm null → factor 1).
+      if (matchedB.esFallback !== true && matchedB.desglose) {
+        tarifaCourierBasePersist = matchedB.desglose.secoNeto;
+        precioProveedorRealPersist = matchedB.desglose.baseConIntermediario;
+        seguroAplicadoPersist = matchedB.desglose.smoNeto;
+      }
     }
   } else {
     // Rama A: tarifa publicada completa del courier elegido.
@@ -590,6 +609,16 @@ export async function crearEnvio(input: CrearEnvioInput) {
       // DEUDA (money) — poblar persist. esFallback=true → courier no cotizó (rescate) → null honesto.
       precioMostradoPersist = matchedA.precioFinal;
       precioProveedorPersist = matchedA.esFallback === true ? null : matchedA.precioProveedor;
+      // DEUDA 153: audit trail. esFallback → todo null (no hay desglose real).
+      // Rama A con intermediario: markupIntermediarioAplicado = baseConIntermediario - secoNeto
+      // (el "+%" del intermediario en $, sin IVA — homogéneo cross-courier).
+      // Sin intermediario (interm=null → factor 1): baseConIntermediario === secoNeto → delta 0.
+      if (matchedA.esFallback !== true && matchedA.desglose) {
+        tarifaCourierBasePersist = matchedA.desglose.secoNeto;
+        precioProveedorRealPersist = matchedA.desglose.baseConIntermediario;
+        seguroAplicadoPersist = matchedA.desglose.smoNeto;
+        markupIntermediarioAplicadoPersist = matchedA.desglose.baseConIntermediario.sub(matchedA.desglose.secoNeto);
+      }
       // STEP 1 Rama A OK: breakdown desde el desglose ya propagado por cotizador
       // (Option A). Fuente única de verdad — no recomputamos.
       if (matchedA.desglose) {
@@ -936,6 +965,16 @@ export async function crearEnvio(input: CrearEnvioInput) {
             ivaFacturado,
             estadoLiquidacionFee: estadoLiqFee,
             estadoLiquidacionLogistica: estadoLiqLog,
+            // DEUDA 153: audit trail interno del desglose de pricing. Valores que
+            // el motor ya calcula (aplicarMarkup), persistidos para análisis
+            // (ej. costo del intermediario → decisión credenciales directas vs
+            // tercero). NO altera ningún precio. descuentoClienteAplicado queda
+            // null hasta DEUDA 156 (aplicar el descuento del cliente al precio).
+            tarifaCourierBase: tarifaCourierBasePersist,
+            markupIntermediarioAplicado: markupIntermediarioAplicadoPersist,
+            precioProveedorReal: precioProveedorRealPersist,
+            seguroAplicado: seguroAplicadoPersist,
+            descuentoClienteAplicado: null,
           }
         }
       },

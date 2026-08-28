@@ -50,8 +50,13 @@ export interface OpcionTarifa {
   // consumidor para que crear.ts persista el breakdown (feeNeto / cascadaNeto
   // / smoNeto / netoAcumulado) sin recomputar. Opcional para no romper
   // consumidores legacy; los productores del cotizador siempre lo pueblan.
-  // Omitimos secoNeto — no lo necesita ningún consumidor downstream.
+  // DEUDA 153: secoNeto y baseConIntermediario se agregaron al desglose
+  // propagado para poblar el audit trail interno de pricing en FinanzasEnvio
+  // (tarifaCourierBase, markupIntermediarioAplicado, precioProveedorReal).
+  // Rama B: baseConIntermediario === secoNeto (sin intermediario ≡ factor 1).
   desglose?: {
+    secoNeto: Prisma.Decimal;
+    baseConIntermediario: Prisma.Decimal;
     cascadaNeto: Prisma.Decimal;
     smoNeto: Prisma.Decimal;
     feeNeto: Prisma.Decimal;
@@ -152,6 +157,7 @@ export function aplicarMarkup(
   precioFinal: Prisma.Decimal;
   desglose: {
     secoNeto: Prisma.Decimal;
+    baseConIntermediario: Prisma.Decimal;
     cascadaNeto: Prisma.Decimal;
     smoNeto: Prisma.Decimal;
     feeNeto: Prisma.Decimal;
@@ -171,17 +177,24 @@ export function aplicarMarkup(
   // ahora la semántica del flag se invierte: true=número con IVA a extraer, false=ya es neto.
   const secoNeto = config.tarifaIncluyeIva ? seco.div(IVA_AR_MULTIPLIER) : seco;
 
+  // DEUDA 153: baseConIntermediario hoisteada fuera del if/else para que exista
+  // coherentemente en AMBAS ramas y se pueda propagar al desglose (audit trail).
+  // Rama B: intermediarioMarkupPorcentaje siempre viene null (resolver L146) →
+  // factor (1 + 0/100) = 1 → baseConIntermediario === secoNeto (semántica correcta:
+  // "sin intermediario" ≡ base = secoNeto). Rama A: idéntica math que antes.
+  const baseConIntermediario = secoNeto.mul(
+    new Prisma.Decimal(1).add(new Prisma.Decimal(config.intermediarioMarkupPorcentaje ?? 0).div(100))
+  );
+
   let costoConMarkup: Prisma.Decimal;
   if (config.usaCredencialesPropias) {
     // Modelo B: sin intermediario, sin markup %, solo fijo. Se opera sobre el NETO.
+    // (baseConIntermediario === secoNeto acá; costoConMarkup queda idéntico al legacy.)
     costoConMarkup = secoNeto.add(fijoMarkup);
   } else {
     // Modelo A: CASCADA sobre el NETO. Primero markup del intermediario (Mocis 10%) sobre la
     // tarifa neta cruda, después markup Shipro (%) sobre el resultado del intermediario, y
     // finalmente markupFijo. DEUDA 107 capa 1.
-    const baseConIntermediario = config.intermediarioMarkupPorcentaje != null
-      ? secoNeto.mul(new Prisma.Decimal(1).add(new Prisma.Decimal(config.intermediarioMarkupPorcentaje).div(100)))
-      : secoNeto;
     costoConMarkup = baseConIntermediario
       .mul(new Prisma.Decimal(1).add(new Prisma.Decimal(porcentajeMarkup).div(100)))
       .add(fijoMarkup);
@@ -211,6 +224,7 @@ export function aplicarMarkup(
     precioFinal,
     desglose: {
       secoNeto,
+      baseConIntermediario,
       cascadaNeto: costoConMarkup,
       smoNeto,
       feeNeto,
@@ -530,7 +544,12 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
               // Propagar el desglose que ya computó aplicarMarkup — crear.ts
               // lo consume para persistir el breakdown (fee/logistica/IVA)
               // sin recomputar. Único source of truth.
+              // DEUDA 153: secoNeto + baseConIntermediario también propagados
+              // para el audit trail interno (crear.ts los usa para poblar
+              // tarifaCourierBase / markupIntermediarioAplicado / precioProveedorReal).
               desglose: {
+                secoNeto: precios.desglose.secoNeto,
+                baseConIntermediario: precios.desglose.baseConIntermediario,
                 cascadaNeto: precios.desglose.cascadaNeto,
                 smoNeto: precios.desglose.smoNeto,
                 feeNeto: precios.desglose.feeNeto,
@@ -565,8 +584,11 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
               slaHs: slaHorasFinal,
               fechaEstimadaString: textoUXLlegada,
               etiquetaSla: esSlaReal ? 'Basado en datos reales' : 'Tiempo estimado',
-              // Propagar el desglose (idem push de domicilio arriba).
+              // Propagar el desglose (idem push de domicilio arriba, incluye
+              // secoNeto + baseConIntermediario para el audit trail — DEUDA 153).
               desglose: {
+                secoNeto: precios.desglose.secoNeto,
+                baseConIntermediario: precios.desglose.baseConIntermediario,
                 cascadaNeto: precios.desglose.cascadaNeto,
                 smoNeto: precios.desglose.smoNeto,
                 feeNeto: precios.desglose.feeNeto,

@@ -532,6 +532,12 @@ export async function crearEnvio(input: CrearEnvioInput) {
   let precioProveedorRealPersist: Prisma.Decimal | null = null;
   let seguroAplicadoPersist: Prisma.Decimal | null = null;
 
+  // DEUDA 156: monto ($) del descuento buyer-facing efectivamente aplicado a esta
+  // opción = matched.precioFinal - matched.precioFinalBuyer. Sin descuento → 0 (honesto,
+  // el match existe). Rescate/fallback → null (política: sin descuento sobre tarifa plana,
+  // consistente con precioProveedorPersist=null en esFallback). NO altera precioFactura.
+  let descuentoClienteAplicadoPersist: Prisma.Decimal | null = null;
+
   let montoDebito: Prisma.Decimal;
   if (credencialMain?.usaCredencialesPropias === true) {
     // Rama B: el flete lo factura el courier directo al cliente; Shipro solo cobra Fee.
@@ -570,9 +576,17 @@ export async function crearEnvio(input: CrearEnvioInput) {
     }
     if (matchedB) {
       tarifaPublicadaElegida = matchedB.precioFinal;
-      precioMostradoPersist = matchedB.precioFinal;
+      // DEUDA 156: precioMostrado = lo que vio el comprador = precioFinalBuyer (con
+      // descuento aplicado por cotizador, piso $0). Sin descuento → precioFinalBuyer
+      // === precioFinal → mismo número que antes.
+      precioMostradoPersist = matchedB.precioFinalBuyer;
       // esFallback=true → OpcionFallback (tarifa plana), el courier no cotizó → null honesto.
       precioProveedorPersist = matchedB.esFallback === true ? null : matchedB.precioProveedor;
+      // DEUDA 156: monto descontado = precioFinal - precioFinalBuyer. Match real → 0
+      // cuando no hay descuento; > 0 cuando sí. Fallback/rescate → null (política).
+      if (matchedB.esFallback !== true) {
+        descuentoClienteAplicadoPersist = matchedB.precioFinal.sub(matchedB.precioFinalBuyer);
+      }
       // DEUDA 153: audit trail. esFallback → todo null (no hay desglose real).
       // Rama B: markupIntermediarioAplicado siempre null (sin intermediario).
       // precioProveedorReal en Rama B = secoNeto (baseConIntermediario === secoNeto
@@ -606,9 +620,17 @@ export async function crearEnvio(input: CrearEnvioInput) {
       montoDebito = matchedA.precioFinal;
       // Propagar el match de Rama A al metric de fuga (evita re-matching / divergencia).
       tarifaPublicadaElegida = matchedA.precioFinal;
-      // DEUDA (money) — poblar persist. esFallback=true → courier no cotizó (rescate) → null honesto.
-      precioMostradoPersist = matchedA.precioFinal;
+      // DEUDA 156: precioMostrado = lo que vio el comprador = precioFinalBuyer (con
+      // descuento del cliente aplicado por cotizador, piso $0). Sin descuento →
+      // precioFinalBuyer === precioFinal → mismo número que antes. precioFactura
+      // (montoDebito arriba) sigue en matched.precioFinal (Shipro factura el chain full).
+      precioMostradoPersist = matchedA.precioFinalBuyer;
       precioProveedorPersist = matchedA.esFallback === true ? null : matchedA.precioProveedor;
+      // DEUDA 156: monto descontado = precioFinal - precioFinalBuyer. Match real → 0
+      // cuando no hay descuento; > 0 cuando sí. Fallback/rescate → null (política).
+      if (matchedA.esFallback !== true) {
+        descuentoClienteAplicadoPersist = matchedA.precioFinal.sub(matchedA.precioFinalBuyer);
+      }
       // DEUDA 153: audit trail. esFallback → todo null (no hay desglose real).
       // Rama A con intermediario: markupIntermediarioAplicado = baseConIntermediario - secoNeto
       // (el "+%" del intermediario en $, sin IVA — homogéneo cross-courier).
@@ -968,13 +990,15 @@ export async function crearEnvio(input: CrearEnvioInput) {
             // DEUDA 153: audit trail interno del desglose de pricing. Valores que
             // el motor ya calcula (aplicarMarkup), persistidos para análisis
             // (ej. costo del intermediario → decisión credenciales directas vs
-            // tercero). NO altera ningún precio. descuentoClienteAplicado queda
-            // null hasta DEUDA 156 (aplicar el descuento del cliente al precio).
+            // tercero). NO altera ningún precio.
             tarifaCourierBase: tarifaCourierBasePersist,
             markupIntermediarioAplicado: markupIntermediarioAplicadoPersist,
             precioProveedorReal: precioProveedorRealPersist,
             seguroAplicado: seguroAplicadoPersist,
-            descuentoClienteAplicado: null,
+            // DEUDA 156: precioMostrado = lo que vio el comprador (con descuento).
+            // descuentoClienteAplicado = monto descontado (precioFinal − precioFinalBuyer).
+            // precioFactura sigue siendo el full (Shipro factura completo).
+            descuentoClienteAplicado: descuentoClienteAplicadoPersist,
           }
         }
       },

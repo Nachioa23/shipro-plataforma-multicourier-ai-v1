@@ -42,6 +42,10 @@ export interface OpcionTarifa {
   // Opcional: consumers legacy (crear.ts, dashboard) lo ignoran.
   codigoServicio?: string;
   precioFinal: Prisma.Decimal;
+  // DEUDA 156: precio que VE EL COMPRADOR en el checkout de e-commerce (precioFinal con el
+  // descuento del cliente aplicado, piso $0). Solo lo consumen canales buyer-facing (Tiendanube,
+  // plugins). El dashboard y la facturación usan precioFinal (full). Sin descuento === precioFinal.
+  precioFinalBuyer: Prisma.Decimal;
   precioProveedor: Prisma.Decimal;
   slaHs: number;
   fechaEstimadaString: string;
@@ -147,6 +151,37 @@ export interface ConfigMarkup {
   // DEUDA 73 capa 2: Fee Shipro neto (SIN IVA), calculado una vez por cotización desde OperacionFee.
   // Se suma al costoConMarkup ANTES del IVA final. Opcional: callers legacy no lo pasan → default 0.
   feeShiproNeto?: Prisma.Decimal | null;
+}
+
+/**
+ * DEUDA 156: computa el precio que VE EL COMPRADOR en el checkout aplicando el
+ * descuento del cliente. NO toca precioFinal (Shipro factura el chain completo
+ * igual — el descuento lo absorbe el cliente hacia su comprador). Solo lo
+ * consumen los canales buyer-facing (rates callback Tiendanube, plugins).
+ *
+ * Modo (config.descuentoClienteModo):
+ *   - "MONTO"      → descuento = config.descuentoClienteSobreTarifa ($)
+ *   - "PORCENTAJE" → descuento = precioFinal × (config.descuentoClientePorcentaje / 100)
+ * Piso $0: buyer nunca queda negativo (máximo, envío gratis).
+ * Sin descuento configurado (default: modo MONTO + monto=0) → descuento=0 → buyer === precioFinal.
+ */
+function aplicarDescuentoCliente(
+  precioFinal: Prisma.Decimal,
+  config: { descuentoClienteModo?: string | null; descuentoClientePorcentaje?: number | null; descuentoClienteSobreTarifa?: Prisma.Decimal | number | null }
+): Prisma.Decimal {
+  const modo = config?.descuentoClienteModo;
+  let descuento = new Prisma.Decimal(0);
+  if (modo === "PORCENTAJE") {
+    const pct = new Prisma.Decimal(config?.descuentoClientePorcentaje ?? 0);
+    if (pct.gt(0)) descuento = precioFinal.mul(pct).div(100);
+  } else if (modo === "MONTO") {
+    const monto = config?.descuentoClienteSobreTarifa != null
+      ? new Prisma.Decimal(config.descuentoClienteSobreTarifa as any)
+      : new Prisma.Decimal(0);
+    if (monto.gt(0)) descuento = monto;
+  }
+  const buyer = precioFinal.sub(descuento);
+  return buyer.lt(0) ? new Prisma.Decimal(0) : buyer.toDecimalPlaces(2);
 }
 
 export function aplicarMarkup(
@@ -437,6 +472,10 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
       courier: config.nombreCourier,
       modalidad: "Estándar",
       precioFinal: tarifa,
+      // DEUDA 156: en fallback/rescate NO aplicamos descuento (política simple/segura:
+      // el descuento vive sobre la cotización real del courier; sobre una tarifa de
+      // rescate ya es un fallback comercial y modificarla puede resultar en $0 al buyer).
+      precioFinalBuyer: tarifa,
       precioProveedor: new Prisma.Decimal(0),
       slaHs: slaHorasFallback,
       fechaEstimadaString: textoFallback,
@@ -537,6 +576,9 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
               modalidad: `Entrega a Domicilio (${op.servicio})`,
               codigoServicio: mapaCodigoServicio.get(nombreNormalizado)?.domicilio,
               precioFinal: precios.precioFinal,
+              // DEUDA 156: precio buyer-facing con descuento del cliente aplicado
+              // (piso $0). precioFinal queda intacto — Shipro factura el chain full.
+              precioFinalBuyer: aplicarDescuentoCliente(precios.precioFinal, config),
               precioProveedor: precios.precioProveedor,
               slaHs: slaHorasFinal,
               fechaEstimadaString: textoUXLlegada,
@@ -580,6 +622,9 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
               modalidad: `Retiro en Sucursal (${op.servicio})`,
               codigoServicio: mapaCodigoServicio.get(nombreNormalizado)?.sucursal,
               precioFinal: precios.precioFinal,
+              // DEUDA 156: precio buyer-facing con descuento del cliente aplicado
+              // (piso $0). precioFinal queda intacto — Shipro factura el chain full.
+              precioFinalBuyer: aplicarDescuentoCliente(precios.precioFinal, config),
               precioProveedor: precios.precioProveedor,
               slaHs: slaHorasFinal,
               fechaEstimadaString: textoUXLlegada,

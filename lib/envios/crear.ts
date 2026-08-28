@@ -516,6 +516,12 @@ export async function crearEnvio(input: CrearEnvioInput) {
   let estadoLiqFee: EstadoLiquidacion = EstadoLiquidacion.PENDIENTE;
   let estadoLiqLog: EstadoLiquidacion = EstadoLiquidacion.PENDIENTE;
 
+  // DEUDA (money): estos dos SIEMPRE salen de la re-cotización interna (matched.*),
+  // nunca del caller. precioProveedor en forma nativa; NULL (no 0) cuando el courier
+  // no cotizó (rescate/fallback) — null es honesto, 0 parecería un costo real.
+  let precioMostradoPersist: Prisma.Decimal | null = null;
+  let precioProveedorPersist: Prisma.Decimal | null = null;
+
   let montoDebito: Prisma.Decimal;
   if (credencialMain?.usaCredencialesPropias === true) {
     // Rama B: el flete lo factura el courier directo al cliente; Shipro solo cobra Fee.
@@ -533,6 +539,31 @@ export async function crearEnvio(input: CrearEnvioInput) {
       ivaFacturado = new Prisma.Decimal(0);
     }
     estadoLiqLog = EstadoLiquidacion.NO_APLICA;
+
+    // DEUDA (money) — Rama B: matcheamos el courier en la re-cotización con el mismo
+    // criterio que Rama A para poblar precioMostrado/precioProveedor desde matched.*,
+    // no del caller. También sembramos tarifaPublicadaElegida (el fuga block skippea
+    // el recompute cuando ya está poblada).
+    const canonLowerB = modalidadCanonica.toLowerCase();
+    const listaCanonicaB = (canonLowerB.includes("sucursal") || canonLowerB.includes("retiro"))
+      ? (dataCotizacion?.sucursal || [])
+      : (dataCotizacion?.domicilio || []);
+    const courierLowerB = courierReal.nombre.toLowerCase();
+    const opcionesDelCourierB = listaCanonicaB.filter(o => o.courier.toLowerCase() === courierLowerB);
+    let matchedB: typeof listaCanonicaB[number] | undefined;
+    if (opcionesDelCourierB.length === 1) {
+      matchedB = opcionesDelCourierB[0];
+    } else if (opcionesDelCourierB.length > 1) {
+      matchedB = opcionesDelCourierB.reduce((prev, curr) =>
+        prev.precioFinal.sub(costoEnvioComprador).abs().lt(curr.precioFinal.sub(costoEnvioComprador).abs()) ? prev : curr
+      );
+    }
+    if (matchedB) {
+      tarifaPublicadaElegida = matchedB.precioFinal;
+      precioMostradoPersist = matchedB.precioFinal;
+      // esFallback=true → OpcionFallback (tarifa plana), el courier no cotizó → null honesto.
+      precioProveedorPersist = matchedB.esFallback === true ? null : matchedB.precioProveedor;
+    }
   } else {
     // Rama A: tarifa publicada completa del courier elegido.
     const canonLowerA = modalidadCanonica.toLowerCase();
@@ -556,6 +587,9 @@ export async function crearEnvio(input: CrearEnvioInput) {
       montoDebito = matchedA.precioFinal;
       // Propagar el match de Rama A al metric de fuga (evita re-matching / divergencia).
       tarifaPublicadaElegida = matchedA.precioFinal;
+      // DEUDA (money) — poblar persist. esFallback=true → courier no cotizó (rescate) → null honesto.
+      precioMostradoPersist = matchedA.precioFinal;
+      precioProveedorPersist = matchedA.esFallback === true ? null : matchedA.precioProveedor;
       // STEP 1 Rama A OK: breakdown desde el desglose ya propagado por cotizador
       // (Option A). Fuente única de verdad — no recomputamos.
       if (matchedA.desglose) {
@@ -639,6 +673,10 @@ export async function crearEnvio(input: CrearEnvioInput) {
           });
           if (fallbackA.precio != null && fallbackA.precio.gt(0)) {
             montoDebito = fallbackA.precio;
+            // DEUDA (money) — resolverPrecioFallback no expone precioProveedor; solo
+            // el precio publicable. precioProveedorPersist queda null (declarado outer),
+            // honesto: acá no hubo cotización del courier.
+            precioMostradoPersist = fallbackA.precio;
             console.warn(`[FASE2] Rama A fallback aplicado: $${fallbackA.precio.toFixed(2)} (fuente: ${fallbackA.fuente}). Cascada completa reconstruida. ${fallbackA.detalle}`);
           }
         } catch (err) {
@@ -879,9 +917,13 @@ export async function crearEnvio(input: CrearEnvioInput) {
         destino: { connect: { id: direccionId } },
         finanzas: {
           create: {
-            precioProveedor: montoProveedor,
+            // DEUDA (money): estos dos SIEMPRE salen de la re-cotización interna
+            // (matched.*), nunca del caller. precioProveedor en forma nativa; NULL
+            // (no 0) cuando el courier no cotizó (rescate/fallback) — null es honesto,
+            // 0 parecería un costo real.
+            precioProveedor: precioProveedorPersist,
             precioFactura: montoDebito,          // FASE 1: autoritativo (recomputado, rama-aware)
-            precioMostrado: costoEnvioComprador, // FASE 1: buyer-facing (puede tener markup/descuento del cliente)
+            precioMostrado: precioMostradoPersist,
             valorDeclarado: parseFloat(String(valorDeclarado)) || 0,
             pesoCobrado: parseFloat(String(pesoReal)) || 1.0,
             fugaFinanciera: fugaCalculada,

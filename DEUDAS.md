@@ -3455,3 +3455,75 @@ Requiere que Nacho defina el rumbo antes de tocar. Probablemente un recon corto 
 **Origen:** hallazgo colateral del recon del fix de precios (2026-08-27) mientras se auditaba `prisma/schema.prisma` L568-596 para confirmar nullabilidad de `precioMostrado`/`precioProveedor`/`precioFactura`.
 
 ---
+
+## DEUDA 154 — Campo "Recargo/Descuento (%)" del Ajuste Comercial: dice descuento pero solo funciona como recargo (ignora negativos en silencio) (registrada 2026-08-28, scope chico-medio, prioridad media)
+
+**Status:** ABIERTA — no bloquea pipeline pero rompe la expectativa del cliente. Campo con label engañoso.
+
+**Problema:** en `components/configuracion/TransportesTab.tsx` L505-516 (card "3. Ajuste Comercial (Tu Tienda)") el input etiquetado "Recargo/Descuento (%)" bindea al estado local `markupClientePorcentaje` que persiste como `CredencialCourier.ajusteTarifaPorcentaje` (via `app/api/configuracion/couriers/route.ts:212, 278-279`). Ese mismo campo es el que el motor de precios lee como **override del markup Shipro%** en `resolverMarkupShiproPorcentaje` (`lib/utils/resolvers-tarifa.ts:47-73`) y aplica en `aplicarMarkup` (`lib/cotizador.ts:164, 182-187`) como cascada `× (1 + porcentaje/100)`. El resolver L51 tiene la guarda:
+
+```
+if (Number.isFinite(ajusteTarifaPorcentaje) && ajusteTarifaPorcentaje > 0) {
+  return ajusteTarifaPorcentaje;  // override
+}
+```
+
+Solo se activa cuando es **> 0**. Un valor 0 o negativo cae al `MarkupShiproVigencia` global — **el descuento se ignora en silencio**. El input HTML es `type="number"` sin `min`, así que la UI SÍ acepta cargar valores negativos: se persisten, pero el pipeline los descarta.
+
+**Consecuencia:** un cliente que carga `-5%` esperando un descuento ve que "se guarda" (el input acepta, el endpoint persiste), pero al cotizar el precio no cambia porque el pipeline sigue usando el markup Shipro global. Campo con label engañoso: promete descuento, solo hace recargo (positivo).
+
+**Nota:** existe `CredencialCourier.descuentoClienteSobreTarifa` (columna ghost, agregada en la migración `20260720235835_pricing_seguro_intermediario_deuda_73_107`, con 0 usos en TS confirmados en el recon) — probablemente el campo pensado para separar "descuento del cliente" del "override markup Shipro". Relacionada con [[DEUDA 156]].
+
+**Scope:** chico-medio (arreglar label + validación en UI si el motor no se cambia; o cablear el campo destino real si se separan las semánticas). **Prioridad:** media (afecta expectativa del cliente sobre un campo comercial).
+
+**Relación:** DEUDA 156 (aplicar el descuento del cliente al precio — arregla de raíz, dejando el override del markup Shipro% en su propio campo). DEUDA 153 (campo `descuentoClienteAplicado` en `FinanzasEnvio` — el destino natural del audit trail cuando N156 se cablee).
+
+**Origen:** recon DEUDA 153 (2026-08-28), CONFLICT 1 al verificar el mapa de config de Nacho.
+
+---
+
+## DEUDA 155 — Sin UI para configurar el markup del intermediario (CourierIntermediario): hoy solo por SQL/seed (registrada 2026-08-28, scope medio, prioridad media)
+
+**Status:** ABIERTA — no bloquea el pipeline (el motor lee y aplica el markup del intermediario correctamente), pero bloquea el alta/edición de intermediarios sin tocar la base a mano.
+
+**Problema:** el modelo `CourierIntermediario` (`prisma/schema.prisma:307-349`) representa al dueño de las credenciales en Rama A (ej. Mocis prestando Andreani) y su `markupPorcentaje`. El resolver `resolverIntermediarioMarkupPorcentaje` (`lib/utils/resolvers-tarifa.ts:136`) lo lee owner-keyed y lo cascadea en `aplicarMarkup` L182-184. **PERO** no existe ninguna pantalla de admin ni endpoint API para gestionarlo. Confirmado en el recon:
+
+- `grep -rn "courierIntermediario\|CourierIntermediario" app/api` → **0 hits** (sin endpoints).
+- `grep -rn "intermediario\|CourierIntermediario" --include="*.tsx" app` → **0 hits** (sin UI).
+
+Hoy la única forma de dar de alta o cambiar un intermediario es SQL directo o modificar `prisma/seed.ts` y re-seedear. Cambiar quién es el dueño de las credenciales (ej. Mocis → Intralog) o su `markupPorcentaje` implica intervención manual en la base — con todo el riesgo operativo que eso conlleva en un dato que afecta el precio.
+
+**Objetivo:** pantalla de administración (rol admin Shipro) para dar de alta/editar `CourierIntermediario`, con vigencias. Idea de Nacho: podría compartir espacio en `/admin-parametros-tarifa` (donde vive el markup Shipro global vía `MarkupShiproVigencia`) como una pestaña o sección aparte — comparten propósito (parámetros de tarifa administrados por Shipro) y metodología (modelos con vigencias).
+
+**Alcance mínimo (Capa 1):** listar intermediarios vigentes por courier ejecutor + alta/edición de `propietarioCourierId` + `markupPorcentaje` + `seguroFijoIntermediarioConIva` + `tarifaIncluyeIvaIntermediario`. Vigencias (`vigenciaDesde` / `vigenciaHasta`) siguiendo el mismo patrón que MarkupShiproVigencia (cierre implícito de la anterior al abrir una nueva).
+
+**Scope:** medio (nueva pantalla + endpoint CRUD + auditoría de cambios ala D-19). **Prioridad:** media — bloquea el alta de intermediarios sin tocar la base a mano; no urgente porque hoy hay pocos intermediarios (Mocis).
+
+**Relación:** DEUDA 107 (modelo `CourierIntermediario`, capa 1 — la infra que esto pondría en superficie de admin). DEUDA 153 (campo `markupIntermediarioAplicado` del audit trail — se pobla del mismo motor sin necesitar esta UI, pero UI + audit trail cierran el círculo).
+
+**Origen:** recon DEUDA 153 (2026-08-28), al mapear dónde vive cada pieza del pricing (Nacho ya sospechaba que no había UI para intermediario).
+
+---
+
+## DEUDA 156 — Aplicar el descuento/recargo del cliente al precio (motor de pricing) (registrada 2026-08-28, scope medio-alto, prioridad media-alta)
+
+**Status:** ABIERTA — no bloquea, pero es la deuda "de raíz" que arregla el campo engañoso de DEUDA 154 y cierra un cabo suelto del diseño DEUDA 73 (comentario L129 de cotizador.ts admite "seguro + descuento se sumarán cuando se implementen").
+
+**Problema:** el "descuento del cliente" no se aplica hoy en el cálculo del precio. El pipeline no cablea un descuento independiente del override del markup Shipro% (ver [[DEUDA 154]]). `aplicarMarkup` (`lib/cotizador.ts:147-220`) NO recibe ningún parámetro de descuento en su `ConfigMarkup` (L131-145). La columna `CredencialCourier.descuentoClienteSobreTarifa` existe (agregada en la migración `20260720235835`) con default 0, pero grep confirmó 0 usos en TS. El comentario L129 del cotizador dice literal: *"NOTA DEUDA 73: aqui se sumaran seguro + descuento cuando se implementen."*
+
+**Objetivo:** construir la aplicación del descuento/recargo del cliente en `aplicarMarkup`, de forma que modifique el precio publicado, y persistirlo en `FinanzasEnvio.descuentoClienteAplicado` (el slot que hoy queda null en el fix de DEUDA 153 hasta que esta deuda se cierre).
+
+**DECISIONES DE NEGOCIO PENDIENTES (Nacho, a definir antes de construir):**
+- **(a) ¿De dónde sale la plata del descuento?** ¿El descuento sale del margen del CLIENTE (Shipro cobra al cliente el mismo precio de siempre, el cliente absorbe el descuento hacia su comprador — capa cliente→comprador) o del margen de SHIPRO (Shipro le cobra menos al cliente y absorbe el descuento — cascada extra en `aplicarMarkup`)? Semánticamente distintos.
+- **(b) ¿Hay tope o barrera de negocio?** ¿Se permite descontar por debajo del costo del courier (venta a pérdida)? ¿"Envío gratis" es un caso legítimo? ¿Se cliprea automáticamente para no invertir la lógica de cascada?
+- **(c) ¿Cómo se separa del "override del markup Shipro"?** Hoy `ajusteTarifaPorcentaje` cumple los dos roles con label engañoso (N154). El descuento cliente debería vivir en otro campo (`descuentoClienteSobreTarifa` ya está en el schema) y tener su propio input en `TransportesTab`.
+
+**CUIDADO:** toca el motor de precios (`aplicarMarkup`) — mismo cuidado que cualquier cambio de plata: recon + verificación localhost + deploy con prueba. NO aislable de la conciliación si el descuento afecta el `precioFactura` (que la conciliación consume como autoritativo). El impacto exacto en conciliación depende de la decisión (a): si el descuento sale del margen Shipro y modifica `precioFactura`, la conciliación tiene que saber que el delta esperable vs lo facturado por el courier ya no coincide con el patrón actual.
+
+**Scope:** medio-alto (motor de precios + resolver + UI del campo separado en TransportesTab + auditoría de cambios ala D-19 + posible ajuste en conciliación según la decisión (a)). **Prioridad:** media-alta — Nacho quiere cerrarlo en cadena con DEUDA 153 (el slot `descuentoClienteAplicado` del audit trail queda null hasta que esta deuda se cierre).
+
+**Relación:** [[DEUDA 154]] (el campo roto que esto arreglaría de raíz — al separar semánticas, el "Recargo/Descuento (Tu Tienda)" bindea a `descuentoClienteSobreTarifa` real, y `ajusteTarifaPorcentaje` queda solo como override del markup Shipro global). [[DEUDA 153]] (`descuentoClienteAplicado` es el destino del audit trail — se cablea de esta deuda). DEUDA 152 (homogeneización IVA de `precioProveedor` — si el descuento se aplica al neto o al bruto es otra pregunta de política que se cruza).
+
+**Origen:** recon DEUDA 153 (2026-08-28), al confirmar en CONFLICT 1 que el "descuento del cliente" no se aplica en el pipeline actual y que el comentario L129 de cotizador ya reservaba el trabajo pendiente.
+
+---

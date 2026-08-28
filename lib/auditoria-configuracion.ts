@@ -86,6 +86,13 @@ export const CAMPOS_AUDITABLES = {
   // en las propias filas de OperacionFee (vigenteDesde/Hasta, valor, tipo).
   operacionFeeValor: { sensible: true, modelo: "OperacionFee" },
   operacionFeeTipo: { sensible: true, modelo: "OperacionFee" },
+  // DEUDA 156 (2026-08-28): descuento buyer-facing del cliente. Cambia el precio
+  // que ve el comprador en el checkout de e-commerce; NO afecta precioFactura
+  // (Shipro cobra el chain completo igual). Tier ALTOS (mismo que markupFijo) —
+  // trackeable pero motivo opcional (no es cambio financiero contra Shipro).
+  descuentoClienteModo: { sensible: false, modelo: "CredencialCourier" },
+  descuentoClientePorcentaje: { sensible: false, modelo: "CredencialCourier" },
+  descuentoClienteSobreTarifa: { sensible: false, modelo: "CredencialCourier" },
 } as const;
 
 export type CampoAuditable = keyof typeof CAMPOS_AUDITABLES;

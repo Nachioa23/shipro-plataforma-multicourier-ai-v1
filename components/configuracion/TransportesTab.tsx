@@ -99,6 +99,14 @@ export default function TransportesTab({ empresaActivaId, embeddedInWizard = fal
                     configCliente.tarifaPlanaRespaldoCourier != null
                       ? Number(configCliente.tarifaPlanaRespaldoCourier)
                       : 0,
+                  // DEUDA 156: descuento buyer-facing del cliente (paso 5). Modo enum
+                  // + monto ($ Decimal → Number para el input) + porcentaje (Float).
+                  descuentoClienteModo: configCliente.descuentoClienteModo || "MONTO",
+                  descuentoClientePorcentaje: configCliente.descuentoClientePorcentaje || 0,
+                  descuentoClienteSobreTarifa:
+                    configCliente.descuentoClienteSobreTarifa != null
+                      ? Number(configCliente.descuentoClienteSobreTarifa)
+                      : 0,
                 };
               } else {
                 return {
@@ -111,6 +119,11 @@ export default function TransportesTab({ empresaActivaId, embeddedInWizard = fal
                   // DEUDA 132 Paso 5b: default 0 → falla la validación obligatoria hasta que el gerente
                   // cargue el valor. Un courier no puede activarse sin tarifa de rescate cargada.
                   tarifaPlanaRespaldoCourier: 0,
+                  // DEUDA 156: defaults del descuento buyer-facing (fila fresca). MONTO
+                  // con monto=0 → sin descuento (precioFinalBuyer === precioFinal).
+                  descuentoClienteModo: "MONTO",
+                  descuentoClientePorcentaje: 0,
+                  descuentoClienteSobreTarifa: 0,
                 };
               }
             });
@@ -520,6 +533,56 @@ export default function TransportesTab({ empresaActivaId, embeddedInWizard = fal
                         <div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold">$</span><input type="number" value={courier.tarifaPlanaRespaldoCourier} onChange={e => handleUpdateCourier(courier.id, 'tarifaPlanaRespaldoCourier', parseFloat(e.target.value))} required min="1" className="w-full pl-7 pr-3 py-2 border border-blue-200 rounded-lg text-sm font-bold text-blue-900 outline-none focus:border-blue-500 bg-white" /></div>
                         <p className="text-[10px] text-gray-500 mt-1">Se publica cuando el courier no puede cotizar o el e-commerce no manda peso/dims. Garantiza que la venta no se caiga.</p>
                       </div>
+                    </div>
+
+                    {/* DEUDA 156 Paso 5: descuento buyer-facing del cliente a su comprador.
+                        NO afecta lo que Shipro te factura (chain completo). Modo explícito
+                        MONTO/PORCENTAJE con piso $0. Paleta emerald para señalar buyer-facing
+                        (vs las secciones azules de config Shipro). Editabilidad gated por
+                        puedeEditarMarkup (mismo tier que markupFijo). */}
+                    <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-5 mt-4">
+                      <h5 className="text-xs font-black text-emerald-800 uppercase tracking-widest mb-1 flex items-center gap-2"><Percent className="w-4 h-4 text-emerald-600" /> 4. Descuento a tu comprador</h5>
+                      <div className="mt-4">
+                        <label className="block text-xs font-bold text-emerald-900 mb-1">Modo</label>
+                        <select
+                          value={courier.descuentoClienteModo || "MONTO"}
+                          onChange={e => handleUpdateCourier(courier.id, 'descuentoClienteModo', e.target.value)}
+                          disabled={!puedeEditarMarkup}
+                          className="w-full p-2 border border-emerald-200 rounded-lg text-sm font-bold text-emerald-900 outline-none focus:border-emerald-500 bg-white disabled:bg-gray-50 disabled:text-gray-500 disabled:cursor-not-allowed"
+                        >
+                          <option value="MONTO">Monto fijo ($)</option>
+                          <option value="PORCENTAJE">Porcentaje (%)</option>
+                        </select>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4 mt-4">
+                        <div>
+                          <label className="block text-xs font-bold text-emerald-900 mb-1">Porcentaje (%)</label>
+                          <div className="relative">
+                            <input
+                              type="number"
+                              value={courier.descuentoClientePorcentaje}
+                              onChange={e => handleUpdateCourier(courier.id, 'descuentoClientePorcentaje', parseFloat(e.target.value))}
+                              disabled={!puedeEditarMarkup || courier.descuentoClienteModo !== "PORCENTAJE"}
+                              className="w-full pl-3 pr-8 py-2 border border-emerald-200 rounded-lg text-sm font-bold text-emerald-900 outline-none focus:border-emerald-500 bg-white disabled:bg-gray-50 disabled:text-gray-400 disabled:cursor-not-allowed"
+                            />
+                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold">%</span>
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-emerald-900 mb-1">Monto fijo</label>
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold">$</span>
+                            <input
+                              type="number"
+                              value={courier.descuentoClienteSobreTarifa}
+                              onChange={e => handleUpdateCourier(courier.id, 'descuentoClienteSobreTarifa', parseFloat(e.target.value))}
+                              disabled={!puedeEditarMarkup || courier.descuentoClienteModo !== "MONTO"}
+                              className="w-full pl-7 pr-3 py-2 border border-emerald-200 rounded-lg text-sm font-bold text-emerald-900 outline-none focus:border-emerald-500 bg-white disabled:bg-gray-50 disabled:text-gray-400 disabled:cursor-not-allowed"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                      <p className="text-[10px] text-gray-500 mt-2">Solo lo ve tu comprador en el checkout de tu tienda. Shipro te factura la tarifa completa igual. Piso $0: el descuento nunca deja el envío en negativo (máximo, envío gratis).</p>
                     </div>
                   </div>
 

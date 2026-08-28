@@ -37,7 +37,13 @@ export type CampoPermiso =
   // de tipoCuenta). El cliente no elige dueño — Rama B implica CLIENTE por
   // construcción; Rama A requiere que admin_shipro elija SHIPRO o un COURIER.
   | "propietarioTipo"
-  | "propietarioCourierId";
+  | "propietarioCourierId"
+  // DEUDA 156 (2026-08-28): descuento buyer-facing del cliente a SU comprador.
+  // Herramienta comercial del cliente — mismo tier que markupFijo (admin_shipro
+  // + gerente_cliente). NO afecta precioFactura (Shipro cobra el chain completo).
+  | "descuentoClienteModo"
+  | "descuentoClientePorcentaje"
+  | "descuentoClienteSobreTarifa";
 
 /**
  * Matriz de permisos: campo -> lista de roles que pueden editarlo.
@@ -60,6 +66,11 @@ const MATRIZ_PERMISOS: Record<CampoPermiso, string[]> = {
   // FASE 2 pieza 1: propiedad de credenciales — admin-only, mismo criterio que tipoCuenta.
   propietarioTipo: ["admin_shipro"],
   propietarioCourierId: ["admin_shipro"],
+  // DEUDA 156: descuento buyer-facing del cliente — mismo tier que markupFijo
+  // (herramienta comercial del cliente hacia SU comprador; no toca facturación).
+  descuentoClienteModo: ["admin_shipro", "gerente_cliente"],
+  descuentoClientePorcentaje: ["admin_shipro", "gerente_cliente"],
+  descuentoClienteSobreTarifa: ["admin_shipro", "gerente_cliente"],
 };
 
 /**

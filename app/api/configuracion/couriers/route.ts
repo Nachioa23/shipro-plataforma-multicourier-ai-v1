@@ -217,6 +217,13 @@ export async function POST(request: Request) {
       // (money convention). El validate abajo garantiza que activo=true ⇒ tarifa > 0.
       const nuevoTarifaRespaldo = parseFloat(courier.tarifaPlanaRespaldoCourier);
 
+      // DEUDA 156 Paso 5: descuento buyer-facing del cliente. Enum whitelist
+      // defensivo (rechaza cualquier string ≠ "PORCENTAJE" → cae a "MONTO");
+      // pct como Float; monto como Decimal desde String() para preservar precisión.
+      const nuevoDescuentoModo: "MONTO" | "PORCENTAJE" = courier.descuentoClienteModo === "PORCENTAJE" ? "PORCENTAJE" : "MONTO";
+      const nuevoDescuentoPct = parseFloat(courier.descuentoClientePorcentaje) || 0;
+      const nuevoDescuentoMonto = parseFloat(courier.descuentoClienteSobreTarifa) || 0;
+
       // DEUDA 132 Paso 5b: tarifa de rescate OBLIGATORIA cuando el courier está activo.
       // Mirror del enforcement legacy D-10-RESPALDO-OBLIGATORIO (que gobernaba el
       // campo per-empresa dropeado en 5a). Server-side es SOURCE OF TRUTH — la UI
@@ -306,6 +313,20 @@ export async function POST(request: Request) {
               : null }
         : {};
 
+      // DEUDA 156 Paso 5: patches del descuento buyer-facing. Gated per campo
+      // (matriz de permisos ["admin_shipro", "gerente_cliente"] — mismo tier que
+      // markupFijo por ser herramienta comercial del cliente). Monto persiste
+      // como Prisma.Decimal desde String() (money precision).
+      const descModoPatch = puedeEditarCampo(rol, "descuentoClienteModo")
+        ? { descuentoClienteModo: nuevoDescuentoModo }
+        : {};
+      const descPctPatch = puedeEditarCampo(rol, "descuentoClientePorcentaje")
+        ? { descuentoClientePorcentaje: nuevoDescuentoPct }
+        : {};
+      const descMontoPatch = puedeEditarCampo(rol, "descuentoClienteSobreTarifa")
+        ? { descuentoClienteSobreTarifa: new Prisma.Decimal(String(nuevoDescuentoMonto)) }
+        : {};
+
       // DEUDA 21: si el rol no puede editar NINGUN campo de este item, retornar
       // 403 (deny by default). Evita upsert no-op + senal clara para el cliente.
       const tieneAlgunPermiso =
@@ -319,7 +340,10 @@ export async function POST(request: Request) {
         Object.keys(tipoCuentaPatch).length > 0 ||
         Object.keys(propietarioTipoPatch).length > 0 ||
         Object.keys(propietarioCourierIdPatch).length > 0 ||
-        Object.keys(tarifaRespaldoPatch).length > 0;
+        Object.keys(tarifaRespaldoPatch).length > 0 ||
+        Object.keys(descModoPatch).length > 0 ||
+        Object.keys(descPctPatch).length > 0 ||
+        Object.keys(descMontoPatch).length > 0;
 
       if (!tieneAlgunPermiso) {
         return NextResponse.json(
@@ -351,6 +375,9 @@ export async function POST(request: Request) {
           ...propietarioTipoPatch,
           ...propietarioCourierIdPatch,
           ...tarifaRespaldoPatch,
+          ...descModoPatch,
+          ...descPctPatch,
+          ...descMontoPatch,
         },
         create: {
           empresaId: empresaIdNum,
@@ -366,6 +393,9 @@ export async function POST(request: Request) {
           ...propietarioTipoPatch,
           ...propietarioCourierIdPatch,
           ...tarifaRespaldoPatch,
+          ...descModoPatch,
+          ...descPctPatch,
+          ...descMontoPatch,
         }
       });
 
@@ -423,6 +453,16 @@ export async function POST(request: Request) {
         }
         if (puedeEditarCampo(rol, "propietarioCourierId")) {
           await auditarCampo("propietarioCourierId", credAntes.propietarioCourierId, nuevoPropietarioCourierId);
+        }
+        // DEUDA 156 Paso 5: audit del descuento buyer-facing (3 fields).
+        if (puedeEditarCampo(rol, "descuentoClienteModo")) {
+          await auditarCampo("descuentoClienteModo", credAntes.descuentoClienteModo, nuevoDescuentoModo);
+        }
+        if (puedeEditarCampo(rol, "descuentoClientePorcentaje")) {
+          await auditarCampo("descuentoClientePorcentaje", credAntes.descuentoClientePorcentaje, nuevoDescuentoPct);
+        }
+        if (puedeEditarCampo(rol, "descuentoClienteSobreTarifa")) {
+          await auditarCampo("descuentoClienteSobreTarifa", credAntes.descuentoClienteSobreTarifa, nuevoDescuentoMonto);
         }
       }
     }

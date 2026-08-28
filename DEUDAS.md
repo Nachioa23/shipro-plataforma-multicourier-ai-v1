@@ -3434,9 +3434,11 @@ Consecuencia: `precioProveedor` NO es homogéneo entre couriers. Cualquier métr
 
 ---
 
-## DEUDA 153 — Campo fantasma `precioProveedorReal`: definido en schema, sin ningún uso en el código (registrada 2026-08-28, scope bajo/medio, prioridad baja)
+## DEUDA 153 — Campo fantasma `precioProveedorReal`: definido en schema, sin ningún uso en el código (registrada 2026-08-28, BUILT-local 2026-08-28)
 
-**Status:** ABIERTA — no bloquea nada. Es un ghost field que requiere decisión de rumbo antes de tocar.
+**Status:** BUILT (local, pending deploy) 2026-08-28 — decisión: CONECTAR (opción (a) del bloque de decisión). Los 5 slots ghost de la sección "5. Desglose de pricing" en FinanzasEnvio quedaron poblados vía cotizador (expone `secoNeto` + `baseConIntermediario` en `OpcionTarifa.desglose`) + `crear.ts` persist (commit `ac441c6`): `tarifaCourierBase` = `matched.desglose.secoNeto`, `markupIntermediarioAplicado` = `baseConIntermediario − secoNeto` (Rama A; null en Rama B), `precioProveedorReal` = `matched.desglose.baseConIntermediario`, `seguroAplicado` = `matched.desglose.smoNeto`. El 5º slot `descuentoClienteAplicado` (que quedaba null hasta cablear el descuento del cliente) lo completó [[DEUDA 156]] (commit `065a403`). Fallback/rescate → null (política, esFallback === true). Verificado en localhost. Pendiente prod deploy. Queda en DEUDAS.md como snapshot de la implementación hasta que se saque post-deploy verificado.
+
+**Status previo (histórico):** ABIERTA — no bloquea nada. Es un ghost field que requiere decisión de rumbo antes de tocar.
 
 **Problema:** `FinanzasEnvio.precioProveedorReal` (Decimal?) existe en `prisma/schema.prisma:596` con el comentario `"costo real esperado = base + markup intermediario"` y contexto en L591 `"La conciliación prefiere precioProveedorReal cuando existe; si no, cae a precioProveedor (legacy)."` — PERO `grep -rn "precioProveedorReal" --include="*.ts" .` en TODO el código TypeScript del repo retorna **CERO usos**: ni se lee ni se escribe en ningún lado. Ni `crear.ts` lo puebla, ni `conciliacion/route.ts` lo consulta, ni ninguna métrica lo referencia.
 
@@ -3505,9 +3507,22 @@ Hoy la única forma de dar de alta o cambiar un intermediario es SQL directo o m
 
 ---
 
-## DEUDA 156 — Aplicar el descuento/recargo del cliente al precio (motor de pricing) (registrada 2026-08-28, scope medio-alto, prioridad media-alta)
+## DEUDA 156 — Aplicar el descuento/recargo del cliente al precio (motor de pricing) (registrada 2026-08-28, BUILT-local 2026-08-28)
 
-**Status:** ABIERTA — no bloquea, pero es la deuda "de raíz" que arregla el campo engañoso de DEUDA 154 y cierra un cabo suelto del diseño DEUDA 73 (comentario L129 de cotizador.ts admite "seguro + descuento se sumarán cuando se implementen").
+**Status:** BUILT (local, pending deploy) 2026-08-28 — construido en 5 pasos, verificado localhost con prueba 20% (precioFactura=14385.64 full → precioMostrado=11508.51 con descuento → descuentoClienteAplicado=2877.13 delta). Reglas de negocio LOCKED por Nacho: (i) descuento absorbido por el CLIENTE (Shipro factura el chain completo — `precioFactura` intacto); (ii) piso $0 (nunca negativo, máximo envío gratis); (iii) el cliente elige modo MONTO ($) o PORCENTAJE (%); (iv) buyer-facing SOLAMENTE (checkout de e-commerce; dashboard/facturación siguen viendo `precioFinal` full); (v) configurable por el CLIENTE en /configuracion/transportes (tier `["admin_shipro","gerente_cliente"]`).
+
+**Pasos construidos:**
+1. **`e033c1d`** — schema+migration `20260828161821`: enum `DescuentoClienteModo` + `CredencialCourier.descuentoClientePorcentaje` (Float) + comentario de `descuentoClienteSobreTarifa` actualizado a política nueva (piso $0).
+2. **`9966624`** — cotizador: helper `aplicarDescuentoCliente` puro + nuevo field `precioFinalBuyer` en `OpcionTarifa` (piso $0). Sin descuento → `precioFinalBuyer === precioFinal` byte-idéntico.
+3. **`37ee3bb`** — Tiendanube rates callback: buyer ve `precioFinalBuyer`; cotizacionSnapshot mantiene `precioFinal` puro para auditoría del embudo.
+4. **`065a403`** — crear.ts: `precioMostrado = matched.precioFinalBuyer` + `descuentoClienteAplicado = matched.precioFinal.sub(matched.precioFinalBuyer)` (guarded por esFallback); `montoDebito` → `precioFactura` intacto (matched.precioFinal full).
+5. **`b934def`** — UI "4. Descuento a tu comprador" (paleta emerald buyer-facing) + persistencia + permisos + auditoría en los 4 archivos: `lib/permisos.ts`, `lib/auditoria-configuracion.ts`, `components/configuracion/TransportesTab.tsx`, `app/api/configuracion/couriers/route.ts`.
+
+**Prueba pendiente POST-DEPLOY:** verificar que el buyer del checkout de Tiendanube ve el precio descontado (rates callback en prod). Todo lo demás (persist, motor, UI) verificado en localhost.
+
+**DEUDA 154 NO cerrada acá — deferred al rediseño del markup:** el relabel del campo "Recargo/Descuento (%)" (que hoy bindea a `ajusteTarifaPorcentaje`, override del markup Shipro) NO se hizo en este build. Nacho decidió (2026-08-28) que el markup Shipro debe salir de la tarjeta del cliente completamente y vivir en admin per-cliente (Shipro-managed) — se registra como [[DEUDA 157]] con secuencia obligatoria construir/migrar/remover. DEUDA 154 se resolverá cuando se ejecute el punto 3 de DEUDA 157 (sacar la sección "3. Ajuste Comercial" al remover el markup de la tarjeta).
+
+**Status previo (histórico):** ABIERTA — no bloquea, pero es la deuda "de raíz" que arregla el campo engañoso de DEUDA 154 y cierra un cabo suelto del diseño DEUDA 73 (comentario L129 de cotizador.ts admite "seguro + descuento se sumarán cuando se implementen").
 
 **Problema:** el "descuento del cliente" no se aplica hoy en el cálculo del precio. El pipeline no cablea un descuento independiente del override del markup Shipro% (ver [[DEUDA 154]]). `aplicarMarkup` (`lib/cotizador.ts:147-220`) NO recibe ningún parámetro de descuento en su `ConfigMarkup` (L131-145). La columna `CredencialCourier.descuentoClienteSobreTarifa` existe (agregada en la migración `20260720235835`) con default 0, pero grep confirmó 0 usos en TS. El comentario L129 del cotizador dice literal: *"NOTA DEUDA 73: aqui se sumaran seguro + descuento cuando se implementen."*
 
@@ -3525,5 +3540,39 @@ Hoy la única forma de dar de alta o cambiar un intermediario es SQL directo o m
 **Relación:** [[DEUDA 154]] (el campo roto que esto arreglaría de raíz — al separar semánticas, el "Recargo/Descuento (Tu Tienda)" bindea a `descuentoClienteSobreTarifa` real, y `ajusteTarifaPorcentaje` queda solo como override del markup Shipro global). [[DEUDA 153]] (`descuentoClienteAplicado` es el destino del audit trail — se cablea de esta deuda). DEUDA 152 (homogeneización IVA de `precioProveedor` — si el descuento se aplica al neto o al bruto es otra pregunta de política que se cruza).
 
 **Origen:** recon DEUDA 153 (2026-08-28), al confirmar en CONFLICT 1 que el "descuento del cliente" no se aplica en el pipeline actual y que el comentario L129 de cotizador ya reservaba el trabajo pendiente.
+
+---
+
+## DEUDA 157 — Rediseño del markup Shipro: sacarlo de la tarjeta del cliente, llevarlo a admin per-cliente (Shipro-managed) (registrada 2026-08-28, scope alto, prioridad media-alta)
+
+**Status:** ABIERTA — no bloquea hoy porque no hay clientes reales en prod que estén tocando el markup, pero es prerequisito para que un cliente REAL entre a producción sin poder alterar el markup Shipro.
+
+**Problema:** el markup Shipro override per-courier vive hoy en `CredencialCourier.ajusteTarifaPorcentaje`, editable por `gerente_cliente` en la tarjeta del courier (`/configuracion/transportes`, sección "3. Ajuste Comercial (Tu Tienda)"). **Decisión de negocio de Nacho (2026-08-28):** el markup Shipro debe configurarlo un usuario de SHIPRO, por CLIENTE (empresa), NO el cliente y NO per-courier. El cliente NO debe tener acceso a ningún ajuste de tarifa excepto su descuento al comprador (ya resuelto en [[DEUDA 156]]).
+
+**Contexto técnico:** `MarkupShiproVigencia` (`prisma/schema.prisma:1603`) es **GLOBAL hoy** — una fila plataforma, sin `empresaId` FK; el schema comment L1599-1602 lo confirma literal: *"UNA sola fila activa a nivel plataforma (no hay FK: es global). CredencialCourier.ajusteTarifaPorcentaje se mantiene como gancho de OVERRIDE por empresa (empty/null = hereda este global)."* El resolver `resolverMarkupShiproPorcentaje` (`lib/utils/resolvers-tarifa.ts:47-73`) lee el override per-credencial cuando `> 0`, sino cae al global. **El único override per-cliente hoy es `ajusteTarifaPorcentaje` en la credencial (per-par cliente↔courier).**
+
+**Absorbe / reemplaza:** [[DEUDA 116]] (default global en onboarding) + [[DEUDA 117]] (UI del override) — ambas quedaron parcialmente pensadas contra el diseño per-credencial actual. El rediseño per-cliente Shipro-managed las supera.
+
+**Decisión de producto pendiente (a confirmar con Nacho al encarar):** al pasar de per-courier a per-cliente se **PIERDE la granularidad per-courier** (hoy la misma empresa puede tener markup distinto por courier — Mocis 10%, Andreani 15%). ¿Aceptable? Si Nacho quiere mantener la granularidad per-courier bajo control Shipro, el nuevo modelo debe ser per-empresa-per-courier (no per-empresa puro).
+
+**SECUENCIA OBLIGATORIA (orden estricto — invertirlo rompe el pricing o deja el markup inconfigurable):**
+
+1. **CONSTRUIR** el nuevo hogar del markup en `/admin-parametros-tarifa` (o pantalla admin equivalente Shipro-managed): per-empresa (o per-empresa-per-courier según decisión). Requiere modelo nuevo — nueva tabla (ej. `MarkupShiproPorEmpresa` con vigencias) o campo en `Empresa`. Endpoint POST admin-only + UI listar/editar.
+
+2. **MIGRAR** el motor de pricing (cotizador + `crear.ts` + conciliación) para leer el markup del nuevo hogar en vez de `CredencialCourier.ajusteTarifaPorcentaje`. Verificar money-safety (no cambiar precios existentes sin intención — misma disciplina que DEUDA 132 fix, DEUDA 153 audit trail). Migración de datos: los overrides per-courier existentes se colapsan/agregan al nuevo modelo (política a decidir: promedio, max, primero, o data migration manual).
+
+3. **RECIÉN ENTONCES** sacar la sección "3. Ajuste Comercial (Tu Tienda)" de `/configuracion/transportes` (`components/configuracion/TransportesTab.tsx:505-523`) — y resolver [[DEUDA 154]] (el label engañoso "Recargo/Descuento (%)") al remover/mover el campo. También decidir en ese punto qué pasa con `markupFijo` (Costo Fijo Adicional) + `tarifaPlanaRespaldoCourier` (Tarifa de rescate) — ver punto siguiente.
+
+**Nunca invertir el orden:** sacar el punto 3 antes de construir su reemplazo deja el markup inconfigurable (nadie lo puede setear) y potencialmente rompe precios existentes.
+
+**Otros fields de la sección 3 (decidir al encarar):**
+- **`markupFijo`** ("Costo Fijo Adicional") — es per-cliente↔courier y NO tiene equivalente global hoy. Al mover el markup% ¿se mueve también? ¿o queda como único field en la tarjeta con el descuento buyer-facing?
+- **`tarifaPlanaRespaldoCourier`** ("Tarifa de rescate") — es la tarifa DEUDA 132 Paso 5b, obligatoria per-courier. Semánticamente distinta al markup. **Probablemente se queda** en la tarjeta del cliente (es un dato del cliente, no una decisión Shipro).
+
+**Relación:** [[DEUDA 154]] (label engañoso — se resuelve al remover el campo en el punto 3). [[DEUDA 116]] + [[DEUDA 117]] (absorbidas por este rediseño). [[DEUDA 156]] (el descuento del cliente — SÍ se queda en la tarjeta, es capa cliente→comprador). [[DEUDA 155]] (UI faltante del intermediario — semánticamente análoga; si ambas se hacen juntas en `/admin-parametros-tarifa`, comparten espacio).
+
+**Scope:** alto (toca schema + motor de pricing + conciliación + UI + migración de datos). **Prioridad:** media-alta (bloquea que el cliente toque el markup Shipro; mitigado hoy porque no hay clientes reales en prod).
+
+**Origen:** sesión DEUDA 156 (2026-08-28), al preguntarse Nacho si el field `ajusteTarifaPorcentaje` debía vivir en la tarjeta del cliente o en admin. Recon confirmó (a) que el diseño histórico lo puso deliberadamente per-credencial, (b) que mover a admin per-cliente requiere migración real (no rename), (c) que hoy sin clientes reales en prod es el momento ideal para reestructurar sin romper contratos vivos.
 
 ---

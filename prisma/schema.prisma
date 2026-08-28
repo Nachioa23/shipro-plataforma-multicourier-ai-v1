@@ -398,6 +398,15 @@ enum PropietarioTipo {
   COURIER
 }
 
+// DEUDA 156: modo del descuento buyer-facing del cliente. Discriminador
+// explícito entre "descontar un monto fijo en $" vs "descontar un %". Se aplica
+// SOLO al precio que ve el comprador en el checkout de e-commerce; Shipro
+// factura la tarifa full igual. Piso $0 (nunca deja el precio negativo).
+enum DescuentoClienteModo {
+  MONTO
+  PORCENTAJE
+}
+
 // ==========================================
 // 1.5. CREDENCIALES COURIERS (El Cerebro)
 // ==========================================
@@ -462,10 +471,17 @@ model CredencialCourier {
   // real al courier (calcula su seguro). Si false → se manda mínimo (seguro mínimo del courier).
   // Reemplaza semánticamente al viejo `requiereSeguro` (que queda obsoleto, se limpia en deuda aparte).
   quiereSeguroCourier         Boolean @default(false)
-  // DEUDA 73: descuento/recargo que el CLIENTE aplica sobre la tarifa publicada a SU comprador.
-  // CON SIGNO: negativo=subvención (regala plata al comprador), positivo=recargo. SIN tope (es su
-  // estrategia comercial). Capa cliente→comprador, distinta del markup Shipro→cliente.
+  // DEUDA 156: MONTO fijo ($) de descuento buyer-facing (usado si modo = MONTO).
+  // Piso $0: el descuento nunca deja el precio negativo (máximo, envío gratis).
+  // Reemplaza la política vieja ("con signo, sin tope") por decisión de Nacho 2026-08-28.
   descuentoClienteSobreTarifa Decimal @default(0) @db.Decimal(12, 2)
+
+  // DEUDA 156: descuento buyer-facing del cliente a SU comprador. Modo explícito.
+  // El cliente elige PORCENTAJE o MONTO. Piso $0 (nunca negativo). Shipro factura la
+  // tarifa full igual (precioFactura intacto); esto solo afecta el precio que ve el
+  // comprador en el checkout de e-commerce (NO el dashboard).
+  descuentoClientePorcentaje Float                @default(0)      // % de descuento (0 = sin descuento). Usado si modo = PORCENTAJE.
+  descuentoClienteModo       DescuentoClienteModo @default(MONTO)  // MONTO | PORCENTAJE — cuál de los dos campos aplica.
 
   ordenamientoDefault String @default("PRECIO_ASC")
 

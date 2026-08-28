@@ -171,7 +171,9 @@ export async function POST(request: Request) {
       return {
         name: `${o.courier} - ${o.modalidad}`,
         code: generarCodeServicio(o.courier, o.codigoServicio),
-        price: Number(o.precioFinal),
+        // DEUDA 156: el comprador ve el precio con descuento del cliente (precioFinalBuyer);
+        // si no hay descuento, precioFinalBuyer === precioFinal. La facturación usa precioFinal aparte.
+        price: Number(o.precioFinalBuyer ?? o.precioFinal),
         currency,
         type: "ship" as const,
         reference: JSON.stringify({ courier: o.courier, modalidad: o.modalidad, codigoServicio: o.codigoServicio, id: o.id }),
@@ -210,7 +212,9 @@ export async function POST(request: Request) {
             pickup.push({
               name: `${o.courier} - Retiro en ${suc.nombre}`,
               code,
-              price: Number(o.precioFinal),
+              // DEUDA 156: el comprador ve el precio con descuento del cliente (precioFinalBuyer);
+              // si no hay descuento, precioFinalBuyer === precioFinal. La facturación usa precioFinal aparte.
+              price: Number(o.precioFinalBuyer ?? o.precioFinal),
               currency,
               type: "pickup" as const,
               address: suc.address,

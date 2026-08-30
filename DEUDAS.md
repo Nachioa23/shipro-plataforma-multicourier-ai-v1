@@ -25,7 +25,7 @@ Este bloque captura decisiones de principio que guian futuras decisiones de scop
 Esta sección es el mapa que cada chat de trabajo lee al arrancar. Fuente de verdad del ORDEN; el detalle de cada deuda vive en su bloque.
 
 **Estado verificado al 2026-08-24** (auditoría de reconciliación código+git+body):
-- RESUELTAS y en producción: DEUDA 128 (movida a DEUDAS-RESUELTAS.md). DEUDA 73, 107, 105, 10, 149, 151 resueltas en su núcleo pero se quedan acá por colas menores pendientes (se mueven al saldarlas).
+- RESUELTAS y en producción: DEUDA 128 (movida a DEUDAS-RESUELTAS.md). DEUDA 73, 107, 105, 10, 149, 151, 159 resueltas en su núcleo pero se quedan acá por colas menores pendientes (se mueven al saldarlas).
 - RESUELTA EN CÓDIGO, FALTA DEPLOY A PRODUCCIÓN: DEUDA 129 (arreglo de regresión fetchConTimeout en commit 709d995, compila, nunca deployado). Semáforo localhost↔prod: queda en pendientes hasta subir a prod.
 - BUGS DE PLATA VIVOS (prioridad): DEUDA 123 (subcobro ~17% por tarifaIncluyeIva en credenciales creadas fuera del seed) + DEUDA 132 (dimensiones caen a 10×10×10, factura mal).
 
@@ -3604,9 +3604,15 @@ Hoy la única forma de dar de alta o cambiar un intermediario es SQL directo o m
 
 ---
 
-## DEUDA 159 — Rediseñar las métricas de "fuga por aforo" (perdidaReal + fugaPesos) — hoy contaminadas por el descuento del cliente (registrada 2026-08-28, scope medio, prioridad media)
+## DEUDA 159 — Rediseñar las métricas de "fuga por aforo" (perdidaReal + fugaPesos) — hoy contaminadas por el descuento del cliente (registrada 2026-08-28, BUILT-local 2026-08-30)
 
-**Status:** ABIERTA — no bloquea operativa, pero las 2 métricas muestran números con drift silencioso post-DEUDA-156. Los displays operator ya se arreglaron en FASE 0 (commit `60d2792`); las métricas quedaron pendientes acá.
+**Status:** BUILT (local, pending deploy) 2026-08-30 — commit `93fc4bf`. La fuga económica del "Desvío Financiero por Peso" (`lib/utils/desvio-peso.ts`) usa ahora `costoAforo` NETO × IVA para display, homogéneo con el resto de cards que muestran con IVA. Reemplaza la fórmula legacy `precioFactura − precioMostrado` contaminada post-[[DEUDA 156]] por el descuento buyer-facing del cliente. Envíos sin aforo cobrado (peso igual, SOBREPRECIO_RECLAMAR, sin conciliar) reportan 0 correctamente. Además: (i) eliminado el bloque muerto `aforoStats/perdidaReal` de `app/api/metricas/route.ts` (era dead output sin consumer frontend, ver comments `dashboard/page.tsx:320` + `torre-de-control/page.tsx:487`); (ii) agregado field `fugaPorcentaje` (per-envío) + `fugaPorcentajePromedio` (agregado en `ResumenDesvio`) — el "% económico" que Nacho pidió, disponible en el JSON para consumo UI posterior. Weight half intacto (`diffKg`, `clasificarSeveridad`, `desvioPromedioKg`, `desvioMaxKg`, `tasaSobre*`, `distribucionSeveridad*`). Billing intacto (`precioFactura`/`precioMostrado`/`montoDebito`, crear.ts, cotizador, rates callback sin cambios). Verificado localhost: dashboard cliente muestra 0 (correcto — no hay aforos en data local); ambas surfaces (client + Torre) leen la misma figura del cliente (`costoAforo × IVA`) por ahora. Pendiente deploy prod.
+
+**Sub-scope diferido (a nuevas deudas):**
+- La vista TORRE debería mostrar la figura del COURIER (`costoCourierFacturado − costoCourierEsperado`), no la del cliente. Los 2 fields se persisten RAW-native y no hay link per-envío al `ivaDeclarado` del `ConciliacionRun`, así que requiere trabajo aparte de conciliación + migración. → [[DEUDA 161]].
+- La Torre muestra un mensaje gris discreto ("Aún no hay liquidaciones...") cuando `enviosConAforo === 0` — asimetría UX con el dashboard cliente (que muestra ceros). Pre-existente (commit `0ddb379` junio 2026), no fallout de 159. → [[DEUDA 162]].
+
+**Status previo (histórico):** ABIERTA — no bloquea operativa, pero las 2 métricas muestran números con drift silencioso post-DEUDA-156. Los displays operator ya se arreglaron en FASE 0 (commit `60d2792`); las métricas quedaron pendientes acá.
 
 **Problema:** `metricas/route.ts:189` (`perdidaReal`) y `desvio-peso.ts:88` (`fugaPesos`) computan `precioFactura − precioMostrado`. Ese proxy **NUNCA fue robusto** — funcionaba solo porque pre-DEUDA-156 `precioMostrado ≈ precioFactura` (sin descuento). Post-156, `precioMostrado` lleva el descuento del cliente, así que la "fuga por aforo" ahora se **contamina con el descuento** (mide como "pérdida de Shipro" algo que es decisión comercial del cliente hacia su comprador).
 
@@ -3656,5 +3662,49 @@ Hoy la única forma de dar de alta o cambiar un intermediario es SQL directo o m
 **Relación:** [[DEUDA 153]] (los 5 slots ghost del "desglose de pricing" ya se conectaron — quedan estos 6 fantasmas de otros modelos). [[DEUDA 152]] (homogeneización IVA, relacionada con `tarifaIncluyeIvaIntermediario`). DEUDA 132 Paso 5a (dropeó `Empresa.tarifaPlanaRespaldo`, patrón a seguir).
 
 **Origen:** diccionario de campos de plata (2026-08-28), Grupo 3.
+
+---
+
+## DEUDA 161 — Vista "courier" del Desvío Financiero por Peso en Torre (costoCourierFacturado − costoCourierEsperado, neto) (registrada 2026-08-30, scope medio-alto, prioridad media)
+
+**Status:** ABIERTA — la vista CLIENTE ya está construida ([[DEUDA 159]] BUILT-local); esta cierra la vista COURIER que Nacho pidió para la Torre.
+
+**Problema:** la métrica "Desvío Financiero por Peso" hoy muestra en AMBAS vistas (dashboard cliente + Torre) la figura del CLIENTE (`costoAforo × IVA` = lo que Shipro le cobró de más al cliente por el aforo). Nacho definió que la TORRE (vista interna Shipro) debería mostrar la figura del COURIER: cuánto le facturó el courier de más a Shipro = `costoCourierFacturado − costoCourierEsperado`. Hoy esos 2 fields se persisten RAW-native (Andreani con IVA, Mocis sin — issue [[DEUDA 152]]) y **NO hay link per-envío al `ivaDeclarado` del `ConciliacionRun`** (verificado en recon 2026-08-30: sin FK `FinanzasEnvio.conciliacionRunId`, snapshot Json solo tiene valores prior para rollback), así que no se pueden netizar con certeza al leer.
+
+**Solución propuesta (patrón `costoAforo`):** en `app/api/conciliacion/route.ts`, computar y persistir un field NUEVO ya en NETO — `deltaCourierNeto` (o `costoCourierFacturadoNeto` + `costoCourierEsperadoNeto`) — netizando con `tarifaExcelIncluyeIva` (del run) para el facturado y `motorCourier.tarifaApiIncluyeIva` (del adapter) para el esperado. Luego la métrica lo lee directo × IVA para display. Cierra parcialmente [[DEUDA 152]] (homogeneización IVA cross-courier).
+
+**Alcance:**
+- Migración aditiva (1-2 columnas en `FinanzasEnvio`).
+- Cambio en `app/api/conciliacion/route.ts:445-506` (write): agregar computación NETO al lado de los raw persistidos.
+- Backfill de envíos ya conciliados (o quedan null hasta re-conciliación; política a decidir).
+- Branch por scope en `lib/utils/desvio-peso.ts` (Torre lee la figura courier, cliente sigue con `costoAforo`) — el helper YA es scope-aware (`calcularDesvioPeso(ctx: AuthContext)`), así que la ramificación por audiencia es limpia.
+- Los 2 cards leen el field por audiencia (dashboard: figura cliente; Torre: figura courier).
+
+**Scope:** medio-alto (toca conciliación + migración + métrica). **Prioridad:** media.
+
+**Relación:** [[DEUDA 159]] (vista cliente ya cerrada; esta la complementa). [[DEUDA 152]] (homogeneización IVA `precioProveedor` cross-courier — se cierra parcialmente al persistir los deltas netos). [[DEUDA 76]] (fuga-ruteo, pattern análogo con `fugaFinanciera` pre-computada al alta).
+
+**Origen:** sesión DEUDA 159 (2026-08-30). Nacho eligió cerrar la vista cliente primero (limpia, `costoAforo` ya está en NETO) y diferir la courier (requiere migración de persistencia).
+
+---
+
+## DEUDA 162 — UX del estado vacío del card "Desvío Financiero por Peso" en Torre (cosmético) (registrada 2026-08-30, scope bajo, prioridad baja)
+
+**Status:** ABIERTA — cosmético, no bloquea nada.
+
+**Problema:** cuando no hay aforos procesados (`enviosConAforo === 0`), la Torre (`app/(dashboard)/torre-de-control/page.tsx:1334-1338`) muestra un mensaje gris discreto (`text-gray-500` sobre fondo claro: "Aún no hay liquidaciones procesadas. Los aforos llegan post-cierre mensual al subir el Excel del courier via /api/conciliacion.") que visualmente se lee como card vacío. El dashboard cliente en el mismo caso (`app/(dashboard)/dashboard/page.tsx:509+`) muestra ceros con `?? 0` defensivo en cada read — nunca se ve vacío. Asimetría UX.
+
+**NO es un bug — es pre-existente:** commit `0ddb379` (2026-06-11, implementación original de la Metrica 3.4 DEUDA 39). El fix [[DEUDA 159]] (`93fc4bf`, 2026-08-30) NO tocó `torre-de-control/page.tsx`. Se observó durante la verificación localhost del fix.
+
+**Solución posible (Nacho decide):**
+- **(a)** Hacer la Torre defensiva como el dashboard cliente: reemplazar el ternary gate L1334-1338 por render del card con `?? 0` fallbacks. Ventaja: siempre muestra algo (aunque sean zeros), consistente con dashboard.
+- **(b)** Mejorar el mensaje vacío: icono + contexto + tal vez botón "Ir a /conciliacion". No cambia la mecánica.
+- **(c)** Dejar como está: el mensaje pre-existente es intencionalmente discreto — la Torre asume que sin conciliaciones no vale la pena mostrar zeros.
+
+**Scope:** bajo (1 archivo, solo UI). **Prioridad:** baja (cosmético, no bloquea operativa).
+
+**Relación:** [[DEUDA 159]] (donde se observó el estado vacío durante la verificación). [[DEUDA 161]] (si se cablea la vista courier de Torre, la asimetría podría desaparecer naturalmente al haber siempre data).
+
+**Origen:** observado en verificación localhost de DEUDA 159 (2026-08-30).
 
 ---

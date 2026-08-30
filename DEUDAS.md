@@ -3577,9 +3577,30 @@ Hoy la única forma de dar de alta o cambiar un intermediario es SQL directo o m
 
 ---
 
-## DEUDA 158 — Renombrar campos de plata mal nombrados según su rol real (empezando por precioFactura → tarifaFullCotizada) (registrada 2026-08-28, scope alto, prioridad media)
+## DEUDA 158 — Renombrar campos de plata mal nombrados según su rol real (empezando por precioFactura → tarifaFullCotizada) (registrada 2026-08-28, EN PROGRESO 2026-08-30)
 
-**Status:** ABIERTA — no bloquea (los comments honestos de FASE 1 mitigan el riesgo de lectura), pero el nombre engañoso sigue induciendo bugs (ver [[DEUDA 156]] fallout: 4 readers usaron precioMostrado como billed proxy hasta que la semántica se alineó).
+**Status:** ABIERTA — **1 de N campos renombrado** (`precioFactura → tarifaFullCotizada`, commit `a8cda53` 2026-08-30). Los comments honestos de FASE 1 mitigan el riesgo de lectura para los restantes, pero el nombre engañoso sigue induciendo bugs (ver [[DEUDA 156]] fallout: 4 readers usaron precioMostrado como billed proxy hasta que la semántica se alineó). Se hace de a UN campo por sesión — principio Nacho: money-safe, nunca en lote.
+
+**AVANCE 2026-08-30 (commit `a8cda53`):** PRIMER campo renombrado — `precioFactura → tarifaFullCotizada`, vía `@map("precioFactura")` (columna física intacta, cero migración de datos, cero cambio de valores; diff 74/74 simétrico = rename puro). Blast radius: 20 archivos tocados (schema + writes + reads + DTOs + frontend + comments). Verificado `tsc=0` + `prisma migrate status` = "up to date". Cascade tsc-guided (Prisma Client regeneró) confirmó que TODAS las refs se actualizaron. Frontend keys sincronizados con endpoint output (dashboard cards + torre anatomía) — cero silent-$0. Pendiente deploy prod.
+
+**CHECKLIST de campos candidatos restantes (uno por sesión, Nacho decide orden):**
+- ⏳ **`CredencialCourier.markupFijo`** — es markup Shipro FIJO, no "Fee" (colisiona con `OperacionFee`). Candidato: `markupFijoShipro`. **Entangled con [[DEUDA 157]]** (rediseño markup — puede renombrarse AS PART de ese redesign en vez de standalone).
+- ⏳ **`CredencialCourier.ajusteTarifaPorcentaje`** — es override % del markup Shipro, no "Recargo/Descuento del cliente" pese al label UI. Candidato: `overrideMarkupShiproPorcentaje`. **Entangled con [[DEUDA 154]] + [[DEUDA 157]]** — recomendado renombrar cuando se ejecute el redesign markup.
+- ⏳ **`FinanzasEnvio.costoCourierEsperado`** — comment promete "según aforo final" pero es copia sin recomputar de `precioProveedor`. Candidato: `costoCourierCotizadoSnapshot`.
+- ⏳ **`FinanzasEnvio.markupIntermediarioAplicado`** — comment dice "+% + fijo" pero solo persiste "+%" (el fijo es ghost). Candidato: revisar semántica antes; posible `markupIntermediarioPctAplicado` para reflejar que solo es %.
+- ⏳ **`FinanzasEnvio.seguroAplicado`** — es SMO (Seguro Mínimo Shipro), no seguro de mercadería del comprador. Candidato: `smoAplicado`.
+- ⏳ **`FinanzasEnvio.tarifaCourierBase`** — comment dice "cruda" pero se persiste NETIZADA. Candidato: `tarifaCourierNetoBase`.
+- ⏳ **`FinanzasEnvio.precioProveedorReal`** — comment promete "conciliación lo prefiere" pero nunca se cablea. Candidato: renombrar cuando se cablee ([[DEUDA 153]] audit trail — pendiente lecturas activas).
+- ⏳ **`FinanzasEnvio.valorDeclarado`** — dice "Seguro de mercadería" pero es VALOR declarado del comprador. Candidato: `valorDeclaradoComprador`.
+
+**Cada rename sigue el mismo patrón validado en `precioFactura`:**
+1. Schema: renombrar field + `@map("nombreViejo")` para preservar columna física (cero migración datos).
+2. `npx prisma generate` → Prisma Client fuerza tsc a fallar en cada ref stale.
+3. Cascade tsc-guided hasta 0 errores.
+4. Renombrar DTOs correlacionados (por principio "nombrar por rol").
+5. Coordinar frontend keys con endpoint output shape.
+6. Comments hygiene por consistencia.
+7. `git diff --stat` con N/N simétrico = rename puro; cualquier asimetría = STOP + revisar.
 
 **Problema:** varios campos de plata tienen nombres que no reflejan su rol real (documentado en `docs/DICCIONARIO-CAMPOS-PLATA.md`, "Grupo 1"). El más claro: `precioFactura` **NO es "lo facturado"** — es la tarifa full COTIZADA y debitada al alta (congelada; el real post-liquidación = `precioFactura + costoAforo`). Nombre honesto sería `tarifaFullCotizada`. Comment ya actualizado en FASE 1 (commit `3ba633a`) para reflejar el rol real, pero el nombre sigue engañando a lectores nuevos (humanos y AI).
 

@@ -3576,3 +3576,85 @@ Hoy la única forma de dar de alta o cambiar un intermediario es SQL directo o m
 **Origen:** sesión DEUDA 156 (2026-08-28), al preguntarse Nacho si el field `ajusteTarifaPorcentaje` debía vivir en la tarjeta del cliente o en admin. Recon confirmó (a) que el diseño histórico lo puso deliberadamente per-credencial, (b) que mover a admin per-cliente requiere migración real (no rename), (c) que hoy sin clientes reales en prod es el momento ideal para reestructurar sin romper contratos vivos.
 
 ---
+
+## DEUDA 158 — Renombrar campos de plata mal nombrados según su rol real (empezando por precioFactura → tarifaFullCotizada) (registrada 2026-08-28, scope alto, prioridad media)
+
+**Status:** ABIERTA — no bloquea (los comments honestos de FASE 1 mitigan el riesgo de lectura), pero el nombre engañoso sigue induciendo bugs (ver [[DEUDA 156]] fallout: 4 readers usaron precioMostrado como billed proxy hasta que la semántica se alineó).
+
+**Problema:** varios campos de plata tienen nombres que no reflejan su rol real (documentado en `docs/DICCIONARIO-CAMPOS-PLATA.md`, "Grupo 1"). El más claro: `precioFactura` **NO es "lo facturado"** — es la tarifa full COTIZADA y debitada al alta (congelada; el real post-liquidación = `precioFactura + costoAforo`). Nombre honesto sería `tarifaFullCotizada`. Comment ya actualizado en FASE 1 (commit `3ba633a`) para reflejar el rol real, pero el nombre sigue engañando a lectores nuevos (humanos y AI).
+
+**Alcance:** rename real en `prisma/schema.prisma` + **TODOS los readers/writers** (~15 sitios para `precioFactura`: `crear.ts`, `conciliacion/route.ts`, `metricas/route.ts`, `admin/liquidaciones/route.ts`, `kpis-hero.ts`, `desvio-peso.ts`, `efectividad-primera-visita.ts`, `procesar-bloqueados*.ts`, `rastreo-manual/route.ts`, `dashboard/page.tsx`, `inversa/route.ts`). Requiere:
+- Migración de columna (`ALTER TABLE RENAME COLUMN`).
+- `npx prisma generate` para regenerar el Client con el nuevo nombre.
+- Cascada de tsc-guided rename en TypeScript.
+- Verificación money-safe (renombrar un campo de plata mal rompe facturación en silencio — ej. si un reader queda con el nombre viejo por error, cae al `?? 0`).
+
+**Otros candidatos del Grupo 1:**
+- `markupFijo` (`CredencialCourier`): es markup Shipro fijo, no "Fee" — colisiona terminológicamente con `OperacionFee`. Candidato: `markupFijoShipro`.
+- `ajusteTarifaPorcentaje` (`CredencialCourier`): es override del markup Shipro%, no "Recargo/Descuento del cliente" pese al label UI — se cruza con [[DEUDA 154]] (label engañoso) y [[DEUDA 157]] (redesign markup). Candidato: `overrideMarkupShiproPorcentaje`.
+- `costoCourierEsperado` (`FinanzasEnvio`): promete "según aforo final" pero es copia de `precioProveedor`. Candidato: `costoCourierCotizadoSnapshot` o similar.
+
+**Principio rector (Nacho, 2026-08-28):** *"nombrar cada campo según su ROL REAL — lo que HACE, no lo que alguien creyó que hacía al nombrarlo. Los renames se hacen de a UN campo por sesión, con recon + verificación money-safe, nunca en lote."* Ver `docs/DICCIONARIO-CAMPOS-PLATA.md`.
+
+**Scope:** alto (schema + migración + money-safety). **Prioridad:** media. Se hace de a UN campo por sesión, nunca en lote. `precioFactura → tarifaFullCotizada` es el primero y el de mayor blast radius (~15 sitios).
+
+**Relación:** [[DEUDA 154]] (label engañoso ajusteTarifaPorcentaje — el rename lo cierra si se hace en el mismo movimiento). [[DEUDA 157]] (rediseño markup — al mover el field a admin, el rename es natural). [[DEUDA 156]] (fallout que expuso el problema; FASE 1 mitigó vía comments honestos).
+
+**Origen:** sesión del diccionario de campos de plata (2026-08-28), post-DEUDA-156 fallout.
+
+---
+
+## DEUDA 159 — Rediseñar las métricas de "fuga por aforo" (perdidaReal + fugaPesos) — hoy contaminadas por el descuento del cliente (registrada 2026-08-28, scope medio, prioridad media)
+
+**Status:** ABIERTA — no bloquea operativa, pero las 2 métricas muestran números con drift silencioso post-DEUDA-156. Los displays operator ya se arreglaron en FASE 0 (commit `60d2792`); las métricas quedaron pendientes acá.
+
+**Problema:** `metricas/route.ts:189` (`perdidaReal`) y `desvio-peso.ts:88` (`fugaPesos`) computan `precioFactura − precioMostrado`. Ese proxy **NUNCA fue robusto** — funcionaba solo porque pre-DEUDA-156 `precioMostrado ≈ precioFactura` (sin descuento). Post-156, `precioMostrado` lleva el descuento del cliente, así que la "fuga por aforo" ahora se **contamina con el descuento** (mide como "pérdida de Shipro" algo que es decisión comercial del cliente hacia su comprador).
+
+**Impacto concreto:** un envío con `precioFactura=10000`, descuento cliente=$500 (→ `precioMostrado=9500`) y sin fuga real de peso reporta `perdidaReal=500` en Torre de Control — falso positivo. Peor: envíos con fuga real de peso Y descuento cliente reportan la suma como una sola "pérdida".
+
+**Objetivo:** recomputar la fuga con los campos correctos. Alternativas disponibles hoy en `FinanzasEnvio`:
+- `costoCourierFacturado − costoCourierEsperado` — **fuga real del courier** (lo que el courier facturó vs lo que Shipro esperaba). Ambos existen post-conciliación.
+- `costoAforo` — **delta que Shipro pasó al cliente** por el aforo (Rama A `subioPeso` only). Ya está en $, con markups aplicados.
+- Combinación según qué mide cada métrica (las dos "fugas" del diccionario: (A) cotizado-vs-facturado del courier vs (B) publicado-vs-facturado al cliente).
+
+**DECISIÓN DE NEGOCIO PENDIENTE (Nacho):** qué mide cada una de las 2 métricas.
+- ¿`perdidaReal` (Torre M4) = pérdida real de Shipro (courier facturó más de lo esperado y Shipro no lo pasó al cliente)? → usar `costoCourierFacturado − costoCourierEsperado − costoAforo` (guarded ≥ 0).
+- ¿`fugaPesos` (Torre M3.4) = mismo criterio o distinto?
+
+**Nota técnica:** `desvio-peso.ts` requiere **ampliar el interface `EnvioParaAuditar`** (hoy solo 4 fields: `pesoCobrado`, `pesoAforado`, `precioMostrado`, `precioFactura`) para acceder a `costoAforo`/`costoCourierFacturado`/`costoCourierEsperado`. Requiere actualizar sus callers (grep confirmó blast radius chico).
+
+**Scope:** medio (toca métricas de Torre de Control + KPIs). **Prioridad:** media.
+
+**Relación:** [[DEUDA 156]] (fallout que rompió estas métricas — FASE 0 arregló los 3 displays operator; las métricas son la última pieza pendiente). [[DEUDA 158]] (si `precioFactura` se renombra a `tarifaFullCotizada` en el mismo movimiento, aclara aún más lo que las métricas miden). Torre de Control M4 (aforo) y M3.4 (desvío de peso).
+
+**Origen:** fallout de [[DEUDA 156]] (2026-08-28). FASE 0 arregló los displays operativos (dashboard + rastreo); esta deuda cierra las métricas.
+
+---
+
+## DEUDA 160 — Limpiar campos fantasma de plata (Grupo 3 del diccionario) (registrada 2026-08-28, scope bajo-medio, prioridad baja)
+
+**Status:** ABIERTA — no bloquea nada. Cleanup arquitectónico: campos que existen en el schema pero ningún reader consume.
+
+**Problema:** documentado en `docs/DICCIONARIO-CAMPOS-PLATA.md` "Grupo 3". Lista de fantasmas detectados en el recon del diccionario (2026-08-28):
+
+- **`FinanzasEnvio.porcentajePrecioFactura`** — sin usos TS detectados, sin comment. Ghost total.
+- **`CredencialCourier.quiereSeguroCourier`** — pipeline no lo lee; `requiereSeguro:false` hardcoded en `crear.ts:480`. Schema promete branching seguro-vs-mínimo que nunca se cableó.
+- **`CourierIntermediario.seguroFijoIntermediarioConIva`** — ghost + **nombre contradice al seed**: `prisma/seed.ts:141` comment dice literal *"SIN IVA (nombre del campo a corregir en deuda aparte)"*. Doble problema: no se usa Y el nombre miente.
+- **`CourierIntermediario.tarifaIncluyeIvaIntermediario`** — ghost, hermano del anterior.
+- **`CredencialCourier.tarifaPlanaRespaldo`** — muerto. Reemplazado por `tarifaPlanaRespaldoCourier` en DEUDA 132 Paso 5a. Comment del propio schema L502-503 lo flag: *"Ningún reader lo consume ya; drop en cleanup aparte"*.
+- **`Courier.smoActivo` + `Courier.smoPrecioAlClienteConIva`** — legacy, motor pivoteó a `SmoCourier` model. Comment L292-294 dice *"espejo hasta que motor pivotee"* — motor ya pivotó, pero legacy sigue en schema.
+
+**CUIDADO:** antes de dropear cada uno, **VERIFICAR puntualmente** que de verdad no se usa en ningún lado ("sin usos detectados" ≠ "garantizado sin usos"). Algunos viven en la base → drop = migración destructiva (irreversible). Decidir uno por uno si se dropea o se deja — un campo vacío molesta menos que uno que miente (que ya lo cubre FASE 1 con comments honestos).
+
+**Alcance por campo:**
+- Grep whole-repo (`--include="*.ts" --include="*.tsx" --include="*.mjs"`) confirmando 0 usos vivos.
+- Si el field tiene rows con valores no-default en prod, decidir qué hacer con los datos (drop = pérdida).
+- Migración destructiva `DROP COLUMN` + regenerate Prisma.
+
+**Scope:** bajo-medio (migraciones destructivas + verificaciones). **Prioridad:** baja — cleanup no bloquea nada; FASE 1 ya mitigó el riesgo de mislead vía comments. Se hace de a uno con verificación previa.
+
+**Relación:** [[DEUDA 153]] (los 5 slots ghost del "desglose de pricing" ya se conectaron — quedan estos 6 fantasmas de otros modelos). [[DEUDA 152]] (homogeneización IVA, relacionada con `tarifaIncluyeIvaIntermediario`). DEUDA 132 Paso 5a (dropeó `Empresa.tarifaPlanaRespaldo`, patrón a seguir).
+
+**Origen:** diccionario de campos de plata (2026-08-28), Grupo 3.
+
+---

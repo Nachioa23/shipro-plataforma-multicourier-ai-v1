@@ -42,7 +42,7 @@ export async function GET(request: Request) {
       prisma.envio.count({ where: donde }),
       prisma.envio.count({ where: donde }), 
       prisma.envio.count({ where: { ...donde, estadoActual: "ENTREGADO" } }),
-      prisma.finanzasEnvio.findMany({ where: { envio: donde }, select: { precioFactura: true } }),
+      prisma.finanzasEnvio.findMany({ where: { envio: donde }, select: { tarifaFullCotizada: true } }),
       prisma.ticketSoporte.count({ where: { envio: donde, estado: { in: ["ABIERTO", "EN_PROGRESO"] } } }),
       prisma.envio.findMany({
         where: donde,
@@ -76,7 +76,7 @@ export async function GET(request: Request) {
 
     // <-- SOLUCIÓN AL ERROR DE TIPO NUMBER VS STRING
     const porcentajeExito = totalHistorico > 0 ? Math.round((exitososHistorico / totalHistorico) * 100) : 0;
-    const gastoTotalDecimal = finanzasData.reduce((acc, f) => acc.add(f.precioFactura ?? new Prisma.Decimal(0)), new Prisma.Decimal(0));
+    const gastoTotalDecimal = finanzasData.reduce((acc, f) => acc.add(f.tarifaFullCotizada ?? new Prisma.Decimal(0)), new Prisma.Decimal(0));
     const gastoTotal = gastoTotalDecimal.toNumber();
 
     // ====== M2: AUDITORÍA DE DIRECCIONES ======
@@ -170,7 +170,7 @@ export async function GET(request: Request) {
 
     // DEUDA 159 (2026-08-30): aforoStats (perdidaReal) eliminado — era dead output (sin consumer
     // frontend, ver comments dashboard/page.tsx:320 + torre-de-control/page.tsx:487) y usaba la
-    // fórmula contaminada (precioFactura − precioMostrado). La métrica de desvío de peso vive
+    // fórmula contaminada (tarifaFullCotizada − precioMostrado). La métrica de desvío de peso vive
     // en lib/utils/desvio-peso.ts (surface via /api/torre-de-control/desvio-peso).
 
     // ====== M5: EFECTIVIDAD ======
@@ -183,7 +183,7 @@ export async function GET(request: Request) {
         if (repartos <= 1) e1raVisita++; else eForzada++;
       } else if (e.estadoActual === "DEVUELTO" || e.estadoActual === "CANCELADO") {
         eDevuelto++;
-        costoInversaEstimado = costoInversaEstimado.add(e.finanzas?.precioFactura ?? e.finanzas?.precioMostrado ?? new Prisma.Decimal(0));
+        costoInversaEstimado = costoInversaEstimado.add(e.finanzas?.tarifaFullCotizada ?? e.finanzas?.precioMostrado ?? new Prisma.Decimal(0));
         const prov = e.destino?.provincia || "Desconocida";
         devMapa[prov] = (devMapa[prov] || 0) + 1;
       }

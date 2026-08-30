@@ -7,13 +7,13 @@
 // que lo cotizado, generando fuga financiera para el cliente Shipro.
 //
 // Fuente de data: FinanzasEnvio (pesoCobrado, pesoAforado, precioMostrado,
-// precioFactura). pesoAforado se popula via /api/conciliacion al subir el
+// tarifaFullCotizada). pesoAforado se popula via /api/conciliacion al subir el
 // Excel mensual del courier.
 //
 // Decisiones:
 // - DEUDA 159 (2026-08-30): la fuga monetaria pasó a ser costoAforo × IVA (con IVA para
 //   display, homogéneo con el resto del panel). Reemplaza la fórmula legacy
-//   precioFactura − precioMostrado, contaminada post-DEUDA-156 por el descuento buyer-facing
+//   tarifaFullCotizada − precioMostrado, contaminada post-DEUDA-156 por el descuento buyer-facing
 //   del cliente. costoAforo se persiste NETO en conciliación (regla plataforma) y representa
 //   el sobrecosto que Shipro le cobró al cliente por el aforo del courier. Cuando el cliente
 //   no pagó extra (peso igual, SOBREPRECIO_RECLAMAR, sin conciliar), costoAforo=0/null → fuga=0.
@@ -45,7 +45,7 @@ export interface EnvioParaAuditar {
   // la contaminación por descuento buyer-facing post-DEUDA-156). Se mantiene el field en el
   // interface por retro-compat de callers legacy — sin uso interno.
   precioMostrado: number | null;
-  precioFactura: number | null;   // base para el % económico (con IVA). Guard: > 0.
+  tarifaFullCotizada: number | null;   // base para el % económico (con IVA). Guard: > 0. DEUDA 158: renombrado de tarifaFullCotizada.
   // DEUDA 159: NETO (regla plataforma en conciliación). Se lleva a con IVA en la fórmula.
   costoAforo: number | null;
 }
@@ -57,8 +57,8 @@ export interface AuditoriaDesvio {
   pesoAforado: number;
   diffKg: number;
   fugaPesos: number;
-  // DEUDA 159: fuga económica como % sobre precioFactura (tarifa full cotizada al alta).
-  // 0 cuando no hay base (precioFactura=0/null) o no hay fuga.
+  // DEUDA 159: fuga económica como % sobre tarifaFullCotizada (tarifa full cotizada al alta).
+  // 0 cuando no hay base (tarifaFullCotizada=0/null) o no hay fuga.
   fugaPorcentaje: number;
   severidad: SeveridadDesvio | null;
 }
@@ -99,17 +99,17 @@ export function auditarDesvio(envio: EnvioParaAuditar): AuditoriaDesvio {
 
   // DEUDA 159 (2026-08-30): la fuga económica del desvío de peso = costoAforo (NETO, lo que
   // Shipro le cobró de más al cliente por el aforo) × IVA para display homogéneo con el
-  // resto del panel (todos con IVA). Reemplaza la fórmula legacy precioFactura − precioMostrado,
+  // resto del panel (todos con IVA). Reemplaza la fórmula legacy tarifaFullCotizada − precioMostrado,
   // contaminada post-DEUDA-156 por el descuento buyer-facing del cliente. costoAforo=0/null
   // cuando el cliente no pagó extra (peso igual, SOBREPRECIO_RECLAMAR, sin conciliar) → correcto.
   const costoAforoNeto = envio.costoAforo ?? 0;
   const fugaPesos = Math.max(0, costoAforoNeto * IVA_AR_MULTIPLIER_NUM);
 
   // DEUDA 159: % económico = cuánto representó el sobrecosto del aforo sobre la tarifa
-  // cotizada al cliente (precioFactura, con IVA). Guard base > 0. Métrica interpretable
+  // cotizada al cliente (tarifaFullCotizada, con IVA). Guard base > 0. Métrica interpretable
   // por el cliente ("me facturaron un X% más").
-  const precioFactura = envio.precioFactura || 0;
-  const fugaPorcentaje = precioFactura > 0 ? (fugaPesos / precioFactura) * 100 : 0;
+  const tarifaFullCotizada = envio.tarifaFullCotizada || 0;
+  const fugaPorcentaje = tarifaFullCotizada > 0 ? (fugaPesos / tarifaFullCotizada) * 100 : 0;
 
   return {
     tieneAforo: true,
@@ -341,7 +341,7 @@ export async function calcularDesvioPeso(
         pesoCobrado: e.finanzas!.pesoCobrado,
         pesoAforado: e.finanzas!.pesoAforado,
         precioMostrado: e.finanzas!.precioMostrado?.toNumber() ?? null,
-        precioFactura: e.finanzas!.precioFactura?.toNumber() ?? null,
+        tarifaFullCotizada: e.finanzas!.tarifaFullCotizada?.toNumber() ?? null,
         // DEUDA 159: costoAforo NETO (regla plataforma). El helper lo lleva a con IVA.
         costoAforo: e.finanzas!.costoAforo?.toNumber() ?? null,
       }),

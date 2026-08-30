@@ -245,7 +245,7 @@ export function aplicarMarkup(
   // IVA aplicado UNA VEZ al total neto acumulado.
   // Redondeo a 2 decimales (half-up) para que el precio cotizado NAZCA en
   // precisión de moneda — coincide byte-a-byte con el valor que Postgres
-  // guarda al persistirlo en FinanzasEnvio.precioFactura (Decimal(12,2),
+  // guarda al persistirlo en FinanzasEnvio.tarifaFullCotizada (Decimal(12,2),
   // que redondea half-away-from-zero al write). Sin este redondeo, la
   // cotización mostraba 3 decimales (ej. 10883.015) mientras que el envío
   // creado guardaba 10883.02 — artifact solo de display, pero confuso.

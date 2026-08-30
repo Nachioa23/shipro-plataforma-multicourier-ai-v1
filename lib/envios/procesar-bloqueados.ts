@@ -86,7 +86,7 @@ export async function procesarEnviosBloqueados(empresaId: number): Promise<Proce
   let fallados = 0;
 
   for (const envio of aProcesar) {
-    const monto: Prisma.Decimal = envio.finanzas?.precioFactura ?? new Prisma.Decimal(0);
+    const monto: Prisma.Decimal = envio.finanzas?.tarifaFullCotizada ?? new Prisma.Decimal(0);
 
     const credencial = await prisma.credencialCourier.findUnique({
       where: { empresaId_nombreCourier: { empresaId, nombreCourier: envio.courier.nombre } }

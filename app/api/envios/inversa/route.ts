@@ -79,7 +79,7 @@ export async function POST(request: Request) {
         largoCm: 10,
         anchoCm: 10,
         altoCm: 10,
-        valorDeclarado: envioOriginal.finanzas?.precioFactura?.toNumber() ?? 0,
+        valorDeclarado: envioOriginal.finanzas?.tarifaFullCotizada?.toNumber() ?? 0,
         requiereSeguro: false
       }],
       referencia: `INVERSA-${trackingOriginal}`,
@@ -128,7 +128,7 @@ export async function POST(request: Request) {
         destino: envioOriginal.origenId ? { connect: { id: envioOriginal.origenId } } : undefined,
         finanzas: {
           create: {
-            precioFactura: envioOriginal.finanzas?.precioFactura || 0,
+            tarifaFullCotizada: envioOriginal.finanzas?.tarifaFullCotizada || 0,
             precioMostrado: 0 
           }
         }

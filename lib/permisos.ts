@@ -40,7 +40,7 @@ export type CampoPermiso =
   | "propietarioCourierId"
   // DEUDA 156 (2026-08-28): descuento buyer-facing del cliente a SU comprador.
   // Herramienta comercial del cliente — mismo tier que markupFijo (admin_shipro
-  // + gerente_cliente). NO afecta precioFactura (Shipro cobra el chain completo).
+  // + gerente_cliente). NO afecta tarifaFullCotizada (Shipro cobra el chain completo).
   | "descuentoClienteModo"
   | "descuentoClientePorcentaje"
   | "descuentoClienteSobreTarifa";

@@ -148,7 +148,7 @@ export async function procesarEnviosBloqueadosPorOperatividad(
     }
 
     // --- 3. Validar saldo ---
-    const monto: Prisma.Decimal = envio.finanzas?.precioFactura ?? new Prisma.Decimal(0);
+    const monto: Prisma.Decimal = envio.finanzas?.tarifaFullCotizada ?? new Prisma.Decimal(0);
     const tipoCuentaEfectivo = credencial.tipoCuenta || empresa.modalidadPago;
     const saldoDisponible = tipoCuentaEfectivo === "PREPAGO"
       ? saldoSimulado

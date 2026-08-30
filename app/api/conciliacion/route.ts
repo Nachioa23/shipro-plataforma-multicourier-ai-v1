@@ -142,14 +142,14 @@ export async function POST(request: Request) {
     // ==========================================================================
     // FASE 1 FIX (post-DEUDA 73/107): conciliación rebuild
     //
-    // ANTES: este endpoint sobrescribia FinanzasEnvio.precioFactura con la
+    // ANTES: este endpoint sobrescribia FinanzasEnvio.tarifaFullCotizada con la
     // formula pre-FASE-1 (ajusteTarifaPorcentaje + markupFijo, sin cascada, sin
-    // SMO, sin Fee, sin IVA). Rompía silenciosamente la autoridad de precioFactura
+    // SMO, sin Fee, sin IVA). Rompía silenciosamente la autoridad de tarifaFullCotizada
     // sembrada por lib/envios/crear.ts.
     //
-    // AHORA: precioFactura queda CONGELADO en lo que se cotizó/debitó al alta.
+    // AHORA: tarifaFullCotizada queda CONGELADO en lo que se cotizó/debitó al alta.
     // El desvío se guarda en FinanzasEnvio.costoAforo. El total-al-cliente en la
-    // liquidación mensual sigue siendo (precioFactura + costoAforo), tal como ya
+    // liquidación mensual sigue siendo (tarifaFullCotizada + costoAforo), tal como ya
     // lo agrega app/api/admin/liquidaciones/route.ts.
     //
     // Regla de negocio (Nacho): quien paga se decide por PESO.
@@ -295,7 +295,7 @@ export async function POST(request: Request) {
         if (subioPeso) {
           // CLIENTE PAGA. Recomputamos la tarifa autoritativa con el costo REAL
           // usando aplicarMarkup (mismo formula que crear.ts). Fee y SMO son
-          // fijos y ya viven adentro de precioFactura original → cancelan en
+          // fijos y ya viven adentro de tarifaFullCotizada original → cancelan en
           // la resta. El delta viene de la cascada porcentual + IVA.
           //
           // Cargamos Fee neto y % intermediario (cacheados por proceso) para
@@ -346,7 +346,7 @@ export async function POST(request: Request) {
           // 2026-07-27: costoAforo se persiste en NETO (regla plataforma: todo neto,
           // IVA aplicado UNA sola vez al leer, en la proforma). Sus vecinos
           // (logisticaNetaFacturada, feeNetoFacturado) también son NETO — invariante
-          // STEP 1: logisticaNeta + feeNeto + ivaFacturado = precioFactura →
+          // STEP 1: logisticaNeta + feeNeto + ivaFacturado = tarifaFullCotizada →
           // logisticaNeta + feeNeto = netoAcumulado_original. Byte-perfect via
           // el desglose ya propagado por cotizador (Opción A). Sin ÷1.21.
           const desgloseNuevo = aplicarMarkup(costoFactRaw, config).desglose;
@@ -496,7 +496,7 @@ export async function POST(request: Request) {
             costoCourierFacturado: costoFactRaw,
             estadoAuditoria: estadoAud,
             facturaCourierRef: referenciaFactura, // Marca para evitar futuros dobles cobros.
-            costoAforo,                            // FASE 1: escribimos el delta; NO tocamos precioFactura.
+            costoAforo,                            // FASE 1: escribimos el delta; NO tocamos tarifaFullCotizada.
             ...(enPipelineLogistica ? {
               periodoLogistica: periodoFacturaCourier,
               estadoLiquidacionLogistica: EstadoLiquidacion.EN_PROCESO,

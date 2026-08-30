@@ -124,7 +124,7 @@ export async function procesarEnviosBloqueadosPorCredencial(
     }
 
     // --- 3. Validar saldo (mirror de operatividad L150-178) ---
-    const monto: Prisma.Decimal = envio.finanzas?.precioFactura ?? new Prisma.Decimal(0);
+    const monto: Prisma.Decimal = envio.finanzas?.tarifaFullCotizada ?? new Prisma.Decimal(0);
     const tipoCuentaEfectivo = credencial.tipoCuenta || empresa.modalidadPago;
     const saldoDisponible = tipoCuentaEfectivo === "PREPAGO"
       ? saldoSimulado

@@ -7,7 +7,7 @@
 //
 // Decisiones (director 2026-06-09):
 // - Universo: solo envios DEVUELTO_AL_REMITENTE en la ventana.
-// - Costo: precioFactura (lo que Shipro le cobra a la empresa cliente).
+// - Costo: tarifaFullCotizada (lo que Shipro le cobra a la empresa cliente).
 // - Tiempo: dias desde fechaImpresion (inmovilizacion de stock).
 // - Touchpoints: eventos courier × 2.
 // - Punto de perdida: ultimo estado courier antes de DEVUELTO.
@@ -85,8 +85,8 @@ export async function GET(request: Request) {
     const detalles = [...anatomias]
       .sort((a, b) => {
         // Score combinado: precio normalizado + dias normalizado.
-        const scoreA = (a.precioFactura || 0) + (a.diasInmovilizacion || 0) * 100;
-        const scoreB = (b.precioFactura || 0) + (b.diasInmovilizacion || 0) * 100;
+        const scoreA = (a.tarifaFullCotizada || 0) + (a.diasInmovilizacion || 0) * 100;
+        const scoreB = (b.tarifaFullCotizada || 0) + (b.diasInmovilizacion || 0) * 100;
         return scoreB - scoreA;
       })
       .slice(0, 20);
@@ -117,7 +117,7 @@ export async function GET(request: Request) {
       }
       const grpC = porCourierMap.get(courierKey)!.grupo;
       grpC.cantidad++;
-      if (anatomia.precioFactura != null) grpC.costoTotal += anatomia.precioFactura;
+      if (anatomia.tarifaFullCotizada != null) grpC.costoTotal += anatomia.tarifaFullCotizada;
       if (anatomia.diasInmovilizacion != null) {
         grpC.diasTotal += anatomia.diasInmovilizacion;
         grpC.diasCount++;
@@ -128,7 +128,7 @@ export async function GET(request: Request) {
       if (!porProvinciaMap.has(provNorm)) porProvinciaMap.set(provNorm, grupoVacio());
       const grpP = porProvinciaMap.get(provNorm)!;
       grpP.cantidad++;
-      if (anatomia.precioFactura != null) grpP.costoTotal += anatomia.precioFactura;
+      if (anatomia.tarifaFullCotizada != null) grpP.costoTotal += anatomia.tarifaFullCotizada;
       if (anatomia.diasInmovilizacion != null) {
         grpP.diasTotal += anatomia.diasInmovilizacion;
         grpP.diasCount++;
@@ -139,7 +139,7 @@ export async function GET(request: Request) {
       if (!porMesMap.has(mesKey)) porMesMap.set(mesKey, grupoVacio());
       const grpM = porMesMap.get(mesKey)!;
       grpM.cantidad++;
-      if (anatomia.precioFactura != null) grpM.costoTotal += anatomia.precioFactura;
+      if (anatomia.tarifaFullCotizada != null) grpM.costoTotal += anatomia.tarifaFullCotizada;
       if (anatomia.diasInmovilizacion != null) {
         grpM.diasTotal += anatomia.diasInmovilizacion;
         grpM.diasCount++;
@@ -150,7 +150,7 @@ export async function GET(request: Request) {
       if (!porModalidadMap.has(modKey)) porModalidadMap.set(modKey, grupoVacio());
       const grpMod = porModalidadMap.get(modKey)!;
       grpMod.cantidad++;
-      if (anatomia.precioFactura != null) grpMod.costoTotal += anatomia.precioFactura;
+      if (anatomia.tarifaFullCotizada != null) grpMod.costoTotal += anatomia.tarifaFullCotizada;
       if (anatomia.diasInmovilizacion != null) {
         grpMod.diasTotal += anatomia.diasInmovilizacion;
         grpMod.diasCount++;

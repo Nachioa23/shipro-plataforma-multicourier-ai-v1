@@ -2212,7 +2212,7 @@ export default function TorreDeControl() {
                                   <p className="text-xs font-bold text-gray-700">Envio #{d.envioId} — {d.courierNombre} — {d.modalidad}</p>
                                   <p className="text-xs text-gray-500 truncate">{d.motivo || 'Sin motivo'}</p>
                                   <p className="text-xs text-gray-400 mt-1">
-                                    ${d.precioFactura?.toLocaleString('es-AR') ?? 'N/D'} | {d.diasInmovilizacion ?? '—'} dias | {d.touchpoints} touchpoints | {d.provincia}
+                                    ${d.tarifaFullCotizada?.toLocaleString('es-AR') ?? 'N/D'} | {d.diasInmovilizacion ?? '—'} dias | {d.touchpoints} touchpoints | {d.provincia}
                                   </p>
                                 </div>
                               ))}

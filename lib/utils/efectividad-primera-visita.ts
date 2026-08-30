@@ -189,7 +189,7 @@ export function resumirEfectividad(
 //
 // Decisiones (director 2026-06-09):
 // - Universo: solo envios DEVUELTO_AL_REMITENTE en la ventana.
-// - Costo: precioFactura del envio (lo que Shipro le cobra a la empresa).
+// - Costo: tarifaFullCotizada del envio (lo que Shipro le cobra a la empresa).
 // - Tiempo: dias desde fechaImpresion (inmovilizacion de stock) hasta
 //   evento DEVUELTO_AL_REMITENTE.
 // - Touchpoints: cantidad de EventoTracking con estado en ESTADOS_COURIER × 2.
@@ -261,16 +261,16 @@ export function identificarPuntoPerdida(eventos: EventoTracking[]): string | nul
 
 /**
  * Extrae el costo del envio devuelto desde FinanzasEnvio.
- * Si no hay finanzas o precioFactura es NULL, retorna sin_dato.
+ * Si no hay finanzas o tarifaFullCotizada es NULL, retorna sin_dato.
  */
 export function extraerCosto(envio: { finanzas?: FinanzasEnvio | null }): {
-  precioFactura: number | null;
+  tarifaFullCotizada: number | null;
   fuente: "facturado" | "sin_dato";
 } {
-  if (!envio.finanzas || envio.finanzas.precioFactura == null) {
-    return { precioFactura: null, fuente: "sin_dato" };
+  if (!envio.finanzas || envio.finanzas.tarifaFullCotizada == null) {
+    return { tarifaFullCotizada: null, fuente: "sin_dato" };
   }
-  return { precioFactura: envio.finanzas.precioFactura.toNumber(), fuente: "facturado" };
+  return { tarifaFullCotizada: envio.finanzas.tarifaFullCotizada.toNumber(), fuente: "facturado" };
 }
 
 // ====================================================
@@ -283,7 +283,7 @@ export interface AnatomiaDevolucion {
   diasInmovilizacion: number | null;      // null si no hay timestamps
   visitasPrevias: number;                 // cantidad de EN_DISTRIBUCION
   touchpoints: number;                    // eventos courier × 2
-  precioFactura: number | null;           // costo en pesos, null si sin dato
+  tarifaFullCotizada: number | null;           // costo en pesos, null si sin dato
   puntoPerdida: string | null;            // ultimo estado antes de DEVUELTO
 }
 
@@ -300,7 +300,7 @@ export function extraerInfoDevolucion(
     diasInmovilizacion: calcularDiasInmovilizacion(envio, eventos),
     visitasPrevias: contarVisitas(eventos),
     touchpoints: contarTouchpoints(eventos),
-    precioFactura: extraerCosto(envio).precioFactura,
+    tarifaFullCotizada: extraerCosto(envio).tarifaFullCotizada,
     puntoPerdida: identificarPuntoPerdida(eventos),
   };
 }
@@ -311,7 +311,7 @@ export function extraerInfoDevolucion(
 
 export interface ResumenDevoluciones {
   cantidadTotal: number;
-  costoTotalFacturado: number;            // suma de precioFactura no-null
+  costoTotalFacturado: number;            // suma de tarifaFullCotizada no-null
   cantidadSinCosto: number;               // cuantos envios no tienen precio
   diasInmovilizacionPromedio: number | null;
   diasInmovilizacionTotal: number;        // suma para visualizar magnitud
@@ -350,8 +350,8 @@ export function resumirDevoluciones(
 
   for (const a of anatomias) {
     // Costo.
-    if (a.precioFactura != null) {
-      costoTotal += a.precioFactura;
+    if (a.tarifaFullCotizada != null) {
+      costoTotal += a.tarifaFullCotizada;
     } else {
       sinCosto++;
     }
@@ -555,13 +555,13 @@ export async function calcularEfectividad(
   // ============================================================
   const resumenBase = resumirEfectividad(envios.map(e => ({ id: e.id, eventos: e.eventos })));
 
-  // D1: cost inversa = suma precioFactura de envios DEVUELTOS.
+  // D1: cost inversa = suma tarifaFullCotizada de envios DEVUELTOS.
   let costoInversaEstimado = 0;
   for (const envio of envios) {
     const clasif = clasificarEfectividad(envio.eventos);
     if (clasif === "DEVUELTO_AL_REMITENTE") {
-      const { precioFactura } = extraerCosto(envio);
-      if (precioFactura != null) costoInversaEstimado += precioFactura;
+      const { tarifaFullCotizada } = extraerCosto(envio);
+      if (tarifaFullCotizada != null) costoInversaEstimado += tarifaFullCotizada;
     }
   }
 

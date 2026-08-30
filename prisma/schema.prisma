@@ -478,7 +478,7 @@ model CredencialCourier {
 
   // DEUDA 156: descuento buyer-facing del cliente a SU comprador. Modo explícito.
   // El cliente elige PORCENTAJE o MONTO. Piso $0 (nunca negativo). Shipro factura la
-  // tarifa full igual (precioFactura intacto); esto solo afecta el precio que ve el
+  // tarifa full igual (tarifaFullCotizada intacto); esto solo afecta el precio que ve el
   // comprador en el checkout de e-commerce (NO el dashboard).
   descuentoClientePorcentaje Float                @default(0)      // % de descuento (0 = sin descuento). Usado si modo = PORCENTAJE.
   descuentoClienteModo       DescuentoClienteModo @default(MONTO)  // MONTO | PORCENTAJE — cuál de los dos campos aplica.
@@ -581,8 +581,8 @@ model FinanzasEnvio {
   id Int @id @default(autoincrement())
 
   // 1. Lo que mostramos / cobramos
-  precioMostrado          Decimal? @db.Decimal(12, 2) // DEUDA 156: precio buyer-facing = tarifa full con el descuento del cliente aplicado (piso $0). Solo para checkout e-commerce; el operador/facturación usan precioFactura.
-  precioFactura           Decimal? @db.Decimal(12, 2) // Tarifa full COTIZADA y debitada AL ALTA (congelada; no se actualiza en conciliación). El total real al cliente post-liquidación = precioFactura + costoAforo. (Rename pendiente: tarifaFullCotizada — ver deuda.)
+  precioMostrado          Decimal? @db.Decimal(12, 2) // DEUDA 156: precio buyer-facing = tarifa full con el descuento del cliente aplicado (piso $0). Solo para checkout e-commerce; el operador/facturación usan tarifaFullCotizada.
+  tarifaFullCotizada      Decimal? @db.Decimal(12, 2) @map("precioFactura") // Tarifa full COTIZADA y debitada AL ALTA (congelada; no se actualiza en conciliación). El total real al cliente post-liquidación = tarifaFullCotizada + costoAforo. DEUDA 158 (2026-08-30): renombrada de precioFactura (nombre por rol real); @map conserva la columna física intacta.
   porcentajePrecioFactura Float?
   valorDeclarado          Decimal? @db.Decimal(12, 2) // VALOR declarado del comprador (input para seguro courier futuro). NO es el monto del seguro; el seguro real no se aplica hoy (requiereSeguro=false).
 
@@ -614,7 +614,7 @@ model FinanzasEnvio {
   // 6. STEP 1 (dos-vías-liquidación) — congelamos la rama al alta y persistimos
   // el breakdown (fee neto / logística neta / IVA), para poder emitir dos proformas
   // (FEE y LOGISTICA) sin recomputar y sin depender de OperacionFee vigente al cierre.
-  // Invariante (rows no-fallback): feeNetoFacturado + logisticaNetaFacturada + ivaFacturado == precioFactura.
+  // Invariante (rows no-fallback): feeNetoFacturado + logisticaNetaFacturada + ivaFacturado == tarifaFullCotizada.
   ramaCongelada              Boolean            @default(false) // true=Rama B (creds propias), false=Rama A. Snapshot de usaCredencialesPropias al alta.
   feeNetoFacturado           Decimal?           @db.Decimal(12, 2) // Fee Shipro NETO (sin IVA). NULL si Rama A cayó en fallback (breakdown irrecuperable).
   logisticaNetaFacturada     Decimal?           @db.Decimal(12, 2) // Cascada + SMO, NETO. Rama B = 0. NULL en fallback.

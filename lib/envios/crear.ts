@@ -507,7 +507,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
 
   // STEP 1 (dos-vías-liquidación): congelamos rama al alta + persistimos el
   // breakdown fee/logística/IVA. Invariante (rows no-fallback):
-  //   feeNetoFacturado + logisticaNetaFacturada + ivaFacturado == precioFactura
+  //   feeNetoFacturado + logisticaNetaFacturada + ivaFacturado == tarifaFullCotizada
   // Fallback Rama A: los 3 quedan NULL y ambos estados van a OBSERVADO (revisión manual).
   const ramaCongelada = credencialMain?.usaCredencialesPropias === true;
   let feeNetoFacturado: Prisma.Decimal | null = null;
@@ -535,7 +535,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
   // DEUDA 156: monto ($) del descuento buyer-facing efectivamente aplicado a esta
   // opción = matched.precioFinal - matched.precioFinalBuyer. Sin descuento → 0 (honesto,
   // el match existe). Rescate/fallback → null (política: sin descuento sobre tarifa plana,
-  // consistente con precioProveedorPersist=null en esFallback). NO altera precioFactura.
+  // consistente con precioProveedorPersist=null en esFallback). NO altera tarifaFullCotizada.
   let descuentoClienteAplicadoPersist: Prisma.Decimal | null = null;
 
   let montoDebito: Prisma.Decimal;
@@ -622,7 +622,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
       tarifaPublicadaElegida = matchedA.precioFinal;
       // DEUDA 156: precioMostrado = lo que vio el comprador = precioFinalBuyer (con
       // descuento del cliente aplicado por cotizador, piso $0). Sin descuento →
-      // precioFinalBuyer === precioFinal → mismo número que antes. precioFactura
+      // precioFinalBuyer === precioFinal → mismo número que antes. tarifaFullCotizada
       // (montoDebito arriba) sigue en matched.precioFinal (Shipro factura el chain full).
       precioMostradoPersist = matchedA.precioFinalBuyer;
       precioProveedorPersist = matchedA.esFallback === true ? null : matchedA.precioProveedor;
@@ -910,7 +910,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
     // Decision de producto: las etiquetas genericas/bloqueadas NO debitan
     // nada; el cobro espera a que haya etiqueta real (en el alta, o en el
     // desbloqueo posterior via procesar-bloqueados*). El monto autoritativo
-    // ya se persiste en FinanzasEnvio.precioFactura mas abajo, para que los
+    // ya se persiste en FinanzasEnvio.tarifaFullCotizada mas abajo, para que los
     // desbloqueos debiten el importe correcto sin recotizar.
 
     // Torre de Control Metrica 2.3 (DEUDA 39, 2026-06-05):
@@ -973,7 +973,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
             // (no 0) cuando el courier no cotizó (rescate/fallback) — null es honesto,
             // 0 parecería un costo real.
             precioProveedor: precioProveedorPersist,
-            precioFactura: montoDebito,          // FASE 1: autoritativo (recomputado, rama-aware)
+            tarifaFullCotizada: montoDebito,     // FASE 1: autoritativo (recomputado, rama-aware). DEUDA 158 (2026-08-30): field renombrado de precioFactura (mismo valor, mismo comportamiento — @map preserva la columna DB).
             precioMostrado: precioMostradoPersist,
             valorDeclarado: parseFloat(String(valorDeclarado)) || 0,
             pesoCobrado: parseFloat(String(pesoReal)) || 1.0,
@@ -997,7 +997,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
             seguroAplicado: seguroAplicadoPersist,
             // DEUDA 156: precioMostrado = lo que vio el comprador (con descuento).
             // descuentoClienteAplicado = monto descontado (precioFinal − precioFinalBuyer).
-            // precioFactura sigue siendo el full (Shipro factura completo).
+            // tarifaFullCotizada sigue siendo el full (Shipro factura completo).
             descuentoClienteAplicado: descuentoClienteAplicadoPersist,
           }
         }
@@ -1048,7 +1048,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
     // Si BLOQUEADO_SALDO, BLOQUEADO_DEPOSITO, BLOQUEADO_OPERATIVIDAD o
     // BLOQUEADO_PARCIAL: NO crear MovimientoFinanciero ni actualizar saldo.
     // El débito se aplica al desbloquear (procesar-bloqueados*), que lee
-    // FinanzasEnvio.precioFactura (autoritativo, rama-aware, ya persistido arriba).
+    // FinanzasEnvio.tarifaFullCotizada (autoritativo, rama-aware, ya persistido arriba).
     if (!bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorCredencial && !bloqueadoPorOperatividad && !bloqueadoPorTramoFallido) {
       // FASE 1 (DEUDA 73/107): montoDebito ya incluye Fee (Rama B: solo Fee;
       // Rama A: tarifa completa con Fee ya adentro via aplicarMarkup). Un solo

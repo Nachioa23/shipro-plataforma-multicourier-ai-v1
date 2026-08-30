@@ -11,7 +11,7 @@
 //
 //   - enviosMes:       cantidad de envios en el dateRange del usuario.
 //   - porcentajeExito: % envios entregados sobre rolling 180 dias hardcoded.
-//   - gastoTotal:      suma precioFactura (fallback precioMostrado) en dateRange.
+//   - gastoTotal:      suma tarifaFullCotizada (fallback precioMostrado) en dateRange.
 //   - ticketsActivos:  count tickets no CERRADOS por empresa (sin date filter).
 //
 // Tambien retorna courierIds (derivados de enviosData) para lookup posterior
@@ -109,7 +109,7 @@ export async function calcularKPIsHeroAnalitica(
   const enviosData = await prisma.envio.findMany({
     where: whereMes,
     include: {
-      finanzas: { select: { precioFactura: true, precioMostrado: true } },
+      finanzas: { select: { tarifaFullCotizada: true, precioMostrado: true } },
     },
   });
 
@@ -126,7 +126,7 @@ export async function calcularKPIsHeroAnalitica(
 
   // gastoTotal: reduce sobre finanzas (in-memory).
   const gastoTotalDecimal = enviosData.reduce(
-    (acc, e) => acc.add(e.finanzas?.precioFactura ?? e.finanzas?.precioMostrado ?? new Prisma.Decimal(0)),
+    (acc, e) => acc.add(e.finanzas?.tarifaFullCotizada ?? e.finanzas?.precioMostrado ?? new Prisma.Decimal(0)),
     new Prisma.Decimal(0)
   );
   const gastoTotal = gastoTotalDecimal.toNumber();

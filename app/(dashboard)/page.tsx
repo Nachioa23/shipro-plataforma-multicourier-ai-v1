@@ -225,7 +225,9 @@ export default function BandejaPedidos() {
 
       const datosParaExcel = enviosAExportar.map((envio: any) => {
         const fechaReal = (envio.fechaImpresion) ? new Date(envio.fechaImpresion).toLocaleDateString("es-AR") : "Sin Fecha";
-        const costo = parseFloat(envio.finanzas?.precioMostrado || envio.finanzas?.precioFactura || envio.precioDeclarado || 0);
+        // DEUDA 156 fallout fix: el operador ve la tarifa full cotizada al alta (precioFactura),
+        // no el precio con descuento del comprador (precioMostrado, que es buyer-facing).
+        const costo = parseFloat(envio.finanzas?.precioFactura || envio.precioDeclarado || 0);
 
         return {
           "Fecha": fechaReal,
@@ -919,7 +921,9 @@ export default function BandejaPedidos() {
                     {envios.map((envio: any) => {
                       const nombreDest = envio.destino?.nombre || envio.destinatarioNombre || 'Sin nombre';
                       const cpDest = envio.destino?.cp || envio.cpDestino || '';
-                      const costoFinal = formatMonto(envio.finanzas?.precioMostrado || envio.finanzas?.precioFactura || 0);
+                      // DEUDA 156 fallout fix: el operador ve la tarifa full cotizada al alta (precioFactura),
+                      // no el precio con descuento del comprador (precioMostrado, que es buyer-facing).
+                      const costoFinal = formatMonto(envio.finanzas?.precioFactura || 0);
                       const fechaTabla = (envio.fechaImpresion) ? new Date(envio.fechaImpresion).toLocaleDateString("es-AR") : 'Sin fecha';
                       
                       const esRetenido = envio.estadoActual === "RETENIDO" || envio.estadoActual === "Retenido";

@@ -75,8 +75,10 @@ export async function POST(request: Request) {
           cp: envio.destino?.cp || ""
         },
         finanzas: {
-          costoEnvio: envio.finanzas?.precioMostrado || envio.finanzas?.precioFactura || 0,
-          valorDeclarado: envio.finanzas?.precioFactura || 0 
+          // DEUDA 156 fallout fix: el operador ve la tarifa full cotizada al alta (precioFactura),
+          // no el precio con descuento del comprador (precioMostrado, que es buyer-facing).
+          costoEnvio: envio.finanzas?.precioFactura || 0,
+          valorDeclarado: envio.finanzas?.precioFactura || 0
         }
       },
       historial 

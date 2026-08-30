@@ -168,48 +168,10 @@ export async function GET(request: Request) {
       }).sort((a, b) => b.totalPerdido - a.totalPerdido).slice(0, 3)
     };
 
-    // ====== M4: AFORO ======
-    let aforoFugaTotal: Prisma.Decimal = new Prisma.Decimal(0); let enviosConFugaAforo = 0; let sumaDesvioKg = 0; let leveCount = 0; let moderadoCount = 0; let graveCount = 0;
-    const couriersAforoStats: Record<string, { total: number, conFuga: number }> = {};
-
-    enviosData.forEach(e => {
-      const f = e.finanzas;
-      if (!f) return;
-      if (f.pesoAforado !== null && f.pesoAforado !== undefined) {
-        const pesoCobrado = f.pesoCobrado || 0;
-        const pesoAforado = f.pesoAforado || 0;
-        const cName = e.courier?.nombre || "Desconocido";
-
-        if (!couriersAforoStats[cName]) couriersAforoStats[cName] = { total: 0, conFuga: 0 };
-        couriersAforoStats[cName].total++;
-
-        if (pesoAforado > pesoCobrado) {
-          enviosConFugaAforo++;
-          couriersAforoStats[cName].conFuga++;
-          const perdidaReal = (f.precioFactura ?? new Prisma.Decimal(0)).sub(f.precioMostrado ?? new Prisma.Decimal(0));
-          if (perdidaReal.gt(0)) aforoFugaTotal = aforoFugaTotal.add(perdidaReal);
-
-          const diffKg = pesoAforado - pesoCobrado;
-          sumaDesvioKg += diffKg;
-          if (diffKg <= 1) leveCount++; else if (diffKg <= 3) moderadoCount++; else graveCount++;
-        }
-      }
-    });
-
-    const baseTotalAforo = enviosData.length > 0 ? enviosData.length : 1;
-    const aforoFugaTotalNum = aforoFugaTotal.toNumber();
-    const aforoStats = {
-      fugaTotal: aforoFugaTotalNum,
-      porcentajeFugaPeso: Math.round((enviosConFugaAforo / baseTotalAforo) * 100),
-      desvioPromedioKg: enviosConFugaAforo > 0 ? Number((sumaDesvioKg / enviosConFugaAforo).toFixed(1)) : 0,
-      costoPromedioDesvio: enviosConFugaAforo > 0 ? Math.round(aforoFugaTotalNum / enviosConFugaAforo) : 0,
-      distribucionError: {
-        leve: enviosConFugaAforo > 0 ? Math.round((leveCount / enviosConFugaAforo) * 100) : 0,
-        moderado: enviosConFugaAforo > 0 ? Math.round((moderadoCount / enviosConFugaAforo) * 100) : 0,
-        grave: enviosConFugaAforo > 0 ? Math.round((graveCount / enviosConFugaAforo) * 100) : 0
-      },
-      topEstrictos: Object.entries(couriersAforoStats).map(([courier, stats]) => ({ courier, porcentajeAforos: stats.total > 0 ? Math.round((stats.conFuga / stats.total) * 100) : 0 })).sort((a, b) => b.porcentajeAforos - a.porcentajeAforos).slice(0, 3)
-    };
+    // DEUDA 159 (2026-08-30): aforoStats (perdidaReal) eliminado — era dead output (sin consumer
+    // frontend, ver comments dashboard/page.tsx:320 + torre-de-control/page.tsx:487) y usaba la
+    // fórmula contaminada (precioFactura − precioMostrado). La métrica de desvío de peso vive
+    // en lib/utils/desvio-peso.ts (surface via /api/torre-de-control/desvio-peso).
 
     // ====== M5: EFECTIVIDAD ======
     let e1raVisita = 0; let eForzada = 0; let eDevuelto = 0; let costoInversaEstimado: Prisma.Decimal = new Prisma.Decimal(0);
@@ -423,7 +385,7 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       totalEnvios: enviosMes, enviosMes, porcentajeExito, gastoTotal, ticketsActivos,
-      ruteoStats, aforoStats, efectividadStats, soporteStats, nps, slaStats,
+      ruteoStats, efectividadStats, soporteStats, nps, slaStats,
       despachoSegmentos, despachoPorCourier, alertasDeposito, auditoriaStats,
       modalidades: Object.keys(couStats).map(k => ({ modalidad: k, _count: { modalidad: couStats[k] } })),
       couriers: Object.keys(couStats).map(k => ({ courierId: k, _count: { courierId: couStats[k] } })),

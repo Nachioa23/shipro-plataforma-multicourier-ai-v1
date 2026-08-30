@@ -11,8 +11,12 @@
 // Excel mensual del courier.
 //
 // Decisiones:
-// - La fuga monetaria = precioFactura - precioMostrado (heredado del legacy
-//   /api/metricas). Refleja el margen que come el e-commerce.
+// - DEUDA 159 (2026-08-30): la fuga monetaria pasó a ser costoAforo × IVA (con IVA para
+//   display, homogéneo con el resto del panel). Reemplaza la fórmula legacy
+//   precioFactura − precioMostrado, contaminada post-DEUDA-156 por el descuento buyer-facing
+//   del cliente. costoAforo se persiste NETO en conciliación (regla plataforma) y representa
+//   el sobrecosto que Shipro le cobró al cliente por el aforo del courier. Cuando el cliente
+//   no pagó extra (peso igual, SOBREPRECIO_RECLAMAR, sin conciliar), costoAforo=0/null → fuga=0.
 // - Severidad por diferencia de kg: leve <=1, moderado 1-3, grave >3.
 // - Solo se cuentan envios con pesoAforado > 0 (aforo procesado).
 //
@@ -20,6 +24,8 @@
 // NIVEL 2 (DEUDA 57 potencial): recomputar pesoVolumetrico desde dimensiones
 //   del paquete (no persistidas hoy) para detectar abusos del courier.
 // ============================================================================
+
+import { IVA_AR_MULTIPLIER_NUM } from "@/lib/constants/iva";
 
 export const SEVERIDAD_LEVE_KG = 1;
 export const SEVERIDAD_GRAVE_KG = 3;
@@ -35,8 +41,13 @@ export function clasificarSeveridad(diffKg: number): SeveridadDesvio {
 export interface EnvioParaAuditar {
   pesoCobrado: number | null;
   pesoAforado: number | null;
+  // DEUDA 159: precioMostrado ya NO participa de la fórmula económica (era la fuente de
+  // la contaminación por descuento buyer-facing post-DEUDA-156). Se mantiene el field en el
+  // interface por retro-compat de callers legacy — sin uso interno.
   precioMostrado: number | null;
-  precioFactura: number | null;
+  precioFactura: number | null;   // base para el % económico (con IVA). Guard: > 0.
+  // DEUDA 159: NETO (regla plataforma en conciliación). Se lleva a con IVA en la fórmula.
+  costoAforo: number | null;
 }
 
 export interface AuditoriaDesvio {
@@ -46,6 +57,9 @@ export interface AuditoriaDesvio {
   pesoAforado: number;
   diffKg: number;
   fugaPesos: number;
+  // DEUDA 159: fuga económica como % sobre precioFactura (tarifa full cotizada al alta).
+  // 0 cuando no hay base (precioFactura=0/null) o no hay fuga.
+  fugaPorcentaje: number;
   severidad: SeveridadDesvio | null;
 }
 
@@ -62,6 +76,7 @@ export function auditarDesvio(envio: EnvioParaAuditar): AuditoriaDesvio {
       pesoAforado: 0,
       diffKg: 0,
       fugaPesos: 0,
+      fugaPorcentaje: 0,
       severidad: null,
     };
   }
@@ -77,15 +92,24 @@ export function auditarDesvio(envio: EnvioParaAuditar): AuditoriaDesvio {
       pesoAforado,
       diffKg: 0,
       fugaPesos: 0,
+      fugaPorcentaje: 0,
       severidad: null,
     };
   }
 
-  // Fuga monetaria = precioFactura - precioMostrado (heredado del legacy).
-  // Si negativa o cero, no se computa.
+  // DEUDA 159 (2026-08-30): la fuga económica del desvío de peso = costoAforo (NETO, lo que
+  // Shipro le cobró de más al cliente por el aforo) × IVA para display homogéneo con el
+  // resto del panel (todos con IVA). Reemplaza la fórmula legacy precioFactura − precioMostrado,
+  // contaminada post-DEUDA-156 por el descuento buyer-facing del cliente. costoAforo=0/null
+  // cuando el cliente no pagó extra (peso igual, SOBREPRECIO_RECLAMAR, sin conciliar) → correcto.
+  const costoAforoNeto = envio.costoAforo ?? 0;
+  const fugaPesos = Math.max(0, costoAforoNeto * IVA_AR_MULTIPLIER_NUM);
+
+  // DEUDA 159: % económico = cuánto representó el sobrecosto del aforo sobre la tarifa
+  // cotizada al cliente (precioFactura, con IVA). Guard base > 0. Métrica interpretable
+  // por el cliente ("me facturaron un X% más").
   const precioFactura = envio.precioFactura || 0;
-  const precioMostrado = envio.precioMostrado || 0;
-  const fugaPesos = Math.max(0, precioFactura - precioMostrado);
+  const fugaPorcentaje = precioFactura > 0 ? (fugaPesos / precioFactura) * 100 : 0;
 
   return {
     tieneAforo: true,
@@ -94,6 +118,7 @@ export function auditarDesvio(envio: EnvioParaAuditar): AuditoriaDesvio {
     pesoAforado,
     diffKg: Math.round(diffKg * 100) / 100,
     fugaPesos: Math.round(fugaPesos * 100) / 100,
+    fugaPorcentaje: Math.round(fugaPorcentaje * 10) / 10,
     severidad: clasificarSeveridad(diffKg),
   };
 }
@@ -109,6 +134,9 @@ export interface ResumenDesvio {
   fugaTotal: number;
   fugaPromedio: number;
   fugaMax: number;
+  // DEUDA 159: % promedio del sobrecosto sobre la tarifa cotizada (con IVA / con IVA),
+  // sobre envíos con fuga económica > 0. 1 decimal.
+  fugaPorcentajePromedio: number;
   desvioPromedioKg: number;
   desvioMaxKg: number;
   ahorroProyectadoAnual: number;
@@ -150,6 +178,14 @@ export function resumirAuditorias(
   const moderado = conDesvio.filter(a => a.severidad === "MODERADO").length;
   const grave = conDesvio.filter(a => a.severidad === "GRAVE").length;
 
+  // DEUDA 159: % promedio SOLO sobre envíos con fuga económica > 0. Un envío con
+  // desvío de peso pero sin costoAforo (SOBREPRECIO_RECLAMAR, peso igual dentro
+  // del clamp, sin conciliar) tiene fugaPorcentaje=0 y NO debería ensuciar el promedio.
+  const conFugaEconomica = conDesvio.filter(a => a.fugaPesos > 0);
+  const fugaPorcentajePromedio = conFugaEconomica.length > 0
+    ? conFugaEconomica.reduce((sum, a) => sum + a.fugaPorcentaje, 0) / conFugaEconomica.length
+    : 0;
+
   return {
     totalEnvios,
     enviosConAforo: conAforo.length,
@@ -163,6 +199,7 @@ export function resumirAuditorias(
     fugaTotal: Math.round(fugaTotal * 100) / 100,
     fugaPromedio: Math.round(fugaPromedio * 100) / 100,
     fugaMax: Math.round(fugaMax * 100) / 100,
+    fugaPorcentajePromedio: Math.round(fugaPorcentajePromedio * 10) / 10,
     desvioPromedioKg: Math.round(desvioPromedioKg * 100) / 100,
     desvioMaxKg: Math.round(desvioMaxKg * 100) / 100,
     ahorroProyectadoAnual: Math.round(fugaTotal * (365 / VENTANA_DIAS) * 100) / 100,
@@ -305,6 +342,8 @@ export async function calcularDesvioPeso(
         pesoAforado: e.finanzas!.pesoAforado,
         precioMostrado: e.finanzas!.precioMostrado?.toNumber() ?? null,
         precioFactura: e.finanzas!.precioFactura?.toNumber() ?? null,
+        // DEUDA 159: costoAforo NETO (regla plataforma). El helper lo lleva a con IVA.
+        costoAforo: e.finanzas!.costoAforo?.toNumber() ?? null,
       }),
     }));
 

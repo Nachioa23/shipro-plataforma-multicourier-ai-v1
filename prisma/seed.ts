@@ -138,9 +138,7 @@ async function main() {
     });
     const datos = {
       markupPorcentaje: 10.0,
-      seguroFijoIntermediarioConIva: 90.0, // dato de conciliación, SIN IVA (nombre del campo a corregir en deuda aparte)
-      tarifaIncluyeIvaIntermediario: false,
-      notas: "Mocis presta credenciales de Andreani. Markup 10% sobre tarifa. Seguro que Mocis factura a Shipro: $90 (dato de conciliación, no va en tarifa publicada).",
+      notas: "Mocis presta credenciales de Andreani. Markup 10% sobre tarifa.",
     };
     if (yaExiste) {
       await prisma.courierIntermediario.update({ where: { id: yaExiste.id }, data: datos });

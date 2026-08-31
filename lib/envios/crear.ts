@@ -528,7 +528,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
   // precio. Se pueblan desde matched.desglose.* en cada rama/match; quedan null
   // en fallback / no-match (consistente con el pattern del fix money).
   let tarifaCourierBaseNetaPersist: Prisma.Decimal | null = null;
-  let markupIntermediarioAplicadoPersist: Prisma.Decimal | null = null;
+  let markupIntermediarioPorcentajeAplicadoPersist: Prisma.Decimal | null = null;
   let baseConIntermediarioAplicadoPersist: Prisma.Decimal | null = null;
   let smoAplicadoPersist: Prisma.Decimal | null = null;
 
@@ -588,7 +588,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
         descuentoClienteAplicadoPersist = matchedB.precioFinal.sub(matchedB.precioFinalBuyer);
       }
       // DEUDA 153: audit trail. esFallback → todo null (no hay desglose real).
-      // Rama B: markupIntermediarioAplicado siempre null (sin intermediario).
+      // Rama B: markupIntermediarioPorcentajeAplicado siempre null (sin intermediario).
       // baseConIntermediarioAplicado (ex-precioProveedorReal) en Rama B = secoNeto (baseConIntermediario === secoNeto
       // por el hoist en aplicarMarkup con interm null → factor 1).
       if (matchedB.esFallback !== true && matchedB.desglose) {
@@ -632,14 +632,14 @@ export async function crearEnvio(input: CrearEnvioInput) {
         descuentoClienteAplicadoPersist = matchedA.precioFinal.sub(matchedA.precioFinalBuyer);
       }
       // DEUDA 153: audit trail. esFallback → todo null (no hay desglose real).
-      // Rama A con intermediario: markupIntermediarioAplicado = baseConIntermediario - secoNeto
+      // Rama A con intermediario: markupIntermediarioPorcentajeAplicado = baseConIntermediario - secoNeto
       // (el "+%" del intermediario en $, sin IVA — homogéneo cross-courier).
       // Sin intermediario (interm=null → factor 1): baseConIntermediario === secoNeto → delta 0.
       if (matchedA.esFallback !== true && matchedA.desglose) {
         tarifaCourierBaseNetaPersist = matchedA.desglose.secoNeto;
         baseConIntermediarioAplicadoPersist = matchedA.desglose.baseConIntermediario;
         smoAplicadoPersist = matchedA.desglose.smoNeto;
-        markupIntermediarioAplicadoPersist = matchedA.desglose.baseConIntermediario.sub(matchedA.desglose.secoNeto);
+        markupIntermediarioPorcentajeAplicadoPersist = matchedA.desglose.baseConIntermediario.sub(matchedA.desglose.secoNeto);
       }
       // STEP 1 Rama A OK: breakdown desde el desglose ya propagado por cotizador
       // (Option A). Fuente única de verdad — no recomputamos.
@@ -996,7 +996,8 @@ export async function crearEnvio(input: CrearEnvioInput) {
             // tercero). NO altera ningún precio.
             // DEUDA 158: renombrado de tarifaCourierBase (mismo valor = secoNeto). @map preserva la columna DB.
             tarifaCourierBaseNeta: tarifaCourierBaseNetaPersist,
-            markupIntermediarioAplicado: markupIntermediarioAplicadoPersist,
+            // DEUDA 158: renombrado de markupIntermediarioAplicado (mismo valor = solo el +%). @map preserva la columna DB.
+            markupIntermediarioPorcentajeAplicado: markupIntermediarioPorcentajeAplicadoPersist,
             // DEUDA 158: renombrado de precioProveedorReal (mismo valor = matched.desglose.baseConIntermediario). @map preserva la columna DB.
             baseConIntermediarioAplicado: baseConIntermediarioAplicadoPersist,
             // DEUDA 158: renombrado de seguroAplicado (mismo valor = smoNeto). @map preserva la columna DB.

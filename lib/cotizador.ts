@@ -59,7 +59,7 @@ export interface OpcionTarifa {
   // consumidores legacy; los productores del cotizador siempre lo pueblan.
   // DEUDA 153: secoNeto y baseConIntermediario se agregaron al desglose
   // propagado para poblar el audit trail interno de pricing en FinanzasEnvio
-  // (tarifaCourierBaseNeta, markupIntermediarioAplicado, baseConIntermediarioAplicado).
+  // (tarifaCourierBaseNeta, markupIntermediarioPorcentajeAplicado, baseConIntermediarioAplicado).
   // Rama B: baseConIntermediario === secoNeto (sin intermediario ≡ factor 1).
   desglose?: {
     secoNeto: Prisma.Decimal;
@@ -591,7 +591,7 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
               // sin recomputar. Único source of truth.
               // DEUDA 153: secoNeto + baseConIntermediario también propagados
               // para el audit trail interno (crear.ts los usa para poblar
-              // tarifaCourierBaseNeta / markupIntermediarioAplicado / baseConIntermediarioAplicado).
+              // tarifaCourierBaseNeta / markupIntermediarioPorcentajeAplicado / baseConIntermediarioAplicado).
               desglose: {
                 secoNeto: precios.desglose.secoNeto,
                 baseConIntermediario: precios.desglose.baseConIntermediario,

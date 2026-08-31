@@ -3543,9 +3543,27 @@ Hoy la única forma de dar de alta o cambiar un intermediario es SQL directo o m
 
 ---
 
-## DEUDA 157 — Rediseño del markup Shipro: sacarlo de la tarjeta del cliente, llevarlo a admin per-cliente (Shipro-managed) (registrada 2026-08-28, scope alto, prioridad media-alta)
+## DEUDA 157 — Rediseño del markup Shipro: sacarlo de la tarjeta del cliente, llevarlo a admin PER-COURIER general (Shipro-managed) (registrada 2026-08-28, EN PROGRESO 2026-08-31)
 
-**Status:** ABIERTA — no bloquea hoy porque no hay clientes reales en prod que estén tocando el markup, pero es prerequisito para que un cliente REAL entre a producción sin poder alterar el markup Shipro.
+**Status:** ABIERTA — **Paso 1 (build home) done local 2026-08-31 (commit `fc03a1f`), pendiente deploy prod (aditivo)**. Paso 2 (wire engine) + Paso 3 (drop client-card field) restantes. No bloquea hoy porque no hay clientes reales en prod tocando el markup, pero es prerequisito para que un cliente REAL entre a producción sin poder alterar el markup Shipro.
+
+**DESIGN LOCKED (Nacho 2026-08-31, simplifica el diseño registrado en 2026-08-28):**
+- **Markup GENERAL por courier:** un valor `%` por courier, **igual para TODOS los clientes** (Andreani 10% para todos, Mocis X% para todos). NO es per-empresa, NO es per-empresa-per-courier.
+- **Managed ONLY by Shipro** (admin_shipro role), en UI Shipro-only. Cliente nunca lo ve ni lo edita.
+- **Override per-cliente = FUTURE feature** (no ahora). El scope se cierra en el general per-courier.
+- **Valores viejos NO se migran** — start fresh, Shipro carga los valores en Paso 2 antes de conectar el motor.
+
+Esto simplifica lo que estaba anteriormente listado como "decisión de producto pendiente" (per-empresa vs per-empresa-per-courier): la respuesta es **per-COURIER general**, sin dimensión per-empresa.
+
+**AVANCE Paso 1 (2026-08-31, commit `fc03a1f`):** construido el hogar del markup Shipro general por courier:
+- **Model `MarkupCourier`** (`prisma/schema.prisma:1639`) — calco de `SmoCourier`: `courierId + valorPorcentaje Decimal(12,4) + activo + vigencias + timestamps`, FK CASCADE, `@@index([courierId, activo])`. Back-relation `Courier.markupsCourier`.
+- **Admin API `/api/admin/markup-courier/route.ts`** — mirror de `/api/admin/smo-courier/route.ts`: GET per-courier (vigencia activa + historial 50) + POST "cerrar+crear" transaccional con no-op guard, admin_shipro gate, console.log `[AUDIT markupCourier]` estructurado. Bounds MIN=0, MAX=100 (mirror de markup-shipro).
+- **Admin UI `/admin-markup-courier/page.tsx`** — mirror de `admin-smo/page.tsx`: esAdminShipro gate; per-courier card con vigencia activa + form nuevo valor + confirm + historial colapsable. **Arranca VACÍA** (sin seed) — cada courier muestra "sin configurar" hasta que Shipro cargue en Paso 2.
+- **Nav wiring** — nuevo `<Link href="/admin-markup-courier">` en `app/(dashboard)/layout.tsx` junto a los otros admin-parámetros (Percent icon, azul; hermano de admin-smo).
+
+**Migración ADITIVA:** `CREATE TABLE "MarkupCourier" + INDEX + FK`. Zero DROP, zero ALTER en tablas existentes. Aplicada local (34 migraciones total). Verificado `tsc=0` + `prisma migrate status` up-to-date. Blast: **5 files** (schema + migration + API + UI + nav), **cero pricing files**.
+
+**Motor NO conectado (aislamiento intencional, mirror de SmoCourier en su sub-piece inicial):** el pricing sigue leyendo el markup viejo (`CredencialCourier.ajusteTarifaPorcentaje` con override + `MarkupShiproVigencia` global fallback) hasta Paso 2. Editar `/admin-markup-courier` hoy NO cambia precios.
 
 **Problema:** el markup Shipro override per-courier vive hoy en `CredencialCourier.ajusteTarifaPorcentaje`, editable por `gerente_cliente` en la tarjeta del courier (`/configuracion/transportes`, sección "3. Ajuste Comercial (Tu Tienda)"). **Decisión de negocio de Nacho (2026-08-28):** el markup Shipro debe configurarlo un usuario de SHIPRO, por CLIENTE (empresa), NO el cliente y NO per-courier. El cliente NO debe tener acceso a ningún ajuste de tarifa excepto su descuento al comprador (ya resuelto en [[DEUDA 156]]).
 
@@ -3553,21 +3571,19 @@ Hoy la única forma de dar de alta o cambiar un intermediario es SQL directo o m
 
 **Absorbe / reemplaza:** [[DEUDA 116]] (default global en onboarding) + [[DEUDA 117]] (UI del override) — ambas quedaron parcialmente pensadas contra el diseño per-credencial actual. El rediseño per-cliente Shipro-managed las supera.
 
-**Decisión de producto pendiente (a confirmar con Nacho al encarar):** al pasar de per-courier a per-cliente se **PIERDE la granularidad per-courier** (hoy la misma empresa puede tener markup distinto por courier — Mocis 10%, Andreani 15%). ¿Aceptable? Si Nacho quiere mantener la granularidad per-courier bajo control Shipro, el nuevo modelo debe ser per-empresa-per-courier (no per-empresa puro).
-
 **SECUENCIA OBLIGATORIA (orden estricto — invertirlo rompe el pricing o deja el markup inconfigurable):**
 
-1. **CONSTRUIR** el nuevo hogar del markup en `/admin-parametros-tarifa` (o pantalla admin equivalente Shipro-managed): per-empresa (o per-empresa-per-courier según decisión). Requiere modelo nuevo — nueva tabla (ej. `MarkupShiproPorEmpresa` con vigencias) o campo en `Empresa`. Endpoint POST admin-only + UI listar/editar.
+1. ✅ **CONSTRUIR** el hogar en `/admin-markup-courier` (Shipro-managed, per-COURIER general). **DONE 2026-08-31 (`fc03a1f`)** — ver AVANCE Paso 1 arriba. Model `MarkupCourier` + admin API + UI + nav; aditivo; arranca vacío; motor NO conectado.
 
-2. **MIGRAR** el motor de pricing (cotizador + `crear.ts` + conciliación) para leer el markup del nuevo hogar en vez de `CredencialCourier.ajusteTarifaPorcentaje`. Verificar money-safety (no cambiar precios existentes sin intención — misma disciplina que DEUDA 132 fix, DEUDA 153 audit trail). Migración de datos: los overrides per-courier existentes se colapsan/agregan al nuevo modelo (política a decidir: promedio, max, primero, o data migration manual).
+2. ⏳ **MIGRAR el motor de pricing** — rewire `resolverMarkupShiproPorcentaje` para leer `MarkupCourier` per-courier en vez de `CredencialCourier.ajusteTarifaPorcentaje`. **Decisión pendiente al encarar:** ¿mantener `MarkupShiproVigencia` global como fallback cuando un courier no tiene `MarkupCourier` vigente, o requerir siempre per-courier (fail-loud)? Update callers: `lib/cotizador.ts` (compute + propagate), `lib/envios/crear.ts` (fallback path), `app/api/conciliacion/route.ts` (reconstruct markup). **MONEY-CRITICAL:** verificar que las cotizaciones no cambien sin intención (misma disciplina que DEUDA 132 fix, DEUDA 153 audit trail). **Cargar los valores reales por courier en `/admin-markup-courier` ANTES de conectar el motor** (evitar que un courier sin fila caiga a 0 y publique precio degradado).
 
-3. **RECIÉN ENTONCES** sacar la sección "3. Ajuste Comercial (Tu Tienda)" de `/configuracion/transportes` (`components/configuracion/TransportesTab.tsx:505-523`) — y resolver [[DEUDA 154]] (el label engañoso "Recargo/Descuento (%)") al remover/mover el campo. También decidir en ese punto qué pasa con `markupFijo` (Costo Fijo Adicional) + `tarifaPlanaRespaldoCourier` (Tarifa de rescate) — ver punto siguiente.
+3. ⏳ **DROP client-card field** — remover `CredencialCourier.ajusteTarifaPorcentaje` (+ `markupFijo` por consistencia — también sale de la tarjeta del cliente al Shipro-admin dominio). Rewire UI `components/configuracion/TransportesTab.tsx` (sacar "Ajuste Comercial (Tu Tienda)"), `lib/permisos.ts`, `lib/auditoria-configuracion.ts`, `app/api/configuracion/couriers/route.ts` (endpoint edit). Migración destructiva (`DROP COLUMN`, patrón DEUDA 160). Cierra [[DEUDA 154]] (label engañoso) + los renames DEUDA 158 entangled (`ajusteTarifaPorcentaje` / `markupFijo` se van al drop en vez de renombrarse).
 
-**Nunca invertir el orden:** sacar el punto 3 antes de construir su reemplazo deja el markup inconfigurable (nadie lo puede setear) y potencialmente rompe precios existentes.
+**Nunca invertir el orden:** sacar el punto 3 antes del punto 2 deja el markup inconfigurable (nadie lo puede setear vía el nuevo hogar) y potencialmente rompe precios existentes. Paso 1 antes de Paso 2 evita que el motor tenga que leer una tabla vacía.
 
-**Otros fields de la sección 3 (decidir al encarar):**
-- **`markupFijo`** ("Costo Fijo Adicional") — es per-cliente↔courier y NO tiene equivalente global hoy. Al mover el markup% ¿se mueve también? ¿o queda como único field en la tarjeta con el descuento buyer-facing?
-- **`tarifaPlanaRespaldoCourier`** ("Tarifa de rescate") — es la tarifa DEUDA 132 Paso 5b, obligatoria per-courier. Semánticamente distinta al markup. **Probablemente se queda** en la tarjeta del cliente (es un dato del cliente, no una decisión Shipro).
+**Otros fields de la sección 3:**
+- **`markupFijo`** ("Costo Fijo Adicional") — se va al DROP junto con `ajusteTarifaPorcentaje` en Paso 3 (mismo dominio: markup Shipro, per-cliente hoy — pasa a Shipro-admin). El equivalente per-courier queda como feature futura (por ahora solo el `%` general vive en `MarkupCourier`; si se necesita fijo per-courier después, se agrega un `valorFijo` al mismo model o un `MarkupCourierFijo` hermano).
+- **`tarifaPlanaRespaldoCourier`** ("Tarifa de rescate") — se queda en la tarjeta del cliente. Es un dato del cliente (DEUDA 132 Paso 5b), no una decisión Shipro.
 
 **Relación:** [[DEUDA 154]] (label engañoso — se resuelve al remover el campo en el punto 3). [[DEUDA 116]] + [[DEUDA 117]] (absorbidas por este rediseño). [[DEUDA 156]] (el descuento del cliente — SÍ se queda en la tarjeta, es capa cliente→comprador). [[DEUDA 155]] (UI faltante del intermediario — semánticamente análoga; si ambas se hacen juntas en `/admin-parametros-tarifa`, comparten espacio).
 

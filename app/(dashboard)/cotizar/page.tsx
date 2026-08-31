@@ -204,7 +204,7 @@ function CotizadorContenido() {
       altoCm: parseFloat(alto),
       valorDeclarado: 0,
       costoEnvio: tarifaElegida.precioFinal,
-      costoProveedor: tarifaElegida.precioProveedor,
+      costoProveedor: tarifaElegida.costoCourierNativo,
       sucursalDestinoId: tabActivo === 'sucursal' ? sucursalElegidaId : undefined
     };
     if (esShipro && empresaSeleccionadaId) {

@@ -517,10 +517,10 @@ export async function crearEnvio(input: CrearEnvioInput) {
   let estadoLiqLog: EstadoLiquidacion = EstadoLiquidacion.PENDIENTE;
 
   // DEUDA (money): estos dos SIEMPRE salen de la re-cotización interna (matched.*),
-  // nunca del caller. precioProveedor en forma nativa; NULL (no 0) cuando el courier
+  // nunca del caller. costoCourierNativo (ex-precioProveedor) en forma nativa; NULL (no 0) cuando el courier
   // no cotizó (rescate/fallback) — null es honesto, 0 parecería un costo real.
   let precioMostradoPersist: Prisma.Decimal | null = null;
-  let precioProveedorPersist: Prisma.Decimal | null = null;
+  let costoCourierNativoPersist: Prisma.Decimal | null = null;
 
   // DEUDA 153: audit trail interno del desglose de pricing. Valores que el motor
   // ya calcula (en aplicarMarkup), persistidos para análisis (ej. costo del
@@ -529,13 +529,13 @@ export async function crearEnvio(input: CrearEnvioInput) {
   // en fallback / no-match (consistente con el pattern del fix money).
   let tarifaCourierBasePersist: Prisma.Decimal | null = null;
   let markupIntermediarioAplicadoPersist: Prisma.Decimal | null = null;
-  let precioProveedorRealPersist: Prisma.Decimal | null = null;
+  let baseConIntermediarioAplicadoPersist: Prisma.Decimal | null = null;
   let smoAplicadoPersist: Prisma.Decimal | null = null;
 
   // DEUDA 156: monto ($) del descuento buyer-facing efectivamente aplicado a esta
   // opción = matched.precioFinal - matched.precioFinalBuyer. Sin descuento → 0 (honesto,
   // el match existe). Rescate/fallback → null (política: sin descuento sobre tarifa plana,
-  // consistente con precioProveedorPersist=null en esFallback). NO altera tarifaFullCotizada.
+  // consistente con costoCourierNativoPersist=null en esFallback). NO altera tarifaFullCotizada.
   let descuentoClienteAplicadoPersist: Prisma.Decimal | null = null;
 
   let montoDebito: Prisma.Decimal;
@@ -557,7 +557,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
     estadoLiqLog = EstadoLiquidacion.NO_APLICA;
 
     // DEUDA (money) — Rama B: matcheamos el courier en la re-cotización con el mismo
-    // criterio que Rama A para poblar precioMostrado/precioProveedor desde matched.*,
+    // criterio que Rama A para poblar precioMostrado/costoCourierNativo desde matched.*,
     // no del caller. También sembramos tarifaPublicadaElegida (el fuga block skippea
     // el recompute cuando ya está poblada).
     const canonLowerB = modalidadCanonica.toLowerCase();
@@ -581,7 +581,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
       // === precioFinal → mismo número que antes.
       precioMostradoPersist = matchedB.precioFinalBuyer;
       // esFallback=true → OpcionFallback (tarifa plana), el courier no cotizó → null honesto.
-      precioProveedorPersist = matchedB.esFallback === true ? null : matchedB.precioProveedor;
+      costoCourierNativoPersist = matchedB.esFallback === true ? null : matchedB.costoCourierNativo;
       // DEUDA 156: monto descontado = precioFinal - precioFinalBuyer. Match real → 0
       // cuando no hay descuento; > 0 cuando sí. Fallback/rescate → null (política).
       if (matchedB.esFallback !== true) {
@@ -589,11 +589,11 @@ export async function crearEnvio(input: CrearEnvioInput) {
       }
       // DEUDA 153: audit trail. esFallback → todo null (no hay desglose real).
       // Rama B: markupIntermediarioAplicado siempre null (sin intermediario).
-      // precioProveedorReal en Rama B = secoNeto (baseConIntermediario === secoNeto
+      // baseConIntermediarioAplicado (ex-precioProveedorReal) en Rama B = secoNeto (baseConIntermediario === secoNeto
       // por el hoist en aplicarMarkup con interm null → factor 1).
       if (matchedB.esFallback !== true && matchedB.desglose) {
         tarifaCourierBasePersist = matchedB.desglose.secoNeto;
-        precioProveedorRealPersist = matchedB.desglose.baseConIntermediario;
+        baseConIntermediarioAplicadoPersist = matchedB.desglose.baseConIntermediario;
         smoAplicadoPersist = matchedB.desglose.smoNeto;
       }
     }
@@ -625,7 +625,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
       // precioFinalBuyer === precioFinal → mismo número que antes. tarifaFullCotizada
       // (montoDebito arriba) sigue en matched.precioFinal (Shipro factura el chain full).
       precioMostradoPersist = matchedA.precioFinalBuyer;
-      precioProveedorPersist = matchedA.esFallback === true ? null : matchedA.precioProveedor;
+      costoCourierNativoPersist = matchedA.esFallback === true ? null : matchedA.costoCourierNativo;
       // DEUDA 156: monto descontado = precioFinal - precioFinalBuyer. Match real → 0
       // cuando no hay descuento; > 0 cuando sí. Fallback/rescate → null (política).
       if (matchedA.esFallback !== true) {
@@ -637,7 +637,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
       // Sin intermediario (interm=null → factor 1): baseConIntermediario === secoNeto → delta 0.
       if (matchedA.esFallback !== true && matchedA.desglose) {
         tarifaCourierBasePersist = matchedA.desglose.secoNeto;
-        precioProveedorRealPersist = matchedA.desglose.baseConIntermediario;
+        baseConIntermediarioAplicadoPersist = matchedA.desglose.baseConIntermediario;
         smoAplicadoPersist = matchedA.desglose.smoNeto;
         markupIntermediarioAplicadoPersist = matchedA.desglose.baseConIntermediario.sub(matchedA.desglose.secoNeto);
       }
@@ -724,8 +724,8 @@ export async function crearEnvio(input: CrearEnvioInput) {
           });
           if (fallbackA.precio != null && fallbackA.precio.gt(0)) {
             montoDebito = fallbackA.precio;
-            // DEUDA (money) — resolverPrecioFallback no expone precioProveedor; solo
-            // el precio publicable. precioProveedorPersist queda null (declarado outer),
+            // DEUDA (money) — resolverPrecioFallback no expone costoCourierNativo (ex-precioProveedor); solo
+            // el precio publicable. costoCourierNativoPersist queda null (declarado outer),
             // honesto: acá no hubo cotización del courier.
             precioMostradoPersist = fallbackA.precio;
             console.warn(`[FASE2] Rama A fallback aplicado: $${fallbackA.precio.toFixed(2)} (fuente: ${fallbackA.fuente}). Cascada completa reconstruida. ${fallbackA.detalle}`);
@@ -969,10 +969,13 @@ export async function crearEnvio(input: CrearEnvioInput) {
         finanzas: {
           create: {
             // DEUDA (money): estos dos SIEMPRE salen de la re-cotización interna
-            // (matched.*), nunca del caller. precioProveedor en forma nativa; NULL
-            // (no 0) cuando el courier no cotizó (rescate/fallback) — null es honesto,
-            // 0 parecería un costo real.
-            precioProveedor: precioProveedorPersist,
+            // (matched.*), nunca del caller. costoCourierNativo (ex-precioProveedor,
+            // @map) en forma nativa; NULL (no 0) cuando el courier no cotizó
+            // (rescate/fallback) — null es honesto, 0 parecería un costo real.
+            // DEUDA 158: renombrado de precioProveedor. Mismo valor (matched.costoCourierNativo),
+            // @map preserva la columna DB. Miembro "nativo" del ciclo costoCourierNativo →
+            // costoCourierCotizado → costoCourierFacturado.
+            costoCourierNativo: costoCourierNativoPersist,
             tarifaFullCotizada: montoDebito,     // FASE 1: autoritativo (recomputado, rama-aware). DEUDA 158 (2026-08-30): field renombrado de precioFactura (mismo valor, mismo comportamiento — @map preserva la columna DB).
             precioMostrado: precioMostradoPersist,
             valorDeclarado: parseFloat(String(valorDeclarado)) || 0,
@@ -993,7 +996,8 @@ export async function crearEnvio(input: CrearEnvioInput) {
             // tercero). NO altera ningún precio.
             tarifaCourierBase: tarifaCourierBasePersist,
             markupIntermediarioAplicado: markupIntermediarioAplicadoPersist,
-            precioProveedorReal: precioProveedorRealPersist,
+            // DEUDA 158: renombrado de precioProveedorReal (mismo valor = matched.desglose.baseConIntermediario). @map preserva la columna DB.
+            baseConIntermediarioAplicado: baseConIntermediarioAplicadoPersist,
             // DEUDA 158: renombrado de seguroAplicado (mismo valor = smoNeto). @map preserva la columna DB.
             smoAplicado: smoAplicadoPersist,
             // DEUDA 156: precioMostrado = lo que vio el comprador (con descuento).

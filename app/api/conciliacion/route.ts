@@ -243,7 +243,7 @@ export async function POST(request: Request) {
       // ==========================================
       rowsEnMainBranch++;
 
-      const costoEsperado: Prisma.Decimal = envio.finanzas.precioProveedor ?? new Prisma.Decimal(0);
+      const costoEsperado: Prisma.Decimal = envio.finanzas.costoCourierNativo ?? new Prisma.Decimal(0);
       const costoFactRaw: Prisma.Decimal = new Prisma.Decimal(fila.costo);
       const credencial = envio.empresa.credenciales.find(c => c.nombreCourier === envio.courier.nombre);
 

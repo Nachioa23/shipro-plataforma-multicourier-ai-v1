@@ -219,7 +219,7 @@ export default function CierreMensual() {
   const generarExcelProforma = (envios: any[], liquidacion: any, nombreEmpresa: string, tipo: "FEE" | "LOGISTICA") => {
     // STEP 1: dos formatos de Excel, uno por vía. Los importes vienen del
     // breakdown persistido (feeNetoFacturado / logisticaNetaFacturada / ivaFacturado)
-    // — NO recalculamos tarifaFullCotizada − precioProveedor (heurística vieja errada).
+    // — NO recalculamos tarifaFullCotizada − costoCourierNativo (heurística vieja errada; ex-precioProveedor DEUDA 158).
     // IVA: fuente única en lib/constants/iva.ts (consolidación 2026-07-31).
     const IVA = IVA_AR_MULTIPLIER_NUM;
     const filasExcel = envios.map(e => {

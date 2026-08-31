@@ -46,7 +46,10 @@ export interface OpcionTarifa {
   // descuento del cliente aplicado, piso $0). Solo lo consumen canales buyer-facing (Tiendanube,
   // plugins). El dashboard y la facturación usan precioFinal (full). Sin descuento === precioFinal.
   precioFinalBuyer: Prisma.Decimal;
-  precioProveedor: Prisma.Decimal;
+  // DEUDA 158 (2026-08-31): renombrado de precioProveedor (nombre por rol real,
+  // "proveedor" era ambiguo — refería al courier físico). Costo courier RAW en
+  // forma NATIVA (Andreani con IVA, Mocis sin; no homogéneo cross-courier).
+  costoCourierNativo: Prisma.Decimal;
   slaHs: number;
   fechaEstimadaString: string;
   etiquetaSla: string;
@@ -56,7 +59,7 @@ export interface OpcionTarifa {
   // consumidores legacy; los productores del cotizador siempre lo pueblan.
   // DEUDA 153: secoNeto y baseConIntermediario se agregaron al desglose
   // propagado para poblar el audit trail interno de pricing en FinanzasEnvio
-  // (tarifaCourierBase, markupIntermediarioAplicado, precioProveedorReal).
+  // (tarifaCourierBase, markupIntermediarioAplicado, baseConIntermediarioAplicado).
   // Rama B: baseConIntermediario === secoNeto (sin intermediario ≡ factor 1).
   desglose?: {
     secoNeto: Prisma.Decimal;
@@ -131,7 +134,7 @@ async function calcularFechaEstimada(horasSla: number): Promise<string> {
 /**
  * DEUDA 10 Paso 3a: logica de markup extraida de cotizar() para reuso.
  * Funcion pura: dado el costo seco del courier + la config de pricing de la
- * credencial, devuelve { precioProveedor, precioFinal }. Misma formula que
+ * credencial, devuelve { costoCourierNativo, precioFinal }. Misma formula que
  * usaba la closure local calcularPrecios (sin cambio de comportamiento).
  * La reusa el fallback de precio (lib/utils/precio-fallback.ts) para re-aplicar
  * markup al precio CRUDO historico (D-10-PRICE-READ source 1).
@@ -188,7 +191,7 @@ export function aplicarMarkup(
   costoSecoCourier: Prisma.Decimal | number,
   config: ConfigMarkup
 ): {
-  precioProveedor: Prisma.Decimal;
+  costoCourierNativo: Prisma.Decimal;
   precioFinal: Prisma.Decimal;
   desglose: {
     secoNeto: Prisma.Decimal;
@@ -255,7 +258,7 @@ export function aplicarMarkup(
   const precioFinal = netoAcumulado.mul(IVA_AR_MULTIPLIER).toDecimalPlaces(2);
 
   return {
-    precioProveedor: seco, // raw, sin cambios: la conciliación depende de este significado.
+    costoCourierNativo: seco, // raw, sin cambios: la conciliación depende de este significado. DEUDA 158: renombrado de precioProveedor.
     precioFinal,
     desglose: {
       secoNeto,
@@ -476,7 +479,7 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
       // el descuento vive sobre la cotización real del courier; sobre una tarifa de
       // rescate ya es un fallback comercial y modificarla puede resultar en $0 al buyer).
       precioFinalBuyer: tarifa,
-      precioProveedor: new Prisma.Decimal(0),
+      costoCourierNativo: new Prisma.Decimal(0),
       slaHs: slaHorasFallback,
       fechaEstimadaString: textoFallback,
       etiquetaSla: "Tiempo estimado",
@@ -579,7 +582,7 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
               // DEUDA 156: precio buyer-facing con descuento del cliente aplicado
               // (piso $0). precioFinal queda intacto — Shipro factura el chain full.
               precioFinalBuyer: aplicarDescuentoCliente(precios.precioFinal, config),
-              precioProveedor: precios.precioProveedor,
+              costoCourierNativo: precios.costoCourierNativo,
               slaHs: slaHorasFinal,
               fechaEstimadaString: textoUXLlegada,
               etiquetaSla: esSlaReal ? 'Basado en datos reales' : 'Tiempo estimado',
@@ -588,7 +591,7 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
               // sin recomputar. Único source of truth.
               // DEUDA 153: secoNeto + baseConIntermediario también propagados
               // para el audit trail interno (crear.ts los usa para poblar
-              // tarifaCourierBase / markupIntermediarioAplicado / precioProveedorReal).
+              // tarifaCourierBase / markupIntermediarioAplicado / baseConIntermediarioAplicado).
               desglose: {
                 secoNeto: precios.desglose.secoNeto,
                 baseConIntermediario: precios.desglose.baseConIntermediario,
@@ -625,7 +628,7 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
               // DEUDA 156: precio buyer-facing con descuento del cliente aplicado
               // (piso $0). precioFinal queda intacto — Shipro factura el chain full.
               precioFinalBuyer: aplicarDescuentoCliente(precios.precioFinal, config),
-              precioProveedor: precios.precioProveedor,
+              costoCourierNativo: precios.costoCourierNativo,
               slaHs: slaHorasFinal,
               fechaEstimadaString: textoUXLlegada,
               etiquetaSla: esSlaReal ? 'Basado en datos reales' : 'Tiempo estimado',

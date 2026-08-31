@@ -240,14 +240,17 @@ export async function POST(request: Request) {
       const depositoPredId = emp?.depositos?.[0]?.id;
       if (depositoPredId != null) {
         const opcionesSnapshot = [
+          // DEUDA 158: DTO field renombrado (o.costoCourierNativo, ex-o.precioProveedor);
+          // JSON key en el snapshot forense conserva "precioProveedor" como bridge para
+          // consistencia con snapshots existentes de CotizacionSnapshot.
           ...(resultado.domicilio ?? []).map((o) => ({
             tipo: "domicilio", courier: o.courier, modalidad: o.modalidad,
-            precioFinal: Number(o.precioFinal), precioProveedor: Number(o.precioProveedor),
+            precioFinal: Number(o.precioFinal), precioProveedor: Number(o.costoCourierNativo),
             slaHs: o.slaHs, esFallback: !!o.esFallback,
           })),
           ...(resultado.sucursal ?? []).map((o) => ({
             tipo: "sucursal", courier: o.courier, modalidad: o.modalidad,
-            precioFinal: Number(o.precioFinal), precioProveedor: Number(o.precioProveedor),
+            precioFinal: Number(o.precioFinal), precioProveedor: Number(o.costoCourierNativo),
             slaHs: o.slaHs, esFallback: !!o.esFallback,
           })),
         ];

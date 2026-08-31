@@ -36,14 +36,14 @@ Antes de la tabla, el modelo mental correcto — las cinco variables reales de u
 |---|---------------------|-----------|----------|
 | 1 | **Cotización virtual full al cliente** (lo que Shipro cotiza al crear el envío, con peso/dims declarados) | `tarifaFullCotizada` (ex-`precioFactura`, `@map`; congelado al alta) | ✅ |
 | 2 | **Facturado real full al cliente** (post-liquidación, con el costo real del courier) | **NO existe como campo** — es la suma `tarifaFullCotizada + costoAforo`, calculada al liquidar | ⚠️ derivado |
-| 3 | **Costo del courier — cotizado** (tarifa cruda al crear la etiqueta) | `precioProveedor` → copia en `costoCourierEsperado` | ✅ |
+| 3 | **Costo del courier — cotizado** (tarifa cruda al crear la etiqueta) | `precioProveedor` → copia en `costoCourierCotizado` (ex-`costoCourierEsperado`, `@map`) | ✅ |
 | 4 | **Costo del courier — realmente facturado** (lo que vino en el Excel del courier) | `costoCourierFacturado` | ✅ |
 | 5 | **Ajuste del cliente a su comprador** (el descuento buyer-facing) | `descuentoClienteAplicado` | ✅ |
 | — | **Precio publicado al comprador** (checkout, con el ajuste del cliente) | `precioMostrado` (post-DEUDA 156) | ✅ |
 
 **Las dos fugas que estas variables permiten medir:**
 
-- **Fuga cotizado vs. facturado (courier):** variable 3 vs. variable 4 → mide el desvío por peso/dimensiones. **Sin** el ajuste del cliente. Hoy medible con `costoCourierFacturado − costoCourierEsperado`.
+- **Fuga cotizado vs. facturado (courier):** variable 3 vs. variable 4 → mide el desvío por peso/dimensiones. **Sin** el ajuste del cliente. Hoy medible con `costoCourierFacturado − costoCourierCotizado` (ex-`costoCourierEsperado`).
 - **Fuga publicado vs. facturado:** (variable 1 ± ajuste del cliente) vs. variable 2 → mide contra lo que el comprador realmente vio publicado.
 
 > **Nota crítica sobre `tarifaFullCotizada`** (ex-`precioFactura`, renombrado 2026-08-30 commit `a8cda53`): NO se actualiza al importar la liquidación del courier. Queda **congelada en la cotización del alta**. El desvío por aforo se guarda aparte en `costoAforo`, y el total real al cliente es la **suma de los dos** (`tarifaFullCotizada + costoAforo`), calculada en la liquidación mensual. Esta es una decisión de diseño deliberada (documentada en `conciliacion/route.ts` L145-152), no un bug.
@@ -61,7 +61,7 @@ Los campos de plata del envío. La zona con más problemas.
 | `porcentajePrecioFactura` | (sin comentario) | Ghost / ambiguo — sin usos detectados. | ⚠️ ambiguo | 3 |
 | `valorDeclarado` | "Seguro de la mercadería (Terceros)" | El **valor** que declara el comprador (input), no el monto del seguro. El seguro real no se aplica hoy. | ⚠️ | 2 |
 | `precioProveedor` | "Costo cotizado al crear la etiqueta" | Tarifa cruda del courier en forma **nativa** (Andreani con IVA, Mocis sin) — no homogénea entre couriers. | ⚠️ parcial | 2 |
-| `costoCourierEsperado` | "Lo que DEBERÍA cobrar el courier según el aforo final" | Es una **copia** de `precioProveedor`, sin recalcular por aforo. | ⚠️ | 2 |
+| `costoCourierCotizado` (ex-`costoCourierEsperado`, `@map`) | "Costo COTIZADO por el courier al crear la etiqueta (copia de precioProveedor, forma nativa; NO recalculado por aforo). Par con costoCourierFacturado (cotizado vs facturado)." | **Copia** de `precioProveedor`, sin recalcular por aforo. Par cotizado/facturado con `costoCourierFacturado`. **Renombrado 2026-08-31 (commit `0b1f6b0`, `@map("costoCourierEsperado")`).** El snapshot JSON de `ConciliacionRun` (undo path) conserva la key vieja `"costoCourierEsperado"` como bridge — backward-compat con snapshots existentes. | ✅ (post-rename) | 1 ✓ |
 | `costoCourierFacturado` | "Lo que REALMENTE vino en el Excel del courier" | Fiel — el costo real del Excel del courier. | ✅ | — |
 | `estadoAuditoria` | "OK, DOBLE_COBRO, SOBREPRECIO_RECLAMAR" | Fiel. Marca si el envío ya se concilió (≠ PENDIENTE). | ✅ | — |
 | `facturaCourierRef` | "Escudo anti-UPS (FC-0001-9992)" | Fiel — referencia del Excel para evitar doble cobro. | ✅ | — |
@@ -139,7 +139,7 @@ Los campos de plata del envío. La zona con más problemas.
 ### Grupo 2 — Engañan al PROGRAMADOR (baratos: corregir el comentario)
 5. ~~`precioFactura`~~ → **RENOMBRADO** a `tarifaFullCotizada` (commit `a8cda53`, 2026-08-30, [[DEUDA 158]] avance 1/N).
 6. `descuentoClienteAplicado` → quitar "con signo" (es piso $0).
-7. `costoCourierEsperado` → aclarar que es copia de `precioProveedor`, no recalculado por aforo.
+7. ~~`costoCourierEsperado`~~ → **RENOMBRADO** a `costoCourierCotizado` (commit `0b1f6b0`, 2026-08-31, [[DEUDA 158]] avance 2/N). Par cotizado/facturado con `costoCourierFacturado`.
 8. `markupIntermediarioAplicado` → aclarar que es solo "+%", sin el fijo.
 9. `seguroAplicado` → aclarar que es el SMO, no el seguro de mercadería.
 10. `precioProveedorReal` → quitar "la conciliación lo prefiere" (no lo lee).
@@ -162,7 +162,7 @@ Los campos de plata del envío. La zona con más problemas.
 - **FASE 0 — Fix operator surfaces (dashboard + export + rastreo)** — ✅ **HECHA 2026-08-28 (commit `60d2792`)**. Los 3 displays operator (Excel export, tabla dashboard main, rastreo manual response) ahora leen `precioFactura` en vez de `precioMostrado`. El buyer en checkout Tiendanube sigue viendo el descuento (`precioFinalBuyer`).
 - **FASE 1 — Grupo 2 (comentarios honestos)** — ✅ **HECHA 2026-08-28 (commit `3ba633a`)**. 12 fields + 1 block comment en `prisma/schema.prisma` con comentarios que dicen la verdad del rol real. Sin renames, sin cambio de tipos ni lógica.
 - **FASE 2 — Métricas de fuga (`perdidaReal` + `fugaPesos`)** — ⏳ pendiente. Rediseñar la fórmula (contaminadas por el descuento del cliente post-DEUDA-156). Registrada como **[[DEUDA 159]]**. DECISIÓN DE NEGOCIO PENDIENTE de Nacho: qué mide cada métrica (fuga courier real vs fuga publicado-vs-facturado).
-- **FASE 3 — Grupo 1 (renames por rol)** — 🚧 **EN PROGRESO 2026-08-30**. Registrada como **[[DEUDA 158]]** (uno por sesión, principio Nacho). Avance: **1/N campos** — ✅ `precioFactura → tarifaFullCotizada` (commit `a8cda53`, vía `@map`, cero migración datos, diff 74/74 simétrico). Restantes en el checklist de la DEUDA 158: `markupFijo`, `ajusteTarifaPorcentaje` (ambos entangled con [[DEUDA 157]] markup redesign), `costoCourierEsperado`, `markupIntermediarioAplicado`, `seguroAplicado`, `tarifaCourierBase`, `precioProveedorReal`, `valorDeclarado`.
+- **FASE 3 — Grupo 1 (renames por rol)** — 🚧 **EN PROGRESO 2026-08-31**. Registrada como **[[DEUDA 158]]** (uno por sesión, principio Nacho). Avance: **2/N campos** — ✅ `precioFactura → tarifaFullCotizada` (commit `a8cda53`, 2026-08-30) + ✅ `costoCourierEsperado → costoCourierCotizado` (commit `0b1f6b0`, 2026-08-31, con bridge snapshot JSON undo-safe). Restantes en el checklist de la DEUDA 158: `markupFijo`, `ajusteTarifaPorcentaje` (ambos entangled con [[DEUDA 157]] markup redesign), `markupIntermediarioAplicado`, `seguroAplicado`, `tarifaCourierBase`, `precioProveedorReal`, `valorDeclarado`.
 - **FASE 4 — Grupo 3 (limpiar fantasmas)** — ⏳ pendiente. Cleanup de campos ghost del schema. Registrada como **[[DEUDA 160]]**. Uno por uno con verificación previa.
 
 > Renombrar campos que viven en la base de datos implica migración y toca lógica de plata: son obras con su propio cuidado, una por vez, nunca todas juntas.

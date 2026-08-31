@@ -170,6 +170,11 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
                     <Shield className="w-5 h-5 text-amber-600" /><span className="font-bold text-amber-800">SMO por Courier</span>
                   </Link>
 
+                  {/* DEUDA 157 Paso 1: markup Shipro por courier (general, admin-only). */}
+                  <Link href="/admin-markup-courier" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-blue-50 hover:text-blue-800 rounded-lg font-medium text-sm transition-all mt-2 bg-blue-50/50 border border-blue-100">
+                    <Percent className="w-5 h-5 text-blue-600" /><span className="font-bold text-blue-800">Markup por Courier</span>
+                  </Link>
+
                   {/* FASE 2 sub 4 parte A: Fee por empresa con vigencias — plata en vivo, motivo obligatorio. */}
                   <Link href="/admin-fee" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-emerald-50 hover:text-emerald-800 rounded-lg font-medium text-sm transition-all mt-2 bg-emerald-50/50 border border-emerald-100">
                     <Receipt className="w-5 h-5 text-emerald-600" /><span className="font-bold text-emerald-800">Fee por Empresa</span>

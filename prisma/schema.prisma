@@ -294,6 +294,11 @@ model Courier {
   // motor pivotee a esta tabla en una sub-piece posterior).
   smos SmoCourier[]
 
+  // DEUDA 157 Paso 1 (2026-08-31): historial de markup Shipro GENERAL por courier
+  // (MarkupCourier). Un % por courier, igual para TODOS los clientes. Reemplaza
+  // (Paso 2 + 3) al override per-credencial CredencialCourier.ajusteTarifaPorcentaje.
+  markupsCourier MarkupCourier[]
+
   // DEUDA 19: audit log de cambios sensibles per-courier (credencialesJson, tipoCuenta, etc).
   auditoriasConfiguracion AuditoriaConfiguracion[]
 }
@@ -1615,6 +1620,28 @@ model SmoCourier {
   courier   Courier @relation(fields: [courierId], references: [id], onDelete: Cascade)
 
   valorNeto Decimal @db.Decimal(12, 2)
+
+  activo        Boolean   @default(true)
+  vigenciaDesde DateTime  @default(now())
+  vigenciaHasta DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([courierId, activo])
+}
+
+/// Markup Shipro GENERAL por courier con vigencias. Mirror del patrón SmoCourier.
+/// Un valor % por courier, igual para TODOS los clientes (DEUDA 157 — el markup
+/// Shipro pasa de la tarjeta del cliente a admin, per-courier general). Override
+/// per-cliente = feature futura. El motor lo lee en Paso 2 (hoy no lo lee —
+/// aislamiento del motor, mismo criterio que SmoCourier en su sub-piece inicial).
+model MarkupCourier {
+  id        Int     @id @default(autoincrement())
+  courierId Int
+  courier   Courier @relation(fields: [courierId], references: [id], onDelete: Cascade)
+
+  valorPorcentaje Decimal @db.Decimal(12, 4)
 
   activo        Boolean   @default(true)
   vigenciaDesde DateTime  @default(now())

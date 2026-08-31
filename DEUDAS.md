@@ -3579,7 +3579,7 @@ Hoy la única forma de dar de alta o cambiar un intermediario es SQL directo o m
 
 ## DEUDA 158 — Renombrar campos de plata mal nombrados según su rol real (empezando por precioFactura → tarifaFullCotizada) (registrada 2026-08-28, EN PROGRESO 2026-08-31)
 
-**Status:** ABIERTA — **2 de N campos renombrados**: (i) `precioFactura → tarifaFullCotizada` (commit `a8cda53` 2026-08-30), (ii) `costoCourierEsperado → costoCourierCotizado` (commit `0b1f6b0` 2026-08-31). Los comments honestos de FASE 1 mitigan el riesgo de lectura para los restantes, pero el nombre engañoso sigue induciendo bugs (ver [[DEUDA 156]] fallout: 4 readers usaron precioMostrado como billed proxy hasta que la semántica se alineó). Se hace de a UN campo por sesión — principio Nacho: money-safe, nunca en lote.
+**Status:** ABIERTA — **3 de N campos renombrados**: (i) `precioFactura → tarifaFullCotizada` (commit `a8cda53` 2026-08-30), (ii) `costoCourierEsperado → costoCourierCotizado` (commit `0b1f6b0` 2026-08-31), (iii) `seguroAplicado → smoAplicado` (commit `26855dc` 2026-08-31). Los comments honestos de FASE 1 mitigan el riesgo de lectura para los restantes, pero el nombre engañoso sigue induciendo bugs (ver [[DEUDA 156]] fallout: 4 readers usaron precioMostrado como billed proxy hasta que la semántica se alineó). Se hace de a UN campo por sesión — principio Nacho: money-safe, nunca en lote.
 
 **AVANCE 1 (2026-08-30, commit `a8cda53`):** PRIMER campo renombrado — `precioFactura → tarifaFullCotizada`, vía `@map("precioFactura")` (columna física intacta, cero migración de datos, cero cambio de valores; diff 74/74 simétrico = rename puro). Blast radius: 20 archivos tocados (schema + writes + reads + DTOs + frontend + comments). Verificado `tsc=0` + `prisma migrate status` = "up to date". Cascade tsc-guided (Prisma Client regeneró) confirmó que TODAS las refs se actualizaron. Frontend keys sincronizados con endpoint output (dashboard cards + torre anatomía) — cero silent-$0. Pendiente deploy prod.
 
@@ -3587,16 +3587,18 @@ Hoy la única forma de dar de alta o cambiar un intermediario es SQL directo o m
 
 **VERIFICACIÓN PENDIENTE (no bloqueante):** el bridge undo del snapshot JSON (revertir una conciliación pre-rename) está verificado en código + round-trip, pero NO ejercitado en prod aún (no había conciliación para revertir el 2026-08-31). Validar en vivo la próxima vez que se revierta una conciliación — esperado: el rollback lee la JSON key vieja `"costoCourierEsperado"` y restaura al field `costoCourierCotizado` sin romper. Análogo a la compra-de-prueba pendiente del Chat B: validación de flujo real, no trabajo de dev.
 
+**AVANCE 3 (2026-08-31, commit `26855dc`):** TERCER campo — `seguroAplicado → smoAplicado`, vía `@map("seguroAplicado")` (columna física intacta, cero migración de datos). Es el **SMO** (Seguro Mínimo de Shipro — tarifa mínima que Shipro cobra por courier), **NO** el seguro de mercadería del comprador ni el seguro del courier real (ambos GHOST hoy — ver nueva [[DEUDA 163]] feature seguro-courier-activable). Blast radius **mínimo** (el más chico del rename campaign hasta ahora): **2 files** (`prisma/schema.prisma` L610 + `lib/envios/crear.ts` — 4 hits: L533 persist var decl, L597 Rama B write, L641 Rama A write, L998 create key). **Zero frontend, zero raw SQL, zero snapshot JSON, zero DTOs, zero readers** (audit-trail DEUDA 153 sin consumer). Persist var renombrada por consistencia (`seguroAplicadoPersist → smoAplicadoPersist`); valor persistido inalterado (`= matchedX.desglose.smoNeto`, mismo SMO). Diff `-5 / +6` (rename puro + 1 comment nuevo en create). Verificado `tsc=0` + `prisma migrate status` = "up to date". Pendiente deploy prod.
+
 **CHECKLIST de campos candidatos restantes (uno por sesión, Nacho decide orden):**
 - ✅ **DONE (2026-08-30, `a8cda53`)** — `FinanzasEnvio.precioFactura → tarifaFullCotizada`.
 - ✅ **DONE (2026-08-31, `0b1f6b0`)** — `FinanzasEnvio.costoCourierEsperado → costoCourierCotizado`.
+- ✅ **DONE (2026-08-31, `26855dc`)** — `FinanzasEnvio.seguroAplicado → smoAplicado` (@map; nombre honesto — es el SMO, no seguro de mercadería/courier).
 - ⏳ **`CredencialCourier.markupFijo`** — es markup Shipro FIJO, no "Fee" (colisiona con `OperacionFee`). Candidato: `markupFijoShipro`. **Entangled con [[DEUDA 157]]** (rediseño markup — puede renombrarse AS PART de ese redesign en vez de standalone).
 - ⏳ **`CredencialCourier.ajusteTarifaPorcentaje`** — es override % del markup Shipro, no "Recargo/Descuento del cliente" pese al label UI. Candidato: `overrideMarkupShiproPorcentaje`. **Entangled con [[DEUDA 154]] + [[DEUDA 157]]** — recomendado renombrar cuando se ejecute el redesign markup.
 - ⏳ **`FinanzasEnvio.markupIntermediarioAplicado`** — comment dice "+% + fijo" pero solo persiste "+%" (el fijo es ghost). Candidato: revisar semántica antes; posible `markupIntermediarioPctAplicado` para reflejar que solo es %.
-- ⏳ **`FinanzasEnvio.seguroAplicado`** — es SMO (Seguro Mínimo Shipro), no seguro de mercadería del comprador. Candidato: `smoAplicado`.
 - ⏳ **`FinanzasEnvio.tarifaCourierBase`** — comment dice "cruda" pero se persiste NETIZADA. Candidato: `tarifaCourierNetoBase`.
 - ⏳ **`FinanzasEnvio.precioProveedorReal`** — comment promete "conciliación lo prefiere" pero nunca se cablea. Candidato: renombrar cuando se cablee ([[DEUDA 153]] audit trail — pendiente lecturas activas).
-- ⏳ **`FinanzasEnvio.valorDeclarado`** — dice "Seguro de mercadería" pero es VALOR declarado del comprador. Candidato: `valorDeclaradoComprador`.
+- ⏳ **`FinanzasEnvio.valorDeclarado`** — dice "Seguro de mercadería" pero es VALOR declarado del comprador. Candidato: `valorDeclaradoComprador`. **Nota (2026-08-31):** al renombrar `seguroAplicado → smoAplicado` quedó registrada como feature-nueva la [[DEUDA 163]] "seguro del courier activable" — si esa feature se implementa, coordinar el rename de `valorDeclarado` con el nuevo field de seguro-courier (que consumiría `valorDeclarado` como base de cálculo).
 
 **Aprendizaje del rename #2 (bridge para JSON keys en snapshots):** cuando el field renombrado se serializa como key literal en un JSON persistido (ej. `ConciliacionRun.snapshot`), el JSON key **se mantiene con el nombre viejo** por backward-compat con data persistida. Solo el Prisma field + los property accesses cascadan al nuevo nombre. El TS interface que describe el JSON shape también mantiene la key vieja (con comment explicativo). Es el equivalente conceptual a `@map` pero manual (no hay decorador para JSON keys arbitrarios).
 
@@ -3734,5 +3736,35 @@ Hoy la única forma de dar de alta o cambiar un intermediario es SQL directo o m
 **Relación:** [[DEUDA 159]] (donde se observó el estado vacío durante la verificación). [[DEUDA 161]] (si se cablea la vista courier de Torre, la asimetría podría desaparecer naturalmente al haber siempre data).
 
 **Origen:** observado en verificación localhost de DEUDA 159 (2026-08-30).
+
+---
+
+## DEUDA 163 — Feature: seguro del courier activable por el cliente (cobertura real sobre valorDeclarado, hoy GHOST) (registrada 2026-08-31, scope alto, prioridad baja)
+
+**Status:** ABIERTA — feature nueva, no bug. Descubierta al renombrar `seguroAplicado → smoAplicado` ([[DEUDA 158]] avance 3): al desambiguar qué contiene el field (SMO = tarifa mínima Shipro), quedó claro que el "seguro del courier real" (cobertura sobre mercadería) NO existe como funcionalidad en el pipeline actual.
+
+**Problema/oportunidad:** hoy el cliente NO puede ofrecer a su comprador el seguro real del courier — la cobertura sobre `valorDeclarado` que el courier vende como servicio extra. Evidencia code-based:
+- `Envio.quiereSeguroCourier` (schema flag) tiene **0 usos** en TS (ghost total).
+- `Bulto.requiereSeguro` está **hardcoded `false`** en `lib/envios/crear.ts:480` cuando construye el paquete que pasa a cotizar — nunca se activa desde el flujo.
+- `Envio.valorDeclarado` se persiste (input del caller → snapshots) pero **NO fluye al precio**: en `lib/cotizador.ts:281` solo se acumula como `valorCarrito` (métrica agregada para reglas de ruteo), nunca se convierte en un monto de seguro que sume al desglose.
+- Comment histórico en `lib/cotizador.ts:138` (DEUDA 73) admite: *"aquí se sumarán seguro + descuento cuando se implementen"* — el **descuento** ya se hizo ([[DEUDA 156]] 2026-08-27), pero el **seguro courier real** sigue pendiente.
+- El único "seguro-like" cableado hoy es el **SMO** (`smoAplicado`, `desglose.smoNeto`) — es la tarifa MÍNIMA que Shipro cobra por courier, un concepto distinto (piso comercial de Shipro, no cobertura de mercadería del courier).
+
+**Qué sería la feature:** permitir que el cliente ofrezca a su comprador el seguro real del courier — cobertura sobre `valorDeclarado` con su costo real (proveniente del tarifario del courier o de una tabla), que fluya al `desglose`, se sume al precio final y se cobre al comprador. Decisión de producto de Nacho (originada al renombrar `seguroAplicado → smoAplicado` 2026-08-31).
+
+**Diseño (nota, no vinculante):**
+- **NO reutilizar** el slot `smoAplicado` (es el SMO — otro concepto). Agregar un field **NUEVO** al `FinanzasEnvio` (ej. `seguroCourierAplicado Decimal? @db.Decimal(12, 2)`) — principio "nombrar por rol": **un concepto, un casillero**.
+- Cablear `Envio.quiereSeguroCourier` (activable desde UI cliente, per-envío o per-config).
+- Extender `PricingDesglose` en `lib/cotizador.ts` con `seguroCourierNeto: Prisma.Decimal` (nuevo slot en el desglose, análogo a `smoNeto`).
+- Computar el costo del seguro en el cotizador (fuente: tarifario del courier o tabla vigenciada, TBD por diseño).
+- Sumarlo al `netoAcumulado` (paralelo a `smoNeto` en `aplicarMarkup`).
+- Persistir en el nuevo field + cobrarlo al comprador (parte del `precioFinalBuyer`).
+- Coordinar rename de `Envio.valorDeclarado → valorDeclaradoComprador` (ya en checklist de [[DEUDA 158]]) para clarificar que es la BASE de cálculo del seguro courier, no el "seguro" en sí.
+
+**Scope:** alto — toca motor de pricing (`lib/cotizador.ts`), schema (`FinanzasEnvio` + `PricingDesglose`), UI cliente (activación del flag + input de `valorDeclarado`), lógica de cobro al comprador. **Prioridad:** baja (feature nueva no bloqueante; los envíos hoy funcionan sin seguro courier — el cliente asume el riesgo o lo maneja fuera de Shipro).
+
+**Relación:** [[DEUDA 158]] (rename `seguroAplicado → smoAplicado` descubrió el ghost). [[DEUDA 73]] (comment original en cotizador que anticipó "seguro + descuento" — descuento cerrado, seguro abierto acá). [[DEUDA 156]] (fallout que forzó revisar semántica de campos de plata y expuso el ghost al desambiguar SMO vs seguro real).
+
+**Origen:** pregunta de Nacho durante recon del rename `seguroAplicado → smoAplicado` (2026-08-31, [[DEUDA 158]] avance 3): *"¿podría `seguroAplicado` también hold el seguro del courier si el cliente lo activa?"* — recon confirmó que no (0 wiring), y en vez de resolverlo con un nombre genérico se optó por: (i) nombre específico `smoAplicado` (rol real hoy), (ii) registrar el gap de la feature como debt separada.
 
 ---

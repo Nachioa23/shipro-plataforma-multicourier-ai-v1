@@ -72,7 +72,7 @@ Los campos de plata del envío. La zona con más problemas.
 | `courierSugerido` / `servicioSugerido` | "El más barato para esta modalidad" | Fiel. | ✅ | — |
 | `tarifaCourierBase` | "lo que devolvió la API cruda" | Post-153: `secoNeto` — la tarifa **netizada** (post-quitar IVA), no la cruda. | ⚠️ parcial | 2 |
 | `markupIntermediarioAplicado` | "el +% + fijo del intermediario" | Post-153: solo el **+%**. El "+fijo" nunca se aplica (es ghost). | ⚠️ | 2 |
-| `seguroAplicado` | "el seguro que terminó en el precio" | Post-153: el **SMO** (Seguro Mínimo de Shipro), no el seguro de mercadería del comprador. | ⚠️ | 2 |
+| `smoAplicado` (ex-`seguroAplicado`, `@map`) | "el seguro que terminó en el precio" | ✅ **RENOMBRADO 2026-08-31 (`26855dc`, [[DEUDA 158]] avance 3/N)**. Nombre honesto: es el **SMO** (Seguro Mínimo de Shipro), no seguro de mercadería ni del courier real (esa feature es la nueva [[DEUDA 163]] "seguro-courier-activable"). | ✅ | — |
 | `descuentoClienteAplicado` | "el descuento/recargo del cliente (con signo)" | Post-156: siempre **≥ 0** (piso $0). El "con signo" está desactualizado. | ⚠️ | 2 |
 | `precioProveedorReal` | "base + markup intermediario. La conciliación lo prefiere." | Post-153: se puebla, pero la conciliación **NO lo lee** (sigue con `precioProveedor`). | ⚠️ | 2 |
 | `ramaCongelada` | "true=Rama B, false=Rama A" | Fiel. | ✅ | — |
@@ -141,7 +141,7 @@ Los campos de plata del envío. La zona con más problemas.
 6. `descuentoClienteAplicado` → quitar "con signo" (es piso $0).
 7. ~~`costoCourierEsperado`~~ → **RENOMBRADO** a `costoCourierCotizado` (commit `0b1f6b0`, 2026-08-31, [[DEUDA 158]] avance 2/N). Par cotizado/facturado con `costoCourierFacturado`.
 8. `markupIntermediarioAplicado` → aclarar que es solo "+%", sin el fijo.
-9. `seguroAplicado` → aclarar que es el SMO, no el seguro de mercadería.
+9. ~~`seguroAplicado`~~ → **RENOMBRADO** a `smoAplicado` (commit `26855dc`, 2026-08-31, [[DEUDA 158]] avance 3/N). El "seguro del courier real" (cobertura sobre mercadería activable por el cliente) es feature nueva pendiente — ver [[DEUDA 163]].
 10. `precioProveedorReal` → quitar "la conciliación lo prefiere" (no lo lee).
 11. `tarifaCourierBase` → aclarar que es netizada, no cruda.
 12. `valorDeclarado` → aclarar que es el valor declarado, no el monto del seguro.
@@ -162,7 +162,7 @@ Los campos de plata del envío. La zona con más problemas.
 - **FASE 0 — Fix operator surfaces (dashboard + export + rastreo)** — ✅ **HECHA 2026-08-28 (commit `60d2792`)**. Los 3 displays operator (Excel export, tabla dashboard main, rastreo manual response) ahora leen `precioFactura` en vez de `precioMostrado`. El buyer en checkout Tiendanube sigue viendo el descuento (`precioFinalBuyer`).
 - **FASE 1 — Grupo 2 (comentarios honestos)** — ✅ **HECHA 2026-08-28 (commit `3ba633a`)**. 12 fields + 1 block comment en `prisma/schema.prisma` con comentarios que dicen la verdad del rol real. Sin renames, sin cambio de tipos ni lógica.
 - **FASE 2 — Métricas de fuga (`perdidaReal` + `fugaPesos`)** — ⏳ pendiente. Rediseñar la fórmula (contaminadas por el descuento del cliente post-DEUDA-156). Registrada como **[[DEUDA 159]]**. DECISIÓN DE NEGOCIO PENDIENTE de Nacho: qué mide cada métrica (fuga courier real vs fuga publicado-vs-facturado).
-- **FASE 3 — Grupo 1 (renames por rol)** — 🚧 **EN PROGRESO 2026-08-31**. Registrada como **[[DEUDA 158]]** (uno por sesión, principio Nacho). Avance: **2/N campos** — ✅ `precioFactura → tarifaFullCotizada` (commit `a8cda53`, 2026-08-30) + ✅ `costoCourierEsperado → costoCourierCotizado` (commit `0b1f6b0`, 2026-08-31, con bridge snapshot JSON undo-safe). Restantes en el checklist de la DEUDA 158: `markupFijo`, `ajusteTarifaPorcentaje` (ambos entangled con [[DEUDA 157]] markup redesign), `markupIntermediarioAplicado`, `seguroAplicado`, `tarifaCourierBase`, `precioProveedorReal`, `valorDeclarado`.
+- **FASE 3 — Grupo 1 (renames por rol)** — 🚧 **EN PROGRESO 2026-08-31**. Registrada como **[[DEUDA 158]]** (uno por sesión, principio Nacho). Avance: **3/N campos** — ✅ `precioFactura → tarifaFullCotizada` (commit `a8cda53`, 2026-08-30) + ✅ `costoCourierEsperado → costoCourierCotizado` (commit `0b1f6b0`, 2026-08-31, con bridge snapshot JSON undo-safe) + ✅ `seguroAplicado → smoAplicado` (commit `26855dc`, 2026-08-31, @map, blast mínimo). Restantes en el checklist de la DEUDA 158: `markupFijo`, `ajusteTarifaPorcentaje` (ambos entangled con [[DEUDA 157]] markup redesign), `markupIntermediarioAplicado`, `tarifaCourierBase`, `precioProveedorReal`, `valorDeclarado`. **Nota:** al renombrar `seguroAplicado` quedó registrada la [[DEUDA 163]] "seguro del courier activable" (feature nueva, hoy ghost) — si esa feature se implementa, el rename de `valorDeclarado → valorDeclaradoComprador` se coordina con ella (`valorDeclarado` sería la base de cálculo del nuevo seguro).
 - **FASE 4 — Grupo 3 (limpiar fantasmas)** — ⏳ pendiente. Cleanup de campos ghost del schema. Registrada como **[[DEUDA 160]]**. Uno por uno con verificación previa.
 
 > Renombrar campos que viven en la base de datos implica migración y toca lógica de plata: son obras con su propio cuidado, una por vez, nunca todas juntas.

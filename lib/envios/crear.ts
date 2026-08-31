@@ -527,7 +527,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
   // intermediario → decisión credenciales directas vs tercero). NO altera ningún
   // precio. Se pueblan desde matched.desglose.* en cada rama/match; quedan null
   // en fallback / no-match (consistente con el pattern del fix money).
-  let tarifaCourierBasePersist: Prisma.Decimal | null = null;
+  let tarifaCourierBaseNetaPersist: Prisma.Decimal | null = null;
   let markupIntermediarioAplicadoPersist: Prisma.Decimal | null = null;
   let baseConIntermediarioAplicadoPersist: Prisma.Decimal | null = null;
   let smoAplicadoPersist: Prisma.Decimal | null = null;
@@ -592,7 +592,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
       // baseConIntermediarioAplicado (ex-precioProveedorReal) en Rama B = secoNeto (baseConIntermediario === secoNeto
       // por el hoist en aplicarMarkup con interm null → factor 1).
       if (matchedB.esFallback !== true && matchedB.desglose) {
-        tarifaCourierBasePersist = matchedB.desglose.secoNeto;
+        tarifaCourierBaseNetaPersist = matchedB.desglose.secoNeto;
         baseConIntermediarioAplicadoPersist = matchedB.desglose.baseConIntermediario;
         smoAplicadoPersist = matchedB.desglose.smoNeto;
       }
@@ -636,7 +636,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
       // (el "+%" del intermediario en $, sin IVA — homogéneo cross-courier).
       // Sin intermediario (interm=null → factor 1): baseConIntermediario === secoNeto → delta 0.
       if (matchedA.esFallback !== true && matchedA.desglose) {
-        tarifaCourierBasePersist = matchedA.desglose.secoNeto;
+        tarifaCourierBaseNetaPersist = matchedA.desglose.secoNeto;
         baseConIntermediarioAplicadoPersist = matchedA.desglose.baseConIntermediario;
         smoAplicadoPersist = matchedA.desglose.smoNeto;
         markupIntermediarioAplicadoPersist = matchedA.desglose.baseConIntermediario.sub(matchedA.desglose.secoNeto);
@@ -994,7 +994,8 @@ export async function crearEnvio(input: CrearEnvioInput) {
             // el motor ya calcula (aplicarMarkup), persistidos para análisis
             // (ej. costo del intermediario → decisión credenciales directas vs
             // tercero). NO altera ningún precio.
-            tarifaCourierBase: tarifaCourierBasePersist,
+            // DEUDA 158: renombrado de tarifaCourierBase (mismo valor = secoNeto). @map preserva la columna DB.
+            tarifaCourierBaseNeta: tarifaCourierBaseNetaPersist,
             markupIntermediarioAplicado: markupIntermediarioAplicadoPersist,
             // DEUDA 158: renombrado de precioProveedorReal (mismo valor = matched.desglose.baseConIntermediario). @map preserva la columna DB.
             baseConIntermediarioAplicado: baseConIntermediarioAplicadoPersist,

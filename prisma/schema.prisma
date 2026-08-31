@@ -607,7 +607,7 @@ model FinanzasEnvio {
   // NOTA: la conciliación NO lee precioProveedorReal hoy — sigue usando precioProveedor (L244). Este field es audit-trail (DEUDA 153), no fuente de conciliación.
   tarifaCourierBase           Decimal? @db.Decimal(12, 2) // DEUDA 153: tarifa del courier NETIZADA (secoNeto, post-quitar IVA), no la cruda pese al nombre.
   markupIntermediarioAplicado Decimal? @db.Decimal(12, 2) // DEUDA 153: solo el +% del intermediario (baseConIntermediario − secoNeto), Rama A. El '+fijo' NO se aplica (ghost). null en Rama B/fallback.
-  seguroAplicado              Decimal? @db.Decimal(12, 2) // DEUDA 153: el SMO (Seguro Mínimo de Shipro), no el seguro de mercadería del comprador. = desglose.smoNeto.
+  smoAplicado                 Decimal? @db.Decimal(12, 2) @map("seguroAplicado") // SMO (Seguro Mínimo de Shipro) aplicado al precio = desglose.smoNeto. NO es seguro de mercadería ni del courier (esos no están cableados — ver deuda del seguro courier). DEUDA 158 (2026-08-31): renombrado de seguroAplicado (nombre por rol real); @map conserva la columna física.
   descuentoClienteAplicado    Decimal? @db.Decimal(12, 2) // DEUDA 156: monto del descuento buyer-facing aplicado (precioFinal − precioFinalBuyer). SIEMPRE ≥ 0 (piso $0). Ya NO es 'con signo' — política nueva 2026-08-28. null en fallback.
   precioProveedorReal         Decimal? @db.Decimal(12, 2) // DEUDA 153: base + markup intermediario (baseConIntermediario). Audit-trail interno; ningún reader lo consume aún.
 

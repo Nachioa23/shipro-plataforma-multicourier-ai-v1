@@ -530,7 +530,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
   let tarifaCourierBasePersist: Prisma.Decimal | null = null;
   let markupIntermediarioAplicadoPersist: Prisma.Decimal | null = null;
   let precioProveedorRealPersist: Prisma.Decimal | null = null;
-  let seguroAplicadoPersist: Prisma.Decimal | null = null;
+  let smoAplicadoPersist: Prisma.Decimal | null = null;
 
   // DEUDA 156: monto ($) del descuento buyer-facing efectivamente aplicado a esta
   // opción = matched.precioFinal - matched.precioFinalBuyer. Sin descuento → 0 (honesto,
@@ -594,7 +594,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
       if (matchedB.esFallback !== true && matchedB.desglose) {
         tarifaCourierBasePersist = matchedB.desglose.secoNeto;
         precioProveedorRealPersist = matchedB.desglose.baseConIntermediario;
-        seguroAplicadoPersist = matchedB.desglose.smoNeto;
+        smoAplicadoPersist = matchedB.desglose.smoNeto;
       }
     }
   } else {
@@ -638,7 +638,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
       if (matchedA.esFallback !== true && matchedA.desglose) {
         tarifaCourierBasePersist = matchedA.desglose.secoNeto;
         precioProveedorRealPersist = matchedA.desglose.baseConIntermediario;
-        seguroAplicadoPersist = matchedA.desglose.smoNeto;
+        smoAplicadoPersist = matchedA.desglose.smoNeto;
         markupIntermediarioAplicadoPersist = matchedA.desglose.baseConIntermediario.sub(matchedA.desglose.secoNeto);
       }
       // STEP 1 Rama A OK: breakdown desde el desglose ya propagado por cotizador
@@ -994,7 +994,8 @@ export async function crearEnvio(input: CrearEnvioInput) {
             tarifaCourierBase: tarifaCourierBasePersist,
             markupIntermediarioAplicado: markupIntermediarioAplicadoPersist,
             precioProveedorReal: precioProveedorRealPersist,
-            seguroAplicado: seguroAplicadoPersist,
+            // DEUDA 158: renombrado de seguroAplicado (mismo valor = smoNeto). @map preserva la columna DB.
+            smoAplicado: smoAplicadoPersist,
             // DEUDA 156: precioMostrado = lo que vio el comprador (con descuento).
             // descuentoClienteAplicado = monto descontado (precioFinal − precioFinalBuyer).
             // tarifaFullCotizada sigue siendo el full (Shipro factura completo).

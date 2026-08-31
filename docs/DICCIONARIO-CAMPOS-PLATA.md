@@ -58,7 +58,7 @@ Los campos de plata del envío. La zona con más problemas.
 |-------|-------------------|------------------|----------|-------|
 | `precioMostrado` | "Lo que el comprador vio en el checkout" | Post-156: precio buyer-facing **con descuento**. El comentario siempre fue correcto; el problema es que 4 lectores lo usaban como si fuera el facturado. | ⚠️ (por los lectores) | 1 |
 | `tarifaFullCotizada` (ex-`precioFactura`, `@map`) | "Tarifa full COTIZADA y debitada AL ALTA (congelada; no se actualiza en conciliación)." | Cotización virtual **congelada al alta**. NO es el facturado real. El real = `tarifaFullCotizada + costoAforo`. **Renombrado 2026-08-30 (commit `a8cda53`, `@map("precioFactura")` preserva columna física).** | ✅ (post-rename) | 1 ✓ |
-| `porcentajePrecioFactura` | (sin comentario) | Ghost / ambiguo — sin usos detectados. | ⚠️ ambiguo | 3 |
+| ~~`porcentajePrecioFactura`~~ | (sin comentario) | ✅ **DROPEADO 2026-08-31 (`2975c9e`, [[DEUDA 160]] Batch 1, local — pend. deploy prod destructivo)**. Ghost total confirmado, 0 hits app-code. | ✅ dropped | — |
 | `valorDeclarado` | "Seguro de la mercadería (Terceros)" | El **valor** que declara el comprador (input), no el monto del seguro. El seguro real no se aplica hoy. | ⚠️ | 2 |
 | `costoCourierNativo` (ex-`precioProveedor`, `@map`) | "Costo cotizado al crear la etiqueta" | ✅ **RENOMBRADO 2026-08-31 (`09f3ca4`, [[DEUDA 158]] avance 4/PAR)**. Tarifa cruda del courier en forma **nativa** (Andreani con IVA, Mocis sin) — no homogénea entre couriers. Miembro "nativo" de la familia lifecycle `costoCourierNativo → costoCourierCotizado → costoCourierFacturado`. El DTO del cotizador (`OpcionTarifa` + return de `aplicarMarkup`) también se renombró; el JSON key `"precioProveedor"` en `CotizacionSnapshot.opcionesSnapshotJson` (write-only forensic log) se conserva como bridge. | ✅ (post-rename) | 1 ✓ |
 | `costoCourierCotizado` (ex-`costoCourierEsperado`, `@map`) | "Costo COTIZADO por el courier al crear la etiqueta (copia de precioProveedor, forma nativa; NO recalculado por aforo). Par con costoCourierFacturado (cotizado vs facturado)." | **Copia** de `precioProveedor`, sin recalcular por aforo. Par cotizado/facturado con `costoCourierFacturado`. **Renombrado 2026-08-31 (commit `0b1f6b0`, `@map("costoCourierEsperado")`).** El snapshot JSON de `ConciliacionRun` (undo path) conserva la key vieja `"costoCourierEsperado"` como bridge — backward-compat con snapshots existentes. | ✅ (post-rename) | 1 ✓ |
@@ -94,7 +94,7 @@ Los campos de plata del envío. La zona con más problemas.
 | `descuentoClienteSobreTarifa` | "MONTO fijo $ buyer-facing, piso $0" | Fiel (post-156). | ✅ | — |
 | `descuentoClientePorcentaje` | "% buyer-facing" | Fiel (post-156). | ✅ | — |
 | `descuentoClienteModo` | "MONTO \| PORCENTAJE" | Fiel (post-156). | ✅ | — |
-| `tarifaPlanaRespaldo` | "Ningún reader lo consume ya; drop en cleanup" | Muerto — reemplazado por el per-courier. | ✅ (ya marcado) | 3 |
+| ~~`tarifaPlanaRespaldo`~~ | "Ningún reader lo consume ya; drop en cleanup" | ✅ **DROPEADO 2026-08-31 (`2975c9e`, [[DEUDA 160]] Batch 1, local — pend. deploy prod destructivo)**. Muerto legacy DEUDA 132 Paso 5a — reemplazado por `tarifaPlanaRespaldoCourier`. | ✅ dropped | — |
 | `tarifaPlanaRespaldoCourier` | "tarifa de rescate POR courier" | Fiel. Obligatoria para activar el courier. | ✅ | — |
 
 > **El mislead más visible al usuario:** la sección **"3. Ajuste Comercial (Tu Tienda)"** en `/configuracion/transportes` dice "Tu Tienda" (sugiere que es del cliente), pero sus tres campos son config de **Shipro**. Es la raíz de la DEUDA 154 y el objetivo de la DEUDA 157 (mover a admin).
@@ -106,8 +106,8 @@ Los campos de plata del envío. La zona con más problemas.
 | Campo | Comentario | Significado REAL | ¿Engaña? | Grupo |
 |-------|-----------|------------------|----------|-------|
 | `markupPorcentaje` | "% que el DUEÑO cobra por prestar credenciales" | Fiel. | ✅ | — |
-| `seguroFijoIntermediarioConIva` | "Se guarda CON IVA" — pero el seed dice "SIN IVA, nombre a corregir" | Ghost + el nombre **contradice** al seed. | ⚠️ | 3 |
-| `tarifaIncluyeIvaIntermediario` | "si la tarifa del intermediario incluye IVA" | Ghost — no consumido. | ⚠️ parcial | 3 |
+| ~~`seguroFijoIntermediarioConIva`~~ | "Se guarda CON IVA" — pero el seed decía "SIN IVA, nombre a corregir" | ✅ **DROPEADO 2026-08-31 (`2975c9e`, [[DEUDA 160]] Batch 1, local — pend. deploy prod destructivo)**. Ghost DEFINITIVO — Nacho confirmó que el markup fijo del intermediario N/A permanente. Seed line 141 removida en mismo commit. | ✅ dropped | — |
+| ~~`tarifaIncluyeIvaIntermediario`~~ | "si la tarifa del intermediario incluye IVA" | ✅ **DROPEADO 2026-08-31 (`2975c9e`, [[DEUDA 160]] Batch 1, local — pend. deploy prod destructivo)**. Hermano semántico del anterior — perdió propósito al morir el fijo intermediario. Seed line 142 removida. | ✅ dropped | — |
 
 ---
 
@@ -148,12 +148,13 @@ Los campos de plata del envío. La zona con más problemas.
 13. ~~`precioProveedor`~~ → **RENOMBRADO** a `costoCourierNativo` (commit `09f3ca4`, 2026-08-31, [[DEUDA 158]] avance 4/PAR). Familia lifecycle: `costoCourierNativo → costoCourierCotizado → costoCourierFacturado`. Bridge JSON key en `CotizacionSnapshot`. *(cruza con DEUDA 152 en la parte de IVA no-homogénea cross-courier).*
 
 ### Grupo 3 — Campos FANTASMA (limpiar aparte)
-14. `porcentajePrecioFactura` — sin usos.
-15. `quiereSeguroCourier` — pipeline no lo lee.
-16. `seguroFijoIntermediarioConIva` — ghost + nombre contradice al seed. **UPGRADE 2026-08-31:** Nacho confirmó que el markup fijo del intermediario NO va a existir nunca → **ghost DEFINITIVO** (candidato firme de drop en [[DEUDA 160]]).
-17. `tarifaIncluyeIvaIntermediario` — ghost.
-18. `tarifaPlanaRespaldo` — muerto (reemplazado por el per-courier).
-19. `Courier.smoActivo` / `smoPrecioAlClienteConIva` — legacy (motor lee `SmoCourier`).
+14. ~~`porcentajePrecioFactura`~~ — ✅ **DROPEADO** (commit `2975c9e`, 2026-08-31, [[DEUDA 160]] Batch 1).
+15. `quiereSeguroCourier` — 🟡 **WAIT por [[DEUDA 163]]** (2026-08-31): recon confirmó 0 readers/writers pero DEUDA 163 (seguro-courier activable) planea RESUCITARLO (design note: *"cablear quiereSeguroCourier"*). Dropear ahora = premature.
+16. ~~`seguroFijoIntermediarioConIva`~~ — ✅ **DROPEADO** (commit `2975c9e`, 2026-08-31, [[DEUDA 160]] Batch 1). Ghost DEFINITIVO — fijo intermediario N/A confirmado.
+17. ~~`tarifaIncluyeIvaIntermediario`~~ — ✅ **DROPEADO** (commit `2975c9e`, 2026-08-31, [[DEUDA 160]] Batch 1). Hermano del anterior.
+18. ~~`tarifaPlanaRespaldo`~~ — ✅ **DROPEADO** (commit `2975c9e`, 2026-08-31, [[DEUDA 160]] Batch 1). Legacy DEUDA 132, reemplazado por `tarifaPlanaRespaldoCourier`.
+19. `Courier.smoActivo` / `smoPrecioAlClienteConIva` — 🟡 **SAFE-CON-DATA-CHECK** (2026-08-31, [[DEUDA 160]] Batch 2): motor pivoteó a `SmoCourier` (confirmado `cotizador.ts:512`). Pre-drop obligatorio: verificar en prod que todo courier con `smoActivo=true` tenga fila `SmoCourier` vigente (query en la deuda). Dropear ambos juntos + limpiar `seed.ts:75, 80`.
+20. **BONUS `requiereSeguro`** (2026-08-31) — 🔴 **NO GHOST, NO DROP**: schema L472/L496 lo declara "obsoleto" pero está VIVO (~15 hits: `OcaAdapter.ts:208` conditional read, `dispatch.ts:527`, UI + permisos + auditoría). El comment del schema MIENTE sobre su estado. Requiere rewiring previo (migrar consumers al reemplazo — probablemente `quiereSeguroCourier` cuando DEUDA 163 lo cablee) ANTES de poder dropearlo. Registrar como sub-tarea de [[DEUDA 160]].
 
 ---
 
@@ -163,6 +164,6 @@ Los campos de plata del envío. La zona con más problemas.
 - **FASE 1 — Grupo 2 (comentarios honestos)** — ✅ **HECHA 2026-08-28 (commit `3ba633a`)**. 12 fields + 1 block comment en `prisma/schema.prisma` con comentarios que dicen la verdad del rol real. Sin renames, sin cambio de tipos ni lógica.
 - **FASE 2 — Métricas de fuga (`perdidaReal` + `fugaPesos`)** — ⏳ pendiente. Rediseñar la fórmula (contaminadas por el descuento del cliente post-DEUDA-156). Registrada como **[[DEUDA 159]]**. DECISIÓN DE NEGOCIO PENDIENTE de Nacho: qué mide cada métrica (fuga courier real vs fuga publicado-vs-facturado).
 - **FASE 3 — Grupo 1 (renames por rol)** — 🚧 **RENAMES LIVIANOS COMPLETOS 2026-08-31; entangled restantes**. Registrada como **[[DEUDA 158]]** (uno por sesión, principio Nacho; el par proveedor/proveedorReal se hizo en un mismo commit por compartir la ambigüedad). Avance: **7/N campos** — ✅ `precioFactura → tarifaFullCotizada` (commit `a8cda53`, 2026-08-30) + ✅ `costoCourierEsperado → costoCourierCotizado` (commit `0b1f6b0`, 2026-08-31, con bridge snapshot JSON undo-safe) + ✅ `seguroAplicado → smoAplicado` (commit `26855dc`, 2026-08-31, @map, blast mínimo) + ✅ PAR `precioProveedor → costoCourierNativo` + `precioProveedorReal → baseConIntermediarioAplicado` (commit `09f3ca4`, 2026-08-31, @map, con bridge JSON en `CotizacionSnapshot`, DTO cotizador renombrado) + ✅ `tarifaCourierBase → tarifaCourierBaseNeta` (commit `f2ae054`, 2026-08-31, @map) + ✅ `markupIntermediarioAplicado → markupIntermediarioPorcentajeAplicado` (commit `14407dc`, 2026-08-31, @map, sufijo `Porcentaje` DEFINITIVO). **HITO 2026-08-31:** los renames livianos del audit-trail COMPLETOS. Restantes son TODOS entangled (0 standalone): `valorDeclarado → valorDeclaradoComprador` (coord. con [[DEUDA 163]] si se implementa seguro-courier), `markupFijo` + `ajusteTarifaPorcentaje` (ambos parte del rediseño markup Shipro en [[DEUDA 157]]). Se renombran cuando esas obras se ejecuten, no antes. **POLICY CORRECTION 2026-08-31:** el criterio "engaña poco → saltar" fue REVERTIDO. Feed colateral a [[DEUDA 160]]: `seguroFijoIntermediarioConIva` ahora ghost DEFINITIVO.
-- **FASE 4 — Grupo 3 (limpiar fantasmas)** — ⏳ pendiente. Cleanup de campos ghost del schema. Registrada como **[[DEUDA 160]]**. Uno por uno con verificación previa.
+- **FASE 4 — Grupo 3 (limpiar fantasmas)** — 🚧 **BATCH 1 DROPEADO 2026-08-31** (commit `2975c9e`, local — pend. deploy prod destructivo). Registrada como **[[DEUDA 160]]**. Batch 1 = 4 fantasmas (`porcentajePrecioFactura`, `seguroFijoIntermediarioConIva`, `tarifaIncluyeIvaIntermediario`, `tarifaPlanaRespaldo`). Restantes: Batch 2 = smo* legacy (data-check pre-drop); WAIT = `quiereSeguroCourier` (por [[DEUDA 163]]); sub-tarea rewiring = `requiereSeguro` (no era ghost — código lo usa vivo).
 
 > Renombrar campos que viven en la base de datos implica migración y toca lógica de plata: son obras con su propio cuidado, una por vez, nunca todas juntas.

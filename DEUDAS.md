@@ -3680,27 +3680,36 @@ Hoy la única forma de dar de alta o cambiar un intermediario es SQL directo o m
 
 ---
 
-## DEUDA 160 — Limpiar campos fantasma de plata (Grupo 3 del diccionario) (registrada 2026-08-28, scope bajo-medio, prioridad baja)
+## DEUDA 160 — Limpiar campos fantasma de plata (Grupo 3 del diccionario) (registrada 2026-08-28, EN PROGRESO 2026-08-31)
 
-**Status:** ABIERTA — no bloquea nada. Cleanup arquitectónico: campos que existen en el schema pero ningún reader consume.
+**Status:** ABIERTA — **Batch 1 (4 fantasmas) dropeado local 2026-08-31 (commit `2975c9e`), pendiente deploy prod destructivo** (non-interactive workaround necesario). Cleanup arquitectónico: campos que existen en el schema pero ningún reader consume.
 
-**Problema:** documentado en `docs/DICCIONARIO-CAMPOS-PLATA.md` "Grupo 3". Lista de fantasmas detectados en el recon del diccionario (2026-08-28):
+**AVANCE Batch 1 (2026-08-31, commit `2975c9e`):** **4 fantasmas confirmados dropeados** (migración destructiva local, cero data-loss útil):
+- ✅ `FinanzasEnvio.porcentajePrecioFactura` — ghost total (1 hit schema decl, sin @default, sin comment, sin seed).
+- ✅ `CourierIntermediario.seguroFijoIntermediarioConIva` — solo seed write. **Ghost DEFINITIVO** confirmado (Nacho: intermediary fixed markup N/A permanente; el único dato, 90.0 del seed Mocis, era basura conceptual).
+- ✅ `CourierIntermediario.tarifaIncluyeIvaIntermediario` — hermano semántico del anterior (perdió propósito al morir el fijo intermediario).
+- ✅ `CredencialCourier.tarifaPlanaRespaldo` — legacy DEUDA 132 Paso 5a; schema comment self-declaraba *"drop en cleanup aparte"*; reemplazado por `tarifaPlanaRespaldoCourier` (per-courier).
 
-- **`FinanzasEnvio.porcentajePrecioFactura`** — sin usos TS detectados, sin comment. Ghost total.
-- **`CredencialCourier.quiereSeguroCourier`** — pipeline no lo lee; `requiereSeguro:false` hardcoded en `crear.ts:480`. Schema promete branching seguro-vs-mínimo que nunca se cableó.
-- **`CourierIntermediario.seguroFijoIntermediarioConIva`** — ghost + **nombre contradice al seed**: `prisma/seed.ts:141` comment dice literal *"SIN IVA (nombre del campo a corregir en deuda aparte)"*. Doble problema: no se usa Y el nombre miente. **UPGRADE 2026-08-31 (feed de [[DEUDA 158]] AVANCE 4):** Nacho confirmó explícitamente que el **markup fijo del intermediario NO va a existir nunca** (el intermediario solo cobra `%`, jamás un componente fijo). Este field pasa de "ghost ambiguo (¿se cablea alguna vez?)" a **GHOST DEFINITIVO** — **candidato firme de drop** (verificar puntualmente el grep antes de dropear, como el resto del checklist, pero la incertidumbre sobre "¿es futuro código?" está resuelta a NO). Correlaciona con el nombre definitivo `markupIntermediarioPorcentajeAplicado` decidido para el par de `FinanzasEnvio.markupIntermediarioAplicado` en el checklist de [[DEUDA 158]].
-- **`CourierIntermediario.tarifaIncluyeIvaIntermediario`** — ghost, hermano del anterior.
-- **`CredencialCourier.tarifaPlanaRespaldo`** — muerto. Reemplazado por `tarifaPlanaRespaldoCourier` en DEUDA 132 Paso 5a. Comment del propio schema L502-503 lo flag: *"Ningún reader lo consume ya; drop en cleanup aparte"*.
-- **`Courier.smoActivo` + `Courier.smoPrecioAlClienteConIva`** — legacy, motor pivoteó a `SmoCourier` model. Comment L292-294 dice *"espejo hasta que motor pivotee"* — motor ya pivotó, pero legacy sigue en schema.
+Migración destructiva: **EXACTAMENTE 4 DROP COLUMN** en la SQL (sin drops/alters extra). Seed limpiado (2 líneas del `datos` de CourierIntermediario Mocis + notas simplificadas). Verificado `tsc=0` (confirmó que eran ghosts — cero app-code roto). Prisma warning esperado: "1 non-null value" en los 2 CourierIntermediario fields = row seed Mocis, worthless. **Pendiente deploy prod** (destructive migrate requiere non-interactive workaround; no parte de esta sesión).
 
-**CUIDADO:** antes de dropear cada uno, **VERIFICAR puntualmente** que de verdad no se usa en ningún lado ("sin usos detectados" ≠ "garantizado sin usos"). Algunos viven en la base → drop = migración destructiva (irreversible). Decidir uno por uno si se dropea o se deja — un campo vacío molesta menos que uno que miente (que ya lo cubre FASE 1 con comments honestos).
+**REMAINING (con hallazgos del recon 2026-08-31, importantes):**
 
-**Alcance por campo:**
-- Grep whole-repo (`--include="*.ts" --include="*.tsx" --include="*.mjs"`) confirmando 0 usos vivos.
-- Si el field tiene rows con valores no-default en prod, decidir qué hacer con los datos (drop = pérdida).
-- Migración destructiva `DROP COLUMN` + regenerate Prisma.
+- 🟡 **`Courier.smoActivo` + `Courier.smoPrecioAlClienteConIva`** (SAFE-CON-DATA-CHECK): motor pivoteó a `SmoCourier` (confirmado en `cotizador.ts:512` comment *"NO se dual-read el legacy Courier.smoPrecioAlClienteConIva"*). **Pre-drop obligatorio:** verificar en prod que TODOS los couriers activos con SMO tengan fila `SmoCourier` vigente (evitar pérdida silenciosa de SMO si algún courier no tiene fila migrada). Query sugerida: `SELECT c.id, c.nombre, c.smoPrecioAlClienteConIva FROM "Courier" c LEFT JOIN "SmoCourier" sc ON sc."courierId"=c.id AND sc.activo WHERE c."smoActivo"=true AND sc.id IS NULL;` — cero rows = safe. Rows ≠ 0 = seedear `SmoCourier` antes de drop. Dropear ambos fields juntos + limpiar `prisma/seed.ts:75, 80`.
 
-**Scope:** bajo-medio (migraciones destructivas + verificaciones). **Prioridad:** baja — cleanup no bloquea nada; FASE 1 ya mitigó el riesgo de mislead vía comments. Se hace de a uno con verificación previa.
+- 🟡 **`CredencialCourier.quiereSeguroCourier`** (WAIT por [[DEUDA 163]]): recon confirmó 0 readers/writers vivos (dormant intent), **pero** el design note de [[DEUDA 163]] (seguro-courier activable) dice literalmente *"Cablear `Envio.quiereSeguroCourier`"* — la feature planea **RESUCITAR** este field. Dropear ahora sería premature. Congelar hasta decisión de DEUDA 163: si se implementa (usa este field) → keep + wire; si se descarta o se rediseña con field nuevo → drop entonces.
+
+- 🔴 **`CredencialCourier.requiereSeguro`** (NO GHOST — necesita REWIRING antes de drop): el schema L472 + L496 declara "obsoleto, se limpia en deuda aparte", **pero el código lo usa activamente** (~15 hits): `lib/couriers/OcaAdapter.ts:208` lo lee condicionalmente para decidir si mandar `valorDeclarado` al courier real; `lib/envios/dispatch.ts:527` lo propaga al adapter; UI edit + permisos + auditoría lo administran; interface `CourierInterface.ts:10` lo declara required. **El comment del schema MIENTE sobre su estado** (declara obsoleto pero es vivo). No es dropeable en su estado actual — requiere pre-work de rewiring: migrar OCA adapter + dispatch a otra fuente (probablemente al mismo `quiereSeguroCourier` cuando DEUDA 163 lo cablee), migrar UI/permisos/auditoría, y ENTONCES dropear. Registrar como sub-tarea de DEUDA 160 (o coordinar con DEUDA 163).
+
+**CUIDADO:** antes de dropear cada uno restante, **VERIFICAR puntualmente** (grep + query prod). "Sin usos detectados en 2026-08-28" ≠ "garantizado sin usos en 2026-XX-YY" — el recon debe re-correrse justo antes del drop. `requiereSeguro` es el ejemplo canónico de por qué (dictionary lo llamó ghost en 2026-08-28; recon 2026-08-31 encontró ~15 hits vivos).
+
+**Alcance restante:**
+- Batch 2: smo* legacy (drop conjunto + limpiar seed 75/80; blast: schema + seed + comments legacy en cotizador/resolvers-tarifa opcionales por consistencia).
+- Batch 3: pendiente decisión DEUDA 163 → drop `quiereSeguroCourier` o rewire.
+- Batch 4 (sub-tarea): rewire `requiereSeguro` → THEN drop.
+
+**Scope:** medio (migraciones destructivas + verificaciones + un rewiring). **Prioridad:** baja — cleanup no bloquea nada; FASE 1 ya mitigó el riesgo de mislead vía comments.
+
+**Problema (2026-08-28):** documentado en `docs/DICCIONARIO-CAMPOS-PLATA.md` "Grupo 3". 6+ campos declarados en schema sin readers vivos. Recon 2026-08-31 reclasificó cada uno por safety: 4 se dropearon en Batch 1 (arriba); 3 quedan con condicionantes (arriba en REMAINING).
 
 **Relación:** [[DEUDA 153]] (los 5 slots ghost del "desglose de pricing" ya se conectaron — quedan estos 6 fantasmas de otros modelos). [[DEUDA 152]] (homogeneización IVA, relacionada con `tarifaIncluyeIvaIntermediario`). DEUDA 132 Paso 5a (dropeó `Empresa.tarifaPlanaRespaldo`, patrón a seguir).
 

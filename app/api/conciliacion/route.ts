@@ -82,6 +82,7 @@ export async function POST(request: Request) {
       finanzasEnvioId: number;
       prior: {
         pesoAforado: number | null;
+        // DEUDA 158: JSON snapshot key — se mantiene el nombre viejo (bridge) aunque el field Prisma es costoCourierCotizado.
         costoCourierEsperado: string | null;
         costoCourierFacturado: string | null;
         estadoAuditoria: string | null;
@@ -214,7 +215,8 @@ export async function POST(request: Request) {
           finanzasEnvioId: envio.finanzas.id,
           prior: {
             pesoAforado: envio.finanzas.pesoAforado ?? null,
-            costoCourierEsperado: envio.finanzas.costoCourierEsperado ? envio.finanzas.costoCourierEsperado.toString() : null,
+            // DEUDA 158: JSON key "costoCourierEsperado" se mantiene (bridge undo backward-compat con snapshots viejos); el Prisma field se lee ya renombrado.
+            costoCourierEsperado: envio.finanzas.costoCourierCotizado ? envio.finanzas.costoCourierCotizado.toString() : null,
             costoCourierFacturado: envio.finanzas.costoCourierFacturado ? envio.finanzas.costoCourierFacturado.toString() : null,
             estadoAuditoria: envio.finanzas.estadoAuditoria ?? null,
             facturaCourierRef: envio.finanzas.facturaCourierRef ?? null,
@@ -446,7 +448,7 @@ export async function POST(request: Request) {
           where: { id: envio.finanzas!.id },
           data: {
             pesoAforado: fila.peso,
-            costoCourierEsperado: costoEsperado,
+            costoCourierCotizado: costoEsperado,
             costoCourierFacturado: costoFactRaw,
             estadoAuditoria: estadoAud,
             facturaCourierRef: referenciaFactura,
@@ -492,7 +494,7 @@ export async function POST(request: Request) {
           where: { id: envio.finanzas!.id },
           data: {
             pesoAforado: fila.peso,
-            costoCourierEsperado: costoEsperado,
+            costoCourierCotizado: costoEsperado,
             costoCourierFacturado: costoFactRaw,
             estadoAuditoria: estadoAud,
             facturaCourierRef: referenciaFactura, // Marca para evitar futuros dobles cobros.
@@ -512,7 +514,8 @@ export async function POST(request: Request) {
         finanzasEnvioId: envio.finanzas.id,
         prior: {
           pesoAforado: envio.finanzas.pesoAforado ?? null,
-          costoCourierEsperado: envio.finanzas.costoCourierEsperado ? envio.finanzas.costoCourierEsperado.toString() : null,
+          // DEUDA 158: JSON key "costoCourierEsperado" se mantiene (bridge undo backward-compat con snapshots viejos); el Prisma field se lee ya renombrado.
+          costoCourierEsperado: envio.finanzas.costoCourierCotizado ? envio.finanzas.costoCourierCotizado.toString() : null,
           costoCourierFacturado: envio.finanzas.costoCourierFacturado ? envio.finanzas.costoCourierFacturado.toString() : null,
           estadoAuditoria: envio.finanzas.estadoAuditoria ?? null,
           facturaCourierRef: envio.finanzas.facturaCourierRef ?? null,

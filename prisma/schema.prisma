@@ -588,7 +588,7 @@ model FinanzasEnvio {
 
   // 2. Auditoría del Courier (Escudo Tarifario)
   precioProveedor       Decimal? @db.Decimal(12, 2) // Costo cotizado del courier al crear la etiqueta, en forma NATIVA (Andreani con IVA, Mocis sin — no homogéneo cross-courier; ver DEUDA 152). null en fallback/rescate.
-  costoCourierEsperado  Decimal? @db.Decimal(12, 2) // Copia de precioProveedor tomada en conciliación (lo que Shipro esperaba del courier). NO se recalcula por aforo pese al nombre.
+  costoCourierCotizado  Decimal? @db.Decimal(12, 2) @map("costoCourierEsperado") // Costo COTIZADO por el courier al crear la etiqueta (copia de precioProveedor, forma nativa; NO recalculado por aforo). Par con costoCourierFacturado (cotizado vs facturado). DEUDA 158 (2026-08-31): renombrado de costoCourierEsperado; @map conserva la columna física. NOTA: el snapshot JSON de ConciliacionRun (undo path) usa la key vieja "costoCourierEsperado" como bridge — no se renombra por backward-compat con snapshots existentes.
   costoCourierFacturado Decimal? @db.Decimal(12, 2) // NUEVO: Lo que REALMENTE vino en el Excel del courier
   estadoAuditoria       String   @default("PENDIENTE") // OK, DOBLE_COBRO, SOBREPRECIO_RECLAMAR
   facturaCourierRef     String? // NUEVO: Escudo anti-UPS (Ej: "FC-0001-9992")

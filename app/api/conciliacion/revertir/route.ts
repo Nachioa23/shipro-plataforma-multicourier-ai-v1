@@ -8,9 +8,9 @@ import { evaluarSuspension, suspenderEmpresa, reactivarEmpresa } from "@/lib/uti
 // Body: { runId: number }
 //
 // Restaura los 8 campos de FinanzasEnvio guardados en ConciliacionRun.snapshot
-// (pesoAforado, costoCourierEsperado, costoCourierFacturado, estadoAuditoria,
-// facturaCourierRef, costoAforo, periodoLogistica, estadoLiquidacionLogistica)
-// a los valores previos a la corrida.
+// (pesoAforado, costoCourierEsperado [JSON key ↔ Prisma field costoCourierCotizado, DEUDA 158 bridge],
+// costoCourierFacturado, estadoAuditoria, facturaCourierRef, costoAforo, periodoLogistica,
+// estadoLiquidacionLogistica) a los valores previos a la corrida.
 //
 // PASO 2b (2026-07-27): además de restaurar los FinanzasEnvio, ahora reversa el
 // dinero movido por la corrida (débitos prepago). Por cada DEBITO_AJUSTE_AFORO
@@ -29,6 +29,7 @@ import { evaluarSuspension, suspenderEmpresa, reactivarEmpresa } from "@/lib/uti
 
 type SnapshotPrior = {
   pesoAforado: number | null;
+  // DEUDA 158: JSON snapshot key — se mantiene el nombre viejo (bridge) aunque el field Prisma es costoCourierCotizado. Al restaurar, el mapping L143 lee esta key y escribe al field Prisma renombrado.
   costoCourierEsperado: string | null;
   costoCourierFacturado: string | null;
   estadoAuditoria: string | null;
@@ -140,7 +141,8 @@ export async function POST(request: Request) {
           where: { id: entry.finanzasEnvioId },
           data: {
             pesoAforado: entry.prior.pesoAforado,
-            costoCourierEsperado: entry.prior.costoCourierEsperado != null
+            // DEUDA 158: Prisma field renombrado a costoCourierCotizado; leer sigue por JSON key vieja "costoCourierEsperado" (bridge undo-compat con snapshots pre-rename).
+            costoCourierCotizado: entry.prior.costoCourierEsperado != null
               ? new Prisma.Decimal(entry.prior.costoCourierEsperado)
               : null,
             costoCourierFacturado: entry.prior.costoCourierFacturado != null

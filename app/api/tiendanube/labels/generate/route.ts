@@ -6,6 +6,7 @@ import { derivarServicioLabel } from "@/lib/tiendanube/derivar-servicio-label";
 import { getAppUrlOrThrow } from "@/lib/utils/app-url";
 import { decryptSecret } from "@/lib/utils/secret-crypto";
 import { patchLabelReadyToDownload } from "@/lib/tiendanube/labels-api";
+import { armarBultoApilado } from "@/lib/empaquetado/armar-bulto";
 
 // El path Tiendanube-facing es {callback_labels_url}/generate. Por eso el archivo vive
 // en /api/tiendanube/labels/generate/route.ts — Tiendanube nos pega directo acá.
@@ -187,34 +188,34 @@ export async function POST(request: Request) {
           const destination = ffoInfo?.destination ?? {};
           const lineItems: any[] = Array.isArray(ffoInfo?.line_items) ? ffoInfo.line_items : [];
 
-          // Peso: fulfillment_order_info.total_weight (kg, autoritativo — el server ya sumó).
-          // Fallback defensivo: computar de line_items[].unit_dimension.weight (también en kg —
-          // payload real 2026-08-26 confirmó unidades kg: 0.24 unit × 3 = 0.72 total_weight).
-          // Sin data → 0 → la barrera de crear.ts (DEUDA 132) lo marca BLOQUEADO_DATOS_PAQUETE,
-          // que es el comportamiento correcto (no inventamos peso).
+          // DEUDA 143 (2026-09-01): dims + peso consolidados con armarBultoApilado
+          // (helper neutral compartido con rates → checkout y etiqueta cotizan idéntico).
+          // Los line_items traen weight en KG (unit_dimension.weight), el helper espera
+          // gramos → conversión × 1000.
+          const itemsParaEmpaquetar = (Array.isArray(lineItems) ? lineItems : []).map((li: any) => ({
+            grams: (Number(li?.unit_dimension?.weight) || 0) * 1000,
+            quantity: Number(li?.quantity) || 1,
+            width: Number(li?.unit_dimension?.width) || 0,
+            height: Number(li?.unit_dimension?.height) || 0,
+            depth: Number(li?.unit_dimension?.depth) || 0,
+          }));
+          const bulto = armarBultoApilado(itemsParaEmpaquetar);
+
+          // Peso: fulfillment_order_info.total_weight (kg, autoritativo — el server ya
+          // sumó, prioridad); fallback a bulto.pesoKg (computa lo mismo pero como red).
+          // Sin data en ninguno → default del helper (1kg) — la barrera de crear.ts
+          // (DEUDA 132) marca BLOQUEADO_DATOS_PAQUETE si eso se prueba subdimensionado.
           const totalWeightFfo = Number(ffoInfo?.total_weight);
-          const computedWeight = lineItems.reduce(
-            (acc, li) => acc + (Number(li?.unit_dimension?.weight) || 0) * (Number(li?.quantity) || 1),
-            0,
-          );
           const pesoReal = Number.isFinite(totalWeightFfo) && totalWeightFfo > 0
             ? totalWeightFfo
-            : (computedWeight > 0 ? computedWeight : 0);
+            : bulto.pesoKg;
 
-          // Dims: primer line_item con medidas > 0. Unit: cm (payload real trae 10, 20 — coherente).
-          // TODO(empaquetado real — DEUDA 143): hoy se toman las dims de UN SOLO line_item (el
-          // primero con medidas) como aproximación del bulto. Un pedido con varios items queda
-          // subdimensionado. El peso SÍ suma todos los items (computedWeight/total_weight arriba),
-          // pero las dims no se consolidan.
-          const primeroConDims = lineItems.find(
-            (li) =>
-              Number(li?.unit_dimension?.width) > 0 ||
-              Number(li?.unit_dimension?.height) > 0 ||
-              Number(li?.unit_dimension?.depth) > 0,
-          );
-          const largoCm = primeroConDims?.unit_dimension?.depth ?? null;
-          const anchoCm = primeroConDims?.unit_dimension?.width ?? null;
-          const altoCm = primeroConDims?.unit_dimension?.height ?? null;
+          // Dims (cm): consolidadas por el helper (depth apilado, width/height máx).
+          // Reemplaza la vieja lógica de primeroConDims (dims de UN solo item, que dejaba
+          // subdimensionado un pedido multi-item).
+          const largoCm = bulto.largoCm;
+          const anchoCm = bulto.anchoCm;
+          const altoCm = bulto.altoCm;
 
           // crearEnvio decide domicilio/sucursal por keyword-match sobre `modalidad`
           // (busca "sucursal" o "retiro" — ver lib/envios/crear.ts). Con estos strings

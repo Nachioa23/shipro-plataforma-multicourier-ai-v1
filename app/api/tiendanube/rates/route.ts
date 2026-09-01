@@ -4,6 +4,7 @@ import { cotizar } from "@/lib/cotizador";
 import { generarCodeServicio } from "@/lib/tiendanube/servicios-publicados";
 import { geocodificarDireccion } from "@/lib/geo/geocodificar-direccion";
 import { resolverSucursalesCercanas } from "@/lib/tiendanube/sucursales-checkout";
+import { armarBultoApilado } from "@/lib/empaquetado/armar-bulto";
 
 // Peso default (kg) cuando no hay peso disponible. Se usa en dos casos:
 // (1) Modo B activo pero SIN peso configurado (config a medias) → respeta la
@@ -40,12 +41,6 @@ export async function POST(request: Request) {
     if (!body) {
       return NextResponse.json({ error: "Body inválido" }, { status: 422 });
     }
-
-    // DEUDA 143 debug (temporal): capturar shape del body de rates para ver si
-    // Tiendanube envía dimensiones por item (width/height/depth/length/dimensions)
-    // o solo grams. Slice a 1500 chars para no floodear logs pero capturar estructura.
-    console.log("[TN-RATES-DBG] body:", JSON.stringify(body).slice(0, 1500));
-    console.log("[TN-RATES-DBG] items[0]:", JSON.stringify(body?.items?.[0] ?? "no-items"));
 
     const storeId = Number(body.store_id);
     if (!Number.isInteger(storeId)) {
@@ -117,16 +112,24 @@ export async function POST(request: Request) {
         requiereSeguro: false,
       }];
     } else {
-      // Default (STEP 1): UN bulto sumando el peso de items[] (grams→kg), 1kg si no hay datos.
-      const items: any[] = Array.isArray(body.items) ? body.items : [];
-      const gramsTotal = items.reduce(
-        (acc, it) => acc + (Number(it?.grams) || 0) * (Number(it?.quantity) || 1),
-        0,
-      );
-      const pesoKg = gramsTotal > 0 ? gramsTotal / 1000 : PESO_DEFAULT_KG;
+      // DEUDA 143 (2026-09-01): arma UN bulto apilado con las dims REALES del
+      // carrito (Tiendanube manda width/height/depth por item en items[].dimensions).
+      // Comparte helper con /generate → checkout y etiqueta cotizan idéntico.
+      // Modo B (arriba) sigue con tarifa fija — es una decisión de empaquetado
+      // distinta, no aplica el helper.
+      const itemsParaEmpaquetar = (Array.isArray(body.items) ? body.items : []).map((it: any) => ({
+        grams: Number(it?.grams) || 0,
+        quantity: Number(it?.quantity) || 1,
+        width: Number(it?.dimensions?.width) || 0,
+        height: Number(it?.dimensions?.height) || 0,
+        depth: Number(it?.dimensions?.depth) || 0,
+      }));
+      const bulto = armarBultoApilado(itemsParaEmpaquetar);
       paquetes = [{
-        pesoKg,
-        largoCm: 10, anchoCm: 10, altoCm: 10,
+        pesoKg: bulto.pesoKg,
+        largoCm: bulto.largoCm,
+        anchoCm: bulto.anchoCm,
+        altoCm: bulto.altoCm,
         valorDeclarado: Number(body.total_price) || 0,
         requiereSeguro: false,
       }];

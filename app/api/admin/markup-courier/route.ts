@@ -29,6 +29,8 @@ import { Prisma } from "@prisma/client";
 
 const MIN_PORCENTAJE = 0;
 const MAX_PORCENTAJE = 100;
+const MODOS_VALIDOS = ["HEREDA", "PROPIO"] as const;
+type ModoMarkup = (typeof MODOS_VALIDOS)[number];
 
 export async function GET(request: Request) {
   const rol = request.headers.get("x-rol") || "";
@@ -61,7 +63,16 @@ export async function GET(request: Request) {
       })
     );
 
-    return NextResponse.json({ filas });
+    // DEUDA 157 Pieza 2: además del listado per-courier, el UI necesita el
+    // markup global activo (MarkupShiproVigencia) para mostrar el hint
+    // "heredando X%" cuando el courier está en modo HEREDA. Un solo round-trip
+    // para self-contained response.
+    const globalActivo = await prisma.markupShiproVigencia.findFirst({
+      where: { activo: true },
+      orderBy: { vigenciaDesde: "desc" },
+    });
+
+    return NextResponse.json({ filas, globalActivo });
   } catch (error) {
     console.error("Error cargando markup Shipro por courier:", error);
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
@@ -81,6 +92,11 @@ export async function POST(request: Request) {
     const body = await request.json();
     const courierIdRaw = body?.courierId;
     const raw = body?.valorPorcentaje;
+    // DEUDA 157 Pieza 2: modo explícito HEREDA/PROPIO en la vigencia.
+    // Whitelist defensivo (rechaza strings fuera del enum). Default HEREDA
+    // si el body no lo trae (compatibilidad con clientes viejos + safest default).
+    const modoRaw = body?.modo;
+    const modo: ModoMarkup = MODOS_VALIDOS.includes(modoRaw) ? modoRaw : "HEREDA";
     const motivo: string | null =
       typeof body?.motivo === "string" && body.motivo.trim().length > 0
         ? body.motivo.trim()
@@ -125,9 +141,15 @@ export async function POST(request: Request) {
         orderBy: { vigenciaDesde: "desc" },
       });
 
-      // No-op guard por courier: si el valor no cambia respecto de la
-      // vigencia activa del mismo courier, no crear filas idénticas contiguas.
-      if (previa && previa.valorPorcentaje.equals(nuevoValor)) {
+      // No-op guard por courier: si NI el valor NI el modo cambian respecto de
+      // la vigencia activa del mismo courier, no crear filas idénticas contiguas.
+      // DEUDA 157 Pieza 2: ahora se compara la tupla (modo, valorPorcentaje) —
+      // switch HEREDA→PROPIO con el mismo valor sigue siendo un cambio real.
+      if (
+        previa &&
+        previa.valorPorcentaje.equals(nuevoValor) &&
+        previa.modo === modo
+      ) {
         return { previa, nueva: previa, noop: true };
       }
 
@@ -141,10 +163,15 @@ export async function POST(request: Request) {
 
       // Crear la nueva vigencia activa para el courier. Si no había previa
       // (primer alta para este courier), esta pasa a ser la única.
+      // DEUDA 157 Pieza 2: valorPorcentaje persistido siempre (VALOR RECORDADO —
+      // aún en HEREDA guardamos el número que el user tenía, para que switch
+      // a PROPIO lo recupere). El motor (Pieza 3) ignora este valor cuando
+      // modo=HEREDA y consulta el global vigente en su lugar.
       const nueva = await tx.markupCourier.create({
         data: {
           courierId,
           valorPorcentaje: nuevoValor,
+          modo,
           activo: true,
           vigenciaDesde: ahora,
         },
@@ -170,6 +197,8 @@ export async function POST(request: Request) {
         courierId,
         courierNombre: courier.nombre,
         sensible: true,
+        modoAnterior: resultado.previa?.modo ?? null,
+        modoNuevo: resultado.nueva.modo,
         valorAnterior: resultado.previa?.valorPorcentaje?.toString() ?? null,
         valorNuevo: resultado.nueva.valorPorcentaje.toString(),
         motivo,

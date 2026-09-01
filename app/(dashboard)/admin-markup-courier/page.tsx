@@ -3,8 +3,17 @@
 // DEUDA 157 Paso 1 (2026-08-31): pantalla admin del markup Shipro GENERAL por
 // courier con vigencias. Mirror de la pantalla del SMO por courier (admin-smo,
 // FASE 2 sub 3), adaptada de "$ neto" a "% porcentual". Un valor por courier,
-// igual para TODOS los clientes. Motor NO conectado todavía — arranca vacía;
-// Shipro carga los % en Paso 2 antes de rewire.
+// igual para TODOS los clientes.
+//
+// DEUDA 157 Pieza 2 (2026-09-01): agregado toggle HEREDA/PROPIO por courier.
+// - HEREDA: el courier sigue el markup global (MarkupShiproVigencia) en vivo;
+//   el % de la fila queda deshabilitado y se muestra el global entre paréntesis.
+// - PROPIO: el courier usa el % de la fila (editable, permite 0 — apagado
+//   intencional, distinto de heredar 0).
+// VALOR RECORDADO: aún en HEREDA se persiste el último valorPorcentaje que el
+// user tenía en PROPIO, para que al volver a PROPIO se recupere sin re-tipear.
+// El motor NO consume `modo` todavía — se conecta en Pieza 3 (aislamiento
+// intencional). Editar acá hoy no cambia precios.
 
 import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
@@ -19,10 +28,13 @@ import {
   ChevronRight,
 } from "lucide-react";
 
+type ModoMarkup = "HEREDA" | "PROPIO";
+
 type Vigencia = {
   id: number;
   courierId: number;
   valorPorcentaje: string;
+  modo: ModoMarkup;
   activo: boolean;
   vigenciaDesde: string;
   vigenciaHasta: string | null;
@@ -35,6 +47,12 @@ type Fila = {
   historial: Vigencia[];
 };
 
+type GlobalActivo = {
+  id: number;
+  valorPorcentaje: string;
+  vigenciaDesde: string;
+} | null;
+
 export default function AdminMarkupCourier() {
   const { data: session } = useSession();
   const rol = session?.user?.rol || "";
@@ -42,7 +60,9 @@ export default function AdminMarkupCourier() {
 
   const [cargando, setCargando] = useState(true);
   const [filas, setFilas] = useState<Fila[]>([]);
+  const [globalActivo, setGlobalActivo] = useState<GlobalActivo>(null);
   const [nuevoValor, setNuevoValor] = useState<Record<number, string>>({});
+  const [nuevoModo, setNuevoModo] = useState<Record<number, ModoMarkup>>({});
   const [guardando, setGuardando] = useState<Record<number, boolean>>({});
   const [expandido, setExpandido] = useState<Record<number, boolean>>({});
 
@@ -52,7 +72,19 @@ export default function AdminMarkupCourier() {
       const res = await fetch("/api/admin/markup-courier");
       if (res.ok) {
         const data = await res.json();
-        setFilas(data.filas || []);
+        const filasResp: Fila[] = data.filas || [];
+        setFilas(filasResp);
+        setGlobalActivo(data.globalActivo ?? null);
+        // Prefill state per-courier con lo que ya tiene la vigencia activa
+        // (modo + valor). Si no hay vigencia activa: default HEREDA + valor "".
+        const valores: Record<number, string> = {};
+        const modos: Record<number, ModoMarkup> = {};
+        for (const f of filasResp) {
+          valores[f.courier.id] = f.activa ? String(f.activa.valorPorcentaje) : "";
+          modos[f.courier.id] = f.activa ? f.activa.modo : "HEREDA";
+        }
+        setNuevoValor(valores);
+        setNuevoModo(modos);
       }
     } catch (e) {
       console.error(e);
@@ -68,20 +100,40 @@ export default function AdminMarkupCourier() {
 
   const guardar = async (fila: Fila) => {
     const courierId = fila.courier.id;
-    const raw = nuevoValor[courierId] || "";
-    const valor = parseFloat(raw);
-    if (!Number.isFinite(valor) || valor < 0 || valor > 100) {
-      alert("Ingresá un porcentaje válido entre 0 y 100.");
-      return;
+    const modo = nuevoModo[courierId] || "HEREDA";
+    const rawValor = nuevoValor[courierId] || "";
+    // VALOR RECORDADO: aún en HEREDA persistimos un número (schema NOT NULL).
+    // Si el input está vacío en HEREDA, guardamos 0 como placeholder — el
+    // motor no lo consume en HEREDA (consulta el global). Si está vacío en
+    // PROPIO, bloqueamos (PROPIO exige un número explícito).
+    let valor: number;
+    if (modo === "PROPIO") {
+      valor = parseFloat(rawValor);
+      if (!Number.isFinite(valor) || valor < 0 || valor > 100) {
+        alert("En modo PROPIO ingresá un porcentaje válido entre 0 y 100 (0 = markup apagado a propósito).");
+        return;
+      }
+    } else {
+      // HEREDA: preservar el valor del input si es válido; si vacío, 0.
+      const parsed = parseFloat(rawValor);
+      valor = Number.isFinite(parsed) && parsed >= 0 && parsed <= 100 ? parsed : 0;
     }
 
-    const actualStr = fila.activa
-      ? `${Number(fila.activa.valorPorcentaje).toFixed(4)} %`
+    const previaStr = fila.activa
+      ? `${fila.activa.modo} ${Number(fila.activa.valorPorcentaje).toFixed(4)}%`
       : "sin vigencia activa";
+    const globalHint = globalActivo
+      ? ` (global vigente: ${Number(globalActivo.valorPorcentaje).toFixed(4)}%)`
+      : "";
+    const nuevaStr =
+      modo === "HEREDA"
+        ? `HEREDA${globalHint}`
+        : `PROPIO ${valor.toFixed(4)}%${valor === 0 ? " — markup apagado a propósito" : ""}`;
     const ok = confirm(
-      `Vas a crear una nueva vigencia de markup Shipro para ${fila.courier.nombre} con valor ${valor.toFixed(4)} %. ` +
-        `La vigencia actual (${actualStr}) queda jubilada (activo=false, vigenciaHasta=hoy) — ` +
-        `es un asiento inverso, nunca se pisa el valor anterior. ¿Confirmás?`
+      `Vas a crear una nueva vigencia de markup Shipro para ${fila.courier.nombre}:\n` +
+        `  Anterior: ${previaStr}\n` +
+        `  Nueva:    ${nuevaStr}\n\n` +
+        `La vigencia actual queda jubilada (activo=false, vigenciaHasta=hoy) — es un asiento inverso, nunca se pisa el valor anterior. ¿Confirmás?`
     );
     if (!ok) return;
 
@@ -90,11 +142,10 @@ export default function AdminMarkupCourier() {
       const res = await fetch("/api/admin/markup-courier", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ courierId, valorPorcentaje: valor }),
+        body: JSON.stringify({ courierId, modo, valorPorcentaje: valor }),
       });
       if (res.ok) {
         alert(`Nueva vigencia guardada para ${fila.courier.nombre}.`);
-        setNuevoValor((s) => ({ ...s, [courierId]: "" }));
         cargar();
       } else {
         const data = await res.json();
@@ -111,7 +162,7 @@ export default function AdminMarkupCourier() {
     iso
       ? new Date(iso).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })
       : "—";
-  const fmtPct = (v: string) => `${Number(v).toFixed(4)} %`;
+  const fmtPct = (v: string | number) => `${Number(v).toFixed(4)} %`;
 
   if (!esAdminShipro) {
     return (
@@ -140,8 +191,15 @@ export default function AdminMarkupCourier() {
             </h2>
             <p className="text-sm font-medium text-gray-500 mt-1">
               Markup general (%) que Shipro aplica por courier — igual para todos los clientes.
-              Editable con vigencias (asiento inverso). El motor lo lee en Paso 2 de DEUDA 157.
+              Modo <strong>HEREDA</strong> sigue el global en vivo; <strong>PROPIO</strong> usa el valor fijo (permite 0 = apagado a propósito).
+              Editable con vigencias (asiento inverso). El motor lo lee en Pieza 3.
             </p>
+            {globalActivo && (
+              <p className="text-xs font-bold text-blue-700 mt-2">
+                Global vigente: {fmtPct(globalActivo.valorPorcentaje)}
+                <span className="text-blue-500 font-normal"> — es el valor que siguen los couriers en modo HEREDA.</span>
+              </p>
+            )}
           </div>
         </div>
       </header>
@@ -159,6 +217,10 @@ export default function AdminMarkupCourier() {
           filas.map((f) => {
             const abierto = !!expandido[f.courier.id];
             const enviando = !!guardando[f.courier.id];
+            const modoActual = nuevoModo[f.courier.id] || "HEREDA";
+            const enHereda = modoActual === "HEREDA";
+            const inputDeshabilitado = enHereda;
+            const globalStr = globalActivo ? fmtPct(globalActivo.valorPorcentaje) : "—";
             return (
               <div
                 key={f.courier.id}
@@ -175,11 +237,32 @@ export default function AdminMarkupCourier() {
                   </div>
                   <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
                     <p className="text-[10px] font-bold text-blue-700 uppercase tracking-wider mb-1">
-                      Markup vigente (%)
+                      Vigente
                     </p>
-                    <p className="text-2xl font-black text-blue-900">
-                      {f.activa ? fmtPct(f.activa.valorPorcentaje) : "sin configurar"}
-                    </p>
+                    {f.activa ? (
+                      f.activa.modo === "HEREDA" ? (
+                        <>
+                          <p className="text-2xl font-black text-blue-900">
+                            HEREDA
+                          </p>
+                          <p className="text-[11px] text-blue-700 mt-1">
+                            Aplica el global: <strong>{globalStr}</strong>
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <p className="text-2xl font-black text-blue-900">
+                            {fmtPct(f.activa.valorPorcentaje)}
+                          </p>
+                          <p className="text-[10px] text-blue-700 mt-1">
+                            <strong>PROPIO</strong>
+                            {Number(f.activa.valorPorcentaje) === 0 && " — apagado a propósito"}
+                          </p>
+                        </>
+                      )
+                    ) : (
+                      <p className="text-2xl font-black text-blue-900">sin configurar</p>
+                    )}
                     <p className="text-[10px] text-blue-700 mt-1">
                       Vigente desde: {f.activa ? fmtFecha(f.activa.vigenciaDesde) : "—"}
                     </p>
@@ -189,27 +272,77 @@ export default function AdminMarkupCourier() {
                       e.preventDefault();
                       guardar(f);
                     }}
-                    className="flex flex-col gap-2"
+                    className="flex flex-col gap-3"
                   >
-                    <label className="text-[10px] font-bold text-gray-500 uppercase">
-                      Nuevo valor (%)
-                    </label>
-                    <input
-                      type="number"
-                      step="0.0001"
-                      min="0"
-                      max="100"
-                      required
-                      value={nuevoValor[f.courier.id] || ""}
-                      onChange={(e) =>
-                        setNuevoValor((s) => ({
-                          ...s,
-                          [f.courier.id]: e.target.value,
-                        }))
-                      }
-                      className="w-full border-2 border-gray-200 rounded-lg p-2.5 text-base font-black text-gray-800 focus:border-blue-500 outline-none"
-                      placeholder="Ej: 10"
-                    />
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">
+                        Modo
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {(["HEREDA", "PROPIO"] as ModoMarkup[]).map((m) => {
+                          const seleccionado = modoActual === m;
+                          return (
+                            <button
+                              key={m}
+                              type="button"
+                              onClick={() =>
+                                setNuevoModo((s) => ({ ...s, [f.courier.id]: m }))
+                              }
+                              className={
+                                "py-2 rounded-lg text-xs font-bold uppercase border-2 transition-colors " +
+                                (seleccionado
+                                  ? "bg-[#233b6b] text-white border-[#233b6b]"
+                                  : "bg-white text-gray-600 border-gray-200 hover:border-blue-300")
+                              }
+                            >
+                              {m}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">
+                        Valor (%)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.0001"
+                        min="0"
+                        max="100"
+                        required={modoActual === "PROPIO"}
+                        disabled={inputDeshabilitado}
+                        value={nuevoValor[f.courier.id] ?? ""}
+                        onChange={(e) =>
+                          setNuevoValor((s) => ({
+                            ...s,
+                            [f.courier.id]: e.target.value,
+                          }))
+                        }
+                        className={
+                          "w-full border-2 rounded-lg p-2.5 text-base font-black outline-none " +
+                          (inputDeshabilitado
+                            ? "bg-gray-50 border-gray-200 text-gray-400 cursor-not-allowed"
+                            : "border-gray-200 text-gray-800 focus:border-blue-500")
+                        }
+                        placeholder={
+                          enHereda ? `heredando ${globalStr}` : "Ej: 10 (0 = apagado)"
+                        }
+                      />
+                      <p className="text-[10px] text-gray-500 mt-1">
+                        {enHereda ? (
+                          <>
+                            Modo HEREDA: sigue el global ({globalStr}) en vivo. El valor
+                            guardado se recuerda por si volvés a PROPIO.
+                          </>
+                        ) : (
+                          <>
+                            Modo PROPIO: usa este valor fijo. 0% = markup apagado a propósito
+                            (distinto de HEREDA).
+                          </>
+                        )}
+                      </p>
+                    </div>
                     <button
                       type="submit"
                       disabled={enviando}
@@ -220,7 +353,7 @@ export default function AdminMarkupCourier() {
                       ) : (
                         <Save className="w-4 h-4" />
                       )}
-                      Guardar nuevo valor
+                      Guardar nueva vigencia
                     </button>
                     <p className="text-[10px] text-gray-500">
                       Cierra la vigencia actual de este courier y crea una nueva. Nunca sobrescribe.
@@ -249,6 +382,7 @@ export default function AdminMarkupCourier() {
                     <table className="w-full text-left whitespace-nowrap">
                       <thead className="bg-slate-50 border-b border-gray-200 text-xs uppercase tracking-wider text-gray-500 font-bold">
                         <tr>
+                          <th className="px-6 py-3">Modo</th>
                           <th className="px-6 py-3">Valor (%)</th>
                           <th className="px-6 py-3">Vigencia desde</th>
                           <th className="px-6 py-3">Vigencia hasta</th>
@@ -258,15 +392,24 @@ export default function AdminMarkupCourier() {
                       <tbody className="divide-y divide-gray-100 text-sm">
                         {f.historial.length === 0 ? (
                           <tr>
-                            <td colSpan={4} className="py-6 text-center text-gray-400">
+                            <td colSpan={5} className="py-6 text-center text-gray-400">
                               Sin vigencias todavía.
                             </td>
                           </tr>
                         ) : (
                           f.historial.map((h) => (
                             <tr key={h.id} className={h.activo ? "bg-emerald-50/40" : ""}>
+                              <td className="px-6 py-3 font-bold text-gray-700 text-xs uppercase">
+                                {h.modo}
+                              </td>
                               <td className="px-6 py-3 font-bold text-gray-800">
-                                {fmtPct(h.valorPorcentaje)}
+                                {h.modo === "HEREDA" ? (
+                                  <span className="text-gray-500 font-normal">
+                                    (hereda global)
+                                  </span>
+                                ) : (
+                                  fmtPct(h.valorPorcentaje)
+                                )}
                               </td>
                               <td className="px-6 py-3 text-gray-600">
                                 {fmtFecha(h.vigenciaDesde)}

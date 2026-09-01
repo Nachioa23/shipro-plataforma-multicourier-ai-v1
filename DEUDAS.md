@@ -3543,9 +3543,28 @@ Hoy la única forma de dar de alta o cambiar un intermediario es SQL directo o m
 
 ---
 
-## DEUDA 157 — Rediseño del markup Shipro: markup UNIFICADO per-courier con modo HEREDA/PROPIO (Shipro-managed) (registrada 2026-08-28, EN PROGRESO 2026-09-01)
+## DEUDA 157 — Rediseño del markup Shipro: markup UNIFICADO per-courier con modo HEREDA/PROPIO (Shipro-managed) (registrada 2026-08-28, RESUELTA LOCAL 2026-09-01, pend. deploy prod)
 
-**Status:** ABIERTA — **Piezas 1 + 2 + 3 done local 2026-09-01 (commits `93ef1c4` + `150eb4a` + `73e3aa7`), pendiente deploy prod (Pieza 3 es la MONEY-CRÍTICA, pero con Opción A el deploy es PRICE-NEUTRAL)**. El rediseño motor+admin está **funcionalmente COMPLETO en local**; verificado end-to-end (Andreani PROPIO 15% subió $14.192,04→$14.742,45; HEREDA idénticos; Rama B gate = 0). Del build-home previo: `MarkupCourier` model + admin API + UI + nav (`fc03a1f`, 2026-08-31) es la base sobre la que se apilaron las 3 piezas. Post-deploy prod → marcar RESUELTA (semáforo localhost↔prod). **Pieza 4 restante (cierre client-card):** remover el campo `ajusteTarifaPorcentaje` de la sección 3 de `/configuracion/transportes` + drop schema — es limpieza, no crítica (el motor ya no lo lee). No bloquea que un cliente REAL entre a producción — el motor unificado ya está listo.
+**Status:** **RESUELTA EN CÓDIGO 2026-09-01 (COMPLETA en localhost), pendiente deploy prod.** Semáforo localhost↔prod: queda acá hasta subir. Las 4 piezas (3 del rediseño + cierre client-card) están en local, verificadas end-to-end. Post-deploy prod → mover a `DEUDAS-RESUELTAS.md`.
+
+**RESUMEN DEUDA 157 COMPLETA (en local):** el markup Shipro se migró de la tarjeta del cliente al admin per-courier. Cliente ya NO ve ni edita ningún ajuste de markup — lo maneja Shipro en `/admin-markup-courier` con modo HEREDA (sigue global) o PROPIO (valor fijo, permite 0). Objetivo original cumplido.
+
+**Commits (4 piezas):**
+- **Pieza 1** `93ef1c4` (2026-09-01): campo `modo` (enum `MarkupCourierModo` HEREDA/PROPIO) en `MarkupCourier`, default HEREDA. Migración aditiva. Cero cambio de precio.
+- **Pieza 2** `150eb4a` (2026-09-01): UI `/admin-markup-courier` con toggle HEREDA/PROPIO + valor recordado + hint global; API upgrade (GET devuelve `globalActivo`, POST persiste `modo`).
+- **Pieza 3** `73e3aa7` (2026-09-01): motor conectado — nuevo `resolverMarkupCourierPorcentaje` (Rama A: MarkupCourier con lógica modo; Rama B: gate 0). 3 callers rewired. `aplicarMarkup` math intacta. Verificado end-to-end: Andreani PROPIO 15% subió $14.192,04→$14.742,45 (Δ+3.88% coherente 10%→15%); HEREDA idénticos; Rama B gate = 0.
+- **CIERRE** `33822c6` (2026-09-01): tarjeta del cliente limpia. Removidos de `/configuracion/transportes` sección 3 los inputs de "Recargo/Descuento %" (`ajusteTarifaPorcentaje` — huérfano tras Pieza 3, motor lee `MarkupCourier`) y "Costo Fijo Adicional $" (`markupFijo` — oculto, regla proporcional-only, queda vivo en código con valor 0, re-exponible). Conservada la "Tarifa de rescate" (`tarifaPlanaRespaldoCourier` — engine consumer, obligatoria DEUDA 132). Sección renombrada a "3. Tarifa de rescate". Save endpoint dejó de persistir los 2 campos removidos (quedan en 0 DB, ya estaban en 0 fleet-wide — verificado). Motor INTACTO. `tsc=0`. Blast: 2 files (`TransportesTab.tsx` + `configuracion/couriers/route.ts`). Zero cambio de precio (Δ price = 0 en local).
+
+**Base previa (aditiva) del build-home:** `MarkupCourier` model + admin API + UI + nav (`fc03a1f`, 2026-08-31) es el hogar sobre el que se apilaron las 3 piezas + cierre. Sigue vigente como base del rediseño unificado.
+
+**Plan de deploy (Opción A — PRICE-NEUTRAL):** prod hoy tiene todos los couriers en HEREDA (default de Pieza 1, cero PROPIO cargado). Conectar el motor en prod es PRICE-NEUTRAL — todos siguen el global 10%, idéntico al comportamiento del path viejo (que para `ajusteTarifaPorcentaje=0` también caía al global). El cierre client-card + endpoint stop-writing también price-neutral (los DB values ya en 0 fleet-wide, verificado). **Deploy invisible para facturación.** Ajustes PROPIO se hacen DESPUÉS deliberadamente desde `/admin-markup-courier`.
+
+**SUB-TAREAS RESIDUALES (registrar, no urgentes):**
+- **`markupFijo` field vivo en el motor a 0:** `aplicarMarkup` L209/L231/L238 sigue leyendo el `fijoMarkup` del `config`; con `credencial.markupFijo=0` fleet-wide, es no-op (`secoNeto.add(0)=secoNeto`, `.add(0)=X`). Si algún día se decide eliminarlo del todo (regla proporcional-only definitiva confirmada), es una migración destructiva del motor — su propia mini-obra con recon + backup. **Por ahora oculto en UI + persistido en 0 + no-op en pricing.** Puede quedar así indefinidamente sin costo operativo.
+- **[[DEUDA 154]]** (label engañoso "Recargo/Descuento"): **RESUELTA DE FACTO** al remover ese input de la tarjeta del cliente en el cierre. El label ya no se muestra al usuario; el campo Prisma `ajusteTarifaPorcentaje` queda dormant en DB (0 fleet-wide, no read por motor post-Pieza-3, no written por el endpoint post-cierre). Marcar DEUDA 154 como cerrada.
+- **[[DEUDA 158]] entangled** (renames pendientes `ajusteTarifaPorcentaje` + `markupFijo`): ambos ya no están en la UI del cliente ni en el pricing engine. Si se quiere renombrar los fields Prisma por rol real (para consistencia semántica del schema post-Pieza-3), es un rename con `@map` como los otros 7 renames DEUDA 158 hechos — **opcional, no urgente** (los fields están dormant; renombrar es puramente cosmético para futuros lectores del schema).
+
+**Origen:** sesión DEUDA 156 (2026-08-28), al preguntarse Nacho si el field `ajusteTarifaPorcentaje` debía vivir en la tarjeta del cliente o en admin. Evolución del diseño: 2026-08-28 registro inicial → 2026-08-31 build-home + design LOCKED simplificado (per-courier general) → 2026-09-01 diseño UNIFICADO con modo HEREDA/PROPIO + 3 piezas + cierre. **Cumplido el objetivo:** el cliente REAL puede entrar a producción sin poder alterar el markup Shipro.
 
 **DISEÑO MARKUP UNIFICADO (Nacho, 2026-09-01 — REEMPLAZA la decisión previa "motor lee solo MarkupCourier sin fallback"):**
 

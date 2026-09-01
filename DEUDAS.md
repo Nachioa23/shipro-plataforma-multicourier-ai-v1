@@ -3545,7 +3545,7 @@ Hoy la única forma de dar de alta o cambiar un intermediario es SQL directo o m
 
 ## DEUDA 157 — Rediseño del markup Shipro: markup UNIFICADO per-courier con modo HEREDA/PROPIO (Shipro-managed) (registrada 2026-08-28, EN PROGRESO 2026-09-01)
 
-**Status:** ABIERTA — **Pieza 1 (campo modo) done local 2026-09-01 (commit `93ef1c4`), pendiente deploy prod (aditivo)**. Pieza 2 (UI toggle) + Pieza 3 (motor) restantes. Del build-home previo: `MarkupCourier` model + admin API + UI + nav (`fc03a1f`, 2026-08-31, aditivo) sigue vigente como base del rediseño unificado — no se descarta, se le agrega arriba el modo. No bloquea hoy porque no hay clientes reales en prod tocando el markup, pero es prerequisito para que un cliente REAL entre a producción sin poder alterar el markup Shipro.
+**Status:** ABIERTA — **Piezas 1 + 2 done local 2026-09-01 (commits `93ef1c4` + `150eb4a`), pendiente deploy prod (ambas aditivas / UI-only)**. Pieza 3 (motor, MONEY-CRÍTICA, deploy aislado) es la única restante. Del build-home previo: `MarkupCourier` model + admin API + UI + nav (`fc03a1f`, 2026-08-31, aditivo) sigue vigente como base — Pieza 2 lo extendió con toggle HEREDA/PROPIO + valor recordado + hint global. No bloquea hoy porque no hay clientes reales en prod tocando el markup, pero es prerequisito para que un cliente REAL entre a producción sin poder alterar el markup Shipro.
 
 **DISEÑO MARKUP UNIFICADO (Nacho, 2026-09-01 — REEMPLAZA la decisión previa "motor lee solo MarkupCourier sin fallback"):**
 
@@ -3573,18 +3573,34 @@ Rama B → sin markup Shipro (como ya definido; no consulta).
 
 - ✅ **PIEZA 1 (HECHA local 2026-09-01, commit `93ef1c4`):** campo `modo` (enum `MarkupCourierModo` {HEREDA, PROPIO}) en `MarkupCourier`, `default HEREDA`. Migración **aditiva** (`CREATE TYPE` + `ADD COLUMN NOT NULL DEFAULT 'HEREDA'`). Filas existentes (Andreani, Moci's, OCA, Correo Argentino, Hop Envíos — todos 10%) → `modo=HEREDA` automáticamente vía DEFAULT (**cero cambio de precio**: siguen todos matcheando el global 10% igual que antes). Motor NO tocado. `tsc=0`. Blast: 2 files (schema + migration). Pendiente deploy prod.
 
-- ⏳ **PIEZA 2 (pendiente, riesgo bajo — no toca precios):** rediseñar UI `/admin-markup-courier` con el **toggle Hereda/Propio** por courier:
-  - Modo HEREDA seleccionado → el campo `valorPorcentaje` queda deshabilitado; muestra entre paréntesis el valor global vigente (visible pero no editable).
-  - Modo PROPIO seleccionado → el campo `valorPorcentaje` habilitado, editable, **permite 0**.
-  - POST `/api/admin/markup-courier` recibe `modo` en el body; validación: si modo=PROPIO exige `valorPorcentaje` finite ∈ [0, 100]; si modo=HEREDA ignora el valor (lo persiste igual por schema NOT NULL, pero se puede setear a 0 default).
-  - Historial de vigencias muestra la columna `modo` en cada fila jubilada.
-  - Cero toque al motor. Blast: `route.ts` + `page.tsx` + posibles ajustes cosméticos.
+- ✅ **PIEZA 2 (HECHA local 2026-09-01, commit `150eb4a`):** UI `/admin-markup-courier` rediseñada con toggle HEREDA/PROPIO por courier + API upgrade:
+  - **Toggle segmentado** (2-column grid, azul Shipro `#233b6b` seleccionado) HEREDA/PROPIO en cada card, bound a `nuevoModo[courierId]` (prefill con `activa.modo` o default `HEREDA`).
+  - **HEREDA:** input % deshabilitado, placeholder muestra `heredando X%` (global); col "Vigente" en azul muestra "HEREDA" + "Aplica el global: X%". El valor se persiste igual (VALOR RECORDADO — al volver a PROPIO se recupera sin re-tipear).
+  - **PROPIO:** input editable, permite 0; hint bajo el input aclara *"0% = markup apagado a propósito, distinto de HEREDA"*. Col "Vigente" muestra el valor + "PROPIO" (+ badge "apagado a propósito" si valor=0).
+  - **Header** con hint global vigente ("Global vigente: X% — es el valor que siguen los couriers en modo HEREDA").
+  - **Historial:** nueva columna "Modo"; en filas HEREDA el valor muestra `(hereda global)` en cursiva gris (más honesto — el valor guardado no era el aplicado).
+  - **API `route.ts`**: GET devuelve `{ filas, globalActivo }` (agregado el global en single-round-trip). POST acepta `modo` en body con whitelist defensivo (default `HEREDA` si falta/inválido), no-op guard compara tupla `(modo, valorPorcentaje)` (switch HEREDA↔PROPIO con mismo valor sí es cambio), `create({ data: { ..., modo } })` persiste, audit log `[AUDIT markupCourier]` incluye `modoAnterior/modoNuevo`.
+  - **Verificado localhost end-to-end:** toggle funciona; **VALOR RECORDADO OK** — ida-y-vuelta PROPIO→HEREDA→PROPIO recupera el valor sin pérdida; audit log confirma persistencia de `modo` en cada vigencia; el **PRECIO SIGUE AISLADO** — cotizar Andreani en PROPIO 15% dio el mismo precio ($14.192,04) porque el motor NO lee `modo` aún (`resolverMarkupShiproPorcentaje` sigue con el path viejo `ajusteTarifaPorcentaje` + global). Confirma la disciplina de aislamiento del motor hasta Pieza 3.
+  - `tsc=0`. Blast: **2 files** (`app/(dashboard)/admin-markup-courier/page.tsx` + `app/api/admin/markup-courier/route.ts`). **Cero pricing tocado.** Pendiente deploy prod.
 
-- ⏳ **PIEZA 3 (pendiente, MONEY-CRÍTICA — deploy aislado para poder verificar precios post-deploy):** conectar el motor:
+- ⏳ **PIEZA 3 (pendiente, MONEY-CRÍTICA — deploy AISLADO para poder verificar precios post-deploy):** conectar el motor:
   - Rewire `resolverMarkupShiproPorcentaje` (o nueva función) para leer `MarkupCourier` con la lógica modo (HEREDA → consulta `MarkupShiproVigencia`; PROPIO → devuelve `valorPorcentaje`).
   - **Gate Rama B** en los 3 callers (`cotizador.ts`, `crear.ts`, `conciliacion/route.ts`): `config.usaCredencialesPropias` → skip resolver, markup=0.
-  - **Verificación numérica de precios ANTES/DESPUÉS obligatoria** — el `tsc` no avisa de cambios de precio. Con default HEREDA + global 10% + `MarkupCourier` 10% en todos los couriers activos, el rewire debe ser **price-neutral** (los HEREDA siguen viendo 10% via el global, idéntico al comportamiento actual del resolver).
   - Blast estimado: 4 files (resolver + 3 callers). Post-Pieza-3, dropear `CredencialCourier.ajusteTarifaPorcentaje` + `markupFijo` (secuenciar como sub-follow-up destructivo — ver "Cierre del client-card" abajo).
+
+  **Plan de medición de impacto acordado (obligatorio antes de deploy Pieza 3):**
+  1. **Foto de precios ANTES:** cotizar un set representativo de envíos con el motor actual (Andreani + Moci's + OCA + Correo + Hop; domicilio + sucursal; distintos CPs origen/destino). Anotar cada precioFinal en una tabla ANTES.
+  2. **Conectar el motor en local** (rewire del resolver + gate Rama B en los 3 callers).
+  3. **Foto de precios DESPUÉS:** cotizar EL MISMO set con el motor nuevo. Comparar:
+     - Couriers con `modo=HEREDA` → precio idéntico (siguen global 10%, el resolver nuevo consulta `MarkupShiproVigencia`, mismo valor).
+     - Couriers con `modo=PROPIO` con otro valor → diferencia medible (ej. Andreani en PROPIO 15% vs el global 10% → +5pp de markup).
+  4. **`tsc` no avisa de cambios de precio** — la verificación numérica ANTES/DESPUÉS es la única red de seguridad money-safe.
+
+  **Decisión de estrategia de deploy (pendiente al encarar):**
+  - **Opción A (recomendada):** deployar con TODOS los couriers en HEREDA → **conexión neutra, cero cambio de precio**. Ajustar a PROPIO courier por courier después, con cambio de precio intencional y medible.
+  - **Opción B:** deployar con algún PROPIO ya activo → cambio de precio intencional en el mismo commit del rewire. Requiere validación explícita del delta antes de push.
+
+  **Recomendación registrada:** **Opción A** (HEREDA primero) — aísla "conectar motor" de "cambiar markup". Un problema post-deploy es del rewire O de un valor nuevo, no ambos mezclados.
 
 **Cierre del client-card (post-Pieza-3, mismo dominio que la vieja secuencia "Paso 3"):** una vez el motor lee del nuevo path, remover `CredencialCourier.ajusteTarifaPorcentaje` (+ `markupFijo`) del schema + UI `TransportesTab.tsx` + permisos + auditoría + endpoint edit + migración destructiva (patrón DEUDA 160). Cierra [[DEUDA 154]] (label engañoso) y los renames [[DEUDA 158]] entangled (`ajusteTarifaPorcentaje`/`markupFijo` se van al drop en vez de renombrarse).
 

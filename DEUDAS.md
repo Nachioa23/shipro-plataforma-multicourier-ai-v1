@@ -3316,13 +3316,50 @@ invisibles en localhost. La validación end-to-end contra el sandbox real es
 obligatoria antes de dar por cerrada cualquier integración (aplicable a los plugins
 WooCommerce/Shopify/Mercado Flex).
 
-**Pendientes menores (no bloqueantes, registrar si se priorizan):**
-- El link de trazabilidad que ve el merchant en Tiendanube puede quedar apuntando
-  al tracking provisorio (SHP-*) si el envío nació bloqueado y se destrabó después;
-  falta re-sincronizar el tracking real post-destrabe.
-- El costo de un envío de prueba salió $0 — verificar si es artefacto de la prueba
-  o un caso a revisar en la cotización del flujo labels.
-- UX: el link de instalación OAuth se genera por POST sin UI (ya registrado).
+**Actualización 2026-09-01 — circuito CORE validado end-to-end en producción:**
+tarifa (rates callback) + etiqueta automática al pagar (order/paid → /generate) +
+**precios consistentes checkout/etiqueta** (DEUDA 143 embrión, helper `armarBultoApilado`
+en `lib/empaquetado/`, commits `5633fa2` + `8e8523e` + `f05c915`; elimina el desvío
+~1,4% anterior entre lo cotizado en checkout vs lo cotizado al armar la etiqueta).
+Los 3 tramos del core operan sin fricción sobre la tienda demo real.
+
+**Pendientes registrados (no bloqueantes del core, agenda futura):**
+
+- **PENDIENTE 1 — Punto 3 del core: consumir y publicar la trazabilidad (NO empezado).**
+  La app Tiendanube debe hacer 3 cosas: (1) publicar tarifa en checkout [HECHO], (2) crear
+  la etiqueta automáticamente al pagar [HECHO, `order/paid` → etiqueta], (3) consumir y
+  publicar la trazabilidad del envío a la cuenta del comprador (e-commerce) y al dashboard
+  del merchant [NO EMPEZADO]. Hoy: cuando un envío nace bloqueado (`BLOQUEADO_*`) y se
+  destraba después, el tracking real del courier NO se re-sincroniza con Tiendanube — el
+  link de seguimiento del merchant/comprador puede quedar apuntando al tracking provisorio
+  `SHP-*`. Falta: (a) empujar el tracking real a Tiendanube cuando el envío se destraba,
+  (b) publicar actualizaciones de estado del envío al comprador. Es un bloque grande, la
+  evolución siguiente del circuito. Relacionado: el webhook `fulfillment_order/*` ya recibe
+  `tracking_event_*` de Tiendanube (hoy stubs no-op en el handler) — ese es el enganche
+  para la ingesta de tracking. Ver también [[DEUDA 106]] (tracking L1 público) + Nota
+  2026-08-06 en la DEUDA 130 sobre la Fulfillment Events API multi-inventory (PUSH desde
+  Shipro al POST `/orders/{order_id}/fulfillment-orders/{ffo_id}/tracking-events`).
+
+- **PENDIENTE 2 — Botón de impresión de etiqueta en el dashboard de Tiendanube (deprioritizado).**
+  El Admin Link funciona y sirve el PDF de la etiqueta (verificado end-to-end en el punto 3
+  del RESOLUCIÓN), pero el botón para dispararlo NO está surfaceado en el admin de
+  Tiendanube que ve el merchant. Hoy el PDF se accede por la URL directa del Admin Link.
+  Falta: que Tiendanube muestre el botón/link de impresión en su panel (requiere probablemente
+  wire con Nimbus/Nexo — ver Nota en DEUDA 130 sobre `@nimbus-ds/components` + `@tiendanube/nexo`).
+  **Nacho lo deprioritizó** (no es fundamental por ahora — el merchant puede acceder al PDF
+  vía Admin Link directamente).
+
+- **Sanity residual (verificar en próxima venta real):** el costo de un envío de prueba
+  salió $0 — quedaba por confirmar si era artefacto o caso a revisar. Post-fix DEUDA 143
+  (precios consistentes) el flujo debería producir el mismo precio que checkout — validar
+  en el próximo despacho real.
+
+- **UX (registrado aparte):** el link de instalación OAuth se genera por POST sin UI —
+  fricción inaceptable para cliente real (ya registrado como deuda menor separada).
+
+**Homologación formal:** [[DEUDA 130]] (spec + homologación oficial Tiendanube) sigue
+aparte — este DEUDA 149 cubre el circuito técnico validado end-to-end en tienda demo;
+la homologación formal para publicar en el App Store de Tiendanube es proceso distinto.
 
 ---
 

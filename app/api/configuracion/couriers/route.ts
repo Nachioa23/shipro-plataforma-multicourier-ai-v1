@@ -209,8 +209,12 @@ export async function POST(request: Request) {
       const nuevoActivo = courier.activo;
       const nuevoUsaPropias = courier.usaPropias;
       const nuevoTipoCuenta = courier.tipoCuenta ? courier.tipoCuenta : null;
-      const nuevoAjuste = parseFloat(courier.markupClientePorcentaje) || 0;
-      const nuevoMarkup = parseFloat(courier.markupClienteFijo) || 0;
+      // DEUDA 157 cierre (2026-09-01): removidos nuevoAjuste (ajusteTarifaPorcentaje —
+      // orphaned por Pieza 3, motor lee MarkupCourier) y nuevoMarkup (markupFijo —
+      // oculto; regla comercial proporcional-only). Los DB fields quedan a su valor
+      // actual (0 en todo el fleet); el UI ya no los expone; el endpoint deja de
+      // persistirlos desde esta tarjeta. Field markupFijo sigue LIVE en aplicarMarkup
+      // (fijoMarkup, always 0 ahora → no-op price-neutral).
       const nuevoSeguro = courier.seguroActivado || false;
       // DEUDA 132 Paso 5b: tarifa de rescate por courier. parseFloat defensivo;
       // Decimal se construye desde String() para no arrastrar imprecisión de float
@@ -282,12 +286,11 @@ export async function POST(request: Request) {
       const serviciosPatch = puedeEditarCampo(rol, "serviciosActivos")
         ? { serviciosActivos: serviciosActivos }
         : {};
-      const ajustePatch = puedeEditarCampo(rol, "ajusteTarifaPorcentaje")
-        ? { ajusteTarifaPorcentaje: nuevoAjuste }
-        : {};
-      const markupPatch = puedeEditarCampo(rol, "markupFijo")
-        ? { markupFijo: nuevoMarkup }
-        : {};
+      // DEUDA 157 cierre (2026-09-01): removidos ajustePatch + markupPatch — la tarjeta
+      // del cliente ya no expone estos inputs (ver TransportesTab section 3). Los DB
+      // fields quedan con su valor existente (0 fleet-wide). Permiso "markupFijo" en
+      // lib/permisos.ts se mantiene (sigue gate del rescue tariff L310 abajo + del
+      // descuento buyer-facing tier — no lo removemos, es "harmless legacy tag").
       const seguroPatch = puedeEditarCampo(rol, "requiereSeguro")
         ? { requiereSeguro: nuevoSeguro }
         : {};
@@ -334,8 +337,6 @@ export async function POST(request: Request) {
         Object.keys(usaPropiasPatch).length > 0 ||
         Object.keys(credencialesJsonPatch).length > 0 ||
         Object.keys(serviciosPatch).length > 0 ||
-        Object.keys(ajustePatch).length > 0 ||
-        Object.keys(markupPatch).length > 0 ||
         Object.keys(seguroPatch).length > 0 ||
         Object.keys(tipoCuentaPatch).length > 0 ||
         Object.keys(propietarioTipoPatch).length > 0 ||
@@ -368,8 +369,6 @@ export async function POST(request: Request) {
           ...usaPropiasPatch,
           ...credencialesJsonPatch,
           ...serviciosPatch,
-          ...ajustePatch,
-          ...markupPatch,
           ...seguroPatch,
           ...tipoCuentaPatch,
           ...propietarioTipoPatch,
@@ -386,8 +385,6 @@ export async function POST(request: Request) {
           ...usaPropiasPatch,
           ...credencialesJsonPatch,
           ...serviciosPatch,
-          ...ajustePatch,
-          ...markupPatch,
           ...seguroPatch,
           ...tipoCuentaPatch,
           ...propietarioTipoPatch,
@@ -435,12 +432,11 @@ export async function POST(request: Request) {
         if (puedeEditarCampo(rol, "serviciosActivos")) {
           // serviciosActivos NO esta en CAMPOS_AUDITABLES — skip audit (gating efectivo solo en upsert).
         }
-        if (puedeEditarCampo(rol, "ajusteTarifaPorcentaje")) {
-          await auditarCampo("ajusteTarifaPorcentaje", credAntes.ajusteTarifaPorcentaje, nuevoAjuste);
-        }
-        if (puedeEditarCampo(rol, "markupFijo")) {
-          await auditarCampo("markupFijo", credAntes.markupFijo, nuevoMarkup);
-        }
+        // DEUDA 157 cierre (2026-09-01): removidas las auditorías de
+        // ajusteTarifaPorcentaje + markupFijo — la tarjeta ya no los escribe
+        // (upsert dropea ambos patches arriba). El campo "markupFijo" en
+        // lib/permisos.ts + lib/auditoria-configuracion.ts se mantiene como
+        // legacy tag: sigue gate del rescue tariff + descuento tier (harmless).
         if (puedeEditarCampo(rol, "requiereSeguro")) {
           await auditarCampo("requiereSeguro", credAntes.requiereSeguro, nuevoSeguro);
         }

@@ -515,18 +515,15 @@ export default function TransportesTab({ empresaActivaId, embeddedInWizard = fal
                       </div>
                     )}
 
+                    {/* DEUDA 157 cierre (2026-09-01): removidos los inputs "Recargo/Descuento (%)"
+                        (ajusteTarifaPorcentaje — orphaned por Pieza 3, el motor lee MarkupCourier admin-managed)
+                        y "Costo Fijo Adicional ($)" (markupFijo — oculto; regla comercial proporcional-only, el
+                        field queda vivo en código con valor 0, re-exponible si cambia la política). Sección
+                        renombrada a "3. Tarifa de rescate" para reflejar lo que queda. Los row-state fields
+                        markupClientePorcentaje/markupClienteFijo siguen cargados a 0 (harmless: el endpoint ya
+                        no los persiste desde esta tarjeta). */}
                     <div className="bg-blue-50 border border-blue-100 rounded-xl p-5">
-                      <h5 className="text-xs font-black text-blue-800 uppercase tracking-widest mb-1 flex items-center gap-2"><Percent className="w-4 h-4 text-blue-600" /> 3. Ajuste Comercial (Tu Tienda)</h5>
-                      <div className="grid grid-cols-2 gap-4 mt-4">
-                        <div>
-                          <label className="block text-xs font-bold text-blue-900 mb-1">Recargo/Descuento (%)</label>
-                          <div className="relative"><input type="number" value={courier.markupClientePorcentaje} onChange={e => handleUpdateCourier(courier.id, 'markupClientePorcentaje', parseFloat(e.target.value))} className="w-full pl-3 pr-8 py-2 border border-blue-200 rounded-lg text-sm font-bold text-blue-900 outline-none focus:border-blue-500 bg-white" /><span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold">%</span></div>
-                        </div>
-                        <div>
-                          <label className="block text-xs font-bold text-blue-900 mb-1">Costo Fijo Adicional</label>
-                          <div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold">$</span><input type="number" value={courier.markupClienteFijo} onChange={e => handleUpdateCourier(courier.id, 'markupClienteFijo', parseFloat(e.target.value))} className="w-full pl-7 pr-3 py-2 border border-blue-200 rounded-lg text-sm font-bold text-blue-900 outline-none focus:border-blue-500 bg-white" /></div>
-                        </div>
-                      </div>
+                      <h5 className="text-xs font-black text-blue-800 uppercase tracking-widest mb-1 flex items-center gap-2"><Percent className="w-4 h-4 text-blue-600" /> 3. Tarifa de rescate</h5>
                       {/* DEUDA 132 Paso 5b: tarifa de rescate por courier — OBLIGATORIA para activar. */}
                       <div className="mt-4">
                         <label className="block text-xs font-bold text-blue-900 mb-1">Tarifa de rescate (neto, $) <span className="text-red-600">*</span></label>

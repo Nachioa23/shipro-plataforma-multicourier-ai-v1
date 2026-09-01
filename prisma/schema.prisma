@@ -407,6 +407,16 @@ enum DescuentoClienteModo {
   PORCENTAJE
 }
 
+// DEUDA 157 markup unificado Pieza 1 (2026-09-01): modo del markup Shipro per-courier.
+// HEREDA = sigue el global MarkupShiproVigencia en vivo (valorPorcentaje se ignora).
+// PROPIO = usa valorPorcentaje fijo de esta fila (permite 0% = apagado intencional,
+// distinto de HEREDA). Reemplaza la convención vieja "0 = inherit" del override
+// per-credencial por un flag explícito.
+enum MarkupCourierModo {
+  HEREDA
+  PROPIO
+}
+
 // ==========================================
 // 1.5. CREDENCIALES COURIERS (El Cerebro)
 // ==========================================
@@ -1642,6 +1652,9 @@ model MarkupCourier {
   courier   Courier @relation(fields: [courierId], references: [id], onDelete: Cascade)
 
   valorPorcentaje Decimal @db.Decimal(12, 4)
+  // HEREDA = sigue el global MarkupShiproVigencia en vivo; PROPIO = usa valorPorcentaje fijo.
+  // PROPIO permite 0% (apagado intencional). DEUDA 157 markup unificado Pieza 1 (2026-09-01).
+  modo MarkupCourierModo @default(HEREDA)
 
   activo        Boolean   @default(true)
   vigenciaDesde DateTime  @default(now())

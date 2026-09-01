@@ -3545,7 +3545,7 @@ Hoy la única forma de dar de alta o cambiar un intermediario es SQL directo o m
 
 ## DEUDA 157 — Rediseño del markup Shipro: markup UNIFICADO per-courier con modo HEREDA/PROPIO (Shipro-managed) (registrada 2026-08-28, EN PROGRESO 2026-09-01)
 
-**Status:** ABIERTA — **Piezas 1 + 2 done local 2026-09-01 (commits `93ef1c4` + `150eb4a`), pendiente deploy prod (ambas aditivas / UI-only)**. Pieza 3 (motor, MONEY-CRÍTICA, deploy aislado) es la única restante. Del build-home previo: `MarkupCourier` model + admin API + UI + nav (`fc03a1f`, 2026-08-31, aditivo) sigue vigente como base — Pieza 2 lo extendió con toggle HEREDA/PROPIO + valor recordado + hint global. No bloquea hoy porque no hay clientes reales en prod tocando el markup, pero es prerequisito para que un cliente REAL entre a producción sin poder alterar el markup Shipro.
+**Status:** ABIERTA — **Piezas 1 + 2 + 3 done local 2026-09-01 (commits `93ef1c4` + `150eb4a` + `73e3aa7`), pendiente deploy prod (Pieza 3 es la MONEY-CRÍTICA, pero con Opción A el deploy es PRICE-NEUTRAL)**. El rediseño motor+admin está **funcionalmente COMPLETO en local**; verificado end-to-end (Andreani PROPIO 15% subió $14.192,04→$14.742,45; HEREDA idénticos; Rama B gate = 0). Del build-home previo: `MarkupCourier` model + admin API + UI + nav (`fc03a1f`, 2026-08-31) es la base sobre la que se apilaron las 3 piezas. Post-deploy prod → marcar RESUELTA (semáforo localhost↔prod). **Pieza 4 restante (cierre client-card):** remover el campo `ajusteTarifaPorcentaje` de la sección 3 de `/configuracion/transportes` + drop schema — es limpieza, no crítica (el motor ya no lo lee). No bloquea que un cliente REAL entre a producción — el motor unificado ya está listo.
 
 **DISEÑO MARKUP UNIFICADO (Nacho, 2026-09-01 — REEMPLAZA la decisión previa "motor lee solo MarkupCourier sin fallback"):**
 
@@ -3583,26 +3583,39 @@ Rama B → sin markup Shipro (como ya definido; no consulta).
   - **Verificado localhost end-to-end:** toggle funciona; **VALOR RECORDADO OK** — ida-y-vuelta PROPIO→HEREDA→PROPIO recupera el valor sin pérdida; audit log confirma persistencia de `modo` en cada vigencia; el **PRECIO SIGUE AISLADO** — cotizar Andreani en PROPIO 15% dio el mismo precio ($14.192,04) porque el motor NO lee `modo` aún (`resolverMarkupShiproPorcentaje` sigue con el path viejo `ajusteTarifaPorcentaje` + global). Confirma la disciplina de aislamiento del motor hasta Pieza 3.
   - `tsc=0`. Blast: **2 files** (`app/(dashboard)/admin-markup-courier/page.tsx` + `app/api/admin/markup-courier/route.ts`). **Cero pricing tocado.** Pendiente deploy prod.
 
-- ⏳ **PIEZA 3 (pendiente, MONEY-CRÍTICA — deploy AISLADO para poder verificar precios post-deploy):** conectar el motor:
-  - Rewire `resolverMarkupShiproPorcentaje` (o nueva función) para leer `MarkupCourier` con la lógica modo (HEREDA → consulta `MarkupShiproVigencia`; PROPIO → devuelve `valorPorcentaje`).
-  - **Gate Rama B** en los 3 callers (`cotizador.ts`, `crear.ts`, `conciliacion/route.ts`): `config.usaCredencialesPropias` → skip resolver, markup=0.
-  - Blast estimado: 4 files (resolver + 3 callers). Post-Pieza-3, dropear `CredencialCourier.ajusteTarifaPorcentaje` + `markupFijo` (secuenciar como sub-follow-up destructivo — ver "Cierre del client-card" abajo).
+- ✅ **PIEZA 3 (HECHA local 2026-09-01, commit `73e3aa7`):** motor conectado a `MarkupCourier`. Cambios:
+  - **Nuevo `resolverMarkupCourierPorcentaje(courierId, usaCredencialesPropias, client)`** en `lib/utils/resolvers-tarifa.ts`. Lógica LOCKED:
+    - **Rama B** (`usaCredencialesPropias=true`): return 0 sin query (gate al tope).
+    - **Rama A**: `findFirst({ courierId, activo, vigenciaDesde ≤ ahora, vigenciaHasta null/≥ahora })`. `modo=PROPIO` → devuelve `valorPorcentaje`. `modo=HEREDA` → helper `resolverGlobalMarkupPorcentaje` (vínculo vivo con `MarkupShiproVigencia`). Sin fila → warn + safety net al global (no throw — default HEREDA de Pieza 1 hace que "sin fila" no debería pasar; safety net cubre edge cases sin romper cotización).
+  - **3 callers rewired:** `lib/cotizador.ts:518` (con null-safe `courierReal ?`), `lib/envios/crear.ts:684`, `app/api/conciliacion/route.ts:327` (con `tx` client). Todos pasan `(courierId, usaCredencialesPropias)`.
+  - **`resolverMarkupShiproPorcentaje` viejo REMOVIDO** — 0 consumers post-rewire (grep confirmó).
+  - **`aplicarMarkup` math INTACTA** — L200-260 sin cambios; sigue leyendo `config.ajusteTarifaPorcentaje` y aplicando el factor en L237. Solo cambió la FUENTE del value upstream.
+  - **Intermediary path INTACTO** — `resolverIntermediarioMarkupPorcentaje` + `baseConIntermediario` L223-225 sin cambios.
+  - `tsc=0`. Blast: **4 files** (resolver + 3 callers). Cero cambios en math ni intermediary path.
 
-  **Plan de medición de impacto acordado (obligatorio antes de deploy Pieza 3):**
-  1. **Foto de precios ANTES:** cotizar un set representativo de envíos con el motor actual (Andreani + Moci's + OCA + Correo + Hop; domicilio + sucursal; distintos CPs origen/destino). Anotar cada precioFinal en una tabla ANTES.
-  2. **Conectar el motor en local** (rewire del resolver + gate Rama B en los 3 callers).
-  3. **Foto de precios DESPUÉS:** cotizar EL MISMO set con el motor nuevo. Comparar:
-     - Couriers con `modo=HEREDA` → precio idéntico (siguen global 10%, el resolver nuevo consulta `MarkupShiproVigencia`, mismo valor).
-     - Couriers con `modo=PROPIO` con otro valor → diferencia medible (ej. Andreani en PROPIO 15% vs el global 10% → +5pp de markup).
-  4. **`tsc` no avisa de cambios de precio** — la verificación numérica ANTES/DESPUÉS es la única red de seguridad money-safe.
+  **Verificación end-to-end local (money-safe):**
+  - **Andreani PROPIO 15%:** baseline $14.192,04 (con 10% viejo global) → **$14.742,45** (post-Pieza-3 con 15% PROPIO). Delta $550.41 = **+3.88% sobre precioFinal**, coherente con markup 10%→15% aplicado sobre `baseConIntermediario` (delta cascade: 1.10→1.15, +4.5% aprox sobre cascada-Shipro, diluido por SMO/Fee/IVA constantes).
+  - **Moci's, OCA, Correo Argentino, Hop Envíos (HEREDA):** precios **IDÉNTICOS** al baseline (siguen matcheando el global 10% via el nuevo resolver).
+  - **Rama B (empresa 5 Andreani propias):** gate = 0, sin markup Shipro (mismo comportamiento que el path viejo — ambas versiones ignoran Rama B).
+  - **Resolver-level simulación cross-checked:** viejo=10 vs nuevo=15 en Andreani (Δ +5pp); viejo=10 vs nuevo=10 en HEREDA (Δ 0). Predicción numérica match perfecto.
 
-  **Decisión de estrategia de deploy (pendiente al encarar):**
-  - **Opción A (recomendada):** deployar con TODOS los couriers en HEREDA → **conexión neutra, cero cambio de precio**. Ajustar a PROPIO courier por courier después, con cambio de precio intencional y medible.
-  - **Opción B:** deployar con algún PROPIO ya activo → cambio de precio intencional en el mismo commit del rewire. Requiere validación explícita del delta antes de push.
+**PLAN DE DEPLOY (Opción A, decidido — deploy NEUTRO):**
+- **Prod hoy: TODOS los couriers en HEREDA** (default de Pieza 1, no se cargó ningún PROPIO). Conectar el motor en prod es **PRICE-NEUTRAL** — todos siguen el global 10%, idéntico al comportamiento actual del resolver viejo (que para `ajusteTarifaPorcentaje=0` también cae al global 10%).
+- **Deploy invisible para facturación** — cero cambio de precio, cero impacto operativo.
+- **Ajuste de markups per-courier a PROPIO se hace DESPUÉS** desde `/admin-markup-courier`, deliberado y medible, aislado del deploy del motor. Un problema es del rewire O de un valor nuevo, nunca ambos mezclados.
 
-  **Recomendación registrada:** **Opción A** (HEREDA primero) — aísla "conectar motor" de "cambiar markup". Un problema post-deploy es del rewire O de un valor nuevo, no ambos mezclados.
+**Con Pieza 3, la DEUDA 157 queda funcionalmente COMPLETA en su parte motor+admin.** Las 3 piezas del rediseño están cerradas:
+- ✅ Pieza 1: campo `modo` (data model).
+- ✅ Pieza 2: toggle admin UI + API.
+- ✅ Pieza 3: motor consume desde `MarkupCourier`.
 
-**Cierre del client-card (post-Pieza-3, mismo dominio que la vieja secuencia "Paso 3"):** una vez el motor lee del nuevo path, remover `CredencialCourier.ajusteTarifaPorcentaje` (+ `markupFijo`) del schema + UI `TransportesTab.tsx` + permisos + auditoría + endpoint edit + migración destructiva (patrón DEUDA 160). Cierra [[DEUDA 154]] (label engañoso) y los renames [[DEUDA 158]] entangled (`ajusteTarifaPorcentaje`/`markupFijo` se van al drop en vez de renombrarse).
+Post-deploy prod → marcar la deuda RESUELTA siguiendo la convención del repo (semáforo localhost↔prod).
+
+**PIEZA 4 pendiente (cierre client-card):** con el motor ya migrado, el campo viejo `CredencialCourier.ajusteTarifaPorcentaje` **YA NO lo lee el motor** (Pieza 3 lo reemplazó), pero **sigue EXISTIENDO en la UI del cliente** (`components/configuracion/TransportesTab.tsx` sección "3. Ajuste Comercial"). Su remoción es el cierre final:
+- Remover sección "3. Ajuste Comercial (Tu Tienda)" de `TransportesTab.tsx` (el cliente no debería verla ni tocarla).
+- Drop de `CredencialCourier.ajusteTarifaPorcentaje` + `markupFijo` del schema (migración destructiva patrón DEUDA 160).
+- Rewire de UI + endpoint edit (`app/api/configuracion/couriers/route.ts`) + `lib/permisos.ts` + `lib/auditoria-configuracion.ts` para no listar los fields dropeados.
+- Cierra [[DEUDA 154]] (label engañoso "Recargo/Descuento" — se resuelve al remover) y los renames [[DEUDA 158]] entangled (`ajusteTarifaPorcentaje` + `markupFijo` se van al drop en vez de renombrarse). Scope: medio (múltiples files + migración destructiva); prioridad: baja post-Pieza-3 (motor ya migrado, el field vive dormido).
 
 ---
 

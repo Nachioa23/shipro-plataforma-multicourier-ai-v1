@@ -41,6 +41,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Body inválido" }, { status: 422 });
     }
 
+    // DEUDA 143 debug (temporal): capturar shape del body de rates para ver si
+    // Tiendanube envía dimensiones por item (width/height/depth/length/dimensions)
+    // o solo grams. Slice a 1500 chars para no floodear logs pero capturar estructura.
+    console.log("[TN-RATES-DBG] body:", JSON.stringify(body).slice(0, 1500));
+    console.log("[TN-RATES-DBG] items[0]:", JSON.stringify(body?.items?.[0] ?? "no-items"));
+
     const storeId = Number(body.store_id);
     if (!Number.isInteger(storeId)) {
       return NextResponse.json({ error: "store_id inválido" }, { status: 422 });

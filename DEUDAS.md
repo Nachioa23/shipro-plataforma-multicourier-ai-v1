@@ -3806,3 +3806,36 @@ Migración destructiva: **EXACTAMENTE 4 DROP COLUMN** en la SQL (sin drops/alter
 **Origen:** pregunta de Nacho durante recon del rename `seguroAplicado → smoAplicado` (2026-08-31, [[DEUDA 158]] avance 3): *"¿podría `seguroAplicado` también hold el seguro del courier si el cliente lo activa?"* — recon confirmó que no (0 wiring), y en vez de resolverlo con un nombre genérico se optó por: (i) nombre específico `smoAplicado` (rol real hoy), (ii) registrar el gap de la feature como debt separada.
 
 ---
+
+## DEUDA 164 — Bug: courier con nombre acentuado (Hop Envíos) duplicado en /admin-couriers + "Error al crear el courier" al activar (registrada 2026-09-01, RESUELTA LOCAL 2026-09-01, pend. deploy prod)
+
+**Status:** RESUELTA EN CÓDIGO (commit `ef00894`, 2026-09-01), pendiente deploy prod (fix presente en local + push pendiente). Semáforo localhost↔prod: queda acá hasta subir. Bug pre-existente (no introducido esta sesión), presente en local Y prod hasta este fix.
+
+**Problema:** el normalizador de nombres de courier en `app/api/admin/couriers/route.ts` (GET filter L47 + POST pre-check L177) hacía `.toLowerCase().replace(/['\s]/g, "")` — strippeaba minúsculas + apóstrofes + whitespace pero **NO acentos**. La `í` sobrevivía la normalización.
+
+Consecuencia para **Hop Envíos**:
+- **DB** `"Hop Envíos"` → normaliza a `"hopenvíos"` (con `í`).
+- **Registry canonical** (`lib/couriers/CourierFactory.ts:24`) → `"hopenvios"` (sin `í`, ASCII plain).
+- **Mismatch en GET filter:** `nombresEnBd` set contenía `"hopenvíos"`; `couriersSoportados()` devolvía `"hopenvios"` → `.filter(!nombresEnBd.has(n))` dejaba pasar Hop → **la UI lo mostraba dos veces** (en la lista de couriers activos DB + en la lista "integrables"). Otros 4 couriers (Andreani, Mocis, OCA, Correo Argentino) sobrevivían por casualidad — todos display names all-ASCII, la normalización coincidía con el canonical. Hop era el **único** courier del registry con un carácter no-ASCII (`í`).
+- **Mismatch en POST pre-check:** el falso negativo del mismo normalizador dejaba pasar el request de re-crear. El `create` hits `Courier.nombre @unique` (schema L211) → Prisma tira P2002 → catch L228-230 devolvía el genérico `"Error al crear el courier"` (500), ocultando la razón real (unique violation).
+
+**Fix (commit `ef00894`, 2026-09-01):**
+1. **Normalizador arreglado:** pipeline nuevo `lowercase → NFD → strip diacríticos (regex sobre U+0300–U+036F) → strip apóstrofes + whitespace`. Ahora `"Hop Envíos"` → `"hopenvios"` (matchea el canonical). Los otros 4 couriers normalizan idéntico al pre-fix (NFD sobre ASCII es no-op).
+2. **Extraído a helper compartido** `lib/utils/normalizar-courier.ts` (`normalizarNombreCourier`) — usado por GET filter + POST pre-check en el mismo file. Evita drift futuro entre dos sitios copy-pasted.
+3. **P2002 específico:** catch POST distingue `Prisma.PrismaClientKnownRequestError` con `err.code === "P2002"` → responde 409 con `"El courier \"${nombre}\" ya existe."`. Red-safety para race conditions (dos POST concurrentes entre pre-check y create) y para futuros drifts entre normalizer y DB. El catch genérico se mantiene para otros errores (500).
+
+**Verificado localhost:** `tsc=0`; sanity de normalización confirma `"Hop Envíos" → "hopenvios"` (fix) + los otros 4 couriers idénticos (`andreani`, `mocis`, `oca`, `correoargentino`); solo 2 files tocados (`admin/couriers/route.ts` + `lib/utils/normalizar-courier.ts` nuevo). **Cero pricing, cero schema, cero migration.**
+
+**Sub-tarea menor (report only, pendiente):** el recon detectó otros sitios con el patrón viejo `.toLowerCase().replace(/['\s]/g, "")` que hacen matching de nombre de courier — candidatos a migrar al helper compartido para prevenir el mismo bug si algún futuro courier trae acentos:
+- `lib/couriers/normalizar.ts:14` (probablemente `normalizarParaComparacion`, usado en cotizador + dispatch).
+- `lib/couriers/credenciales/index.ts:17, 37` (resolución de credenciales).
+
+No tocados en `ef00894` por scope estricto — solo route de admin-couriers. Registrar como micro-follow-up cuando se decida migrar el resto del codebase al helper unificado.
+
+**Scope:** bajo (1 file de código + 1 helper nuevo + doc). **Prioridad:** alta (bug operativo — bloqueaba activación de Hop en admin, opacaba errores de creación).
+
+**Relación:** [[DEUDA 32+37]] (ABM de couriers original — introdujo el normalizador buggy). Descubierto durante la campaña de DEUDA 157 (Nacho cargando markups per courier post-Paso 1, notó el duplicate + error al intentar activar Hop).
+
+**Origen:** Nacho reportó el bug al intentar activar Hop en el admin (2026-09-01) tras deploy de DEUDA 157 Paso 1. Diagnosis + fix same-session.
+
+---

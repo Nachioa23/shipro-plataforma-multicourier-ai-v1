@@ -16,7 +16,7 @@ import { resolverPrecioFallback } from "@/lib/utils/precio-fallback";
 import { calcularFeeOperacion } from "@/lib/utils/operacion-fee";
 import { validarDireccionEnvio } from "@/lib/geo/validar-direccion";
 import {
-  resolverMarkupShiproPorcentaje,
+  resolverMarkupCourierPorcentaje,
   resolverSmoNeto,
   resolverIntermediarioMarkupPorcentaje,
 } from "@/lib/utils/resolvers-tarifa";
@@ -681,8 +681,11 @@ export async function crearEnvio(input: CrearEnvioInput) {
         try {
           // FASE 2 motor mov 2: resolver los 4 términos de la cascada
           // (intermediario, markup Shipro, SMO, Fee) igual que cotización.
-          const markupShiproPorcentajeFB = await resolverMarkupShiproPorcentaje(
-            credencialMain.ajusteTarifaPorcentaje
+          // DEUDA 157 Pieza 3 (2026-09-01): markup Shipro ahora viene de MarkupCourier
+          // (modo HEREDA→global, PROPIO→valor). Rama B gate en el resolver.
+          const markupShiproPorcentajeFB = await resolverMarkupCourierPorcentaje(
+            courierIdReal,
+            credencialMain.usaCredencialesPropias
           );
           const smoNetoFB = await resolverSmoNeto(courierIdReal);
           const intermediarioMarkupPorcentajeFB = await resolverIntermediarioMarkupPorcentaje(

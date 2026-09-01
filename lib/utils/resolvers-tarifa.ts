@@ -27,31 +27,16 @@ import { Prisma } from "@prisma/client";
 // migra el motor a las nuevas fuentes.
 
 /**
- * Resuelve el % de markup Shipro a aplicar en la cascada de aplicarMarkup.
- *
- * REGLA (Nacho, 2026-08-03, ver DISENO-MODELO-DATOS-CONFIG-VARIABLES.md §5.2):
- *   - Si CredencialCourier.ajusteTarifaPorcentaje > 0 → es un OVERRIDE
- *     explícito para ese par cliente↔courier: devolvemos ese %.
- *   - Si es 0 → HEREDA el markup Shipro GLOBAL vigente
- *     (MarkupShiproVigencia). Motivación: el markup Shipro nunca es 0 en el
- *     negocio, así que 0 = "no seteado / inherit"; además una empresa
- *     accidentalmente en 0 hereda el global en vez de perder margen.
- *   - Si por algún motivo NO hay MarkupShiproVigencia activa (nunca
- *     debería, hay seed): warn + devolver 0. Fail-open sobre fail-loud
- *     porque la ausencia acá bloquearía cotización.
- *
- * NO hay cambio de schema: ajusteTarifaPorcentaje sigue siendo
- * Float @default(0.0) NOT NULL. La convención "0 = inherit" reemplaza a la
- * convención documentada "null = inherit" del diseño.
+ * Helper interno: resuelve el markup Shipro GLOBAL activo/vigente
+ * (MarkupShiproVigencia). Es el valor que los MarkupCourier en modo HEREDA
+ * siguen en vivo. Sin vigencia activa → warn + 0 (fail-open — nunca debería
+ * pasar; hay seed que crea la fila inicial 10%).
+ * DEUDA 157 Pieza 3 (2026-09-01): extraído del viejo resolverMarkupShiproPorcentaje
+ * para reuso desde resolverMarkupCourierPorcentaje (HEREDA + safety net).
  */
-export async function resolverMarkupShiproPorcentaje(
-  ajusteTarifaPorcentaje: number,
+async function resolverGlobalMarkupPorcentaje(
   client: { markupShiproVigencia: typeof prisma.markupShiproVigencia } = prisma
 ): Promise<number> {
-  if (Number.isFinite(ajusteTarifaPorcentaje) && ajusteTarifaPorcentaje > 0) {
-    return ajusteTarifaPorcentaje;
-  }
-
   const ahora = new Date();
   const activo = await client.markupShiproVigencia.findFirst({
     where: {
@@ -61,15 +46,73 @@ export async function resolverMarkupShiproPorcentaje(
     },
     orderBy: { vigenciaDesde: "desc" },
   });
-
   if (!activo) {
     console.warn(
-      "[resolverMarkupShiproPorcentaje] No hay MarkupShiproVigencia activa — revisar seed/config. Devolviendo 0."
+      "[resolverGlobalMarkupPorcentaje] No hay MarkupShiproVigencia activa — revisar seed/config. Devolviendo 0."
     );
     return 0;
   }
-
   return Number(activo.valorPorcentaje);
+}
+
+/**
+ * DEUDA 157 markup unificado Pieza 3 (2026-09-01): resuelve el % de markup
+ * Shipro por courier desde MarkupCourier (con modo HEREDA/PROPIO). Reemplaza
+ * el viejo resolverMarkupShiproPorcentaje (que leía el override per-credencial
+ * + fallback global).
+ *
+ * REGLA (Nacho, 2026-09-01, ver DEUDA 157 markup unificado en DEUDAS.md):
+ *   - Rama B (usaCredencialesPropias=true): **NO markup Shipro** — gate al
+ *     tope, no se consulta MarkupCourier. Devuelve 0 sin query.
+ *   - Rama A: lee la fila activa/vigente de MarkupCourier para el courier:
+ *     * modo=HEREDA → devuelve el global MarkupShiproVigencia vigente
+ *       (vínculo vivo: si el global cambia, este courier lo sigue).
+ *     * modo=PROPIO → devuelve `valorPorcentaje` de la fila (permite 0 —
+ *       markup apagado a propósito, distinto de heredar 0).
+ *   - Sin fila MarkupCourier para el courier: NO debería pasar (Pieza 1
+ *     hace que default HEREDA cubra todo courier activo automáticamente).
+ *     Safety net: warn + cae al global (mismo comportamiento que HEREDA).
+ *     NO throw — no romper cotización por config faltante.
+ *
+ * NOTA: el intermediario markup (owner-lent, Rama A) es un cascade SEPARADO
+ * (resolverIntermediarioMarkupPorcentaje) y NO cambia con Pieza 3.
+ */
+export async function resolverMarkupCourierPorcentaje(
+  courierId: number,
+  usaCredencialesPropias: boolean,
+  client: {
+    markupShiproVigencia: typeof prisma.markupShiproVigencia;
+    markupCourier: typeof prisma.markupCourier;
+  } = prisma
+): Promise<number> {
+  // Rama B: sin markup Shipro por diseño (mismo criterio que aplicarMarkup L228).
+  if (usaCredencialesPropias) return 0;
+
+  const ahora = new Date();
+  const row = await client.markupCourier.findFirst({
+    where: {
+      courierId,
+      activo: true,
+      vigenciaDesde: { lte: ahora },
+      OR: [{ vigenciaHasta: null }, { vigenciaHasta: { gte: ahora } }],
+    },
+    orderBy: { vigenciaDesde: "desc" },
+    select: { modo: true, valorPorcentaje: true },
+  });
+
+  if (!row) {
+    console.warn(
+      `[resolverMarkupCourierPorcentaje] No hay MarkupCourier activo para courierId=${courierId} — cae al global (safety net). Revisar config (debería existir por default HEREDA de Pieza 1).`
+    );
+    return await resolverGlobalMarkupPorcentaje(client);
+  }
+
+  if (row.modo === "PROPIO") {
+    return Number(row.valorPorcentaje);
+  }
+
+  // HEREDA → global en vivo.
+  return await resolverGlobalMarkupPorcentaje(client);
 }
 
 /**

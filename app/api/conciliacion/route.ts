@@ -4,7 +4,7 @@ import { Prisma, EstadoLiquidacion } from "@prisma/client";
 import { aplicarMarkup, type ConfigMarkup } from "@/lib/cotizador";
 import { calcularFeeOperacion } from "@/lib/utils/operacion-fee";
 import {
-  resolverMarkupShiproPorcentaje,
+  resolverMarkupCourierPorcentaje,
   resolverSmoNeto,
   resolverIntermediarioMarkupPorcentaje,
 } from "@/lib/utils/resolvers-tarifa";
@@ -324,8 +324,11 @@ export async function POST(request: Request) {
 
           const smoNeto: Prisma.Decimal = await resolverSmoNeto(envio.courierId, tx);
 
-          const markupShiproPorcentaje = await resolverMarkupShiproPorcentaje(
-            credencial.ajusteTarifaPorcentaje,
+          // DEUDA 157 Pieza 3 (2026-09-01): markup Shipro ahora viene de MarkupCourier
+          // (modo HEREDA→global, PROPIO→valor). Rama B gate en el resolver.
+          const markupShiproPorcentaje = await resolverMarkupCourierPorcentaje(
+            envio.courierId,
+            credencial.usaCredencialesPropias,
             tx
           );
 

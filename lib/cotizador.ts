@@ -6,7 +6,7 @@ import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
 import { calcularPromesaCalibrada } from "@/lib/utils/promesa-calibrada";
 import { calcularFeeOperacion } from "@/lib/utils/operacion-fee";
 import {
-  resolverMarkupShiproPorcentaje,
+  resolverMarkupCourierPorcentaje,
   resolverSmoNeto,
   resolverIntermediarioMarkupPorcentaje,
 } from "@/lib/utils/resolvers-tarifa";
@@ -507,7 +507,9 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
       // cascada de aplicarMarkup queda sync/pure — sólo cambia de dónde vienen
       // sus inputs:
       //   - Markup Shipro (%): MarkupShiproVigencia global vigente, con
-      //     credencial.ajusteTarifaPorcentaje como override (0 = hereda global).
+      //     resolverMarkupCourierPorcentaje: por courier desde MarkupCourier
+      //     (modo HEREDA→global, PROPIO→valor). Rama B gate: sin markup Shipro.
+      //     DEUDA 157 Pieza 3 (2026-09-01): reemplaza el path viejo per-credencial.
       //   - SMO (neto): SmoCourier del courier ejecutor, vigente. Sin fila → 0
       //     con warn. NO se dual-read el legacy Courier.smoPrecioAlClienteConIva.
       //   - Intermediario (%): owner-keyed via credencial.propietarioCourierId,
@@ -515,9 +517,9 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
       //     propietario seteado (browse/quote no rompe; creación de envío ya
       //     bloquea legacy null-owner Rama A con BLOQUEADO_CREDENCIAL, sub-piece 3).
       // Ver lib/utils/resolvers-tarifa.ts para los contratos completos.
-      const markupShiproPorcentaje = await resolverMarkupShiproPorcentaje(
-        config.ajusteTarifaPorcentaje
-      );
+      const markupShiproPorcentaje = courierReal
+        ? await resolverMarkupCourierPorcentaje(courierReal.id, config.usaCredencialesPropias)
+        : 0;
       const smoNeto = courierReal
         ? await resolverSmoNeto(courierReal.id)
         : new Prisma.Decimal(0);

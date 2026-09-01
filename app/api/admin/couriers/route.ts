@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import prisma from "@/lib/prisma";
 import { capacidadTecnica, CODIGOS_SERVICIO, displayCourier } from "@/lib/couriers/serviciosSoportados";
 import { couriersSoportados, courierTieneSoporte } from "@/lib/couriers/CourierFactory";
+import { normalizarNombreCourier } from "@/lib/utils/normalizar-courier";
 
 // =============================================================================
 // DEUDA 32+37: ABM de couriers (espacio Shipro).
@@ -43,9 +45,11 @@ export async function GET(request: Request) {
   // Couriers integrables: tienen adapter (couriersSoportados) pero NO fila en BD.
   // Es lo que el asistente de alta ofrece para crear. Devolvemos canonico (lo que
   // espera el POST) + display (para mostrar en UI).
-  const nombresEnBd = new Set(
-    couriers.map((c) => c.nombre.toLowerCase().replace(/['\s]/g, ""))
-  );
+  // Normalización diacritic-insensitive (helper compartido) para matchear
+  // display names con acentos (`"Hop Envíos"`) contra canónicos ASCII del
+  // registry (`hopenvios`). Sin esto, Hop aparecía duplicado en la lista
+  // (bug pre-fix: `/[\s]/` no strippea acentos → mismatch DB vs registry).
+  const nombresEnBd = new Set(couriers.map((c) => normalizarNombreCourier(c.nombre)));
   const integrables = couriersSoportados()
     .filter((n) => !nombresEnBd.has(n))
     .map((canonico) => ({ canonico, display: displayCourier(canonico) }));
@@ -172,10 +176,9 @@ export async function POST(request: Request) {
     );
   }
 
-  // Verificar que no exista ya (por nombre normalizado).
+  // Verificar que no exista ya (por nombre normalizado, diacritic-insensitive).
   const existentes = await prisma.courier.findMany();
-  const normalizar = (s: string) => s.toLowerCase().replace(/['\s]/g, "");
-  if (existentes.some((c) => normalizar(c.nombre) === normalizar(nombre))) {
+  if (existentes.some((c) => normalizarNombreCourier(c.nombre) === normalizarNombreCourier(nombre))) {
     return NextResponse.json(
       { error: `El courier '${nombre}' ya existe.` },
       { status: 409 }
@@ -226,6 +229,16 @@ export async function POST(request: Request) {
     });
     return NextResponse.json({ courier: conServicios }, { status: 201 });
   } catch (err: any) {
+    // P2002 = unique constraint violation. En este handler, prácticamente
+    // siempre es Courier.nombre @unique (el pre-check normalizado ya intenta
+    // atraparlo antes; este catch es red-safety si la normalización aún
+    // divergiera de la comparación DB — o si dos POST concurrentes crean
+    // la misma fila entre pre-check y create). Devolvemos 409 + mensaje
+    // específico para que el operador entienda la causa real.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      console.error(`[admin/couriers POST] courier ya existe (P2002): ${nombre}`);
+      return NextResponse.json({ error: `El courier "${nombre}" ya existe.` }, { status: 409 });
+    }
     console.error("[admin/couriers POST] fallo:", err);
     return NextResponse.json({ error: "Error al crear el courier" }, { status: 500 });
   }

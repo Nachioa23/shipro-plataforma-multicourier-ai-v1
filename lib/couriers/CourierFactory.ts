@@ -4,6 +4,7 @@ import { MocisAdapter } from './MocisAdapter';
 import { OcaAdapter, CredencialesOca } from './OcaAdapter';
 import { CorreoArgentinoAdapter, CredencialesCorreoArgentino } from './CorreoArgentinoAdapter';
 import { HopEnviosAdapter, CredencialesHopEnvios } from './HopEnviosAdapter';
+import { IntralogAdapter } from './IntralogAdapter';
 import { normalizarParaComparacion } from './normalizar';
 import { SERVICIOS_SOPORTADOS } from './serviciosSoportados';
 
@@ -21,7 +22,7 @@ export const COURIERS_SOPORTADOS = Object.keys(SERVICIOS_SOPORTADOS);
 // Los switches de JS no son reflectables, asi que esta lista se mantiene a mano
 // junto al switch — misma disciplina que agregar un case. verificarConsistencia-
 // Couriers() la compara contra el registry para detectar desincronizacion.
-const COURIERS_CON_CASE = ['andreani', 'mocis', 'oca', 'correoargentino', 'hopenvios'];
+const COURIERS_CON_CASE = ['andreani', 'mocis', 'oca', 'correoargentino', 'hopenvios', 'intralog'];
 
 // Detecta drift entre el registry (COURIERS_SOPORTADOS) y el switch
 // (COURIERS_CON_CASE). Devuelve los desalineados en cada direccion.
@@ -132,6 +133,12 @@ export class CourierFactory {
         }
         return new HopEnviosAdapter(hop);
       }
+
+      case 'intralog':
+        if (!credenciales.usuario || !credenciales.password) {
+          throw new Error('Faltan credenciales de Intralog (usuario/password)');
+        }
+        return new IntralogAdapter(credenciales.usuario, credenciales.password);
 
       // Para sumar un nuevo courier: (1) agregar su entrada al registry
       // serviciosSoportados.ts (eso lo suma a COURIERS_SOPORTADOS), (2) importar

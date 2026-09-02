@@ -3,6 +3,7 @@ import * as mocis from './mocis';
 import * as oca from './oca';
 import * as correoargentino from './correoargentino';
 import * as hopenvios from './hopenvios';
+import * as intralog from './intralog';
 
 /**
  * Devuelve credenciales master de Shipro para el courier indicado.
@@ -21,6 +22,7 @@ export function obtenerCredencialesShipro(courier: string): unknown {
     case 'oca':      return oca.obtenerShipro();
     case 'correoargentino': return correoargentino.obtenerShipro();
     case 'hopenvios': return hopenvios.obtenerShipro();
+    case 'intralog': return intralog.obtenerShipro();
     default:         return {};
   }
 }
@@ -41,6 +43,7 @@ export function parsearCredencialesPropias(courier: string, json: string | null 
     case 'oca':      return oca.parsearPropias(json);
     case 'correoargentino': return correoargentino.parsearPropias(json);
     case 'hopenvios': return hopenvios.parsearPropias(json);
+    case 'intralog': return intralog.parsearPropias(json);
     default:         return {};
   }
 }
@@ -50,3 +53,4 @@ export type { CredencialesMocis } from './mocis';
 export type { CredencialesOca } from './oca';
 export type { CredencialesCorreoArgentino } from './correoargentino';
 export type { CredencialesHopEnvios } from './hopenvios';
+export type { CredencialesIntralog } from './intralog';

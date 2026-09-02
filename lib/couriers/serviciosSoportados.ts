@@ -36,6 +36,7 @@ export const NOMBRES_DISPLAY: Record<string, string> = {
   oca: "OCA",
   correoargentino: "Correo Argentino",
   hopenvios: "Hop Envíos",
+  intralog: "Intralog",
 };
 
 // Helper: devuelve el nombre de display de un courier, con fallback a la
@@ -133,6 +134,16 @@ export const SERVICIOS_SOPORTADOS: Record<string, Partial<Record<CodigoServicio,
     inversa_cambio: null,
     inversa_devolucion_retiro_domicilio: null,
     inversa_devolucion_dropoff_sucursal: "sucursal",
+  },
+  intralog: {
+    entrega_domicilio_estandar: "domicilio",   // AMBA/INTERIOR según CP (una zona, no servicios distintos)
+    entrega_domicilio_express: null,            // FASE 2 — falta confirmar precio/condiciones con César
+    entrega_sucursal: null,                     // PICK UP — FASE 2 (obtenerSucursales aún es stub)
+    entrega_punto_retiro: null,
+    entrega_elocker: null,
+    inversa_cambio: null,                       // no confirmado en doc de Intralog
+    inversa_devolucion_retiro_domicilio: null,
+    inversa_devolucion_dropoff_sucursal: null,
   },
 };
 

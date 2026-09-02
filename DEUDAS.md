@@ -4024,3 +4024,67 @@ Post-CAPA-2 estricto, con 0 servicios activo:true en la BD para Hop → **Hop de
 **Origen:** configuración del catálogo Shipro de couriers pre-deploy de [[DEUDA 91]] (Nacho, 2026-09-03). El bloqueo del server al activar `entrega_sucursal` de Hop en `/admin-couriers` es la señal.
 
 ---
+
+## DEUDA 166 — Gate de activación: soportar courier de entrega auto-recolector sin sucursales (bloquea Intralog) (registrada 2026-09-02, scope medio, prioridad alta)
+
+**Status:** ABIERTA — descubierta al intentar activar Intralog en `/configuracion/transportes` tras integrarlo (adapter + factory + registry + fila Courier ya en BD, cotización verificada contra la API de Intralog: $10.219 neto). El gate rechaza la activación con *"Sin cobertura · Intralog no tiene sucursales modeladas ni capacidad de consolidación (origen efectivo CP 1702)"*. Territorio: **Núcleo** (`app/api/configuracion/couriers/route.ts` + `lib/couriers/modalidad.ts`).
+
+**Problema:** el gate de activación (DEUDA 36.E Diseño 2 STEP A) rechaza cualquier courier cuya modalidad de asignación de sucursal resuelva `sin_sucursales`. La modalidad se deriva en `getModalidadAsignacion()` de `lib/couriers/modalidad.ts:47-55`:
+- Si `tieneSucursales(courier)` → `por_cp_origen`
+- Si `puedeConsolidar && cpDepositoConsolidador` → `sucursal_unica`
+- Sino → **`sin_sucursales`** → gate rechaza
+
+Intralog es courier de entrega **domicilio-a-domicilio, auto-recolector**, sin sucursales físicas modeladas ni capacidad de consolidación activada en Fase 1 (registry `entrega_sucursal: null`, DB `puedeConsolidar=false`, `cpDepositoConsolidador=null`). Cae en `sin_sucursales` → rechazo del gate. El gate no contempla un **cuarto perfil**: "courier que auto-recolecta en el depósito del cliente y entrega domicilio-a-domicilio, sin sucursales físicas".
+
+**Cross-check con recon (Chat A, 2026-09-02):**
+- Verificado con probe a BD: Intralog id=13 `{ puedeRecogerDomicilio=false, puedeConsolidar=false, cpDepositoConsolidador=null, servicios=[] }`.
+- Con Depósito 3 (empresaId=3 Cliente Demo SRL, CP 1661, `courierRecolectorId=2` Moci's) → gate calcula `cpOrigenEfectivo="1702"` (hub de Moci's) por la rama `recolector && courierBDCheck.id !== recolector.id && recolector.cpDepositoConsolidador` (`route.ts:121-128`). Intralog no cubre 1702 → `sin_sucursales`.
+- Sin recolector (o quitando `courierRecolectorId`) → gate calcula `cpOrigenEfectivo = depositoPrincipal.codigoPostal` → Intralog sigue rechazado por `sin_sucursales` (la modalidad no depende del CP). Confirma que el problema es de perfil, no de CP.
+- **`puedeRecogerDomicilio` es código muerto** — grep exhaustivo (`grep -rn puedeRecogerDomicilio` excluyendo `node_modules`/`.git`) devuelve solo hits en `prisma/schema.prisma`, `prisma/migrations/…`, `docs/ARQUITECTURA-MULTICOURIER.md` y el script `crear-intralog.mjs` (setter). Ningún consumidor en runtime. Setearlo en `true` no cambia nada del gate.
+
+**Regla de negocio (Nacho, 2026-09-02):** si un courier NO puede recolectar desde el depósito del recolector designado pero SÍ desde el del cliente, debe poder activarse igual, con la aclaración de que sólo recolecta desde el depósito del cliente y emite **etiqueta simple** (sin sub-etiqueta de recolector).
+
+**Fix:** el gate (o `getModalidadAsignacion`) debe reconocer el perfil "courier de entrega domicilio-a-domicilio con auto-pickup, sin sucursales" como cobertura VÁLIDA. Semánticamente equivale a "el courier hace su Caso B (mismo_courier) sin pasar por el hub del recolector predeterminado del depósito". Opciones a evaluar durante diseño:
+- Introducir una modalidad nueva (`domicilio_autopickup`) en `modalidad.ts` gatillada por un flag explícito del Courier (ej. cablear `puedeRecogerDomicilio` — hoy inerte — como source of truth, o un flag nuevo `entregaDomicilioDirecto`).
+- Alternativamente, hacer que el gate use el CP del depósito del cliente (no el hub del recolector) cuando el courier declara auto-pickup, y aceptar `sin_sucursales` como cobertura cuando el courier declara este perfil.
+- `dispatch.ts` Caso B (`lib/envios/dispatch.ts:442-473`) **ya soporta** el despacho de este perfil sin cambios (no chequea sucursales, sólo llama `motorMain.despachar(paramsDespacho)`). **El bloqueo es SOLO el gate de activación** — el runtime está listo.
+
+**Consecuencia operacional hasta el fix:** Intralog **no se puede activar** en ninguna empresa. Bloquea la puesta en producción de Intralog Fase 1 (los adapters/registry/DB row ya están listos). Bloquea también la activación futura de cualquier courier con el mismo perfil (delivery domicilio-a-domicilio sin sucursales físicas).
+
+**Scope:** medio (cambio en `modalidad.ts` + gate en `couriers/route.ts` + posible refactor de flags del Courier + tests). **Prioridad:** alta (bloquea a Intralog en producción; el cliente espera activarlo).
+
+**Relación:** [[DEUDA 91]] (filtros de capacidad courier×servicio — la CAPA 1 y CAPA 2 no gatean activación; el gate de activación es una capa distinta). DEUDA 36.E Diseño 2 STEP A (introdujo el gate original; asumió que todo courier no-recolector recibe en su red desde el hub del recolector — asunción que se rompe con el perfil auto-recolector).
+
+**Origen:** integración de Intralog (Chat B — Couriers). Recon completo de first-mile en Chat A el 2026-09-02 (dispatch.ts + gate + modalidad.ts) confirmando que el bloqueo NO está en dispatch ni en la config de BD sino en el gate de activación.
+
+---
+
+## DEUDA 167 — Multi-recolector: N couriers recolectores con asignación courier→recolector (Intralog Fase 2) (registrada 2026-09-02, scope alto, prioridad baja)
+
+**Status:** ABIERTA — Fase 2 futura de la integración de Intralog. Territorio: **Núcleo** (`lib/envios/dispatch.ts` + modelo de `Deposito`/`DepositoCourierConfig` + `Deposito.courierRecolectorId`).
+
+**Problema:** hoy (Fase 1) el modelo asume **un solo courier recolector por depósito** — `Deposito.courierRecolectorId` es un scalar. Cuando el par `(deposito, courier)` tiene `DepositoCourierConfig.recogeViaConsolidador=true`, dispatch entra en Caso C y todos los couriers no-recolectores recolectan desde ese único recolector (doble etiqueta: entregador + recolector, con `set_tracking_code` Mocis↔Andreani hardcoded en `dispatch.ts:407-424`).
+
+Fase 2 (regla de negocio, Nacho 2026-09-02): un mismo cliente puede tener **N couriers recolectores** simultáneamente, con **asignación explícita courier→recolector**. Ejemplo:
+- Moci's e Intralog ambos habilitados como recolectores del depósito del cliente.
+- Andreani se va con Moci's → etiqueta de Andreani + sub-etiqueta de Moci's, retiran por depósito de Moci's.
+- OCA se va con Intralog → etiqueta de OCA + sub-etiqueta de Intralog, retiran por depósito de Intralog.
+
+Sin ese modelo, o bien todos los couriers no-recolectores van por el mismo recolector (Fase 1 actual), o hay que forzar la configuración manualmente cambiando `courierRecolectorId` según el flujo — inviable.
+
+**Fix (a diseñar):**
+- **Modelo de datos:** reemplazar `Deposito.courierRecolectorId` (scalar) por una tabla puente que mapee `(depositoId, courierEntregaId) → courierRecolectorId`. Los recolectores habilitados de un depósito serían el `distinct` de `courierRecolectorId` en esa tabla. Compatibilidad con el modelo actual: si sólo hay un recolector para todos los couriers, la tabla degenera al comportamiento hoy.
+- **dispatch.ts:** el lookup del recolector (`dispatch.ts:317-319`) debe cambiar de "recolector fijo del depósito" a "recolector asignado a ESTE courier de entrega en ESTE depósito". El resto del Caso C (armado de tramo 1 + tramo 2 + vinculación `set_tracking_code`) queda igual con la nueva fuente de verdad.
+- **Vinculación `set_tracking_code`:** hoy hardcoded para Moci's-Andreani. Con multi-recolector conviene mover la lógica al adapter del recolector como `vincularConTrackingMain(...)` opcional (TODO ya anotado en `dispatch.ts:404-406`), para que cada recolector implemente su propia vinculación (Intralog puede requerir un endpoint distinto).
+- **Gate de activación** (`app/api/configuracion/couriers/route.ts:92-172`): STEP A y STEP B calculan `cpOrigenEfectivo` contra "el recolector del depósito" — con multi-recolector, hay que evaluar contra el recolector que se le va a asignar a este courier específicamente (o dejar que el usuario elija durante la activación).
+- **UI (`CoberturaGrid`, `TransportesTab`):** mostrar la asignación courier→recolector y permitir editarla. Post-MVP.
+
+**Consecuencia operacional hasta el fix:** con Intralog activado (una vez desbloqueada [[DEUDA 166]]), el cliente sólo podrá usar UN recolector consolidador a la vez para todos los couriers no-recolectores del depósito. Si quiere probar Intralog como recolector para algunos couriers manteniendo Moci's para otros, no es posible sin este cambio.
+
+**Scope:** alto (modelo de datos + migración + dispatch + gate + UI). **Prioridad:** baja (futura; para MVP alcanza con el recolector único). Requisito previo: cerrar [[DEUDA 166]] para poder activar Intralog en primer lugar.
+
+**Relación:** [[DEUDA 166]] (prerequisito — hasta que Intralog se pueda activar Fase 1 no tiene sentido diseñar Fase 2). [[DEUDA 103]] (etiqueta madre/hija — la sub-etiqueta del recolector va acá). Consolidación de Intralog como recolector (pendiente de info de César Jaimes sobre el flujo de etiqueta de recolección de Intralog).
+
+**Origen:** integración de Intralog (Chat B — Couriers). Regla de negocio explicitada por Nacho durante el recon del gate de activación (Chat A, 2026-09-02).
+
+---

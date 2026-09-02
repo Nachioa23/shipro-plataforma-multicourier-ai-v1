@@ -257,7 +257,10 @@ export class IntralogAdapter implements ICourierIntegrator {
       ancho: p.anchoCm ?? 10,
       largo: p.largoCm ?? 10,
       peso: p.pesoKg ?? 1,
-      productos: [{ cantidad: 1, nombre: p.contenido ?? "Paquete", sku: "" }],
+      // sku no-vacío — Intralog rechaza sku="" con rollback de constraint
+      // (backend Java). Usamos el contenido o un placeholder; el DespachoParams
+      // no trae SKU real.
+      productos: [{ cantidad: 1, nombre: p.contenido ?? "Paquete", sku: p.contenido ?? "SIN-SKU" }],
     }));
 
     const body = {

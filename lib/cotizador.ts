@@ -370,6 +370,13 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
   // Las capacidades usan el mismo vocabulario que el param tipoEntrega del adapter
   // ("domicilio", "sucursal", "cambio", "devolucion"), asi que la lookup es directa:
   // mapaCapacidades.get(nombreNormalizado)?.has("sucursal").
+  //
+  // DEUDA 91: default ESTRICTO — sin catálogo Shipro habilitado, no se ofrece la
+  // modalidad. Fuerza configurar servicios al integrar el courier (Nacho). Orden de
+  // deploy: configurar TODOS los couriers ANTES de deployar, sino desaparecen de las
+  // cotizaciones. La estrictez está en L570 + L672: `?.has(...) ?? false` — si el
+  // courier no tiene entrada en el catálogo (o su Set está vacío), el gate es false
+  // en ambos paths (hot + outer catch fallback) → skip total.
   const mapaCapacidades = new Map<string, Set<string>>();
   for (const courier of couriersReales) {
     const claveNormalizada = normalizarParaComparacion(courier.nombre);

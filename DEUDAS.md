@@ -4088,3 +4088,32 @@ Sin ese modelo, o bien todos los couriers no-recolectores van por el mismo recol
 **Origen:** integración de Intralog (Chat B — Couriers). Regla de negocio explicitada por Nacho durante el recon del gate de activación (Chat A, 2026-09-02).
 
 ---
+
+## DEUDA 168 — Política de sub-etiqueta: cuándo se emite la doble etiqueta (courier final + dueño/recolector) (registrada 2026-09-02, scope medio, prioridad media)
+
+**Status:** ABIERTA (política de diseño, a implementar en el modelo de despacho). Territorio: **Núcleo** (`lib/envios/dispatch.ts` + modelo doble etiqueta). Relacionada con [[DEUDA 103]] (etiqueta madre/hija — infraestructura de composición de la sub-etiqueta).
+
+**Regla de negocio (confirmada por Nacho, 2026-09-02):** la sub-etiqueta (doble etiqueta = etiqueta del courier final + sub-etiqueta del dueño/recolector) se emite cuando se cumple **CUALQUIERA** de estas dos condiciones:
+
+- **(a) TRAMO FÍSICO:** hay recolección/consolidación — el paquete pasa por el depósito de un courier recolector antes de llegar al courier de última milla.
+- **(b) PROPIEDAD DE CREDENCIAL:** las credenciales con las que se despacha pertenecen a un courier (no son del cliente). El dueño de la credencial tiene derecho a la sub-etiqueta como **VÍNCULO DE CONTROL Y RESPONSABILIDAD** sobre la etiqueta emitida con sus credenciales.
+
+**Fundamento:** en la práctica ambas condiciones suelen coincidir, porque el dueño de la credencial es habitualmente el punto de recolección consolidada. Ejemplo: si Intralog es dueño de las credenciales de Andreani/Correo/OCASA/Pickit/Hop/Moova, lo eficiente (y lo habitual) es que esos couriers recolecten UNA vez por el depósito de Intralog (consolidado), no por cada depósito de cada cliente. Andreani NO recolecta por el depósito del cliente salvo que el dueño de la credencial (Intralog) lo contrate explícitamente — caso raro, quizás nunca. Aun en ese caso raro, la sub-etiqueta se emite igual (condición b) para que el dueño de la credencial tenga control/trazabilidad de la etiqueta emitida con sus credenciales.
+
+**Aplica a:** Intralog, Moci's, y cualquier courier/intermediario que preste sus credenciales (Rama A / `CourierIntermediario`). Debe ser **política general de la NPMS**, no per-courier.
+
+**Implementación (a diseñar por Núcleo):** `lib/envios/dispatch.ts` debe emitir la sub-etiqueta cuando:
+- (a) el envío tiene tramo de consolidación (ya modelado en Caso C — decisión `esConsolidadorEfectivo` en `dispatch.ts:300-304`), **O**
+- (b) la credencial usada pertenece a un courier (dato de propiedad de credencial: `CredencialCourier.propietarioTipo === "COURIER"` + `propietarioCourierId`, Rama A introducida en FASE 2 pieza 1, 2026-07-30).
+
+Hoy la doble etiqueta sólo se dispara por (a). Falta el disparador (b): un envío despachado con credencial de propiedad "COURIER" pero SIN tramo físico de consolidación no genera sub-etiqueta hoy, y debería.
+
+**Consecuencia operacional hasta el fix:** el dueño de la credencial pierde trazabilidad/control cuando presta credenciales sin consolidar el pickup (caso raro pero posible). Sin la sub-etiqueta no hay vínculo declarativo entre la etiqueta emitida y el courier que la respalda comercialmente.
+
+**Scope:** medio (extender la decisión de doble etiqueta en dispatch + tocar el composer/generador de sub-etiqueta + tests con matriz de casos). **Prioridad:** media (no bloquea ningún cliente activo hoy, pero es prerrequisito de cualquier onboarding donde Intralog preste credenciales de terceros sin consolidar).
+
+**Relación:** [[DEUDA 103]] (infraestructura de etiqueta madre/hija, dependencia dura). [[DEUDA 166]] (activación de couriers auto-recolectores como Intralog; misma familia). [[DEUDA 167]] (multi-recolector; comparte la superficie de decisión de tramos).
+
+**Origen:** análisis de integración de Intralog como courier recolector/consolidador Y dueño de credenciales de terceros (Chat A, 2026-09-02). Política explicitada por Nacho al distinguir los dos disparadores (tramo físico vs propiedad de credencial).
+
+---

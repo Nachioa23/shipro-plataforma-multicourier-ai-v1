@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
+import { adapterSoportaModalidad } from "@/lib/couriers/serviciosSoportados";
 import { calcularPromesaCalibrada } from "@/lib/utils/promesa-calibrada";
 import { calcularFeeOperacion } from "@/lib/utils/operacion-fee";
 import {
@@ -659,12 +660,18 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
       // (ej. credencial malformada, CourierFactory rechazó). Logueamos + pusheamos
       // fallback en AMBAS modalidades habilitadas por el cliente para que el
       // courier no desaparezca del checkout aunque haya caído entero.
+      // DEUDA 91 capa 1 (2026-09-02): además del flag per-empresa (config.ofreceX)
+      // gate por la CAPACIDAD DEL ADAPTER — el fallback no debe empujar una modalidad
+      // que el courier no presta físicamente. Sin este gate, un Mocis con credencial
+      // malformada + tarifa de rescate cargada pusheaba fallback de sucursal aunque
+      // Mocis no ofrezca sucursal. Misma fuente de verdad que el UI de /admin-couriers
+      // (candado por adapter) y que el filter del hot path (activo+cap del registry).
       console.warn("[cotizador] courier falló:", errorFatal instanceof Error ? errorFatal.message : String(errorFatal));
-      if (config.ofreceDomicilio !== false) {
+      if (config.ofreceDomicilio !== false && adapterSoportaModalidad(config.nombreCourier, "domicilio")) {
         const fbDom = await construirOpcionFallback(config, "domicilio");
         if (fbDom) { fbDom.codigoServicio = mapaCodigoServicio.get(normalizarParaComparacion(config.nombreCourier))?.domicilio; opcionesDomicilio.push(fbDom); }
       }
-      if (config.ofreceSucursal !== false) {
+      if (config.ofreceSucursal !== false && adapterSoportaModalidad(config.nombreCourier, "sucursal")) {
         const fbSuc = await construirOpcionFallback(config, "sucursal");
         if (fbSuc) { fbSuc.codigoServicio = mapaCodigoServicio.get(normalizarParaComparacion(config.nombreCourier))?.sucursal; opcionesSucursal.push(fbSuc); }
       }

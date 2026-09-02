@@ -153,24 +153,13 @@ export function soportaServicio(courierNombre: string, codigoServicio: string): 
   return capacidadTecnica(courierNombre, codigoServicio) !== null;
 }
 
-// DEUDA 91 capa 1 (2026-09-02): devuelve true si el ADAPTER del courier soporta
-// físicamente la modalidad ("domicilio" | "sucursal" | "cambio" | "devolucion").
-// Iteración sobre SERVICIOS_SOPORTADOS[courier]: hay soporte si algún codigoServicio
-// declarado mapea a esa modalidad. Es el techo físico (Capa 1). NO consulta el catálogo
-// admin (Capa 2 = ServicioCourier.activo) — eso lo cubre el filter del hot path del
-// cotizador (que ya cachea la capacidad vía capacidadTecnicaMapeada). Este helper
-// existe para el outer catch fatal de cotizador.ts, donde no hay mapaCapacidades
-// disponible (adapter falló antes de que se computara) y hay que consultar el registry
-// directo para no ofrecer fallback en modalidades que el courier no presta físicamente.
-// MISMA fuente que el UI de /admin-couriers (candado por adapter).
-export function adapterSoportaModalidad(courierNombre: string, modalidad: string): boolean {
-  const mapa = SERVICIOS_SOPORTADOS[normalizarParaComparacion(courierNombre)];
-  if (!mapa) return false;
-  for (const codigo of Object.keys(mapa) as CodigoServicio[]) {
-    if (mapa[codigo] === modalidad) return true;
-  }
-  return false;
-}
+// DEUDA 91 capa 2 (2026-09-02): el helper `adapterSoportaModalidad` (capa 1)
+// se removió — el outer catch fatal de cotizador.ts ahora usa `mapaCapacidades`
+// (mismo Set que el hot path L568-570), que combina Layer 1 (adapter ceiling via
+// registry) + Layer 2 (Shipro catálogo admin-managed). El helper standalone
+// quedaba como dead code post CAPA 2. Consultar `mapaCapacidades.get(courier)?.has(modalidad)`
+// para "engine ofrece" (combinado ambos layers), o `capacidadTecnica()` para
+// "adapter declara" per-codigoServicio (registry-direct, sin admin gate).
 
 // =============================================================================
 // DEUDA 32+37 (Fase K): tieneSucursales derivado del servicio entrega_sucursal.

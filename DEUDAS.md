@@ -1399,13 +1399,41 @@ TS_NODE_BASEURL=./ npx ts-node -r tsconfig-paths/register --compiler-options '{"
 
 **Por que importa:** baja prioridad. Registrada para que la restriccion actual sea trazable y la extension sea un cambio consciente, no un descubrimiento.
 
-## DEUDA 91 — Cablear el catálogo ServicioCourier al runtime de cotización (adapter integration) (registrada 2026-07-06)
+## DEUDA 91 — Cablear el catálogo ServicioCourier al runtime de cotización (adapter integration) (registrada 2026-07-06, RESUELTA LOCAL 2026-09-02, pend. deploy prod)
+
+**Status:** **RESUELTA EN CÓDIGO 2026-09-02 (COMPLETA en localhost), pendiente deploy prod.** Semáforo localhost↔prod: queda acá hasta subir. Post-deploy prod → mover a `DEUDAS-RESUELTAS.md`. **Prerequisito de Intralog** (Chat B): con la 91 aplicada, Intralog entra sin heredar el bug de ofrecer modalidades que no presta.
+
+**RESUMEN COMPLETO (en local) — 2 capas + default estricto:**
+
+- **CAPA 1 (HECHA local 2026-09-02, commit `1bdcc08`):** el motor filtra modalidades por **capacidad del adapter** (no ofrece lo que el courier no soporta técnicamente). MISMA fuente de verdad que la UI `/admin-couriers` (bloqueo de toggles por adapter). Aplicada en TODOS los caminos de armado de opciones (hot path + fallback inner + outer catch fatal + Tiendanube consume del cotizador). Arregla el bug histórico de Moci's cotizando sucursal. Verificado local: Moci's ya NO ofrece sucursal, Andreani mantiene domicilio + sucursal, precios intactos.
+- **CAPA 2 (HECHA local 2026-09-02, commit `c5595a2` + `c83b738` docs estricto):** el motor respeta el **catálogo de servicios administrado por Shipro** (`ServicioCourier.activo`) como recorte sobre el techo del adapter. **Engine ofrece = adapter-soportado ∩ Shipro-habilitado.** Jerarquía: adapter = techo (Capa 1, físico), Shipro = recorte (Capa 2, business admin-managed). Simetría total con el hot path — outer catch fallback ahora usa el MISMO `mapaCapacidades` que el hot path.
+- **Default ESTRICTO (Nacho, 2026-09-02):** courier sin catálogo configurado NO ofrece nada. Fuerza configurar servicios al integrar el courier — evita ambigüedad "no configurado ¿ofrece por default o no?". Comportamiento `?.has(...) ?? false` en L570 hot path + L672 outer catch: si `mapaCapacidades.get(courier)` es undefined o Set vacío → gate false → skip total.
+
+**ORDEN DE DEPLOY OBLIGATORIO (crítico):**
+- **Configurar el catálogo de TODOS los couriers activos ANTES del deploy** (local + prod). Con default estricto, un courier con 0 servicios `activo:true + capacidadTecnicaMapeada != null` desaparece del checkout.
+- Nacho ya configuró: **local + prod** al 2026-09-03. Excepción única: **Hop Envíos sucursal** — bloqueado por adapter incompleto (ver [[DEUDA 165]] nueva).
+- Post-configuración, deploy es price-neutral y desplaza-neutral para couriers configurados.
+
+**Sub-tareas históricas (contexto — la mayoría cubiertas por la arquitectura CAPA 1+2):**
+
+- ✅ **Punto 1 del plan original (2026-07):** cotizador pide solo códigos activos por courier. Cubierto por CAPA 1+2.
+- ⏳ **Punto 2 (adapter recibe `codigosSolicitados` + devuelve `codigoServicio`):** sin implementar. Hoy el `codigoServicio` en `OpcionTarifa` se resuelve por separado en el cotizador vía `mapaCodigoServicio` (DEUDA 144), no por el adapter. Sigue como arquitectura pendiente si se quiere que el adapter etiquete por código canónico.
+- ⏳ **Punto 3 (adapters leen `capacidadTecnicaMapeada`):** sin implementar. Adapters no consultan el catálogo — el cotizador gate por adaptador vía registry consulta.
+- ⏳ **Punto 4 (descartar servicios devueltos no pedidos):** sin implementar. Bajo riesgo hoy: el adapter Mocis devuelve "Same Day"/"Next Day" y el cotizador acepta ambos si el gate pasa.
+- ⏳ **Sub-tarea M-1 (Moci's Same Day / Next Day service_id):** sigue sin averiguar. Hoy adapter etiqueta por index (heurística). No bloqueante — funciona, pero sin garantía formal.
+- ⏳ **Sub-tarea A-1 (contrato Andreani Express):** sigue sin resolver.
+
+Los 4 puntos ⏳ + M-1/A-1 son evolución arquitectónica del contrato adapter↔cotizador. **El bug crítico (Mocis-sucursal, prerequisito Intralog) está cerrado.** Los pendientes pueden atacarse cuando se integre un adapter que los necesite explícitamente.
+
+---
+
+**CONTEXTO HISTÓRICO (pre-2026-09-02, mantenido para referencia):**
 
 **Tipo:** Arquitectura — continuación de DEUDA 32+37 (NO arquitectura nueva).
 **Origen:** Detectada durante testeo post-migración (2026-07). Síntoma disparador: Moci's
 cotiza "entrega en sucursal" que NO ofrece (y que ROMPERÍA la creación del envío si se
 elige), y no se distingue "Same Day" de "Next Day".
-**Estado:** PENDIENTE. Insumo de NotebookLM YA OBTENIDO (ver tablas de mapeo abajo).
+**Estado (histórico 2026-07-06):** PENDIENTE. Insumo de NotebookLM YA OBTENIDO (ver tablas de mapeo abajo).
 Bloqueante parcial: falta confirmar los service id de Moci's (sub-tarea M-1). OCA: cableado al nacer junto con el adapter (2026-08-21) — alta en BD pendiente de credenciales.
 
 ---
@@ -3952,5 +3980,47 @@ No tocados en `ef00894` por scope estricto — solo route de admin-couriers. Reg
 **Relación:** [[DEUDA 32+37]] (ABM de couriers original — introdujo el normalizador buggy). Descubierto durante la campaña de DEUDA 157 (Nacho cargando markups per courier post-Paso 1, notó el duplicate + error al intentar activar Hop).
 
 **Origen:** Nacho reportó el bug al intentar activar Hop en el admin (2026-09-01) tras deploy de DEUDA 157 Paso 1. Diagnosis + fix same-session.
+
+---
+
+## DEUDA 165 — Adapter de Hop Envíos incompleto: faltan capacidades sucursal / punto de retiro / drop-off devolución (registrada 2026-09-03, scope medio, prioridad media)
+
+**Status:** ABIERTA — descubierta al configurar el catálogo Shipro de couriers pre-deploy de [[DEUDA 91]] (2026-09-03). NO es bug de la 91 — al contrario, la CAPA 1 de la 91 (adapter=techo) detectó correctamente que el adapter de Hop no declara esas capacidades. Consecuencia: Hop queda **capado a domicilio** hasta que se complete el adapter. Funciona (no rompe cotizaciones), sólo ofrece menos de lo que podría en la realidad.
+
+**Problema:** al intentar activar "entrega_sucursal" (o el resto de modalidades sucursal-based) en `/admin-couriers` para Hop, el servidor responde 400 con *"No se puede activar 'entrega_sucursal': el courier 'Hop Envíos' no lo soporta tecnicamente (sin capacidad mapeada)"* (`app/api/admin/couriers/route.ts:99-105`). El bloqueo es correcto — enforcement de la regla `activo:true` requiere `capacidadTecnicaMapeada != null` (regla forzada en L122-123 del PUT + L189-191 del seed). Pero **Hop SÍ ofrece esas modalidades en la realidad** (dato de negocio Nacho):
+- **Entrega en punto de retiro.**
+- **Entrega en sucursal** (usa la red de sucursales de Andreani — Hop se apoya en el network físico de Andreani).
+- **Devolución con drop-off en sucursal / punto de retiro** (mismo network de Andreani).
+
+**Causa técnica:** el adapter de Hop (`lib/couriers/HopEnviosAdapter.ts` + registry `lib/couriers/serviciosSoportados.ts:127-136`) declara solo `entrega_sucursal: "sucursal"` + `entrega_punto_retiro: "sucursal"` + `inversa_devolucion_dropoff_sucursal: "sucursal"` con `entrega_domicilio_estandar: null` — pero la lógica interna del adapter (`cotizar()`, `despachar()`) no está implementada para las modalidades sucursal/drop-off. La `capacidadTecnicaMapeada` en el registry declara la intención, pero el código del adapter no cablea el flow real hacia Hop's API (que se apoya en la sucursales de Andreani).
+
+**Cross-check con recon local:**
+```
+Hop Envíos (registry) — L127-136 serviciosSoportados.ts:
+  entrega_domicilio_estandar: null   ← domicilio directo NO soportado (Hop no hace last-mile de domicilio directo)
+  entrega_sucursal: "sucursal"       ← declarado pero adapter incompleto
+  entrega_punto_retiro: "sucursal"   ← declarado pero adapter incompleto
+  inversa_devolucion_dropoff_sucursal: "sucursal"  ← declarado pero adapter incompleto
+```
+
+Post-CAPA-2 estricto, con 0 servicios activo:true en la BD para Hop → **Hop desaparece del checkout**. Nacho debe activarlos en `/admin-couriers`, pero el server rechaza por capacidad. **Bloqueo circular hasta completar el adapter.**
+
+**Fix:**
+- **Adapter code:** implementar `cotizar()` + `despachar()` para modalidades sucursal-based en `lib/couriers/HopEnviosAdapter.ts`. Requiere consultar la documentación de integración de Hop (Gemini Notebook — los chats del proyecto tienen la doc de Hop) para mapear bien:
+  - Cómo Hop maneja las sucursales de Andreani (¿usa la sucursal API de Andreani con credenciales Hop? ¿tiene endpoint propio?).
+  - Punto de retiro (Andreani PD3 o distinto).
+  - Drop-off de devolución (mismo network sucursal, sentido inverso).
+- **Registry `serviciosSoportados.ts`:** el mapeo ya declara las 3 capacidades — no requiere cambio si el mapping es correcto (revisar durante implementación por si algún código canónico necesita otra capacidad).
+- **Post-fix:** activar las modalidades en `/admin-couriers` para Hop (el server dejará de rechazar cuando `capacidadTecnica()` devuelva `"sucursal"` con el adapter completo).
+
+**Consecuencia operacional hasta el fix:**
+- Hop capado a domicilio_estandar (que también está null en su registry, por diseño — Hop no hace last-mile de domicilio directo). **Hop actualmente NO ofrece nada** en checkout post-CAPA-2 estricto.
+- Si Nacho quiere que Hop ofrezca AL MENOS sucursal antes del fix del adapter, es viable como hack temporal completar solo la modalidad sucursal en el adapter (implementación mínima) sin drop-off ni punto de retiro. Alternativa: dejar Hop desactivado en prod hasta que la implementación esté completa (más limpio, sin capas de temporales).
+
+**Scope:** medio (adapter class + mapeo Hop↔Andreani sucursales + tests). **Prioridad:** media (Hop funciona con las modalidades que declara — solo pierde sucursal + drop-off + punto de retiro).
+
+**Relación:** [[DEUDA 91]] (destapó el gap — el adapter incompleto se hizo evidente al configurar el catálogo pre-deploy). [[DEUDA 32+37]] (registry + admin de servicios).
+
+**Origen:** configuración del catálogo Shipro de couriers pre-deploy de [[DEUDA 91]] (Nacho, 2026-09-03). El bloqueo del server al activar `entrega_sucursal` de Hop en `/admin-couriers` es la señal.
 
 ---

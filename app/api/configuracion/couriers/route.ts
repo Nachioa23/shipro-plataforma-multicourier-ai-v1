@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { Prisma } from "@prisma/client";
+import { Prisma, type Courier } from "@prisma/client";
 import {
   registrarCambioConfiguracion,
   MotivoRequeridoError,
@@ -8,16 +8,153 @@ import {
 } from "@/lib/auditoria-configuracion";
 import { puedeEditarCampo, esModeloBCredenciales } from "@/lib/permisos";
 import { asignarSucursalParaDeposito } from "@/lib/sucursales/cercanas";
+import type { CourierConServicios } from "@/lib/couriers/serviciosSoportados";
 import { procesarEnviosBloqueadosPorCredencial } from "@/lib/envios/procesar-bloqueados-credencial";
+
+// =============================================================================
+// DEUDA 166 — Evaluación de activación del courier (los 4 perfiles) (2026-09-02)
+// =============================================================================
+// Perfil 1 — sin recolector designado (o el courier ES el recolector, o el
+//   recolector no tiene hub CP): cobertura contra CP del depósito del cliente.
+//   Cualquier tipo válido (incluye sin_sucursales, que se interpreta como
+//   "courier auto-pickup, sin red de sucursales" — dispatch en Caso B).
+//   NO se registra ficha DepositoCourierConfig(recogeViaConsolidador=true).
+//
+// Perfil 2 — con recolector designado + el courier cubre el hub del recolector
+//   vía sucursales (por_cp) o es un consolidador con hub propio (sucursal_unica).
+//   Cobertura contra el hub. Sí se registra ficha (dispatch entra en Caso C,
+//   doble etiqueta).
+//
+// Perfil 3 — CUARTO PERFIL. Con recolector designado + el courier NO cubre el
+//   hub del recolector PERO SÍ el depósito del cliente. Se activa igual: la
+//   recolección ocurre en el depósito del cliente (dispatch queda en Caso B,
+//   etiqueta simple) con un aviso informativo. NO se registra ficha (si se
+//   registrase, dispatch entraría en Caso C y buscaría al recolector, que es
+//   justamente lo que no queremos). Casos que gatillan perfil 3:
+//     - Courier de red de sucursales cuyas sucursales no cubren el hub pero sí
+//       el CP del depósito del cliente (fallback re-evalúa contra CP cliente).
+//     - Courier "auto-pickup" (sin_sucursales) cuando hay recolector — la
+//       cobertura no depende del CP; el aviso aplica directo.
+//
+// Perfil 4 — con recolector designado + el courier NO cubre ni el hub ni el
+//   depósito del cliente (por_cp_origen con red sin cobertura en ninguno de
+//   los dos). Rechazo legítimo, misma señal que hoy.
+//
+// Dispatch (lib/envios/dispatch.ts) NO se toca — Caso B ya sabe recolectar
+// desde el depósito del cliente sin config previa; el bloqueo era solo del gate.
+// =============================================================================
+
+const AVISO_CUARTO_PERFIL =
+  "Este courier recolecta desde el depósito del cliente, no desde el recolector designado (etiqueta simple).";
+
+interface EvaluacionActivacion {
+  puedeActivar: boolean;
+  cpOrigenEfectivo: string;
+  motivo?: string;
+  via?: "hub_recolector" | "deposito_cliente";
+  avisoRecoleccion?: string;
+}
+
+async function evaluarActivacionCourier(
+  courier: Courier & CourierConServicios,
+  depositoPrincipal: { codigoPostal: string; latitud: number | null; longitud: number | null },
+  recolector: Courier | null,
+): Promise<EvaluacionActivacion> {
+  const evaluadoContraHub =
+    !!recolector && courier.id !== recolector.id && !!recolector.cpDepositoConsolidador;
+
+  const cpPrimario = evaluadoContraHub
+    ? (recolector!.cpDepositoConsolidador as string)
+    : depositoPrincipal.codigoPostal;
+
+  const cobertura = await asignarSucursalParaDeposito({
+    prisma,
+    courier,
+    cpOrigenEfectivo: cpPrimario,
+    latitudOrigen: depositoPrincipal.latitud,
+    longitudOrigen: depositoPrincipal.longitud,
+    dropOffCliente: false,
+  });
+
+  // Perfil 2: cubre el hub del recolector con sucursales o hub propio.
+  if (
+    evaluadoContraHub &&
+    (cobertura.tipo === "por_cp" ||
+      cobertura.tipo === "sucursal_unica" ||
+      cobertura.tipo === "drop_off_cliente")
+  ) {
+    return { puedeActivar: true, via: "hub_recolector", cpOrigenEfectivo: cpPrimario };
+  }
+
+  // Perfil 1: sin recolector aplicable — primary ya se evaluó contra CP cliente.
+  if (!evaluadoContraHub) {
+    if (
+      cobertura.tipo === "por_cp" ||
+      cobertura.tipo === "sucursal_unica" ||
+      cobertura.tipo === "drop_off_cliente" ||
+      cobertura.tipo === "sin_sucursales"
+    ) {
+      return { puedeActivar: true, via: "deposito_cliente", cpOrigenEfectivo: cpPrimario };
+    }
+    return { puedeActivar: false, cpOrigenEfectivo: cpPrimario, motivo: cobertura.mensaje };
+  }
+
+  // Perfil 3 — courier auto-pickup (sin_sucursales): no depende del CP.
+  if (cobertura.tipo === "sin_sucursales") {
+    return {
+      puedeActivar: true,
+      via: "deposito_cliente",
+      cpOrigenEfectivo: cpPrimario,
+      avisoRecoleccion: AVISO_CUARTO_PERFIL,
+    };
+  }
+
+  // Perfil 3 — fallback: courier con red de sucursales; primary fue sin_cobertura
+  // contra hub. Re-evaluar contra CP del depósito del cliente.
+  const coberturaCliente = await asignarSucursalParaDeposito({
+    prisma,
+    courier,
+    cpOrigenEfectivo: depositoPrincipal.codigoPostal,
+    latitudOrigen: depositoPrincipal.latitud,
+    longitudOrigen: depositoPrincipal.longitud,
+    dropOffCliente: false,
+  });
+
+  if (
+    coberturaCliente.tipo === "por_cp" ||
+    coberturaCliente.tipo === "sucursal_unica" ||
+    coberturaCliente.tipo === "drop_off_cliente" ||
+    coberturaCliente.tipo === "sin_sucursales"
+  ) {
+    return {
+      puedeActivar: true,
+      via: "deposito_cliente",
+      cpOrigenEfectivo: cpPrimario,
+      avisoRecoleccion: AVISO_CUARTO_PERFIL,
+    };
+  }
+
+  // Perfil 4: no cubre ni el hub del recolector ni el depósito del cliente.
+  // En esta rama cobertura.tipo es sin_cobertura por descarte (los tipos válidos
+  // devolvieron en perfil 2, sin_sucursales devolvió en perfil 3); el narrow
+  // explícito con `"mensaje" in cobertura` evita el TS2339 sin cast.
+  const motivo = "mensaje" in cobertura ? cobertura.mensaje : "Sin cobertura para este CP";
+  return { puedeActivar: false, cpOrigenEfectivo: cpPrimario, motivo };
+}
 
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const empresaId = parseInt(searchParams.get("empresaId") || "1");
 
-    // 1. Buscamos la lista maestra de Couriers que el Super Admin dio de alta
+    // 1. Buscamos la lista maestra de Couriers que el Super Admin dio de alta.
+    // DEUDA 166: incluimos el servicio entrega_sucursal para que
+    // evaluarActivacionCourier pueda derivar la modalidad (tieneSucursales).
     const couriersMaestros = await prisma.courier.findMany({
-      where: { activo: true }
+      where: { activo: true },
+      include: {
+        servicios: { where: { codigoServicio: "entrega_sucursal" } },
+      },
     });
 
     // 2. Buscamos qué configuraciones específicas guardó esta Empresa
@@ -28,10 +165,30 @@ export async function GET(request: Request) {
 
     if (!empresa) return NextResponse.json({ error: "Empresa no encontrada" }, { status: 404 });
 
-    return NextResponse.json({ 
+    // DEUDA 166: aviso del cuarto perfil, calculado al vuelo por courier.
+    // Se recalcula en cada GET → si el recolector del depósito cambia, el aviso
+    // aparece o desaparece automáticamente (sin persistencia).
+    const depositoPrincipal = await prisma.deposito.findFirst({
+      where: { empresaId, esPredeterminado: true, activo: true },
+    });
+    const recolector = depositoPrincipal?.courierRecolectorId
+      ? await prisma.courier.findUnique({ where: { id: depositoPrincipal.courierRecolectorId } })
+      : null;
+
+    const couriersConAviso = depositoPrincipal
+      ? await Promise.all(
+          couriersMaestros.map(async (c) => {
+            const evalActivacion = await evaluarActivacionCourier(c, depositoPrincipal, recolector);
+            const aviso = evalActivacion.puedeActivar ? evalActivacion.avisoRecoleccion : undefined;
+            return aviso ? { ...c, avisoRecoleccion: aviso } : c;
+          }),
+        )
+      : couriersMaestros;
+
+    return NextResponse.json({
       empresa: { ordenamientoDefault: empresa.ordenamientoDefault },
       credencialesCliente: empresa.credenciales,
-      couriersGlobales: couriersMaestros // <--- Enviamos la lista maestra al Frontend
+      couriersGlobales: couriersConAviso // <--- Enviamos la lista maestra al Frontend (posiblemente enriquecida con avisoRecoleccion — DEUDA 166)
     });
   } catch (error: any) {
     return NextResponse.json({ error: "Falla al leer la base de datos" }, { status: 500 });
@@ -118,43 +275,26 @@ export async function POST(request: Request) {
           continue;
         }
 
-        let cpOrigenEfectivo: string = depositoPrincipal.codigoPostal;
-        if (
-          recolector &&
-          courierBDCheck.id !== recolector.id &&
-          recolector.cpDepositoConsolidador
-        ) {
-          cpOrigenEfectivo = recolector.cpDepositoConsolidador;
-        }
+        // DEUDA 166: evaluación unificada de los 4 perfiles (helper arriba).
+        // Perfil 1/3 → via="deposito_cliente" (dispatch en Caso B, etiqueta simple),
+        // NO se crea ficha. Perfil 2 → via="hub_recolector" (dispatch en Caso C,
+        // doble etiqueta), sí se crea ficha (STEP B). Perfil 4 → rechazo.
+        const evalActivacion = await evaluarActivacionCourier(
+          courierBDCheck,
+          depositoPrincipal,
+          recolector,
+        );
 
-        const cobertura = await asignarSucursalParaDeposito({
-          prisma,
-          courier: courierBDCheck,
-          cpOrigenEfectivo,
-          latitudOrigen: depositoPrincipal.latitud,
-          longitudOrigen: depositoPrincipal.longitud,
-          dropOffCliente: false,
-        });
-
-        if (cobertura.tipo === "sin_cobertura" || cobertura.tipo === "sin_sucursales") {
+        if (!evalActivacion.puedeActivar) {
           rechazos.push({
             nombre: courier.id,
-            motivo: cobertura.mensaje,
-            cpOrigenEfectivo,
+            motivo: evalActivacion.motivo as string,
+            cpOrigenEfectivo: evalActivacion.cpOrigenEfectivo,
           });
           continue;
         }
 
-        // STEP B: si (a) fue evaluado contra el hub del recolector, (b) el
-        // courier no es el propio recolector, y (c) la cobertura es real
-        // (por_cp | sucursal_unica), corresponde crear la ficha
-        // DepositoCourierConfig(recogeViaConsolidador=true) despues de las
-        // escrituras principales. Si se evaluo contra el CP del deposito
-        // (sin recolector, o el courier ES el recolector), NO se crea ficha.
-        const evaluadoContraHub =
-          !!recolector && courierBDCheck.id !== recolector.id && !!recolector.cpDepositoConsolidador;
-        const cubre = cobertura.tipo === "por_cp" || cobertura.tipo === "sucursal_unica";
-        if (evaluadoContraHub && cubre) {
+        if (evalActivacion.via === "hub_recolector") {
           fichasACrear.push(courierBDCheck.id);
         }
       }

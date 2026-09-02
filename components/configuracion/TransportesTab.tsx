@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
-import { Save, Loader2, CheckCircle2, AlertCircle, Lock, Key, Package, Percent, DollarSign } from 'lucide-react';
+import { Save, Loader2, CheckCircle2, AlertCircle, Info, Lock, Key, Package, Percent, DollarSign } from 'lucide-react';
 import ModalMotivoAuditoria, { type CambioPreview } from "@/components/ModalMotivoAuditoria";
 import { puedeEditarCampo, esModeloBCredenciales } from "@/lib/permisos";
 
@@ -90,6 +90,10 @@ export default function TransportesTab({ empresaActivaId, embeddedInWizard = fal
                   credenciales: configCliente.credencialesJson ? JSON.parse(configCliente.credencialesJson) : credsPorDefecto,
                   markupClientePorcentaje: configCliente.ajusteTarifaPorcentaje || 0, markupClienteFijo: configCliente.markupFijo || 0,
                   tipoCuenta: configCliente.tipoCuenta || "",
+                  // DEUDA 166: aviso del cuarto perfil calculado al vuelo por el GET del endpoint.
+                  // Presente cuando el courier no cubre el hub del recolector pero sí el depósito
+                  // del cliente (recolección propia, etiqueta simple).
+                  avisoRecoleccion: globalCourier.avisoRecoleccion || null,
                   // FASE 2 pieza 1: propiedad de credenciales (mirror lectura de usaCredencialesPropias arriba).
                   propietarioTipo: configCliente.propietarioTipo || null,
                   propietarioCourierId: configCliente.propietarioCourierId ?? null,
@@ -113,6 +117,8 @@ export default function TransportesTab({ empresaActivaId, embeddedInWizard = fal
                   id: globalCourier.nombre, activo: false, usaPropias: true, credenciales: credsPorDefecto,
                   markupClientePorcentaje: 0, markupClienteFijo: 0,
                   tipoCuenta: "",
+                  // DEUDA 166: aviso del cuarto perfil (mismo campo que rama con configCliente).
+                  avisoRecoleccion: globalCourier.avisoRecoleccion || null,
                   // FASE 2 pieza 1: default en la fila fresca — Rama B implica CLIENTE.
                   propietarioTipo: "CLIENTE",
                   propietarioCourierId: null,
@@ -415,6 +421,16 @@ export default function TransportesTab({ empresaActivaId, embeddedInWizard = fal
                     {rechazosCobertura[courier.id].cpOrigenEfectivo && (
                       <span className="text-red-500"> (origen efectivo CP {rechazosCobertura[courier.id].cpOrigenEfectivo})</span>
                     )}
+                  </div>
+                </div>
+              )}
+
+              {/* === DEUDA 166: aviso informativo del cuarto perfil (calculado al vuelo en el GET) === */}
+              {courier.avisoRecoleccion && !rechazosCobertura[courier.id] && (
+                <div className="bg-amber-50 border-b border-amber-200 px-5 py-3 flex items-start gap-2">
+                  <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="text-[11px] text-amber-700">
+                    <span className="font-black uppercase tracking-widest">Aviso</span> · {courier.avisoRecoleccion}
                   </div>
                 </div>
               )}

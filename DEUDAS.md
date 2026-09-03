@@ -3411,9 +3411,36 @@ la homologación formal para publicar en el App Store de Tiendanube es proceso d
 
 ---
 
-## DEUDA 150 — Centro de conexiones del cliente: UI para que las empresas administren sus plugins/apps/conectores y su API Key (registrada 2026-08-26, ampliada 2026-09-03)
+## DEUDA 150 — Centro de conexiones del cliente: UI para que las empresas administren sus plugins/apps/conectores y su API Key (registrada 2026-08-26, ampliada 2026-09-03, avance 2026-09-03)
 
-**Status:** ABIERTA — prerequisito de homologación de plugins self-service. **Bloqueante único** para cerrar el plugin de WooCommerce (el cliente no tiene hoy dónde generar su API Key). También bloquea el onboarding completo de Tiendanube desde la óptica del cliente.
+**Status:** EN PROGRESO — Pieza 1 (modelo Conexion) + Pieza API-Key (flujo seguro Opción A) HECHAS LOCAL, verificadas end-to-end en localhost. **Pendiente deploy prod.** Sigue bloqueando WooCommerce hasta que el flujo esté en producción (el plugin apunta a `pm.shipro.pro/api` — la key debe generarse ahí). Follow-ups del hub registrados abajo.
+
+**Avance 2026-09-03 (piezas construidas local):**
+
+- **Pieza 1 — modelo Conexion (commit `9d9fc82`, HECHA local).** Cimiento del hub: modelo genérico per `(empresa, plataforma)` con enums `PlataformaConexion` (TIENDANUBE/WOOCOMMERCE/VTEX/MAGENTO/PRESTASHOP/SHOPIFY/MERCADOLIBRE/API_REST), `MecanismoConexion` (API_KEY/OAUTH), `EstadoConexion` (ACTIVA/PENDIENTE/REVOCADA). Migración additive (CREATE TYPE + CREATE TABLE + FK + índices; zero DROP/ALTER). Sin UI ni API todavía — es la fundación. Tiendanube **intacto** (Chat B territory; absorción coordinada para después — ver follow-up más abajo).
+
+- **Pieza API-Key — flujo seguro Opción A Shipro-triggered (commit `327ee5e`, HECHA local, verificada e2e).** Cadena completa:
+  - **Trigger hub**: botón "Enviar link de setup de API Key" en el drawer per-cliente de `/clientes`, sección nueva "API Key del cliente" (gate admin_shipro/operador_shipro).
+  - **Endpoint admin** (`POST /api/admin/empresas/[id]/enviar-link-api-key`): crea row en la nueva tabla `TokenSetupApiKey` (token 192-bit base64url, expira 7d, `usadoEn=null`) + dispara mail. NO devuelve el token/URL al Shipro admin.
+  - **Mail**: `enviarMailSetupApiKey` en `lib/mailer.ts` (reusa `transporter` + `firmaShipro`, mismo patrón que `enviarMailBienvenida`).
+  - **Página pública** `/setup-api-key/[token]`: valida token (GET), cliente confirma, POST consume el token atómicamente (`$transaction` + `updateMany where usadoEn=null` como race-safe lock), genera la key vía el `generateApiKey()` existente, persiste solo `apiKeyHash + Ultimos4 + Activa + CreadaEn`, devuelve el PLAIN **una única vez**. UI con copy-to-clipboard + warning show-once + instructivo.
+  - **Endpoint público** (`GET/POST /api/empresa/api-key/via-token`) registrado en `proxy.ts PUBLIC_API_EXACT` — autenticación es el propio token (sin sesión).
+  - **Garantías de seguridad verificadas**: Shipro NUNCA ve la key en plaintext (el admin endpoint retorna solo `{ok, empresaId, enviadoA, expira}`; el plain solo aparece en el response del POST público que llama el browser del cliente). Solo hash HMAC-SHA256 se persiste. Token con expiración + single-use + race-safe. Tabla `TokenSetupApiKey` es **dominio separado** de `TokenVinculacionTiendanube` (no hay reuso cruzado). Verificado local 2026-09-03: cliente generó la key OK, se copió, el token quedó `usadoEn`.
+  - **Desbloquea a Chat C (WooCommerce)** UNA VEZ EN PROD: el plugin apunta a `pm.shipro.pro/api`, la key tiene que emitirse en el ambiente de producción.
+
+**Follow-ups del hub (piezas siguientes, NO hechas):**
+
+- **Instructivo por plataforma en `/setup-api-key`.** Hoy la página asume WooCommerce en el copy ("Dónde la pego → WooCommerce → Ajustes → Shipro"). Debería leer las conexiones del cliente (modelo Conexion) y dar instrucciones a medida por plataforma (WooCommerce vs Tiendanube vs futuras). Depende de la pieza siguiente ("registrar/ver conexiones") para saber qué tiene el cliente. Observación de Nacho, 2026-09-03.
+- **Pieza "Registrar + ver conexiones".** Poblar el modelo `Conexion` (registro de qué plataforma tiene cada cliente + su mecanismo/estado/referenciaExterna) + pantalla del hub para ver quién está integrado a qué. Es el próximo verbo funcional del hub: "saber quién está integrado". Habilita el instructivo por plataforma + la vista consolidada del cliente.
+- **Puerta del cliente (Opción B — autoservicio).** Que el cliente también pueda generar/rotar su key desde su propio panel `/configuracion` (no solo por disparo Shipro). El endpoint `/api/empresa/api-key` ya está gateado para `gerente_cliente`; falta la UI cliente-facing (Capa 1 original de esta deuda, complemento del flujo Shipro-triggered que ya está).
+- **Ciclo de vida de conexión.** Suspender / reactivar / dar de baja un cliente (ej. por falta de pago) — revoca/reactiva credenciales usando `EstadoConexion` del modelo Conexion. Decisiones de negocio pendientes: ¿suspender desactiva o revoca la key? ¿manual o automático por deuda? ¿qué pasa con envíos en curso? Obra propia (semi-nueva deuda, referenciada desde acá).
+- **Absorción de Tiendanube al modelo Conexion.** Hoy Tiendanube vive en `TiendaTiendanube` (Chat B territory) — futura pieza para migrar esa data a `Conexion` (o mantener referenciada) y unificar visualmente el hub. **Cross-chat obligatorio con Chat B** (toca `lib/tiendanube/*` + `app/api/tiendanube/*` + oauth callback + webhooks).
+
+---
+
+**Contexto original de la deuda:**
+
+**Status previo:** ABIERTA — prerequisito de homologación de plugins self-service. **Bloqueante único** para cerrar el plugin de WooCommerce (el cliente no tiene hoy dónde generar su API Key). También bloquea el onboarding completo de Tiendanube desde la óptica del cliente.
 
 **Contexto de descubrimiento (original 2026-08-26):** al conectar el plugin de WooCommerce se necesitó una API Key real de una empresa (Argenshipro). Se confirmó que: (a) el endpoint `/api/empresa/api-key` existe pero NO tiene UI (ningún botón lo dispara); (b) ese endpoint rechaza a usuarios Shipro por diseño (solo rol `gerente_cliente`); (c) la sección `/plataformas` existe SOLO para usuarios Shipro, no para clientes. Resultado: hoy un cliente no tiene ninguna pantalla para generar su key ni administrar sus conexiones.
 

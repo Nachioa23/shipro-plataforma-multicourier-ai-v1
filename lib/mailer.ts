@@ -314,6 +314,62 @@ export async function enviarMailBienvenida(emailDestino: string, nombreEmpresaOU
 }
 
 // ==============================================================
+// MAIL 5b: SETUP DE API KEY (DEUDA 150 Pieza 2)
+// ==============================================================
+// Shipro dispara desde el hub → mail al cliente con link tokenizado que expira.
+// El cliente hace clic, genera su API Key en una página pública, la ve UNA vez.
+// Shipro NUNCA ve la key en plaintext. El link expira (7d) y es single-use.
+export async function enviarMailSetupApiKey(emailDestino: string, nombreEmpresaOUsuario: string, urlSetup: string) {
+  try {
+    const mailOptions = {
+      from: `"Shipro Onboarding" <${process.env.SMTP_USER}>`,
+      to: emailDestino,
+      subject: `🔑 Shipro: Generá tu API Key para conectar tus tiendas`,
+      html: `
+        <style>${fontImport}</style>
+        <div style="font-family: Arial, sans-serif; color: #333; max-w: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eaeaea; border-radius: 10px;">
+          <h2 style="color: #233b6b;">¡Hola, ${nombreEmpresaOUsuario}! 👋</h2>
+          <p>Desde <strong>Shipro</strong> te habilitamos la generación de tu <strong>API Key</strong>. Es la llave única de tu empresa para conectar Shipro con las plataformas de e-commerce que uses (WooCommerce, y en el futuro más).</p>
+
+          <div style="background-color: #f8fafc; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #3b82f6;">
+            <p style="margin: 0; color: #1f2937; font-weight: bold; margin-bottom: 10px;">Cómo funciona:</p>
+            <ol style="color: #4b5563; line-height: 1.6; margin: 0; padding-left: 20px;">
+              <li>Hacé clic en el botón de abajo (link personal, válido 7 días, se usa UNA sola vez).</li>
+              <li>En la página, tocá <strong>"Generar mi API Key"</strong>.</li>
+              <li>La key aparece en pantalla <strong>una única vez</strong> — copiala y guardala en un lugar seguro.</li>
+              <li>Pegala en el plugin de tu tienda (por ejemplo, en Shipro para WooCommerce &gt; Ajustes &gt; Shipro).</li>
+            </ol>
+          </div>
+
+          <div style="text-align: center; margin: 35px 0;">
+            <a href="${urlSetup}" target="_blank" style="background-color: #2563eb; color: #ffffff; padding: 14px 28px; text-decoration: none; font-weight: bold; border-radius: 6px; display: inline-block;">
+              Generar mi API Key
+            </a>
+          </div>
+
+          <div style="background-color: #fff7ed; padding: 12px 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #f59e0b;">
+            <p style="margin: 0; font-size: 13px; color: #9a3412;">
+              <strong>Importante:</strong> la key se muestra una única vez. Si la perdés, tendremos que emitirte una nueva (la anterior deja de funcionar).
+            </p>
+          </div>
+
+          <p style="font-size: 12px; color: #9ca3af; text-align: center; margin-top: 30px;">
+            Si no esperabas este mail, ignoralo — el link vence solo y no permite acceder a tu cuenta.<br>
+            Cualquier duda, respondé este correo.
+          </p>
+          ${firmaShipro}
+        </div>
+      `,
+    };
+    await transporter.sendMail(mailOptions);
+    return true;
+  } catch (error) {
+    console.error("[Mailer] Error Mail Setup API Key:", error);
+    return false;
+  }
+}
+
+// ==============================================================
 // MAIL 6: ESCALACIÓN AL COURIER (Soporte Shipro)
 // ==============================================================
 export async function enviarMailEscalacionCourier(emailCourier: string, nombreCourier: string, tracking: string, estadoActual: string, motivo: string, observacion: string) {

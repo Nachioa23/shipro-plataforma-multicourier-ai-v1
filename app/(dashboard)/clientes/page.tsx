@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Building2, Plus, Search, Mail, CheckCircle2, Send, Loader2, AlertCircle, Settings, Users, Percent, Save, X, Copy, Trash2, ShieldAlert } from 'lucide-react';
+import { Building2, Plus, Search, Mail, CheckCircle2, Send, Loader2, AlertCircle, Settings, Users, Percent, Save, X, Copy, Trash2, ShieldAlert, Key } from 'lucide-react';
 import { useSession } from "next-auth/react";
 import {
   validarCUIT,
@@ -49,6 +49,12 @@ export default function GestionClientes() {
   const [creandoUsuario, setCreandoUsuario] = useState(false);
   const [nuevoUser, setNuevoUser] = useState({ nombre: "", email: "", rol: "operador_cliente" });
   const [linkMagicoUsuario, setLinkMagicoUsuario] = useState<any>(null);
+
+  // DEUDA 150 Pieza 2: envío del link tokenizado de setup de API Key al cliente.
+  // Shipro dispara desde este drawer; el backend crea el TokenSetupApiKey + manda
+  // el mail. Shipro NUNCA ve la key en plaintext (la genera el cliente en su página).
+  const [enviandoLinkApiKey, setEnviandoLinkApiKey] = useState(false);
+  const [mensajeLinkApiKey, setMensajeLinkApiKey] = useState<{ texto: string; tipo: 'ok' | 'error' } | null>(null);
 
   const esEquipoShipro = session?.user?.rol === 'admin_shipro' || session?.user?.rol === 'operador_shipro';
 
@@ -397,10 +403,55 @@ export default function GestionClientes() {
               <p className="text-xs font-bold text-blue-600 uppercase tracking-widest mb-1">Auditando Cliente</p>
               <h2 className="text-xl font-black text-gray-800">{clienteSeleccionado.nombre}</h2>
             </div>
-            <button onClick={() => {setClienteSeleccionado(null); setCreandoUsuario(false); setLinkMagicoUsuario(null);}} className="p-2 hover:bg-gray-200 rounded-full text-gray-500 transition-colors"><X className="w-6 h-6" /></button>
+            <button onClick={() => {setClienteSeleccionado(null); setCreandoUsuario(false); setLinkMagicoUsuario(null); setMensajeLinkApiKey(null);}} className="p-2 hover:bg-gray-200 rounded-full text-gray-500 transition-colors"><X className="w-6 h-6" /></button>
           </div>
 
           <div className="flex-1 overflow-y-auto p-6 space-y-8">
+            {/* DEUDA 150 Pieza 2: enviar link tokenizado de setup de API Key al gerente_cliente.
+                Shipro dispara desde acá; el cliente recibe el mail y genera la key en una página
+                pública (Shipro nunca ve la key en plaintext). */}
+            <section>
+              <h3 className="text-sm font-black text-gray-800 flex items-center gap-2 mb-4 border-b pb-2">
+                <Key className="w-4 h-4 text-indigo-500" /> API Key del cliente
+              </h3>
+              <p className="text-xs text-gray-500 leading-relaxed mb-3">
+                Enviá al gerente del cliente un link seguro para que genere su API Key (válido 7 días, un solo uso). La key se muestra una única vez y solo la ve el cliente.
+              </p>
+              <button
+                onClick={async () => {
+                  if (!clienteSeleccionado || enviandoLinkApiKey) return;
+                  setEnviandoLinkApiKey(true);
+                  setMensajeLinkApiKey(null);
+                  try {
+                    const res = await fetch(`/api/admin/empresas/${clienteSeleccionado.id}/enviar-link-api-key`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (res.ok) {
+                      setMensajeLinkApiKey({ texto: `Link enviado a ${data?.enviadoA ?? "el gerente del cliente"}.`, tipo: 'ok' });
+                    } else {
+                      setMensajeLinkApiKey({ texto: data?.error || `Error HTTP ${res.status}`, tipo: 'error' });
+                    }
+                  } catch {
+                    setMensajeLinkApiKey({ texto: "Error de red. Reintentá.", tipo: 'error' });
+                  } finally {
+                    setEnviandoLinkApiKey(false);
+                  }
+                }}
+                disabled={enviandoLinkApiKey}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {enviandoLinkApiKey ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                {enviandoLinkApiKey ? "Enviando…" : "Enviar link de setup de API Key"}
+              </button>
+              {mensajeLinkApiKey && (
+                <p className={`mt-3 text-xs font-medium px-3 py-2 rounded-lg ${mensajeLinkApiKey.tipo === 'ok' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+                  {mensajeLinkApiKey.texto}
+                </p>
+              )}
+            </section>
+
             <section>
               <h3 className="text-sm font-black text-gray-800 flex items-center gap-2 mb-4 border-b pb-2">
                 <Percent className="w-4 h-4 text-amber-500" /> Reglas Comerciales (Shipro Markup)
@@ -528,7 +579,7 @@ export default function GestionClientes() {
         </div>
       </div>
       
-      {clienteSeleccionado && <div className="fixed inset-0 bg-slate-900/20 z-40" onClick={() => {setClienteSeleccionado(null); setCreandoUsuario(false); setLinkMagicoUsuario(null);}}></div>}
+      {clienteSeleccionado && <div className="fixed inset-0 bg-slate-900/20 z-40" onClick={() => {setClienteSeleccionado(null); setCreandoUsuario(false); setLinkMagicoUsuario(null); setMensajeLinkApiKey(null);}}></div>}
     </div>
   );
 }

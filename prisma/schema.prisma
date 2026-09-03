@@ -55,6 +55,7 @@ model Empresa {
   tiendasTiendanube   TiendaTiendanube[] // DEUDA 144: tiendas Tiendanube vinculadas (1 empresa → N tiendas)
   tokensVinculacionTiendanube TokenVinculacionTiendanube[] // Tokens de un solo uso para el link de instalación OAuth (Momento 1)
   conexiones          Conexion[] // DEUDA 150 Pieza 1: hub de conexiones per (empresa, plataforma).
+  tokensSetupApiKey   TokenSetupApiKey[] // DEUDA 150 Pieza 2: tokens de un solo uso para el link de setup de la API Key.
 
   // DEUDA 29: si true, el cliente puede usar credenciales Shipro (Modelo A) al activar
   // couriers. Inmutabilidad direccional: gerente_cliente puede ir A→B (obtener
@@ -1926,5 +1927,48 @@ model Conexion {
   // día de mañana se necesita permitir N conexiones de la misma plataforma para
   // una empresa (ej. N tiendas Tiendanube), se relaja este @@unique.
   @@unique([empresaId, plataforma])
+  @@index([empresaId])
+}
+
+// =============================================================================
+// DEUDA 150 Pieza 2 (2026-09-03) — Token de setup de API Key
+// =============================================================================
+// Token single-use con expiración que Shipro genera en el hub y le manda al
+// cliente por mail. El cliente hace clic en el link y llega a la página pública
+// de generación de API Key (`/setup-api-key/[token]`). El endpoint público
+// valida el token (existe + no expiró + usadoEn=null), genera la key vía la
+// lógica existente en `/api/empresa/api-key`, la muestra UNA sola vez al cliente,
+// y marca el token como consumido.
+//
+// Shipro NUNCA ve la key en plaintext — la genera el cliente en su página, con
+// el token como autenticación (bypass de sesión NextAuth). El endpoint SÓLO
+// valida el token; la generación reusa `generateApiKey()` + persistencia en
+// `Empresa.apiKey{Hash,Ultimos4,Activa,CreadaEn}` (patrón show-once ya existente).
+//
+// Shape moldeado sobre `TokenVinculacionTiendanube` (mismo patrón: randomBytes(24)
+// base64url + expira + single-use explícito por `usadoEn`). Tabla separada para
+// no mezclar dominios (OAuth de Tiendanube vs setup de API Key genérica) y para
+// mantener aislada la lógica de purpose (evita que un token de un dominio se use
+// en el otro).
+// =============================================================================
+model TokenSetupApiKey {
+  id Int @id @default(autoincrement())
+
+  empresaId Int
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  // Token random 192-bit base64url. @unique para lookup O(1) en el endpoint público.
+  token String @unique
+
+  // Vencimiento del link. Setear al crear (diseño: ~7 días, mismo que
+  // TokenVinculacionTiendanube). Un link vencido no genera key.
+  expira DateTime
+
+  // Single-use: null hasta que el POST del endpoint público lo consuma; entonces
+  // se setea al timestamp de generación. Un token ya usado no genera de nuevo.
+  usadoEn DateTime?
+
+  createdAt DateTime @default(now())
+
   @@index([empresaId])
 }

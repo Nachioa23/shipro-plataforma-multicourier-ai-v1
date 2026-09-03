@@ -278,8 +278,6 @@ export class IntralogAdapter implements ICourierIntegrator {
       punto_entrega: null,                 // FASE 1: sin sucursal PICK UP.
     };
 
-    console.log("[INTRALOG-DBG] body imposicion:", JSON.stringify(body));
-
     const res = await fetchConTimeout(`${this.API_URL}/intralog/heritas/pedido`, {
       method: 'POST',
       headers: {

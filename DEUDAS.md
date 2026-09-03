@@ -3351,22 +3351,42 @@ en `lib/empaquetado/`, commits `5633fa2` + `8e8523e` + `f05c915`; elimina el des
 ~1,4% anterior entre lo cotizado en checkout vs lo cotizado al armar la etiqueta).
 Los 3 tramos del core operan sin fricción sobre la tienda demo real.
 
+**Actualización 2026-09-03 — puntos 1, 2 y 3 funcionalmente completos en código.**
+Corrección del audit viejo que decía que el punto 3 (trazabilidad) estaba "sin empezar":
+está IMPLEMENTADO y cableado vía [[DEUDA 104]] — cron de rastreo corriendo cada 30 min,
+`pushTrackingEvent` publicando a Tiendanube con mapeo Shipro→Tiendanube, marcado de
+`sincronizadoTiendanubeEn` + barrido de reintento. Ver el bloque "PUNTO 3 (trazabilidad)"
+más abajo para el detalle. Única cola: validación EN VIVO con el primer cliente real de
+Tiendanube (imposible simular con envíos de prueba que nunca se despachan físicamente).
+
 **Pendientes registrados (no bloqueantes del core, agenda futura):**
 
-- **PENDIENTE 1 — Punto 3 del core: consumir y publicar la trazabilidad (NO empezado).**
-  La app Tiendanube debe hacer 3 cosas: (1) publicar tarifa en checkout [HECHO], (2) crear
-  la etiqueta automáticamente al pagar [HECHO, `order/paid` → etiqueta], (3) consumir y
-  publicar la trazabilidad del envío a la cuenta del comprador (e-commerce) y al dashboard
-  del merchant [NO EMPEZADO]. Hoy: cuando un envío nace bloqueado (`BLOQUEADO_*`) y se
-  destraba después, el tracking real del courier NO se re-sincroniza con Tiendanube — el
-  link de seguimiento del merchant/comprador puede quedar apuntando al tracking provisorio
-  `SHP-*`. Falta: (a) empujar el tracking real a Tiendanube cuando el envío se destraba,
-  (b) publicar actualizaciones de estado del envío al comprador. Es un bloque grande, la
-  evolución siguiente del circuito. Relacionado: el webhook `fulfillment_order/*` ya recibe
-  `tracking_event_*` de Tiendanube (hoy stubs no-op en el handler) — ese es el enganche
-  para la ingesta de tracking. Ver también [[DEUDA 106]] (tracking L1 público) + Nota
-  2026-08-06 en la DEUDA 130 sobre la Fulfillment Events API multi-inventory (PUSH desde
-  Shipro al POST `/orders/{order_id}/fulfillment-orders/{ffo_id}/tracking-events`).
+- **PUNTO 3 (trazabilidad) — IMPLEMENTADO ([[DEUDA 104]]), pendiente validación en vivo.**
+  Corrección del estado previo (un audit viejo lo daba como "no empezado" — era info
+  desactualizada; recon 2026-09-03 confirma que está cableado). El punto 3 está implementado
+  y cableado en producción:
+  - El cron de rastreo (`/api/cron/rastreo`) está wireado y corriendo cada 30 min (8-22 ART),
+    verificado en el crontab del server + `cron-rastreo.log` activo.
+  - Consume el estado de los couriers (`rastrear`) y lo mapea al catálogo canónico Shipro.
+  - Publica el evento a Tiendanube vía `pushTrackingEvent` (`lib/tiendanube/tracking-api.ts`
+    → `POST /orders/{order}/fulfillment-orders/{ffo}/tracking-events`) con mapeo de estados
+    Shipro→Tiendanube (`lib/tiendanube/tracking-map.ts`; `estadoTiendanube()` devuelve `null`
+    para estados que no se pushean). Marca `Envio.sincronizadoTiendanubeEn` al éxito;
+    best-effort con barrido de reintento (`LOTE_REINTENTO_TIENDANUBE`) para el backlog.
+  - El comprador ve el tracking en su cuenta de Tiendanube y el merchant en su dashboard.
+
+  **PENDIENTE:** validación end-to-end EN VIVO. No es construcción — el código está completo.
+  Requiere un envío REAL de Tiendanube con movimiento físico del courier (Andreani/Moci's
+  moviendo el paquete de verdad), imposible de simular con datos de prueba (los envíos de
+  prueba nunca se despachan físicamente → nunca cambian de estado → el cron no tiene evento
+  que empujar; en el log se ve `procesados=14 / actualizados=0`, los "errores" son las
+  etiquetas de prueba que nunca se usaron). Se validará automáticamente con el primer
+  cliente real de Tiendanube migrado desde la plataforma vieja.
+
+  Enlaces relacionados: el webhook `fulfillment_order/*` recibe `tracking_event_*` desde
+  Tiendanube (hoy stubs no-op en el handler; sentido inverso de la trazabilidad, no
+  requerido para el punto 3). Ver también [[DEUDA 106]] (tracking L1 público) + Nota
+  2026-08-06 en la DEUDA 130 sobre la Fulfillment Events API multi-inventory.
 
 - **PENDIENTE 2 — Botón de impresión de etiqueta en el dashboard de Tiendanube (deprioritizado).**
   El Admin Link funciona y sirve el PDF de la etiqueta (verificado end-to-end en el punto 3

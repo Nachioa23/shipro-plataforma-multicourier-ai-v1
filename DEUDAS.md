@@ -4057,9 +4057,23 @@ Post-CAPA-2 estricto, con 0 servicios activo:true en la BD para Hop → **Hop de
 
 ---
 
-## DEUDA 166 — Gate de activación: soportar courier de entrega auto-recolector sin sucursales (bloquea Intralog) (registrada 2026-09-02, scope medio, prioridad alta)
+## DEUDA 166 — Gate de activación: soportar courier de entrega auto-recolector sin sucursales (bloquea Intralog) (registrada 2026-09-02, TRAMO INTRALOG CERRADO 2026-09-03 vía data, cuarto perfil queda como fix disponible)
 
-**Status:** ABIERTA — descubierta al intentar activar Intralog en `/configuracion/transportes` tras integrarlo (adapter + factory + registry + fila Courier ya en BD, cotización verificada contra la API de Intralog: $10.219 neto). El gate rechaza la activación con *"Sin cobertura · Intralog no tiene sucursales modeladas ni capacidad de consolidación (origen efectivo CP 1702)"*. Territorio: **Núcleo** (`app/api/configuracion/couriers/route.ts` + `lib/couriers/modalidad.ts`).
+**Status:** cierre del tramo de Intralog el 2026-09-03 — resuelto **vía DATA, no código**: Intralog activa por el mecanismo consolidador (`puedeConsolidar=true` + `cpDepositoConsolidador="1619"`, depósito central real de Intralog confirmado por Nacho; Intralog consolida de verdad → **uso fiel del mecanismo, no atajo**). Cae en **PERFIL 2** (modalidad `sucursal_unica`, cubre vía su hub), **SIN aviso**. El adapter (Chat B) cotiza OK. Pendiente: validación e2e (cotización + despacho a domicilio) que corre el Chat B.
+
+Fila actualizada: id=14 (la fila vieja id=13 fue borrada + recreada por el wizard con 8 servicios).
+
+El **cuarto perfil** (fix del gate en commit `bd081f0`, ver más abajo) resultó **correcto pero NO era el caso de Intralog**. Queda commiteado LOCAL, sin deployar, esperando el primer courier que REALMENTE lo necesite (un courier que no cubra el hub del recolector pero sí el depósito del cliente).
+
+**Aprendizaje del tramo:** el problema NO era ni el gate ni el adapter — era que faltaba modelar el dato de consolidación de Intralog (`cpDepositoConsolidador`). La cobertura vive en la BD (DEUDA 29 eliminó la declarativa a nivel Empresa), no en el adapter. El diagnóstico costó varias vueltas (Chat A diagnosticó mal dos veces: primero achacándolo al `puedeRecogerDomicilio` dead-code, después a un supuesto perfil "auto-pickup sin sucursales"); lo resolvió la **certeza de negocio de Nacho** ("Intralog cubre AMBA, el aviso está mal") + el **dato del hub real** (CP 1619). Método a repetir: cuando el diagnóstico técnico no cierra, la certeza de negocio + el dato faltante son la salida — no forzar código para tapar el vacío.
+
+**Integración completa de Intralog** (adapter + cobertura + modalidades + sucursales + first-mile fases 2+): la lleva el **Chat B de punta a punta** (decisión Nacho: unificar la integración en un solo chat). Cualquier territorio núcleo que toque lo coordina con Chat A.
+
+---
+
+Registro histórico del bloqueo original (2026-09-02):
+
+**Descubrimiento:** al intentar activar Intralog en `/configuracion/transportes` tras integrarlo (adapter + factory + registry + fila Courier ya en BD, cotización verificada contra la API de Intralog: $10.219 neto). El gate rechazaba con *"Sin cobertura · Intralog no tiene sucursales modeladas ni capacidad de consolidación (origen efectivo CP 1702)"*. Territorio: **Núcleo** (`app/api/configuracion/couriers/route.ts` + `lib/couriers/modalidad.ts`).
 
 **Problema:** el gate de activación (DEUDA 36.E Diseño 2 STEP A) rechaza cualquier courier cuya modalidad de asignación de sucursal resuelva `sin_sucursales`. La modalidad se deriva en `getModalidadAsignacion()` de `lib/couriers/modalidad.ts:47-55`:
 - Si `tieneSucursales(courier)` → `por_cp_origen`
@@ -4088,6 +4102,8 @@ Intralog es courier de entrega **domicilio-a-domicilio, auto-recolector**, sin s
 **Relación:** [[DEUDA 91]] (filtros de capacidad courier×servicio — la CAPA 1 y CAPA 2 no gatean activación; el gate de activación es una capa distinta). DEUDA 36.E Diseño 2 STEP A (introdujo el gate original; asumió que todo courier no-recolector recibe en su red desde el hub del recolector — asunción que se rompe con el perfil auto-recolector).
 
 **Origen:** integración de Intralog (Chat B — Couriers). Recon completo de first-mile en Chat A el 2026-09-02 (dispatch.ts + gate + modalidad.ts) confirmando que el bloqueo NO está en dispatch ni en la config de BD sino en el gate de activación.
+
+**Commit local no deployado — cuarto perfil (`bd081f0`):** implementación del fix del gate + aviso informativo calculado al vuelo. Perfil 1/2/4 sin cambio de comportamiento; perfil 3 (courier que NO cubre hub del recolector pero SÍ el depósito del cliente) pasa a ACTIVAR (era rechazo) con aviso amber "recolecta desde el depósito del cliente, no desde el recolector designado". `dispatch.ts` intacto (Caso B ya lo soporta). Verificado empíricamente los 4 perfiles contra BD local. **NO se deployó** porque Intralog resultó ser perfil 2 (activa vía hub 1619). El fix es CORRECTO para el caso futuro de un courier que realmente no pueda alcanzar el hub del recolector. **Decisión pendiente de Nacho**: deployarlo por su valor propio (destraba el caso real cuando aparezca; sin riesgo — no cambia los otros 3 perfiles) o dejarlo esperando al primer caso concreto que lo justifique.
 
 ---
 

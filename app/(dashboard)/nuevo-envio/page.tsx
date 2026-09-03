@@ -273,6 +273,7 @@ export default function NuevoEnvio() {
       ancho: paqAncho,
       alto: paqAlto,
       localidad: destLocalidadSeleccionada,
+      provincia: destProvincia,
       nombre: destNombre,
       dni: dniProcesado,
       email: destEmail,

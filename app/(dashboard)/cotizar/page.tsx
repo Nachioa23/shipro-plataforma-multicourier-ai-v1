@@ -50,6 +50,7 @@ function CotizadorContenido() {
   // en lugar de intentar geocodificar "1614, Destino, Argentina" que no resuelve
   // y salta la re-ordenacion por proximidad.
   const localidadDestino = searchParams.get("localidad") || "";
+  const provinciaDestino = searchParams.get("provincia") || "";
   // Coords precisas provistas por Google Places en /nuevo-envio (opcionales).
   // Cuando existen se pasan como `&lat=&lng=` al endpoint que salta el geocoding.
   const latDestino = searchParams.get("lat") || "";
@@ -192,6 +193,7 @@ function CotizadorContenido() {
       destinatarioNombre: nombreDestino,
       cpDestino: cpDestino,
       localidad: decodeURIComponent(localidadDestino),
+      provinciaDestino: provinciaDestino,
       calle: calleDestino, altura: alturaDestino, piso: "", dpto: "",
       dni: dniDestino, email: emailDestino, telefono: telefonoDestino,
       pesoReal: peso,

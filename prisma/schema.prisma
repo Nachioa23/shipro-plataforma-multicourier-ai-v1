@@ -54,6 +54,7 @@ model Empresa {
   depositos           Deposito[] // DEUDA 4: depósitos físicos del cliente
   tiendasTiendanube   TiendaTiendanube[] // DEUDA 144: tiendas Tiendanube vinculadas (1 empresa → N tiendas)
   tokensVinculacionTiendanube TokenVinculacionTiendanube[] // Tokens de un solo uso para el link de instalación OAuth (Momento 1)
+  conexiones          Conexion[] // DEUDA 150 Pieza 1: hub de conexiones per (empresa, plataforma).
 
   // DEUDA 29: si true, el cliente puede usar credenciales Shipro (Modelo A) al activar
   // couriers. Inmutabilidad direccional: gerente_cliente puede ir A→B (obtener
@@ -415,6 +416,45 @@ enum DescuentoClienteModo {
 enum MarkupCourierModo {
   HEREDA
   PROPIO
+}
+
+// DEUDA 150 Pieza 1 (2026-09-03): plataformas e-commerce soportadas por el hub de
+// conexiones. Genérico desde el día uno — hoy solo se usa WOOCOMMERCE en producción,
+// el resto se declara para no requerir migración cuando se agreguen. TIENDANUBE se
+// reserva para cuando se absorba la data de TiendaTiendanube (Pieza N futura,
+// coordinada con Chat B — hoy Tiendanube sigue viviendo en su propia tabla).
+enum PlataformaConexion {
+  TIENDANUBE
+  WOOCOMMERCE
+  VTEX
+  MAGENTO
+  PRESTASHOP
+  SHOPIFY
+  MERCADOLIBRE
+  API_REST
+}
+
+// DEUDA 150 Pieza 1: mecanismo de autenticación de la conexión.
+// API_KEY = usa Empresa.apiKeyHash (una key por cliente, compartida entre todas las
+//           conexiones API_KEY de la empresa). WooCommerce y todos los plugins
+//           self-installed usan este mecanismo.
+// OAUTH   = la credencial vive en la tabla per-platform (ej. TiendaTiendanube.accessToken).
+//           Conexion NO guarda el token — solo declara el mecanismo.
+enum MecanismoConexion {
+  API_KEY
+  OAUTH
+}
+
+// DEUDA 150 Pieza 1: estado del ciclo de vida de la conexión.
+// PENDIENTE = declarada pero aún no completó el handshake (ej. link OAuth generado
+//             sin callback aún, o key emitida sin que el plugin haya llamado todavía).
+// ACTIVA    = handshake completo, la conexión responde. Estado normal en producción.
+// REVOCADA  = desactivada explícitamente (por el cliente o por Shipro). Distinto de
+//             borrada — mantiene el historial para audit.
+enum EstadoConexion {
+  ACTIVA
+  PENDIENTE
+  REVOCADA
 }
 
 // ==========================================
@@ -1836,5 +1876,55 @@ model TokenVinculacionTiendanube {
 
   createdAt DateTime @default(now())
 
+  @@index([empresaId])
+}
+
+// =============================================================================
+// DEUDA 150 Pieza 1 (2026-09-03) — Hub de conexiones per (empresa, plataforma)
+// =============================================================================
+// Una conexión por par (empresa, plataforma): un cliente puede tener varias
+// (WooCommerce + Tiendanube + …). Es el registro genérico de "quién está integrado
+// a qué y cómo" — la fachada del hub multiplataforma.
+//
+// Qué SÍ vive acá: identidad de la conexión (empresa+plataforma), mecanismo de
+// auth, estado, referencia externa (si la plataforma tiene un id remoto declarado
+// del lado del vendor, ej. store id de Tiendanube).
+//
+// Qué NO vive acá:
+// - La API Key: vive en Empresa.apiKeyHash (una por cliente, compartida entre
+//   todas sus conexiones API_KEY). Conexion NO guarda la key.
+// - El OAuth accessToken: vive en la tabla per-platform (ej. TiendaTiendanube.
+//   accessToken). Conexion solo declara mecanismo=OAUTH.
+// - Recursos (plugin/docs/guía): son per-plataforma, no per-conexion — concern
+//   separado de una pieza futura.
+//
+// Tiendanube absorción: hoy Tiendanube vive en TiendaTiendanube (Chat B territory,
+// modelo per-platform). Conexion NO reemplaza esa tabla en Pieza 1 — se reserva el
+// valor PLATAFORMA=TIENDANUBE para cuando se absorba (Pieza N futura, coordinada
+// con Chat B). El hub UI del cliente en Pieza 2+ lee ambas fuentes en paralelo.
+// =============================================================================
+model Conexion {
+  id Int @id @default(autoincrement())
+
+  empresaId Int
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  plataforma PlataformaConexion
+  mecanismo  MecanismoConexion
+  estado     EstadoConexion @default(PENDIENTE)
+
+  // Identificador remoto de la plataforma (ej. storeId de Tiendanube, shop domain
+  // de Shopify, account name de VTEX). Null para plataformas API_KEY donde el sitio
+  // se identifica por sus llamadas (Empresa.apiKeyHash → empresaId), no por un id
+  // remoto declarado a Shipro.
+  referenciaExterna String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Una conexión por (empresa, plataforma). Evita duplicados accidentales; si el
+  // día de mañana se necesita permitir N conexiones de la misma plataforma para
+  // una empresa (ej. N tiendas Tiendanube), se relaja este @@unique.
+  @@unique([empresaId, plataforma])
   @@index([empresaId])
 }

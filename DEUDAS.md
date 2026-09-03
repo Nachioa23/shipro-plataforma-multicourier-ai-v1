@@ -3411,22 +3411,34 @@ la homologación formal para publicar en el App Store de Tiendanube es proceso d
 
 ---
 
-## DEUDA 150 — Centro de conexiones del cliente: UI para que las empresas administren sus plugins/apps/conectores y su API Key (registrada 2026-08-26)
+## DEUDA 150 — Centro de conexiones del cliente: UI para que las empresas administren sus plugins/apps/conectores y su API Key (registrada 2026-08-26, ampliada 2026-09-03)
 
-**Status:** ABIERTA — prerequisito de homologación de plugins self-service. Bloquea la validación e2e del plugin de WooCommerce (el cliente no tiene hoy dónde generar su API Key).
+**Status:** ABIERTA — prerequisito de homologación de plugins self-service. **Bloqueante único** para cerrar el plugin de WooCommerce (el cliente no tiene hoy dónde generar su API Key). También bloquea el onboarding completo de Tiendanube desde la óptica del cliente.
 
-**Contexto de descubrimiento:** Al conectar el plugin de WooCommerce se necesitó una API Key real de una empresa (Argenshipro). Se confirmó que: (a) el endpoint `/api/empresa/api-key` existe pero NO tiene UI (ningún botón lo dispara); (b) ese endpoint rechaza a usuarios Shipro por diseño (solo rol `gerente_cliente`); (c) la sección `/plataformas` existe SOLO para usuarios Shipro, no para clientes. Resultado: hoy un cliente no tiene ninguna pantalla para generar su key ni administrar sus conexiones.
+**Contexto de descubrimiento (original 2026-08-26):** al conectar el plugin de WooCommerce se necesitó una API Key real de una empresa (Argenshipro). Se confirmó que: (a) el endpoint `/api/empresa/api-key` existe pero NO tiene UI (ningún botón lo dispara); (b) ese endpoint rechaza a usuarios Shipro por diseño (solo rol `gerente_cliente`); (c) la sección `/plataformas` existe SOLO para usuarios Shipro, no para clientes. Resultado: hoy un cliente no tiene ninguna pantalla para generar su key ni administrar sus conexiones.
+
+**Ampliación 2026-09-03 (aprendizajes del build del plugin WooCommerce):**
+
+- **Sirve para MÚLTIPLES plataformas a la vez.** Tiendanube y WooCommerce tienen el mismo agujero: el cliente no tiene UI para administrar sus conexiones. La sección debe listar TODAS las plataformas conectadas del cliente (hoy `/plataformas` existe solo para usuarios Shipro — hay que crear el equivalente de cara al cliente). No es una sección "para WooCommerce", es la sección de conexiones del cliente.
+
+- **Generación de API Key (Capa 1, mínimo que desbloquea WooCommerce).** El endpoint `/api/empresa/api-key` YA EXISTE (POST rota, GET consulta) pero: (a) no tiene UI, ningún botón lo dispara; (b) rechaza a usuarios Shipro por diseño (solo rol `gerente_cliente`). La pantalla debe vivir del lado del cliente. La key tiene formato `shipro_live_...`, se muestra UNA sola vez al generarla (el cliente la copia), y en BD se guarda solo el hash (`apiKeyHash`) + últimos 4 para display. WooCommerce la consume por copiar-pegar.
+
+- **Compartir/instalar es DISTINTO por plataforma:**
+  - **Tiendanube**: link de instalación OAuth (el flujo del install link que ya existe).
+  - **WooCommerce**: no hay "link" — el cliente descarga el `.zip` del plugin y pega su API Key en el plugin. Entonces "compartir" para WooCommerce = entregar el archivo del plugin + la key. La UI debe contemplar ambos modelos, no asumir que todos los plugins se instalan por link.
+
+- **Onboarding completo:** la sección debe cubrir el ciclo que hoy no existe para el cliente: ver sus plataformas, generar/rotar/revocar su API Key, obtener el link o el paquete de instalación según la plataforma, y ver el estado de cada conexión.
 
 **Alcance (por capas — Capa 3 es el norte, Capa 1 el mínimo entregable):**
 - **Capa 1 (mínimo que desbloquea WooCommerce):** pantalla de cara al cliente (rol `gerente_cliente`) donde la empresa genera y copia su API Key (`shipro_live_...`). Es lo único imprescindible para que el plugin cotice.
 - **Capa 2 (gestión de la key):** rotar la key, ver fecha de creación / últimos 4, revocar. El endpoint de rotación ya existe (POST `/api/empresa/api-key`, valida rol + motivo de auditoría D-19); falta la UI.
-- **Capa 3 (centro de conexiones completo — objetivo):** sección de cara al cliente donde la empresa ve y administra TODAS sus plataformas (Tiendanube, WooCommerce, Shopify, etc.): instalar/conectar, desconectar, estado de cada conexión, y su API Key, en un solo lugar. Equivalente cliente de la `/plataformas` que hoy solo ve Shipro.
+- **Capa 3 (centro de conexiones completo — objetivo):** sección de cara al cliente donde la empresa ve y administra TODAS sus plataformas (Tiendanube, WooCommerce, Shopify, etc.): instalar/conectar (con el modelo apropiado por plataforma — link OAuth vs descarga de plugin + key), desconectar, estado de cada conexión, y su API Key, en un solo lugar. Equivalente cliente de la `/plataformas` que hoy solo ve Shipro.
 
 **Decisión de producto (Nacho):** el objetivo es la Capa 3 (centro de conexiones completo, la cara de Shipro para el cliente). Se puede construir por capas, entregando la Capa 1 primero para no frenar la prueba de WooCommerce.
 
-**Dependencia:** el frente de plugins (WooCommerce) no puede validar la Etapa 2 (cotizar e2e) hasta que exista al menos la Capa 1. El código del plugin sí puede construirse en paralelo.
+**Dependencia cruzada explícita:** el frente de plugins (WooCommerce) tiene TODO el código construido y commiteado (repo `shipro-woocommerce`, 5 commits, apuntando a `pm.shipro.pro/api`); NO puede validarse e2e hasta que exista al menos la Capa 1. Esta deuda es el **único bloqueante** para cerrar WooCommerce. El código del plugin ya no está en construcción — está esperando la key.
 
-**Pertenece a:** Núcleo (toca UI del panel + permisos de rol en shipro-2.0). NO lo construye el chat de plugins.
+**Pertenece a:** Núcleo (toca UI del panel + permisos de rol en `shipro-2.0`). NO lo construye el chat de plugins.
 
 ---
 

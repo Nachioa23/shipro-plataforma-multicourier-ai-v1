@@ -5,7 +5,7 @@ import {
   suspenderEmpresa,
 } from "@/lib/utils/suspension-cuenta";
 import { enviarMailCreacion } from "@/lib/mailer";
-import { obtenerCourier } from "@/lib/couriers/normalizar";
+import { normalizarNombreCourier } from "@/lib/utils/normalizar-courier";
 import { despacharCourier } from "@/lib/envios/dispatch";
 import { cotizar } from "@/lib/cotizador";
 import { calcularPromesaCalibrada } from "@/lib/utils/promesa-calibrada";
@@ -143,30 +143,48 @@ export async function crearEnvio(input: CrearEnvioInput) {
 
   // =========================================================
   // RESOLVER COURIER CANÓNICO
-  // obtenerCourier tolera variantes ("moci", "Moci's", "MOCIS") y
-  // devuelve el registro de BD con el nombre canónico correcto.
   //
-  // FIX (2026-09-04): antes acá había un auto-provision legacy
-  //   `if (!courierReal) prisma.courier.create({ data: { nombre: nombreCourier, activo: true } })`
-  // que explotaba con PrismaClientValidationError (Argument `nombre` is missing)
-  // cuando el caller mandaba `nombreCourier=undefined` — resultando en 500 en
-  // POST /api/envios (WooCommerce + plugins recientes). El auto-provision era
-  // legacy documentado como debt para DEUDA 12 / ABM: ya no se justifica hoy
-  // (los couriers se administran desde /admin-couriers, nadie los auto-crea al
-  // vuelo por nombre string). Reemplazado por un throw explícito → el handler
-  // lo mapea a 400 con code "COURIER_AUSENTE" en vez del 500 genérico.
+  // Resolución normalizada (helper de Hop, DEUDA 164): acepta el `courier` de
+  // /cotizar tal cual (ANDREANI/MOCI'S/INTRALOG/HOP ENVÍOS/etc.) sin que el
+  // plugin mantenga un mapeo. `normalizarNombreCourier` unifica case + acentos
+  // (NFD + strip diacríticos) + apóstrofes + espacios — así "ANDREANI",
+  // "Andreani", "andreani", "HOP ENVIOS" (sin acento) y "Hop Envíos" (con
+  // acento) resuelven al mismo Courier de BD.
   //
-  // NOTA: este es Fix A (unblock del 500). Fix B — degradar a un estado
-  // BLOQUEADO_COURIER_AUSENTE en vez de rechazar, cumpliendo "la venta se hace
-  // sí o sí" — queda como movimiento aparte (requiere decisión de schema:
-  // Envio.courierId nullable vs Courier placeholder + procesar-bloqueados-*).
+  // CourierAusente solo si NINGÚN courier normalizado coincide (courier
+  // genuinamente desconocido, ej. "FEDEX"). El handler lo mapea a 400 con code
+  // "COURIER_AUSENTE" (Fix A, 2026-09-04).
+  //
+  // NOTA: Fix B — degradar a un estado BLOQUEADO_COURIER_AUSENTE en vez de
+  // rechazar, cumpliendo "la venta se hace sí o sí" — queda como movimiento
+  // aparte (requiere decisión de schema: Envio.courierId nullable vs Courier
+  // placeholder + procesar-bloqueados-*).
+  //
+  // Historial: el bloque tenía un auto-provision legacy (prisma.courier.create
+  // con `nombre` del input) que explotaba con PrismaClientValidationError
+  // cuando el caller mandaba `nombreCourier=undefined` → 500 crudo. Fix A del
+  // 2026-09-04 lo reemplazó por throw explícito; esta iteración (2026-09-04)
+  // unifica la normalización al helper de Hop para no requerir mapeo en el
+  // plugin.
   // =========================================================
-  const courierReal = await obtenerCourier(nombreCourier);
+  let courierReal = null;
+  if (nombreCourier) {
+    const objetivo = normalizarNombreCourier(nombreCourier);
+    const couriers = await prisma.courier.findMany({
+      include: {
+        servicios: {
+          where: { codigoServicio: "entrega_sucursal" },
+          select: { codigoServicio: true, capacidadTecnicaMapeada: true },
+        },
+      },
+    });
+    courierReal = couriers.find((c) => normalizarNombreCourier(c.nombre) === objetivo) ?? null;
+  }
 
   if (!courierReal) {
     throw new Error(
-      `CourierAusente: nombreCourier="${nombreCourier ?? "undefined"}" no existe en BD. ` +
-      `El caller debe enviar un nombre de courier canónico ya dado de alta en /admin-couriers.`
+      `CourierAusente: nombreCourier="${nombreCourier ?? "undefined"}" no coincide con ningún courier de BD. ` +
+      `El caller debe enviar el string 'courier' que devuelve /cotizar (o cualquier variante de case/acento del nombre canónico).`
     );
   }
   const courierIdReal = courierReal.id;

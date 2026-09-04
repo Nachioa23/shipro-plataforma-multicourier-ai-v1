@@ -4192,3 +4192,31 @@ Hoy la doble etiqueta sólo se dispara por (a). Falta el disparador (b): un env�
 **Origen:** análisis de integración de Intralog como courier recolector/consolidador Y dueño de credenciales de terceros (Chat A, 2026-09-02). Política explicitada por Nacho al distinguir los dos disparadores (tramo físico vs propiedad de credencial).
 
 ---
+
+## DEUDA 169 — 500 en POST /api/envios: auto-provision fantasma del courier + Fix B pendiente (degradación "la venta nunca se pierde") (registrada 2026-09-04, Fix A RESUELTO LOCAL 2026-09-04 pend. deploy, Fix B ABIERTO scope medio prioridad alta)
+
+**Status:** Fix A resuelto en local (commit `248cbd3`, pendiente deploy). Fix B abierto — es el trabajo real: enganchar la política "la venta nunca se pierde" al camino de creación de envío.
+
+**BUG (root cause).** Al recibir un POST /api/envios con `nombreCourier=undefined` (caller nuevo que arma mal el body, ej. WooCommerce Chat C), `crear.ts` disparaba un auto-provision legacy: `prisma.courier.create({ data: { nombre: nombreCourier, activo: true }, include: { servicios: {…} } })` (L158-166 pre-fix) → `PrismaClientValidationError: Argument nombre is missing` → 500 crudo al cliente. Auto-provision documentado en el propio comment como *"si el caller manda algo raro queda como debt para DEUDA 12 / ABM"* — sobrevivió meses sin incidente porque los callers antiguos siempre pasaban un nombre válido; el primer caller que rompe el supuesto es el plugin WooCommerce nuevo.
+
+**Aclaración importante:** NO era regresión de [[DEUDA 91]]. Git blame prueba que el `.create()` fue introducido por el commit `03806c3` (2026-04-28, extract original de `crearEnvio`); el `include: { servicios }` fue agregado por `10eda290` (2026-06-01, [[DEUDA 32+37]] Fase K — cascada de tipos). DEUDA 91 no tocó este bloque. La mención al "91" en el mensaje del commit del fix quedó por brevedad narrativa; el registro histórico correcto está acá.
+
+**Fix A (COMMIT `248cbd3`, LOCAL, pendiente deploy).** Guard early: si `obtenerCourier(nombreCourier)` retorna `null`, `throw new Error('CourierAusente: …')` en vez del auto-provision fantasma. El catch del handler de la API (`app/api/envios/route.ts`) mapea `CourierAusente:` a **HTTP 400 con code `COURIER_AUSENTE`** (cumple contrato [[DEUDA 129]] "nunca 5xx por errores de negocio"). Elimina el `.create()` legacy. tsc = 0. 2 archivos, +31/-16 líneas. Impacto operacional inmediato: el 500 se convierte en 400 con code claro — el caller (WooCommerce, plugin, e-commerce) sabe qué corregir. Pendiente: deploy + verificación con Chat C.
+
+**Fix B — PENDIENTE (la política "la venta nunca se pierde").** Fix A todavía RECHAZA el envío (400) en vez de crearlo en un estado bloqueado con etiqueta genérica. La política declarada de Shipro es que la venta debe completarse siempre; los failures de negocio (courier ausente, saldo insuficiente, credencial incompleta, datos de paquete faltantes, cobertura vacía) deben degradar a un estado `BLOQUEADO_*` que se destraba después, con SHP-* provisorio + débito diferido. Ese patrón ya existe (`crear.ts` L1108-1124: matriz de `else if` sobre flags `bloqueadoPor*` + `procesar-bloqueados-*.ts` para debit deferred). Falta:
+- Nuevo flag `bloqueadoPorCourierAusente` en `crearEnvio` + su rama en la cadena de `else if` con estado `BLOQUEADO_COURIER_AUSENTE`.
+- El guard de Fix A es el enganche natural — en vez del throw, setear el flag y continuar la creación con `courierIdReal = <placeholder | null>` en un envío que se marca bloqueado.
+- **Decisión de schema pendiente** (bloqueante de Fix B): `Envio.courierId` es NOT NULL hoy. Opciones: (a) hacerlo nullable (migración destructiva, requiere cascade rewrites en procesar-bloqueados* y dashboards que asumen courier presente); (b) seedear un Courier "SIN_RESOLVER" placeholder + tolerar downstream; (c) mantener Fix A tal cual (rechazo) y no implementar Fix B — política más simple ("responsabilidad del caller enviar courier válido").
+- **Coherencia con `procesar-bloqueados-*`**: si Fix B crea envíos en `BLOQUEADO_COURIER_AUSENTE`, se necesita un handler para destrabar (típicamente `procesar-bloqueados-courier-ausente.ts` moldeado sobre `procesar-bloqueados-credencial.ts`) + UI dashboard donde el operador selecciona el courier real. **Money-adjacent** — el débito se aplica al destrabar, mismo patrón que otros BLOQUEADO_*. Verificación cuidadosa: revisar que el simulateSaldo + `FinanzasEnvio.tarifaFullCotizada` funcionen cuando el courierId original era placeholder.
+- **Reuso 100%**: el patrón de flags + precedencia + skip débito + SHP-* + eventoTracking + debit diferido en procesar-bloqueados. Lo nuevo es solo: 1 flag, 1 estado string, 1 handler de destrabado, decisión de schema.
+
+**Aprendizaje** (para registrar sin registrar deuda nueva):
+- [[DEUDA 91]] se verificó end-to-end en el camino de COTIZACIÓN (`/api/cotizar`) pero NO se probó en el camino de CREACIÓN de envío (`POST /api/envios` → `crear.ts`). El auto-provision legacy que rompió con `nombreCourier=undefined` vivía en `crear.ts`, un camino tangencial a lo que DEUDA 91 cubría. **Próxima vez que una deuda toque cotizar + crear (que son dos caminos con superficies distintas), la verificación e2e debe probar AMBOS caminos**. Regla general para checklists de verificación: cotización y creación son dos APIs distintas con clientes distintos (marketplace vs plugin vs dashboard) — cambio compartido = verificación separada.
+
+**Scope Fix B:** medio (schema nullable/placeholder + flag + handler + UI operador + verificación money-adjacent). **Prioridad Fix B:** alta (respeta la política declarada; hoy Fix A cumple contrato "no 5xx" pero rompe "venta sí o sí" en el caller que manda un courier ausente).
+
+**Relación:** [[DEUDA 129]] (contrato de resiliencia — Fix A cumple "no 5xx"; Fix B cumple "venta se hace sí o sí"). [[DEUDA 91]] (capacity filter — origen del confuso comment de commit, pero NO es la fuente del bug). [[DEUDA 32+37]] (Fase K agregó el `include: { servicios }` al `.create()` legacy; blame prueba autoría). [[DEUDA 12]] (ABM de couriers — cerrar el gap del auto-provision legacy que originalmente esperaba resolverse acá).
+
+**Origen:** producción tirando 500 en POST /api/envios (2026-09-04). Diagnóstico Chat A vía blame + recon estructural del safety-net existente.
+
+---

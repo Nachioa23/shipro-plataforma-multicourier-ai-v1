@@ -245,6 +245,17 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+    // FIX (2026-09-04): Fix A del bug de crear.ts — reemplaza el auto-provision
+    // legacy que explotaba con 500 (PrismaClientValidationError) cuando el caller
+    // mandaba nombreCourier=undefined. Ahora crear.ts throwea CourierAusente y
+    // este catch lo mapea a 400 con code claro para que el caller (plugin, e-commerce)
+    // sepa qué corregir. Fix B (degradar a BLOQUEADO_COURIER_AUSENTE) es aparte.
+    if (error?.message?.startsWith('CourierAusente:')) {
+      return NextResponse.json(
+        { error: 'Falta courier o el nombre no coincide con ningún courier dado de alta. Enviá un nombre canónico existente.', code: 'COURIER_AUSENTE' },
+        { status: 400 }
+      );
+    }
     // DEUDA 129: courier upstream no respondió en el timeout del adapter.
     // 503 = infra fallada aguas arriba (safe to retry). Los marketplaces
     // (Tiendanube et al.) tratan 5xx como transitorios sin abrir el circuit

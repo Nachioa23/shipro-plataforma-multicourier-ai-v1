@@ -145,25 +145,29 @@ export async function crearEnvio(input: CrearEnvioInput) {
   // RESOLVER COURIER CANÓNICO
   // obtenerCourier tolera variantes ("moci", "Moci's", "MOCIS") y
   // devuelve el registro de BD con el nombre canónico correcto.
-  // Si no existe, lo crea con el nombre tal como vino (legacy:
-  // antes el diccionario manual hardcodeaba "Andreani"/"Mocis";
-  // ahora confiamos en obtenerCourier — si el caller manda algo
-  // raro queda como debt para DEUDA 12 / ABM).
+  //
+  // FIX (2026-09-04): antes acá había un auto-provision legacy
+  //   `if (!courierReal) prisma.courier.create({ data: { nombre: nombreCourier, activo: true } })`
+  // que explotaba con PrismaClientValidationError (Argument `nombre` is missing)
+  // cuando el caller mandaba `nombreCourier=undefined` — resultando en 500 en
+  // POST /api/envios (WooCommerce + plugins recientes). El auto-provision era
+  // legacy documentado como debt para DEUDA 12 / ABM: ya no se justifica hoy
+  // (los couriers se administran desde /admin-couriers, nadie los auto-crea al
+  // vuelo por nombre string). Reemplazado por un throw explícito → el handler
+  // lo mapea a 400 con code "COURIER_AUSENTE" en vez del 500 genérico.
+  //
+  // NOTA: este es Fix A (unblock del 500). Fix B — degradar a un estado
+  // BLOQUEADO_COURIER_AUSENTE en vez de rechazar, cumpliendo "la venta se hace
+  // sí o sí" — queda como movimiento aparte (requiere decisión de schema:
+  // Envio.courierId nullable vs Courier placeholder + procesar-bloqueados-*).
   // =========================================================
-  let courierReal = await obtenerCourier(nombreCourier);
+  const courierReal = await obtenerCourier(nombreCourier);
 
   if (!courierReal) {
-    // Fase K (DEUDA 32+37): el create necesita include servicios para mantener
-    // el shape Courier & CourierConServicios que obtenerCourier devuelve.
-    courierReal = await prisma.courier.create({
-      data: { nombre: nombreCourier, activo: true },
-      include: {
-        servicios: {
-          where: { codigoServicio: "entrega_sucursal" },
-          select: { codigoServicio: true, capacidadTecnicaMapeada: true },
-        },
-      },
-    });
+    throw new Error(
+      `CourierAusente: nombreCourier="${nombreCourier ?? "undefined"}" no existe en BD. ` +
+      `El caller debe enviar un nombre de courier canónico ya dado de alta en /admin-couriers.`
+    );
   }
   const courierIdReal = courierReal.id;
 

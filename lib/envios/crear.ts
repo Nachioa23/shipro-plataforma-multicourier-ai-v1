@@ -6,6 +6,7 @@ import {
 } from "@/lib/utils/suspension-cuenta";
 import { enviarMailCreacion } from "@/lib/mailer";
 import { normalizarNombreCourier } from "@/lib/utils/normalizar-courier";
+import { normalizarProvinciaAR } from "@/lib/utils/provincias-ar";
 import { despacharCourier } from "@/lib/envios/dispatch";
 import { cotizar } from "@/lib/cotizador";
 import { calcularPromesaCalibrada } from "@/lib/utils/promesa-calibrada";
@@ -107,11 +108,18 @@ export async function crearEnvio(input: CrearEnvioInput) {
   const {
     empresaId, depositoId: depositoIdInput, permitirBloqueoPorDeposito, destinatarioNombre, cpDestino, pesoReal, largoCm, anchoCm, altoCm, nombreCourier,
     calle, altura, piso, dpto, dni, email, telefono, localidad, modalidad,
-    valorDeclarado, costoEnvio, costoProveedor, provinciaDestino, numeroOrden,
+    valorDeclarado, costoEnvio, costoProveedor, provinciaDestino: provinciaDestinoRaw, numeroOrden,
     tiendanubeStoreId, tiendanubeFulfillmentOrderId, tiendanubeOrderId,
     idempotencyKey,
     tipoOrigen, sucursalOrigenId, sucursalDestinoId
   } = input;
+
+  // Normaliza provincia código→nombre (ej. 'B'→'Buenos Aires') para la etiqueta.
+  // Núcleo normaliza, los plugins mandan el código del e-commerce tal cual.
+  // Pass-through si ya es nombre completo (o cualquier valor desconocido — no
+  // rompe envíos que ya mandaban bien). Aplicado ANTES de que provinciaDestino
+  // fluya a Direccion (BD), validar-direccion (peaje) y dispatch → adapter.
+  const provinciaDestino = normalizarProvinciaAR(provinciaDestinoRaw ?? "");
 
   let trackingOficial = "SHP-" + Math.floor(Math.random() * 900000 + 100000);
   let urlEtiquetaFinal: string | null = null;

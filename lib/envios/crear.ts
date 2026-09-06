@@ -7,6 +7,7 @@ import {
 import { enviarMailCreacion } from "@/lib/mailer";
 import { normalizarNombreCourier } from "@/lib/utils/normalizar-courier";
 import { resolverProvinciaDesdeCP } from "@/lib/geo/resolver-cp";
+import { parseAltura } from "@/lib/utils/parse-direccion";
 import { despacharCourier } from "@/lib/envios/dispatch";
 import { cotizar } from "@/lib/cotizador";
 import { calcularPromesaCalibrada } from "@/lib/utils/promesa-calibrada";
@@ -107,7 +108,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
 
   const {
     empresaId, depositoId: depositoIdInput, permitirBloqueoPorDeposito, destinatarioNombre, cpDestino, pesoReal, largoCm, anchoCm, altoCm, nombreCourier,
-    calle, altura, piso, dpto, dni, email, telefono, localidad, modalidad,
+    calle: calleRaw, altura: alturaRaw, piso, dpto, dni, email, telefono, localidad, modalidad,
     valorDeclarado, costoEnvio, costoProveedor, numeroOrden,
     tiendanubeStoreId, tiendanubeFulfillmentOrderId, tiendanubeOrderId,
     idempotencyKey,
@@ -125,6 +126,24 @@ export async function crearEnvio(input: CrearEnvioInput) {
   // reemplazar la elección del comprador sin motivo.
   const resolucionCP = await resolverProvinciaDesdeCP(String(cpDestino ?? ""));
   const provinciaDestino = resolucionCP?.provincia ?? "";
+
+  // Parsea altura desde calle (WooCommerce manda todo junto en `address_1`).
+  // Conservador: si no hay número claro → altura vacía → RETENIDO (no adivina).
+  // Reusa el patrón de la normalización de provincia por CP: helper en núcleo
+  // aplicado ANTES del adapter, Chat B untouched, degradación via peaje.
+  //
+  // NO override el altura del plugin si vino explícito no-vacío — el caller
+  // podría haber parseado mejor (ej. plugins que separan address_1 de
+  // address_2 vía convención del store).
+  let calle = calleRaw ?? "";
+  let altura = alturaRaw ?? "";
+  if (!altura.trim() && calle.trim()) {
+    const parsed = parseAltura(calle);
+    if (parsed.altura !== null) {
+      calle = parsed.calle;
+      altura = parsed.altura;
+    }
+  }
 
   let trackingOficial = "SHP-" + Math.floor(Math.random() * 900000 + 100000);
   let urlEtiquetaFinal: string | null = null;

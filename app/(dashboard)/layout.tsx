@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { Sora } from "next/font/google";
 import Link from "next/link";
-import { Inbox, Tags, Package, LayoutDashboard, Truck, ShieldAlert, Users, CreditCard, ArrowRightLeft, Activity, LogOut, Building2, Calculator, Landmark, Scale, FileSpreadsheet, Settings2, Settings, ScrollText, Percent, Shield, Receipt, Plug } from 'lucide-react';
+import { Inbox, Tags, Package, LayoutDashboard, Truck, ShieldAlert, Users, CreditCard, ArrowRightLeft, Activity, LogOut, Building2, Calculator, Landmark, Scale, FileSpreadsheet, Settings2, Settings, ScrollText, Percent, Shield, Receipt, Plug, Handshake } from 'lucide-react';
 import { useSession, signOut } from "next-auth/react";
 import CotizadorModal from '@/components/CotizadorModal';
 import "../globals.css";
@@ -173,6 +173,11 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
                   {/* DEUDA 157 Paso 1: markup Shipro por courier (general, admin-only). */}
                   <Link href="/admin-markup-courier" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-blue-50 hover:text-blue-800 rounded-lg font-medium text-sm transition-all mt-2 bg-blue-50/50 border border-blue-100">
                     <Percent className="w-5 h-5 text-blue-600" /><span className="font-bold text-blue-800">Markup por Courier</span>
+                  </Link>
+
+                  {/* DEUDA 170 Pieza A: markup del DUEÑO de credenciales (CourierIntermediario, admin-only). */}
+                  <Link href="/admin-markup-dueno" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-purple-50 hover:text-purple-800 rounded-lg font-medium text-sm transition-all mt-2 bg-purple-50/50 border border-purple-100">
+                    <Handshake className="w-5 h-5 text-purple-600" /><span className="font-bold text-purple-800">Markup del Dueño</span>
                   </Link>
 
                   {/* FASE 2 sub 4 parte A: Fee por empresa con vigencias — plata en vivo, motivo obligatorio. */}

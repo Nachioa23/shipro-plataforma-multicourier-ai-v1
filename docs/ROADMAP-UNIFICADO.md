@@ -106,8 +106,21 @@ liquidación es documento (`LiquidacionMensual` sin `MovimientoFinanciero` asoci
 - **DEUDA 73** — descuento del cliente con signo (paso 6 del modelo, capa cliente→comprador); rename cosmético
   `seguroFijoIntermediarioConIva` → sin-IVA (schema); política de seguro por-courier (flag `quiereSeguroCourier`
   en schema pero adapters aún no lo consumen).
-- **DEUDA 107** — UI admin para editar el intermediario por-courier (hoy manual en DB); el fallback
-  `resolverPrecioFallback` no reconstruye la cascada (documentado como GAP en `crear.ts`).
+- **DEUDA 107 / DEUDA 155** — UI admin para editar el intermediario por-courier (`CourierIntermediario`); hoy
+  seed-only, sin pantalla. El fallback `resolverPrecioFallback` no reconstruye la cascada (documentado como GAP
+  en `crear.ts`).
+
+**Dónde vive cada markup (política de acceso — clarificación 2026-09-07):**
+
+- **Markup de Shipro** → `/admin-markup-courier` (Shipro-only). Cerrado por [[DEUDA 157]]: modelo `MarkupCourier`
+  con modo HEREDA/PROPIO por courier + UI admin + motor cableado. El cliente **NO configura ni ve** el markup
+  de Shipro.
+- **Markup del dueño/intermediario** (Rama A) → `CourierIntermediario`, seed-only, **sin UI todavía** ([[DEUDA
+  155]]). Cuando exista, también será Shipro-only (hermano de `/admin-markup-courier`; idea de Nacho: pestaña
+  compartida en `/admin-parametros-tarifa`).
+- **Ambos son Shipro-only por diseño**. Cualquier UI o texto que sugiera lo contrario es obsoleto (ej. la vieja
+  tarjeta "Reglas Comerciales" en `/clientes` que decía "entrá como el cliente a Mis Transportes" — corregida
+  2026-09-07).
 
 ---
 

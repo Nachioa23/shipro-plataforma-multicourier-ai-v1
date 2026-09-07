@@ -3485,7 +3485,9 @@ Hoy la única forma de dar de alta o cambiar un intermediario es SQL directo o m
 
 **Scope:** medio (nueva pantalla + endpoint CRUD + auditoría de cambios ala D-19). **Prioridad:** media — bloquea el alta de intermediarios sin tocar la base a mano; no urgente porque hoy hay pocos intermediarios (Mocis).
 
-**Relación:** DEUDA 107 (modelo `CourierIntermediario`, capa 1 — la infra que esto pondría en superficie de admin). DEUDA 153 (campo `markupIntermediarioAplicado` del audit trail — se pobla del mismo motor sin necesitar esta UI, pero UI + audit trail cierran el círculo).
+**Relación:** DEUDA 107 (modelo `CourierIntermediario`, capa 1 — la infra que esto pondría en superficie de admin). DEUDA 153 (campo `markupIntermediarioAplicado` del audit trail — se pobla del mismo motor sin necesitar esta UI, pero UI + audit trail cierran el círculo). [[DEUDA 157]] (markup unificado de Shipro, hermano — vive en `/admin-markup-courier`, también solo-Shipro).
+
+**Política de acceso (reforzada 2026-09-07):** **AMBOS markups son de acceso exclusivo Shipro** — ni el markup Shipro (`/admin-markup-courier`, DEUDA 157 ya con UI) ni el markup del dueño/intermediario (esta deuda, sin UI todavía) los configura ni los ve el cliente. Son parámetros de tarifa administrados por Shipro. Cualquier UI que sugería lo contrario (ej. la vieja tarjeta "Reglas Comerciales" en `/clientes` que decía "entrá como el cliente a Mis Transportes") es texto engañoso post-DEUDA 157 y fue corregida (commit del 2026-09-07 en `app/(dashboard)/clientes/page.tsx`).
 
 **Origen:** recon DEUDA 153 (2026-08-28), al mapear dónde vive cada pieza del pricing (Nacho ya sospechaba que no había UI para intermediario).
 

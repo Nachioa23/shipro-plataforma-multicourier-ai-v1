@@ -4018,3 +4018,40 @@ Contexto: WooCommerce YA funciona e2e (etiqueta Andreani `360003092333370` valid
 **Estado del bug WooCommerce-etiqueta** (actualizado 2026-09-06): Fix A ✓ local (guard courier), Resolución normalizada ✓ local (courier normalizado con helper Hop), Fix 1 provincia ✓ local (CP-based), Fix 2 altura ✓ local (parser conservador). Verificado e2e en prod con Andreani `360003092333370`. Los 4 fixes van al mismo deploy prod. Fix B (degradación "venta sí o sí" en vez de CourierAusente 400) sigue pendiente como pieza aparte de robustez.
 
 ---
+
+## DEUDA 171 — Adapter Correo Argentino: bugs de alineación con la API real (2 arreglados, 2 pendientes; bloqueado por credenciales para validar) (registrada 2026-09-07)
+
+**Status:** PARCIAL. El adapter existe y está bien estructurado (8 métodos, sandbox switch, `tarifaApiIncluyeIva=false`). Cruzado contra la doc real de Correo Argentino (MiCorreo + Paq.ar) via Gemini ANTES de validar — se encontraron **4 desalineaciones** que lo harían fallar. **NO se puede validar e2e todavía**: Correo usa "sandbox cerrado" (sin credenciales públicas de test), hay que pedir apiKey + agreement de QA a un ejecutivo comercial de Correo. Además son **DOS cuentas distintas**: MiCorreo (`customerId + usuario/password`, para cotizar) y Paq.ar (`apiKey + agreement`, para despachar) — el cliente gestiona ambas por separado.
+
+**BUG 1 (CRÍTICO, PENDIENTE) — auth de MiCorreo ausente en `cotizar()`.**
+El `cotizar()` manda el request a MiCorreo `/rates` **SIN Authorization** (solo `Content-Type`). La doc real (Gemini) confirma que MiCorreo requiere `Authorization: Bearer <token JWT>`. El token se obtiene con `POST /token` (HTTP Basic Auth con usuario+password) → devuelve token + expiración. El `customerId` se puede recuperar con `POST /users/validate` (email+password + Bearer). Como está hoy, `cotizar()` recibe `401` y el catch lo trata como "sin cobertura" (devuelve `[]`) → **Correo nunca cotizaría y el error quedaría silenciado**.
+
+*Diseño del fix (para cuando haya credenciales):*
+- Agregar a `CredencialesCorreoArgentino`: `micorreoUser` + `micorreoPassword`.
+- Agregar flujo de token: método `getTokenMiCorreo()` con cache + expiración (patrón del `getToken` de Mocis / Intralog): si no hay token válido, `POST /token` con Basic Auth (`btoa(user:password)` en `Authorization: Basic`), leer `token + expiración`, cachear.
+- En `cotizar()`: inyectar `Authorization: Bearer <token>` en el request a `/rates`.
+- Validar contra la API real que el formato del `/token` y el `Bearer` son los esperados (la doc puede tener imprecisiones — validar en vivo con credenciales, como pasó con Intralog).
+
+**BUG 2 (ARREGLADO, commit `0a01095`) — `state` vacío en el despacho.**
+El despacho mandaba `senderData/shippingData.state=""` pero Correo exige el código de provincia de 1 letra (obligatorio). **Fix:** helper `lib/couriers/correo/provincia-a-codigo.ts` mapea el nombre canónico (que `crear.ts` resuelve desde el CP) al código ISO 3166-2:AR de 1 letra ("B", "C", "K", …). Específico de Correo (Andreani usa nombre directo); si un 2do courier lo necesita, se promueve a `lib/constants/codigos-provincia-ar.ts` (acuerdo con Chat A / Núcleo). Sin match → `""` (mejor bloqueado que provincia equivocada — el envío degrada a RETENIDO en vez de generar etiqueta a provincia incorrecta).
+
+**BUG 3 (PENDIENTE, menor) — `obtenerSucursales` no filtra por CP.**
+El endpoint `/v1/agencies` de Paq.ar filtra por `stateId` (provincia), no por CP. El adapter recibe `cp`. *Fix (cuando se valide sucursal)*: derivar provincia del CP (`resolverProvinciaDesdeCP` ya está en núcleo) → usar el código ISO (BUG 2 helper) → llamar `/agencies?stateId=<código>` → usar `latitude/longitude` de las agencias devueltas para rankear por cercanía real al CP del comprador. Patrón similar al de otros couriers zonales.
+
+**BUG 4 (cubierto por BUG 2) — mapeo provincia→código.** Resuelto junto con BUG 2.
+
+**Datos de la doc (Gemini, para la validación futura):**
+- **Cotización:** `POST {base}/micorreo/v1/rates`. QA: `apitest.correoargentino.com.ar`. Body: `customerId` + `postalCodeOrigin/Destination` + `dimensions{ weight(g), height, width, length(cm) }`. `deliveredType` opcional (`"D"`=domicilio, `"S"`=sucursal; omitirlo devuelve ambas). Peso 1–25.000 g.
+- **Despacho:** `POST {base}/paqar/v1/orders`. QA: `apitest.correoargentino.com.ar/paqar/v1`. Auth: `Authorization: Apikey <key>` + header `agreement:<num>`. `deliveryType`: `homeDelivery` / `agency` / `locker`. `state` **obligatorio** (código 1 letra). `agencyId` obligatorio si `agency` / `locker`. `serviceType:"CP"` (Clásico). `saleDate` ISO con `-03:00`.
+- **Etiqueta:** `POST /paqar/v1/labels` → JSON con `fileBase64` (PDF base64). `labelFormat` opcional (`"10x15"` o `"label"`).
+- **Tracking:** `GET /paqar/v1/tracking` (array en body). Estados documentados: `PRE`/preImposicion, `CAN`/cancelacion, `CAU`/caduco — **catálogo incompleto en la doc**; completar al validar.
+- **Sucursales:** `GET /paqar/v1/agencies`. Filtros: `stateId`, `pickup_availability`, `package_reception`. Devuelve `agency_id` + dirección + lat/long + horarios.
+- **Cancelación:** `PATCH /paqar/v1/orders/{tracking}/cancel`.
+- **IVA:** la doc NO especifica si los precios son netos o con IVA (adapter asume neto, `tarifaApiIncluyeIva=false`) — **confirmar al validar**.
+- **Ambiente QA** existe para ambas APIs pero **SIN credenciales públicas** (sandbox cerrado).
+
+**Próximo paso:** conseguir credenciales de QA (`apiKey` + `agreement` de Paq.ar + `user` / `password` / `customerId` de MiCorreo), implementar BUG 1, validar e2e (cotizar + despachar + etiqueta + rastrear), y ahí confirmar los supuestos de la doc (formato token, IVA, catálogo de estados de tracking).
+
+**Origen:** cross-check de Chat B del adapter existente contra la doc oficial de Correo Argentino (via Gemini) el 2026-09-07, antes de tener credenciales para validar en vivo — para llegar preparados al momento en que Correo entregue las credenciales de QA.
+
+---

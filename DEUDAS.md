@@ -3495,28 +3495,72 @@ Hoy la única forma de dar de alta o cambiar un intermediario es SQL directo o m
 
 ---
 
-## DEUDA 170 — Unificar la configuración del markup de Shipro en UNA sola pantalla Shipro-only (registrada 2026-09-07, propuesta Nacho, scope medio, prioridad baja — UX/refactor)
+## DEUDA 170 — Consola de Tarifa Unificada Shipro-only: 5 variables (markup dueño + markup Shipro global/courier + SMO + Fee + IVA) en una pantalla (registrada 2026-09-07, propuesta Nacho, RECATEGORIZADA 2026-09-07 ESTRATÉGICA — 2 partes: P1 media-alta + P2 alta)
 
-**Status:** REGISTRADA (no urgente — nada roto, es organización). Absorbe [[DEUDA 155]] (UI del markup del dueño/intermediario).
+**Status:** REGISTRADA + SPLIT en 2 partes con prioridades distintas (recategorización Nacho 2026-09-07 — la versión inicial la clasificó como "UX/refactor prioridad baja"; **ese framing era incorrecto**: la tarifa es la palanca comercial más sensible del negocio). Absorbe [[DEUDA 155]] (UI del markup del dueño/intermediario) — cerrada por la Parte 1.
 
-**Contexto:** hoy la configuración del markup de Shipro está **dispersa en 3 lugares** distintos:
-- `/admin-parametros-tarifa` — markup global de Shipro.
-- `/admin-markup-courier` — markup por courier (HEREDA / PROPIO — cerrado por [[DEUDA 157]]).
-- Markup del **DUEÑO** de credenciales (intermediario, modelo `CourierIntermediario`) — seed-only, sin UI (ver [[DEUDA 155]]).
+**Contexto — la tarifa publicada se arma con 5 variables, hoy DESPERDIGADAS:**
+La fórmula (verificada, canónica) es:
+> `tarifa API courier → +markup DUEÑO (intermediario) → +markup SHIPRO (global + por courier) → +SMO → +Fee → ×IVA`
 
-**Propuesta (Nacho, 2026-09-07):**
-- **(a)** Configurar el markup del **dueño** DESDE `/admin-markup-courier` también — misma naturaleza (ajuste Shipro por courier), tiene sentido que viva junto al markup por courier de Shipro.
-- **(b)** **FUSIONAR** `/admin-parametros-tarifa` con `/admin-markup-courier` en **una sola pantalla** de "parámetros de markup" — global + por courier + dueño. Los tres tipos conviven en una vista única.
+Ejemplo canónico Andreani + Mocis (verificado en localhost): `10.000 + 10% Mocis + 10% Shipro + 121,50 SMO + 1.600 Fee = 13.821,50 × 1,21`. **La FÓRMULA funciona — no está rota.** Lo que está roto es la **ergonomía de configuración**:
 
-**Política de acceso:** los **tres** markups son de acceso **EXCLUSIVO Shipro** (admin_shipro/operador_shipro). El cliente NO entra, NO configura, NO ve estos parámetros — son parámetros de tarifa administrados por Shipro (misma línea de la clarificación 2026-09-07 en [[DEUDA 155]]).
+| Variable                     | Dónde vive hoy                                    | Tiene UI Shipro? |
+| ---------------------------- | ------------------------------------------------- | ---------------- |
+| Markup del **DUEÑO**         | `CourierIntermediario` — **seed / SQL**           | **NO** ([[DEUDA 155]]) |
+| Markup **Shipro** global     | `/admin-parametros-tarifa`                        | Sí               |
+| Markup **Shipro** por courier| `/admin-markup-courier`                           | Sí ([[DEUDA 157]]) |
+| **SMO**                      | `/admin-smo`                                      | Sí               |
+| **Fee**                      | `/fee-por-empresa`                                | Sí               |
+| **IVA**                      | **constante en código** (`1.21`)                  | NO               |
 
-**Por qué merece su propio diseño:** decidir cómo conviven **3 tipos de markup** en una sola vista es una decisión de UX/arquitectura no trivial — jerarquía visual, orden de aplicación (global → por courier → dueño), qué se ve como default vs. override, cómo se muestran los conflictos, cómo se distingue el markup Shipro del markup dueño (naturaleza distinta pese a que ambos son "Shipro-managed"). Se abre con su propio design doc cuando se active.
+**Argumento de negocio (Nacho, 2026-09-07):** *"La tarifa es lo primero que prueba un cliente. Si un vendedor de Shipro no puede ajustarla rápido para cerrar una venta, se pierde al cliente."* Es **palanca comercial estratégica** — cualquier fricción operativa para tocar una variable (SSH a la base para cargar un markup de intermediario, saltar entre 4 pantallas para ver el precio final, tocar código para cambiar IVA) se traduce directamente en oportunidades comerciales perdidas. Por eso esta deuda es **estratégica**, no "UX/refactor prioridad baja".
 
-**Por qué NO es urgente:** nada está roto. El markup global funciona (`/admin-parametros-tarifa`), el markup por courier funciona ([[DEUDA 157]] cerrado, con UI en `/admin-markup-courier`), y el markup del dueño se administra por seed/SQL hoy — es tolerable porque son pocos y estables. La unificación es **organización** (reducir superficies, evitar que operadores nuevos tengan que descubrir 3 pantallas), no un fix de un bug.
+---
 
-**Relación:** [[DEUDA 155]] (UI del markup del dueño — **absorbida acá**, se cierra cuando esta deuda se ejecute). [[DEUDA 157]] (markup por courier con UI en `/admin-markup-courier` — es el punto de partida del merge). Renames pendientes de [[DEUDA 158]] atados a esta unificación: `markupFijo → markupFijoShipro`, `ajusteTarifaPorcentaje → overrideMarkupShiproPorcentaje` (mejor hacerlos AS PART del rediseño, no standalone).
+### PARTE 1 — UI para el markup del DUEÑO de credenciales (`CourierIntermediario`) — prioridad MEDIA-ALTA
 
-**Origen:** propuesta de Nacho (2026-09-07) al reforzar la política "ambos markups son solo-Shipro" tras el fix del texto engañoso de `/clientes` (commit del 2026-09-07). Al declarar la política unificada, emergió naturalmente que la UI también debería estar unificada — hoy hay 3 pantallas Shipro-only para lo que conceptualmente es un solo dominio (parámetros de markup de Shipro).
+**Absorbe [[DEUDA 155]].** Es el **ÚNICO hueco que IMPIDE configurar una variable** hoy — las otras 5 (Shipro global, Shipro courier, SMO, Fee, IVA) tienen alguna manera de tocarse (aunque dispersa); el markup del dueño no.
+
+**Por qué es media-alta (y no baja como se registró originalmente):** hoy tolerable porque el único intermediario activo es Mocis (seed estable). Pero **bloquea couriers intermediarios nuevos**: si mañana se integra un intermediario ≠ Mocis (otra cooperativa, otro broker, otro dueño de credenciales), no se puede cargar su markup sin tocar la base → sus tarifas saldrían mal, o directamente no se puede facturar hasta que un dev intervenga. Cualquier onboarding de intermediario nuevo se traba en este punto.
+
+**Alcance mínimo:** un CRUD Shipro-only del markup de `CourierIntermediario` — listar los intermediarios existentes con su porcentaje, editar el porcentaje, dar de alta uno nuevo. Puede vivir standalone (pantalla temporal) hasta que la Parte 2 la absorba en la consola unificada, o hacerse directamente dentro de `/admin-markup-courier` como sección adicional (ver Parte 2 propuesta a).
+
+**Cierra:** [[DEUDA 155]] al ejecutarse.
+
+---
+
+### PARTE 2 — CONSOLA DE TARIFA UNIFICADA (5 variables en una pantalla Shipro-only) — prioridad ALTA ESTRATÉGICA, obra grande con diseño propio
+
+**Objetivo:** una sola pantalla Shipro-only que junta las **5 variables de tarifa** con la **jerarquía de aplicación visible**:
+> `[tarifa API courier]  →  +[markup DUEÑO]  →  +[markup SHIPRO (global + por courier)]  →  +[SMO]  →  +[Fee]  →  ×[IVA]  =  tarifa publicada`
+
+**Absorbe / integra:**
+- `/admin-parametros-tarifa` (markup Shipro global) → fusionado.
+- `/admin-markup-courier` (markup Shipro por courier, [[DEUDA 157]]) → fusionado. Es el punto de partida técnico del merge.
+- `CourierIntermediario` (markup del dueño) → absorbe la Parte 1.
+- `/admin-smo` → integrado en la vista (edición Shipro).
+- `/fee-por-empresa` → integrado en la vista.
+- **IVA** → sale del código y pasa a ser un parámetro editable (constante hoy `1.21`, pero blanquearla en la vista aunque no cambie).
+
+**Por qué merece su propio diseño (NO improvisar):** decidir cómo conviven **5 variables heterogéneas** (2 markups Shipro + 1 markup dueño + SMO + Fee + IVA) en una sola vista, con la jerarquía de aplicación clara y editable, es una decisión de UX/arquitectura no trivial:
+- Orden de aplicación (fórmula: dueño → Shipro → SMO → Fee → IVA) debe ser explícito y no editable.
+- Cómo se distingue markup Shipro (dominio Shipro) vs markup dueño (naturaleza distinta pese a que ambos son "Shipro-managed" — el dueño es un tercero cuyo % lo negocia Shipro).
+- Cómo se muestran overrides por courier vs defaults globales.
+- Cómo se muestra el efecto de cada variable sobre un ejemplo canónico ("si toco esto, el precio final para Andreani va de X a Y").
+- Cómo se toca IVA (regulación fiscal, cambio raro pero visible).
+
+**Requiere design doc + plan de piezas propio** antes de la implementación. NO improvisar sobre `/admin-markup-courier` — ampliar esa pantalla incrementalmente termina en el mismo problema disperso, solo que peor.
+
+**Renames pendientes de [[DEUDA 158]] atados a esta obra:** `markupFijo → markupFijoShipro`, `ajusteTarifaPorcentaje → overrideMarkupShiproPorcentaje` (hacerlos AS PART del rediseño, no standalone — ya identificados como entangled con [[DEUDA 157]] / esta consola).
+
+---
+
+**Política de acceso (transversal a P1 y P2):** las **5 variables** son de acceso **EXCLUSIVO Shipro** (admin_shipro/operador_shipro). El cliente NO entra, NO configura, NO ve estos parámetros — son parámetros de tarifa administrados por Shipro. Misma línea de la clarificación 2026-09-07 reforzada en [[DEUDA 155]] y en el fix del texto engañoso de `/clientes` (commit del 2026-09-07).
+
+**Relación:** [[DEUDA 155]] (UI markup dueño — **absorbida por Parte 1**, se cierra cuando P1 se ejecute). [[DEUDA 157]] (markup por courier con UI en `/admin-markup-courier` — punto de partida técnico del merge de la Parte 2). [[DEUDA 158]] (renames atados: `markupFijo`, `ajusteTarifaPorcentaje` — hacerlos AS PART de la Parte 2). [[DEUDA 152]] (homogeneizar IVA de precioProveedor entre couriers — cuando la consola exponga IVA como variable, esta deuda se vuelve más urgente porque el operador va a ver el número).
+
+**Origen:** propuesta de Nacho (2026-09-07) al reforzar la política "ambos markups son solo-Shipro" tras el fix del texto engañoso de `/clientes`. Recategorizada el mismo día tras clarificar el argumento comercial: la tarifa es la primera prueba de fuego con un cliente nuevo, y la fricción operativa para tocarla es una pérdida directa de ventas. Split en 2 partes para que la parte urgente (UI dueño, bloquea intermediarios nuevos) no quede rehén de la obra grande (consola unificada, que merece diseño propio).
 
 ---
 

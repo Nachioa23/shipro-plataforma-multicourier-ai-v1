@@ -22,15 +22,16 @@ import { ICourierIntegrator, CotizacionParams, DespachoParams, SucursalInfo, Res
 
 // DEUDA 129: mismo timeout+reclasificación que Mocis (8s < circuit breaker Tiendanube 10s).
 const COURIER_TIMEOUT_MS = 8000;
+const ETIQUETA_TIMEOUT_MS = 30000; // PDF on-demand de Intralog tarda unos segundos (confirmado por Pablo/Silver)
 
-async function fetchConTimeout(input: string | URL, init?: RequestInit): Promise<Response> {
+async function fetchConTimeout(input: string | URL, init?: RequestInit, timeoutMs: number = COURIER_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), COURIER_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(input, { ...init, signal: controller.signal });
   } catch (e: any) {
     if (e?.name === "AbortError") {
-      throw new Error("CourierTimeout: Intralog no respondió en " + COURIER_TIMEOUT_MS + "ms");
+      throw new Error("CourierTimeout: Intralog no respondió en " + timeoutMs + "ms");
     }
     throw e;
   } finally {
@@ -319,7 +320,7 @@ export class IntralogAdapter implements ICourierIntegrator {
     const res = await fetchConTimeout(`${this.API_URL}/intralog/pedido/${ref.trackingNumber}/etiqueta`, {
       method: 'GET',
       headers: { 'Authorization': `Bearer ${token}` },
-    });
+    }, ETIQUETA_TIMEOUT_MS);
     if (!res.ok) {
       throw new Error(`Intralog HTTP ${res.status} al descargar etiqueta ${ref.trackingNumber}`);
     }

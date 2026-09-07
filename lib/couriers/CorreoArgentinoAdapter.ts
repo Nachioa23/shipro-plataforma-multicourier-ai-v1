@@ -6,6 +6,7 @@ import {
   ResultadoBulto,
 } from './CourierInterface';
 import type { CredencialesCorreoArgentino } from './credenciales/correoargentino';
+import { provinciaACodigoCorreo } from './correo/provincia-a-codigo';
 
 // Re-export para que CourierFactory pueda importar el tipo desde un solo lugar
 // (mismo patrón que OcaAdapter re-exportando CredencialesOca).
@@ -180,8 +181,9 @@ export class CorreoArgentinoAdapter implements ICourierIntegrator {
               streetName: params.origen?.calle ?? "",
               streetNumber: params.origen?.altura ?? "",
               cityName: params.origen?.localidad ?? "",
-              // CA usa código de provincia; no está en nuestro modelo → dejamos vacío.
-              state: "",
+              // Correo Argentino exige el código ISO 3166-2:AR de 1 letra ("B","C",...).
+              // El nombre canónico se mapea vía helper local (Andreani usa nombre directo).
+              state: provinciaACodigoCorreo(params.origen?.provincia),
               zipCode: params.origen?.cp ?? "",
             },
           },
@@ -194,7 +196,7 @@ export class CorreoArgentinoAdapter implements ICourierIntegrator {
               streetName: params.calle,
               streetNumber: params.altura,
               cityName: params.localidad,
-              state: "",
+              state: provinciaACodigoCorreo(params.provincia),
               zipCode: params.cp,
             },
           },

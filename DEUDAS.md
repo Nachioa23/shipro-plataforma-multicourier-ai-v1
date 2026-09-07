@@ -3491,6 +3491,33 @@ Hoy la única forma de dar de alta o cambiar un intermediario es SQL directo o m
 
 **Origen:** recon DEUDA 153 (2026-08-28), al mapear dónde vive cada pieza del pricing (Nacho ya sospechaba que no había UI para intermediario).
 
+**NOTA (2026-09-07):** esta deuda queda **ABSORBIDA por [[DEUDA 170]]** (unificar la config de markup Shipro en una sola pantalla). La UI del markup del dueño se implementará como parte de esa unificación (vive junto al markup global + markup por courier en `/admin-markup-courier`, todo solo-Shipro).
+
+---
+
+## DEUDA 170 — Unificar la configuración del markup de Shipro en UNA sola pantalla Shipro-only (registrada 2026-09-07, propuesta Nacho, scope medio, prioridad baja — UX/refactor)
+
+**Status:** REGISTRADA (no urgente — nada roto, es organización). Absorbe [[DEUDA 155]] (UI del markup del dueño/intermediario).
+
+**Contexto:** hoy la configuración del markup de Shipro está **dispersa en 3 lugares** distintos:
+- `/admin-parametros-tarifa` — markup global de Shipro.
+- `/admin-markup-courier` — markup por courier (HEREDA / PROPIO — cerrado por [[DEUDA 157]]).
+- Markup del **DUEÑO** de credenciales (intermediario, modelo `CourierIntermediario`) — seed-only, sin UI (ver [[DEUDA 155]]).
+
+**Propuesta (Nacho, 2026-09-07):**
+- **(a)** Configurar el markup del **dueño** DESDE `/admin-markup-courier` también — misma naturaleza (ajuste Shipro por courier), tiene sentido que viva junto al markup por courier de Shipro.
+- **(b)** **FUSIONAR** `/admin-parametros-tarifa` con `/admin-markup-courier` en **una sola pantalla** de "parámetros de markup" — global + por courier + dueño. Los tres tipos conviven en una vista única.
+
+**Política de acceso:** los **tres** markups son de acceso **EXCLUSIVO Shipro** (admin_shipro/operador_shipro). El cliente NO entra, NO configura, NO ve estos parámetros — son parámetros de tarifa administrados por Shipro (misma línea de la clarificación 2026-09-07 en [[DEUDA 155]]).
+
+**Por qué merece su propio diseño:** decidir cómo conviven **3 tipos de markup** en una sola vista es una decisión de UX/arquitectura no trivial — jerarquía visual, orden de aplicación (global → por courier → dueño), qué se ve como default vs. override, cómo se muestran los conflictos, cómo se distingue el markup Shipro del markup dueño (naturaleza distinta pese a que ambos son "Shipro-managed"). Se abre con su propio design doc cuando se active.
+
+**Por qué NO es urgente:** nada está roto. El markup global funciona (`/admin-parametros-tarifa`), el markup por courier funciona ([[DEUDA 157]] cerrado, con UI en `/admin-markup-courier`), y el markup del dueño se administra por seed/SQL hoy — es tolerable porque son pocos y estables. La unificación es **organización** (reducir superficies, evitar que operadores nuevos tengan que descubrir 3 pantallas), no un fix de un bug.
+
+**Relación:** [[DEUDA 155]] (UI del markup del dueño — **absorbida acá**, se cierra cuando esta deuda se ejecute). [[DEUDA 157]] (markup por courier con UI en `/admin-markup-courier` — es el punto de partida del merge). Renames pendientes de [[DEUDA 158]] atados a esta unificación: `markupFijo → markupFijoShipro`, `ajusteTarifaPorcentaje → overrideMarkupShiproPorcentaje` (mejor hacerlos AS PART del rediseño, no standalone).
+
+**Origen:** propuesta de Nacho (2026-09-07) al reforzar la política "ambos markups son solo-Shipro" tras el fix del texto engañoso de `/clientes` (commit del 2026-09-07). Al declarar la política unificada, emergió naturalmente que la UI también debería estar unificada — hoy hay 3 pantallas Shipro-only para lo que conceptualmente es un solo dominio (parámetros de markup de Shipro).
+
 ---
 
 ## DEUDA 156 — Aplicar el descuento/recargo del cliente al precio (motor de pricing) (registrada 2026-08-28, BUILT-local 2026-08-28)

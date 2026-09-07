@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Building2, Plus, Search, Mail, CheckCircle2, Send, Loader2, AlertCircle, Settings, Users, Percent, Save, X, Copy, Trash2, ShieldAlert, Key } from 'lucide-react';
+import { Building2, Plus, Search, Mail, CheckCircle2, Send, Loader2, AlertCircle, Settings, Users, Percent, Save, X, Copy, Trash2, ShieldAlert, Key, Plug, Store } from 'lucide-react';
 import { useSession } from "next-auth/react";
 import {
   validarCUIT,
@@ -56,7 +56,51 @@ export default function GestionClientes() {
   const [enviandoLinkApiKey, setEnviandoLinkApiKey] = useState(false);
   const [mensajeLinkApiKey, setMensajeLinkApiKey] = useState<{ texto: string; tipo: 'ok' | 'error' } | null>(null);
 
+  // DEUDA 150 Pieza 1: hub de conexiones per-empresa. Se carga al abrir el drawer
+  // (via useEffect abajo). Muestra las Conexion rows + tiendas Tiendanube (read-only,
+  // sin migrar — la absorción es Pieza 2 coordinada con Chat B) + estado API Key.
+  const [conexionesData, setConexionesData] = useState<{
+    conexiones: any[];
+    tiendasTiendanube: any[];
+    apiKey: { existe: boolean; activa: boolean; ultimos4: string | null; creadaEn: string | null };
+  } | null>(null);
+  const [cargandoConexiones, setCargandoConexiones] = useState(false);
+  const [errorConexiones, setErrorConexiones] = useState<string | null>(null);
+  const [nuevaConexion, setNuevaConexion] = useState<{ plataforma: string; mecanismo: string; estado: string }>({
+    plataforma: "WOOCOMMERCE",
+    mecanismo: "API_KEY",
+    estado: "PENDIENTE",
+  });
+  const [registrandoConexion, setRegistrandoConexion] = useState(false);
+  const [mensajeConexion, setMensajeConexion] = useState<{ texto: string; tipo: 'ok' | 'error' } | null>(null);
+
   const esEquipoShipro = session?.user?.rol === 'admin_shipro' || session?.user?.rol === 'operador_shipro';
+
+  // DEUDA 150 Pieza 1: carga las conexiones del cliente seleccionado.
+  const cargarConexiones = async (empresaId: number) => {
+    setCargandoConexiones(true);
+    setErrorConexiones(null);
+    setConexionesData(null);
+    try {
+      const res = await fetch(`/api/admin/empresas/${empresaId}/conexiones`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setErrorConexiones(data?.error || `Error HTTP ${res.status}`);
+      } else {
+        setConexionesData(data);
+      }
+    } catch {
+      setErrorConexiones("Error de red al cargar conexiones.");
+    } finally {
+      setCargandoConexiones(false);
+    }
+  };
+
+  useEffect(() => {
+    if (clienteSeleccionado?.id) {
+      cargarConexiones(clienteSeleccionado.id);
+    }
+  }, [clienteSeleccionado?.id]);
 
   const fetchClientes = async () => {
     try {
@@ -403,7 +447,7 @@ export default function GestionClientes() {
               <p className="text-xs font-bold text-blue-600 uppercase tracking-widest mb-1">Auditando Cliente</p>
               <h2 className="text-xl font-black text-gray-800">{clienteSeleccionado.nombre}</h2>
             </div>
-            <button onClick={() => {setClienteSeleccionado(null); setCreandoUsuario(false); setLinkMagicoUsuario(null); setMensajeLinkApiKey(null);}} className="p-2 hover:bg-gray-200 rounded-full text-gray-500 transition-colors"><X className="w-6 h-6" /></button>
+            <button onClick={() => {setClienteSeleccionado(null); setCreandoUsuario(false); setLinkMagicoUsuario(null); setMensajeLinkApiKey(null); setConexionesData(null); setErrorConexiones(null); setMensajeConexion(null);}} className="p-2 hover:bg-gray-200 rounded-full text-gray-500 transition-colors"><X className="w-6 h-6" /></button>
           </div>
 
           <div className="flex-1 overflow-y-auto p-6 space-y-8">
@@ -449,6 +493,172 @@ export default function GestionClientes() {
                 <p className={`mt-3 text-xs font-medium px-3 py-2 rounded-lg ${mensajeLinkApiKey.tipo === 'ok' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
                   {mensajeLinkApiKey.texto}
                 </p>
+              )}
+            </section>
+
+            {/* DEUDA 150 Pieza 1: hub de conexiones per-cliente. Muestra Conexion rows +
+                tiendas Tiendanube (read-only) + estado API Key. Registro manual (Opción B):
+                Shipro marca la plataforma que el cliente va a usar. */}
+            <section>
+              <h3 className="text-sm font-black text-gray-800 flex items-center gap-2 mb-4 border-b pb-2">
+                <Plug className="w-4 h-4 text-sky-500" /> Conexiones del cliente
+              </h3>
+
+              {cargandoConexiones && (
+                <div className="flex items-center gap-2 text-xs text-gray-500 py-3">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Cargando conexiones…
+                </div>
+              )}
+
+              {errorConexiones && (
+                <p className="text-xs font-medium bg-red-50 text-red-700 border border-red-200 px-3 py-2 rounded-lg mb-3">
+                  {errorConexiones}
+                </p>
+              )}
+
+              {conexionesData && (
+                <div className="space-y-4">
+                  {/* API Key status */}
+                  <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-xs">
+                    <p className="font-bold text-gray-700 mb-1">Estado de API Key</p>
+                    {conexionesData.apiKey.existe ? (
+                      <p className="text-gray-600">
+                        <span className={conexionesData.apiKey.activa ? "text-emerald-700 font-bold" : "text-amber-700 font-bold"}>
+                          {conexionesData.apiKey.activa ? "ACTIVA" : "INACTIVA"}
+                        </span>
+                        {conexionesData.apiKey.ultimos4 ? ` · termina en ${conexionesData.apiKey.ultimos4}` : ""}
+                        {conexionesData.apiKey.creadaEn ? ` · desde ${new Date(conexionesData.apiKey.creadaEn).toLocaleDateString("es-AR")}` : ""}
+                      </p>
+                    ) : (
+                      <p className="text-gray-500 italic">Sin API Key generada todavía (usar el botón de arriba).</p>
+                    )}
+                  </div>
+
+                  {/* Tiendanube stores (read-only) */}
+                  {conexionesData.tiendasTiendanube.length > 0 && (
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500 mb-2">Tiendanube ({conexionesData.tiendasTiendanube.length})</p>
+                      <div className="space-y-2">
+                        {conexionesData.tiendasTiendanube.map((t: any) => (
+                          <div key={t.id} className="bg-white border border-gray-200 rounded-lg px-3 py-2 flex items-center gap-2 text-xs">
+                            <Store className="w-4 h-4 text-sky-600 shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <p className="font-bold text-gray-800 truncate">{t.nombre ?? `Store #${t.storeId}`}</p>
+                              {t.dominio && <p className="text-[10px] text-gray-500 truncate">{t.dominio}</p>}
+                            </div>
+                            <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${t.estado === "instalada" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : t.estado === "suspendida" ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-gray-100 text-gray-600 border-gray-200"}`}>
+                              {t.estado}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-[9px] text-gray-400 italic mt-1">Leídas de TiendaTiendanube — read-only en este hub (absorción a Conexion es tarea posterior).</p>
+                    </div>
+                  )}
+
+                  {/* Conexion rows registradas */}
+                  {conexionesData.conexiones.length > 0 && (
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500 mb-2">Conexiones registradas ({conexionesData.conexiones.length})</p>
+                      <div className="space-y-2">
+                        {conexionesData.conexiones.map((c: any) => (
+                          <div key={c.id} className="bg-white border border-gray-200 rounded-lg px-3 py-2 flex items-center gap-2 text-xs">
+                            <Plug className="w-4 h-4 text-indigo-500 shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <p className="font-bold text-gray-800">{c.plataforma}</p>
+                              <p className="text-[10px] text-gray-500">
+                                {c.mecanismo}{c.referenciaExterna ? ` · ref: ${c.referenciaExterna}` : ""}
+                              </p>
+                            </div>
+                            <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${c.estado === "ACTIVA" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : c.estado === "PENDIENTE" ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-gray-100 text-gray-600 border-gray-200"}`}>
+                              {c.estado}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {conexionesData.conexiones.length === 0 && conexionesData.tiendasTiendanube.length === 0 && (
+                    <p className="text-xs text-gray-500 italic">Sin conexiones registradas todavía.</p>
+                  )}
+
+                  {/* Form de registro manual (Opción B — Shipro marca la plataforma) */}
+                  <div className="border-t border-gray-100 pt-3">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500 mb-2">Registrar conexión (Shipro)</p>
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-3 gap-2">
+                        <select
+                          value={nuevaConexion.plataforma}
+                          onChange={(e) => setNuevaConexion({ ...nuevaConexion, plataforma: e.target.value })}
+                          className="text-xs border border-gray-300 rounded-md px-2 py-1.5 bg-white"
+                        >
+                          <option value="TIENDANUBE">Tiendanube</option>
+                          <option value="WOOCOMMERCE">WooCommerce</option>
+                          <option value="VTEX">VTEX</option>
+                          <option value="MAGENTO">Magento</option>
+                          <option value="PRESTASHOP">PrestaShop</option>
+                          <option value="SHOPIFY">Shopify</option>
+                          <option value="MERCADOLIBRE">Mercado Libre</option>
+                          <option value="API_REST">API REST (genérico)</option>
+                        </select>
+                        <select
+                          value={nuevaConexion.mecanismo}
+                          onChange={(e) => setNuevaConexion({ ...nuevaConexion, mecanismo: e.target.value })}
+                          className="text-xs border border-gray-300 rounded-md px-2 py-1.5 bg-white"
+                        >
+                          <option value="API_KEY">API_KEY</option>
+                          <option value="OAUTH">OAUTH</option>
+                        </select>
+                        <select
+                          value={nuevaConexion.estado}
+                          onChange={(e) => setNuevaConexion({ ...nuevaConexion, estado: e.target.value })}
+                          className="text-xs border border-gray-300 rounded-md px-2 py-1.5 bg-white"
+                        >
+                          <option value="PENDIENTE">PENDIENTE</option>
+                          <option value="ACTIVA">ACTIVA</option>
+                          <option value="REVOCADA">REVOCADA</option>
+                        </select>
+                      </div>
+                      <button
+                        onClick={async () => {
+                          if (!clienteSeleccionado || registrandoConexion) return;
+                          setRegistrandoConexion(true);
+                          setMensajeConexion(null);
+                          try {
+                            const res = await fetch(`/api/admin/empresas/${clienteSeleccionado.id}/conexiones`, {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify(nuevaConexion),
+                            });
+                            const data = await res.json().catch(() => ({}));
+                            if (res.ok) {
+                              setMensajeConexion({ texto: `Conexión ${nuevaConexion.plataforma} registrada.`, tipo: 'ok' });
+                              await cargarConexiones(clienteSeleccionado.id);
+                            } else {
+                              setMensajeConexion({ texto: data?.error || `Error HTTP ${res.status}`, tipo: 'error' });
+                            }
+                          } catch {
+                            setMensajeConexion({ texto: "Error de red. Reintentá.", tipo: 'error' });
+                          } finally {
+                            setRegistrandoConexion(false);
+                          }
+                        }}
+                        disabled={registrandoConexion}
+                        className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-bold text-white bg-sky-600 hover:bg-sky-700 rounded-md disabled:opacity-40 transition-colors"
+                      >
+                        {registrandoConexion ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                        {registrandoConexion ? "Registrando…" : "Registrar / Actualizar conexión"}
+                      </button>
+                      {mensajeConexion && (
+                        <p className={`text-[11px] font-medium px-2 py-1.5 rounded ${mensajeConexion.tipo === 'ok' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+                          {mensajeConexion.texto}
+                        </p>
+                      )}
+                    </div>
+                    <p className="text-[9px] text-gray-400 italic mt-1">Upsert por (empresa, plataforma) — registrar la misma plataforma actualiza mecanismo/estado.</p>
+                  </div>
+                </div>
               )}
             </section>
 
@@ -579,7 +789,7 @@ export default function GestionClientes() {
         </div>
       </div>
       
-      {clienteSeleccionado && <div className="fixed inset-0 bg-slate-900/20 z-40" onClick={() => {setClienteSeleccionado(null); setCreandoUsuario(false); setLinkMagicoUsuario(null); setMensajeLinkApiKey(null);}}></div>}
+      {clienteSeleccionado && <div className="fixed inset-0 bg-slate-900/20 z-40" onClick={() => {setClienteSeleccionado(null); setCreandoUsuario(false); setLinkMagicoUsuario(null); setMensajeLinkApiKey(null); setConexionesData(null); setErrorConexiones(null); setMensajeConexion(null);}}></div>}
     </div>
   );
 }

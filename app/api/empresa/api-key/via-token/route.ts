@@ -102,7 +102,7 @@ export async function POST(request: NextRequest) {
         throw new Error("TOKEN_YA_USADO");
       }
 
-      return tx.empresa.update({
+      const empresaActualizada = await tx.empresa.update({
         where: { id: registro.empresaId },
         data: {
           apiKeyHash: hash,
@@ -112,6 +112,36 @@ export async function POST(request: NextRequest) {
         },
         select: { apiKeyUltimos4: true, apiKeyCreadaEn: true, apiKeyActiva: true },
       });
+
+      // DEUDA 150 Pieza 1 (2026-09-07): al completar el handshake de API Key,
+      // pobla/actualiza una Conexion(mecanismo=API_KEY, estado=ACTIVA) para el
+      // hub. Si Shipro ya registró manualmente una Conexion API_KEY para este
+      // cliente (Opción B: marca la plataforma antes/durante el onboarding),
+      // marca esa como ACTIVA. Si no hay ninguna todavía → crea una genérica
+      // API_REST como placeholder — el operador puede refinar la plataforma
+      // más tarde en el hub. Aditivo: si el upsert falla por cualquier motivo
+      // ajeno al $unique constraint, la transacción rolleará el key gen (safe).
+      const conexionApiKey = await tx.conexion.findFirst({
+        where: { empresaId: registro.empresaId, mecanismo: "API_KEY" },
+        select: { id: true },
+      });
+      if (conexionApiKey) {
+        await tx.conexion.update({
+          where: { id: conexionApiKey.id },
+          data: { estado: "ACTIVA" },
+        });
+      } else {
+        await tx.conexion.create({
+          data: {
+            empresaId: registro.empresaId,
+            plataforma: "API_REST",
+            mecanismo: "API_KEY",
+            estado: "ACTIVA",
+          },
+        });
+      }
+
+      return empresaActualizada;
     });
 
     // ÚNICA VEZ que la key completa se expone. El PLAIN NUNCA se persiste ni

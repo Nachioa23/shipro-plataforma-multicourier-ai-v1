@@ -1399,7 +1399,7 @@ TS_NODE_BASEURL=./ npx ts-node -r tsconfig-paths/register --compiler-options '{"
 
 **Por que importa:** baja prioridad. Registrada para que la restriccion actual sea trazable y la extension sea un cambio consciente, no un descubrimiento.
 
-## DEUDA 91 — Cablear el catálogo ServicioCourier al runtime de cotización (adapter integration) (registrada 2026-07-06, RESUELTA LOCAL 2026-09-02, pend. deploy prod)
+## DEUDA 91 — Cablear el catálogo ServicioCourier al runtime de cotización (adapter integration) (registrada 2026-07-06, RESUELTA EN PROD 2026-09-06)
 
 **Status:** **RESUELTA EN CÓDIGO 2026-09-02 (COMPLETA en localhost), pendiente deploy prod.** Semáforo localhost↔prod: queda acá hasta subir. Post-deploy prod → mover a `DEUDAS-RESUELTAS.md`. **Prerequisito de Intralog** (Chat B): con la 91 aplicada, Intralog entra sin heredar el bug de ofrecer modalidades que no presta.
 
@@ -3411,7 +3411,7 @@ la homologación formal para publicar en el App Store de Tiendanube es proceso d
 
 ---
 
-## DEUDA 150 — Centro de conexiones del cliente: UI para que las empresas administren sus plugins/apps/conectores y su API Key (registrada 2026-08-26, ampliada 2026-09-03, avance 2026-09-03)
+## DEUDA 150 — Centro de conexiones del cliente: UI para que las empresas administren sus plugins/apps/conectores y su API Key (registrada 2026-08-26, ampliada 2026-09-03, Pieza 1 modelo Conexion + flujo API Key Opción A DEPLOYADAS 2026-09-06, EN PROGRESO — follow-ups pendientes)
 
 **Status:** EN PROGRESO — Pieza 1 (modelo Conexion) + Pieza API-Key (flujo seguro Opción A) HECHAS LOCAL, verificadas end-to-end en localhost. **Pendiente deploy prod.** Sigue bloqueando WooCommerce hasta que el flujo esté en producción (el plugin apunta a `pm.shipro.pro/api` — la key debe generarse ahí). Follow-ups del hub registrados abajo.
 
@@ -3667,7 +3667,7 @@ Hoy la única forma de dar de alta o cambiar un intermediario es SQL directo o m
 
 ---
 
-## DEUDA 157 — Rediseño del markup Shipro: markup UNIFICADO per-courier con modo HEREDA/PROPIO (Shipro-managed) (registrada 2026-08-28, RESUELTA LOCAL 2026-09-01, pend. deploy prod)
+## DEUDA 157 — Rediseño del markup Shipro: markup UNIFICADO per-courier con modo HEREDA/PROPIO (Shipro-managed) (registrada 2026-08-28, RESUELTA EN PROD 2026-09-06)
 
 **Status:** **RESUELTA EN CÓDIGO 2026-09-01 (COMPLETA en localhost), pendiente deploy prod.** Semáforo localhost↔prod: queda acá hasta subir. Las 4 piezas (3 del rediseño + cierre client-card) están en local, verificadas end-to-end. Post-deploy prod → mover a `DEUDAS-RESUELTAS.md`.
 
@@ -3898,7 +3898,7 @@ Migración aditiva (`CREATE TABLE + INDEX + FK`), aplicada local, blast 5 files,
 
 ---
 
-## DEUDA 160 — Limpiar campos fantasma de plata (Grupo 3 del diccionario) (registrada 2026-08-28, EN PROGRESO 2026-08-31)
+## DEUDA 160 — Limpiar campos fantasma de plata (Grupo 3 del diccionario) (registrada 2026-08-28, Batch 1 DEPLOYADO 2026-09-06, EN PROGRESO — restantes pendientes)
 
 **Status:** ABIERTA — **Batch 1 (4 fantasmas) dropeado local 2026-08-31 (commit `2975c9e`), pendiente deploy prod destructivo** (non-interactive workaround necesario). Cleanup arquitectónico: campos que existen en el schema pero ningún reader consume.
 
@@ -4009,7 +4009,7 @@ Migración destructiva: **EXACTAMENTE 4 DROP COLUMN** en la SQL (sin drops/alter
 
 ---
 
-## DEUDA 164 — Bug: courier con nombre acentuado (Hop Envíos) duplicado en /admin-couriers + "Error al crear el courier" al activar (registrada 2026-09-01, RESUELTA LOCAL 2026-09-01, pend. deploy prod)
+## DEUDA 164 — Bug: courier con nombre acentuado (Hop Envíos) duplicado en /admin-couriers + "Error al crear el courier" al activar (registrada 2026-09-01, RESUELTA EN PROD 2026-09-06)
 
 **Status:** RESUELTA EN CÓDIGO (commit `ef00894`, 2026-09-01), pendiente deploy prod (fix presente en local + push pendiente). Semáforo localhost↔prod: queda acá hasta subir. Bug pre-existente (no introducido esta sesión), presente en local Y prod hasta este fix.
 
@@ -4084,13 +4084,13 @@ Post-CAPA-2 estricto, con 0 servicios activo:true en la BD para Hop → **Hop de
 
 ---
 
-## DEUDA 166 — Gate de activación: soportar courier de entrega auto-recolector sin sucursales (bloquea Intralog) (registrada 2026-09-02, TRAMO INTRALOG CERRADO 2026-09-03 vía data, cuarto perfil queda como fix disponible)
+## DEUDA 166 — Gate de activación: soportar courier de entrega auto-recolector sin sucursales (bloquea Intralog) (registrada 2026-09-02, TRAMO INTRALOG CERRADO 2026-09-03 vía data, cuarto perfil DEPLOYADO EN PROD 2026-09-06 como fix disponible para futuros couriers con ese perfil)
 
 **Status:** cierre del tramo de Intralog el 2026-09-03 — resuelto **vía DATA, no código**: Intralog activa por el mecanismo consolidador (`puedeConsolidar=true` + `cpDepositoConsolidador="1619"`, depósito central real de Intralog confirmado por Nacho; Intralog consolida de verdad → **uso fiel del mecanismo, no atajo**). Cae en **PERFIL 2** (modalidad `sucursal_unica`, cubre vía su hub), **SIN aviso**. El adapter (Chat B) cotiza OK. Pendiente: validación e2e (cotización + despacho a domicilio) que corre el Chat B.
 
 Fila actualizada: id=14 (la fila vieja id=13 fue borrada + recreada por el wizard con 8 servicios).
 
-El **cuarto perfil** (fix del gate en commit `bd081f0`, ver más abajo) resultó **correcto pero NO era el caso de Intralog**. Queda commiteado LOCAL, sin deployar, esperando el primer courier que REALMENTE lo necesite (un courier que no cubra el hub del recolector pero sí el depósito del cliente).
+El **cuarto perfil** (fix del gate en commit `bd081f0`, ver más abajo) resultó **correcto pero NO era el caso de Intralog**. **Actualización 2026-09-06**: se deployó en prod (viajó con la cadena de Intralog que Chat B llevó al deploy), queda disponible como fix para el primer courier que REALMENTE lo necesite (un courier que no cubra el hub del recolector pero sí el depósito del cliente). Sin riesgo — no cambia los otros 3 perfiles.
 
 **Aprendizaje del tramo:** el problema NO era ni el gate ni el adapter — era que faltaba modelar el dato de consolidación de Intralog (`cpDepositoConsolidador`). La cobertura vive en la BD (DEUDA 29 eliminó la declarativa a nivel Empresa), no en el adapter. El diagnóstico costó varias vueltas (Chat A diagnosticó mal dos veces: primero achacándolo al `puedeRecogerDomicilio` dead-code, después a un supuesto perfil "auto-pickup sin sucursales"); lo resolvió la **certeza de negocio de Nacho** ("Intralog cubre AMBA, el aviso está mal") + el **dato del hub real** (CP 1619). Método a repetir: cuando el diagnóstico técnico no cierra, la certeza de negocio + el dato faltante son la salida — no forzar código para tapar el vacío.
 
@@ -4130,7 +4130,7 @@ Intralog es courier de entrega **domicilio-a-domicilio, auto-recolector**, sin s
 
 **Origen:** integración de Intralog (Chat B — Couriers). Recon completo de first-mile en Chat A el 2026-09-02 (dispatch.ts + gate + modalidad.ts) confirmando que el bloqueo NO está en dispatch ni en la config de BD sino en el gate de activación.
 
-**Commit local no deployado — cuarto perfil (`bd081f0`):** implementación del fix del gate + aviso informativo calculado al vuelo. Perfil 1/2/4 sin cambio de comportamiento; perfil 3 (courier que NO cubre hub del recolector pero SÍ el depósito del cliente) pasa a ACTIVAR (era rechazo) con aviso amber "recolecta desde el depósito del cliente, no desde el recolector designado". `dispatch.ts` intacto (Caso B ya lo soporta). Verificado empíricamente los 4 perfiles contra BD local. **NO se deployó** porque Intralog resultó ser perfil 2 (activa vía hub 1619). El fix es CORRECTO para el caso futuro de un courier que realmente no pueda alcanzar el hub del recolector. **Decisión pendiente de Nacho**: deployarlo por su valor propio (destraba el caso real cuando aparezca; sin riesgo — no cambia los otros 3 perfiles) o dejarlo esperando al primer caso concreto que lo justifique.
+**Cuarto perfil DEPLOYADO EN PROD (`bd081f0`, 2026-09-06):** implementación del fix del gate + aviso informativo calculado al vuelo. Perfil 1/2/4 sin cambio de comportamiento; perfil 3 (courier que NO cubre hub del recolector pero SÍ el depósito del cliente) pasa a ACTIVAR (era rechazo) con aviso amber "recolecta desde el depósito del cliente, no desde el recolector designado". `dispatch.ts` intacto (Caso B ya lo soporta). Verificado empíricamente los 4 perfiles contra BD local. **Se deployó** con la cadena de Intralog (Chat B lo incluyó en su batch); queda disponible para cuando aparezca el primer courier con perfil 3 real. Intralog terminó siendo perfil 2 (activa vía hub 1619) — el cuarto perfil no dispara para él, pero ya está en prod listo para el primer caso concreto que lo justifique. Sin riesgo — no cambia los otros 3 perfiles.
 
 ---
 
@@ -4193,7 +4193,7 @@ Hoy la doble etiqueta sólo se dispara por (a). Falta el disparador (b): un env�
 
 ---
 
-## DEUDA 169 — 500 en POST /api/envios: auto-provision fantasma del courier + normalización + Fix B pendiente (degradación "la venta nunca se pierde") (registrada 2026-09-04, Fix A RESUELTO LOCAL 2026-09-04 pend. deploy, Resolución normalizada RESUELTA LOCAL 2026-09-06 pend. deploy, Fix B ABIERTO scope medio prioridad alta)
+## DEUDA 169 — 500 en POST /api/envios: auto-provision fantasma del courier + normalización + Fix B pendiente (degradación "la venta nunca se pierde") (registrada 2026-09-04, Fix A + Resolución normalizada courier + Provincia desde CP + Parser de altura TODO DEPLOYADO EN PROD 2026-09-06, EN PROGRESO — Fix B ABIERTO scope medio prioridad alta)
 
 **Status:** Fix A (guard) + Resolución normalizada resueltos en local (commits `248cbd3` + `caf158b`), pendientes deploy. Fix B abierto — es el trabajo real: enganchar la política "la venta nunca se pierde" al camino de creación de envío.
 

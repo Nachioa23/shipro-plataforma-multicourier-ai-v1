@@ -664,10 +664,15 @@ export default function GestionClientes() {
 
             <section>
               <h3 className="text-sm font-black text-gray-800 flex items-center gap-2 mb-4 border-b pb-2">
-                <Percent className="w-4 h-4 text-amber-500" /> Reglas Comerciales (Shipro Markup)
+                <Percent className="w-4 h-4 text-amber-500" /> Reglas Comerciales (Markups — solo Shipro)
               </h3>
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-800 font-medium text-center">
-                Para configurar los markups de Shipro hacia este cliente, debés ingresar como él (Desde la Bandeja) y entrar a "Mis Transportes".
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-800 font-medium space-y-2">
+                <p>
+                  <strong>Markup de Shipro:</strong> se configura en <code>/admin-markup-courier</code> (acceso exclusivo Shipro). El cliente NO configura ni ve el markup de Shipro.
+                </p>
+                <p>
+                  <strong>Markup del dueño de credenciales (intermediario):</strong> hoy vive en <code>CourierIntermediario</code> y se configura por seed — sin UI todavía (deuda del hub, también solo-Shipro).
+                </p>
               </div>
             </section>
 

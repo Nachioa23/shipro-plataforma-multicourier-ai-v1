@@ -126,6 +126,38 @@ export async function GET(request: Request) {
       }),
     ]);
 
+    // HUB DEUDA 150 Pieza 2: registra la conexión Tiendanube en el modelo Conexion. BEST-EFFORT — si
+    // falla, la instalación de la tienda NO se rompe (ya commiteó arriba). Autorizado por Chat B, aditivo.
+    //
+    // Mapeo estado: la callback OAuth solo entra por el camino feliz del install (el upsert de la tienda
+    // deja `estado: "instalada"` unconditional), así que la Conexion arranca ACTIVA. Los estados
+    // "suspendida"→PENDIENTE y "desinstalada"→REVOCADA los aplicarán los webhooks lifecycle en su propia
+    // pasada (fuera de scope de Pieza 2).
+    //
+    // Multi-store caveat: el @@unique([empresaId, plataforma]) implica que si una empresa tiene una 2da
+    // tienda Tiendanube, el upsert pisa `referenciaExterna` (last-store-wins). Aceptable por ahora — el
+    // detalle real de N tiendas ya vive en `TiendaTiendanube` y el hub lo expone read-only aparte
+    // (ver `app/api/admin/empresas/[id]/conexiones` GET, que trae `tiendasTiendanube` listadas).
+    try {
+      await prisma.conexion.upsert({
+        where: { empresaId_plataforma: { empresaId, plataforma: "TIENDANUBE" } },
+        update: {
+          estado: "ACTIVA",
+          referenciaExterna: String(storeId),
+          mecanismo: "OAUTH",
+        },
+        create: {
+          empresaId,
+          plataforma: "TIENDANUBE",
+          mecanismo: "OAUTH",
+          estado: "ACTIVA",
+          referenciaExterna: String(storeId),
+        },
+      });
+    } catch (err) {
+      console.error("[tiendanube/oauth/callback] Conexion upsert best-effort falló (la tienda ya se instaló, no se rompe):", err);
+    }
+
     // Enriquecer la tienda con su nombre + dominio (GET /store), best-effort. Capturamos nombre/dominio
     // en variables del scope externo para pasarlos al redirect de la página de éxito. La tienda YA quedó
     // vinculada; un fallo acá NO rompe la instalación (queda sin nombre/dominio, se puede reintentar).

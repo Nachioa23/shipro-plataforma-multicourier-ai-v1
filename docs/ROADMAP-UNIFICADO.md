@@ -1,19 +1,68 @@
 # Roadmap Unificado — Shipro 2.0
 
-> **Documento operativo único.** Reconcilia el master de fases con el estado real de `DEUDAS.md` al **2026-07-24**.
-> **Fuente de verdad detallada:** `DEUDAS.md` (números canónicos). Este board **cruza** — no reemplaza.
+> **Documento operativo único.** Reconcilia el master de fases con el estado real de `DEUDAS.md` al **2026-09-06**.
+> **Fuente de verdad detallada:** `DEUDAS.md` (números canónicos, pendientes) + `DEUDAS-RESUELTAS.md` (histórico
+> movido, verbatim). Este board **cruza** — no reemplaza.
 > **Complementa a:** `docs/COMERCIALIZACION-CHECKLIST.md` (foco pre-lanzamiento, algo desactualizado).
 
 ---
 
-## Estado general (fecha 2026-07-24)
+## Estado general (fecha 2026-09-06)
 
-FASE 1 (precios y motor de plata) está **casi cerrada**: la fórmula rama-aware, la conciliación aforo↔virtual y la
-liquidación en dos vías (Fee vs Logística) están vivas y verificadas al centavo. Lo que queda de FASE 1 es el
-**cobro mensual real** en la billetera (hoy la liquidación es documento, no movimiento) — tres pasos concretos
-detallados abajo. Con eso cerrado, se abre el portón para desplegar y recién entonces sumar plugins (FASE 3) y
-más couriers (FASE 2). Deploy y sumar plugins son eventos separados: primero desplegar el motor firme, después
-exponerlo.
+FASE 1 (motor de plata) sigue **firme en prod desde 2026-07-30** y esta sesión sumó cierres importantes: DEUDA 157
+(markup Shipro unificado per-courier, admin-managed) COMPLETA en prod, DEUDA 91 (capacidad courier ∩ catálogo
+Shipro) RESUELTA en prod, DEUDA 164 (bug Hop normalizador) RESUELTA en prod, DEUDA 160 Batch 1 (4 campos fantasma
+dropeados) DEPLOYADO. FASE 2 y FASE 3 abrieron en paralelo con los frentes de couriers y plugins operando en
+producción — Intralog Fase 1 activo (courier real cotizando + emitiendo etiquetas), WooCommerce validado end-to-end
+(primera etiqueta real de Andreani generada vía plugin), hub de conexiones Pieza 1 (modelo Conexion) + flujo seguro
+de API Key (Opción A: Shipro dispara link tokenizado → cliente genera la key) en prod. Pendientes activos: Fix B de
+DEUDA 169 (degradación "la venta nunca se pierde" cuando el courier no resuelve), follow-ups del hub DEUDA 150
+(instructivo por plataforma, ver conexiones, Opción B autoservicio, ciclo de vida, absorción Tiendanube), fantasmas
+restantes de DEUDA 160, adapter Hop completo (DEUDA 165), fases siguientes de Intralog, plugins nuevos (Shopify /
+VTEX / Magento / Mercado Libre) del lado de Chat C. Ver "Mapa de trabajo por chat" abajo para quién avanza qué en
+paralelo vs acoplado.
+
+---
+
+## Mapa de trabajo por chat (quién hace qué)
+
+**Territorios (regla anti-colisión — cada chat tiene su superficie de archivos):**
+
+- **CHAT A — Núcleo.** `lib/cotizador.ts`, `lib/envios/crear.ts`, `lib/envios/dispatch.ts`, `lib/envios/procesar-bloqueados-*.ts`,
+  `prisma/schema.prisma` + migraciones, motor de precios, cascada de markup, hub de conexiones (DEUDA 150 —
+  `lib/geo/resolver-cp.ts`, `lib/utils/parse-direccion.ts`, `Conexion`, `TokenSetupApiKey`), normalizadores de
+  entrada del envío. **Corre las migraciones** en cada deploy.
+- **CHAT B — Couriers / Integraciones.** Adapters (`lib/couriers/AndreaniAdapter.ts`, `MocisAdapter`,
+  `IntralogAdapter`, `HopEnviosAdapter`, `CorreoArgentinoAdapter`, `OcaAdapter`, `CourierFactory`,
+  `CourierInterface`, `serviciosSoportados`, `normalizar-courier`), app Tiendanube completa (`lib/tiendanube/*`,
+  `app/api/tiendanube/*`), empaquetado (`lib/empaquetado/*`, `armarBultoApilado` — DEUDA 143).
+- **CHAT C — Plugins / API externa / Docs.** Plugin WooCommerce (repo `shipro-woocommerce`), plugins futuros
+  (Shopify, VTEX, Magento, PrestaShop, Mercado Libre), contrato OpenAPI (`docs/shipro-api-v1.openapi.yaml`),
+  documentación externa (`docs/shipro-api-v1.html`).
+
+**Frentes EN PARALELO** (sin pisarse — se pueden avanzar simultáneamente sin coordinar):
+
+- **A**: construir el hub cliente-facing — UI para administrar conexiones, ver plataformas integradas, instructivo
+  por plataforma, puerta de cliente (Opción B autoservicio de generación de API Key). No depende de nadie.
+- **B**: Intralog fases siguientes (sucursal / consolidación / etiquetas de recolección) + completar adapter de Hop
+  (DEUDA 165 — sucursal / punto de retiro / drop-off).
+- **C**: ajustes finos WooCommerce (surface del estado RETENIDO en el plugin, revertir timeout de validación de
+  15s → 5s cuando la latencia del núcleo baje a < 5s DEUDA 145, HMAC token si se agrega a `/rastreo-publico`) +
+  investigar nuevos plugins (Shopify / VTEX / etc).
+
+**Frentes ACOPLADOS** (requieren coordinación explícita entre chats):
+
+- **Hub (A) ↔ Plugins (C)**: cuando el hub mande "instructivo/plugin/credenciales" a un cliente, C define qué
+  recurso corresponde por plataforma (link OAuth para Tiendanube; `.zip` + API Key para WooCommerce; etc.).
+- **Absorción de Tiendanube al modelo `Conexion` (A) ↔ B**: las tablas `TiendaTiendanube` /
+  `TokenVinculacionTiendanube` / `EtiquetaTiendanube` son territorio de B — cuando A las migre al modelo Conexion
+  hay que coordinar el rewiring del callback OAuth + webhooks. Pieza futura, decisión post-MVP.
+- **Cualquier cambio en `crear.ts` / `cotizador.ts` / `schema.prisma`**: pasa por Chat A. Ejemplos ya coordinados
+  esta sesión: helper `armarBultoApilado` (B propuso, A lo cableó), normalización de dirección provincia+altura
+  (A construyó, B/C consumen sin tocar adapters/plugin).
+- **Fix B "la venta nunca se pierde" (A, DEUDA 169)**: cuando A cambie `crear.ts` para que el envío nazca en
+  `BLOQUEADO_COURIER_AUSENTE` en vez de rechazar con 400, el shape de la respuesta a los plugins cambia — avisar
+  a C para que WooCommerce (y plugins futuros) manejen el nuevo estado bloqueado sin sorpresas.
 
 ---
 
@@ -67,9 +116,10 @@ liquidación es documento (`LiquidacionMensual` sin `MovimientoFinanciero` asoci
 Sumar couriers ANTES de cerrar la fórmula multiplica el problema (cada adapter nuevo pisa el motor de plata a
 mitad de refactor). Por eso este bloque va después de FASE 1.
 
-- **DEUDA 91 — Cablear catálogo `ServicioCourier` al runtime de cotización.** Es la LLAVE DE ESCALABILIDAD:
-  hoy los adapters devuelven strings crudos sin cruzar contra el catálogo, y Moci's cotiza "sucursal" que no
-  ofrece (rompe envíos). Bloqueante parcial: sub-tarea M-1 (service IDs Same/Next Day de Moci's).
+- **DEUDA 91 — Cablear catálogo `ServicioCourier` al runtime de cotización.** ✅ **RESUELTA EN PROD 2026-09-06**
+  (Capa 1 = adapter techo + Capa 2 = catálogo Shipro estricto). Moci's ya no cotiza "sucursal" que no ofrece;
+  el gate estricto aplica en todos los caminos (checkout, `/api/cotizar`, Tiendanube rates). Movida a
+  `DEUDAS-RESUELTAS.md`. Prerequisito satisfecho para la integración de Intralog (Chat B) que corrió después.
 - **DEUDA 93 — Recolección tarifada del courier recolector.** Servicio con credenciales de Shipro (no del
   cliente), Shipro refactura al cliente. Bloqueada por respuesta de Moci's (preguntas listas para mandar).
 - **DEUDA 71 — Guardar credenciales del courier al finalizar el wizard.** Hoy el paso 4 del wizard activa
@@ -145,14 +195,22 @@ Un plugin es una compuerta de tráfico externo hacia el motor de plata. Hay que 
 
 ---
 
-## Cómo se relacionan los dos chats anteriores + esta sesión
+## Cómo se relacionan los chats — histórico
 
-- **Chat "Shipro 2.0 roadmap y próximos pasos"** — es el MASTER de las 3 fases (precios → couriers → plugins),
-  con la lógica del portón (deploy) intercalada.
-- **Chat "Plataforma Multicourier V2"** — es el DISEÑO DE ARQUITECTURA multicourier: `CotizacionSnapshot`,
-  cobertura, 8 couriers investigados, la redimensión del snapshot como tracking-de-conversión (no como
-  precio-congelado-para-facturar). Es la base técnica que FASE 2 y FASE 3 leen. Vive en
-  `docs/ARQUITECTURA-MULTICOURIER.md`.
-- **Esta sesión** — es la EJECUCIÓN de FASE 1: cinco commits (`8d40f58`, `996142f`, `d850272`, `d623b9d`,
-  `0d6fd7b`) que cierran el motor de plata rama-aware, la conciliación aforo y las dos-vías de liquidación.
-  Deja tres PASOS restantes de FASE 1 (cobro mensual) para las próximas sesiones.
+> Contexto histórico previo al modelo actual 3-chat. La organización operativa vigente es la de **"Mapa de trabajo
+> por chat"** al inicio del documento (Chat A / B / C con sus territorios + frentes paralelos/acoplados). Esta
+> sección se conserva para trazabilidad de cómo llegamos acá.
+
+- **Chat "Shipro 2.0 roadmap y próximos pasos"** — MASTER original de las 3 fases (precios → couriers → plugins),
+  con la lógica del portón (deploy) intercalada. Antecesor del actual Chat A (Núcleo).
+- **Chat "Plataforma Multicourier V2"** — DISEÑO DE ARQUITECTURA multicourier: `CotizacionSnapshot`, cobertura,
+  8 couriers investigados, la redimensión del snapshot como tracking-de-conversión. Base técnica que FASE 2 y
+  FASE 3 leen. Vive en `docs/ARQUITECTURA-MULTICOURIER.md`. Antecesor del actual Chat B (Couriers).
+- **Sesión 2026-07-24 "ejecución FASE 1"** — cinco commits (`8d40f58`, `996142f`, `d850272`, `d623b9d`, `0d6fd7b`)
+  que cerraron el motor de plata rama-aware, la conciliación aforo y las dos-vías de liquidación. Deploy prod
+  `b11f7f8` (2026-07-30).
+- **Sesión 2026-09-06 (actual)** — 3 chats operando en paralelo/acoplado: Chat A cerró DEUDAS 91/157/164 + Batch 1
+  de 160 + Fix A/normalización de 169 + Hub Pieza 1 + API Key Opción A. Chat B integró Intralog Fase 1 completa +
+  cuarto perfil (bd081f0) + fix Hop (164). Chat C construyó plugin WooCommerce end-to-end (etiquetas Andreani
+  reales generadas) + registró aprendizajes del build en DEUDAS 149/150. Territorios claros, cero colisiones —
+  ver Mapa de trabajo arriba.

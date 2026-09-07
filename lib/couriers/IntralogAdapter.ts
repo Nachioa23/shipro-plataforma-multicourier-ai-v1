@@ -346,7 +346,9 @@ export class IntralogAdapter implements ICourierIntegrator {
     }
     const data = await res.json();
     if (!Array.isArray(data) || data.length === 0) {
-      return this.traducirEstado("");
+      // Pedido recién creado sin eventos de tracking aún → estado inicial.
+      // (Intralog devuelve [] hasta que hay movimiento; verificado contra su API).
+      return "ETIQUETA_CREADA";
     }
     const ultimo = data[data.length - 1];
     return this.traducirEstado(String(ultimo?.codigo ?? ""));

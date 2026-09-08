@@ -43,7 +43,7 @@
 //
 // GATE: admin_shipro.
 
-import { useState, useEffect, useCallback, Fragment } from "react";
+import { useState, useEffect, useCallback, Fragment, useRef } from "react";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
 import {
@@ -64,6 +64,8 @@ import {
   Building2,
   Landmark,
   ExternalLink,
+  ArrowRight,
+  Zap,
 } from "lucide-react";
 
 type ModoMarkupShipro = "HEREDA" | "PROPIO";
@@ -142,6 +144,44 @@ type FilaFee = {
 type IvaInfo = {
   multiplier: number;
   porcentaje: number;
+};
+
+type PreviewInputs = {
+  courierId: number | null;
+  empresaId: number | null;
+  secoNetoSample: string;
+  usaCredencialesPropias: boolean;
+  propietarioTipo: "COURIER" | "SHIPRO" | "CLIENTE";
+  tarifaIncluyeIva: boolean;
+};
+
+type PreviewResponse = {
+  input: {
+    courier: { id: number; nombre: string };
+    empresa: { id: number; nombre: string };
+    secoNetoSample: number;
+    usaCredencialesPropias: boolean;
+    propietarioTipo: "COURIER" | "SHIPRO" | "CLIENTE";
+    tarifaIncluyeIva: boolean;
+  };
+  config: {
+    ajusteTarifaPorcentaje: number;
+    intermediarioMarkupPorcentaje: number | null;
+    smoNeto: string;
+    feeShiproNeto: string;
+    feeTipo: "FIJO" | "PORCENTAJE" | null;
+    feeAproximado: boolean;
+    ivaMultiplier: number;
+  };
+  desglose: {
+    secoNeto: string;
+    baseConIntermediario: string;
+    cascadaNeto: string;
+    smoAplicado: string;
+    feeAplicado: string;
+    netoAcumulado: string;
+  };
+  precioFinal: string;
 };
 
 const fmtPct = (v: string | number | null | undefined) =>
@@ -705,6 +745,533 @@ function HistorialAccordion({ fila }: { fila: Fila }) {
             </div>
           ))}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// SECTION: PREVIEW LIVE — cascada byte-exact vs el motor real.
+//   Llama el endpoint POST /api/admin/consola-tarifa/preview que REUSA la
+//   función `aplicarMarkup` del motor + los 4 resolvers reales. Cero replica
+//   de fórmula → cero drift. Debounce 300ms en cambios de input + re-fetch
+//   automático via `reloadKey` cada vez que un save termina abajo.
+// -----------------------------------------------------------------------------
+
+function SectionPreview({
+  filas,
+  fees,
+  reloadKey,
+}: {
+  filas: Fila[];
+  fees: FilaFee[];
+  reloadKey: number;
+}) {
+  const [inputs, setInputs] = useState<PreviewInputs>({
+    courierId: null,
+    empresaId: null,
+    secoNetoSample: "10000",
+    usaCredencialesPropias: false,
+    propietarioTipo: "COURIER",
+    tarifaIncluyeIva: false,
+  });
+  const [avanzadoOpen, setAvanzadoOpen] = useState(false);
+  const [preview, setPreview] = useState<PreviewResponse | null>(null);
+  const [cargando, setCargando] = useState(false);
+  const [errorPreview, setErrorPreview] = useState<string | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Prefill defaults al primer render — primer courier + primera empresa.
+  useEffect(() => {
+    setInputs((s) => ({
+      ...s,
+      courierId: s.courierId ?? (filas[0]?.courier.id ?? null),
+      empresaId: s.empresaId ?? (fees[0]?.empresa.id ?? null),
+    }));
+  }, [filas, fees]);
+
+  const fetchPreview = useCallback(async () => {
+    if (
+      inputs.courierId == null ||
+      inputs.empresaId == null ||
+      !inputs.secoNetoSample
+    ) {
+      setPreview(null);
+      return;
+    }
+    const seco = parseFloat(inputs.secoNetoSample);
+    if (!Number.isFinite(seco) || seco < 0) {
+      setPreview(null);
+      return;
+    }
+    setCargando(true);
+    setErrorPreview(null);
+    try {
+      const res = await fetch("/api/admin/consola-tarifa/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          courierId: inputs.courierId,
+          empresaId: inputs.empresaId,
+          secoNetoSample: seco,
+          usaCredencialesPropias: inputs.usaCredencialesPropias,
+          propietarioTipo: inputs.propietarioTipo,
+          tarifaIncluyeIva: inputs.tarifaIncluyeIva,
+        }),
+      });
+      if (res.ok) {
+        const data: PreviewResponse = await res.json();
+        setPreview(data);
+      } else {
+        const data = await res.json();
+        setErrorPreview(data.error || "Error en el preview");
+        setPreview(null);
+      }
+    } catch {
+      setErrorPreview("Error de conexión");
+      setPreview(null);
+    } finally {
+      setCargando(false);
+    }
+  }, [inputs]);
+
+  // Debounced re-fetch al cambiar inputs.
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(fetchPreview, 300);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [fetchPreview]);
+
+  // Auto re-fetch tras cada save exitoso abajo (reloadKey incrementa).
+  useEffect(() => {
+    if (reloadKey === 0) return;
+    fetchPreview();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadKey]);
+
+  const currentCourier = filas.find((f) => f.courier.id === inputs.courierId);
+  const currentEmpresa = fees.find((f) => f.empresa.id === inputs.empresaId);
+
+  const fmtMoneyNum = (v: string) =>
+    `$ ${Number(v).toLocaleString("es-AR", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
+  const fmtNum4 = (v: string) =>
+    Number(v).toLocaleString("es-AR", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 4,
+    });
+
+  return (
+    <section
+      aria-labelledby="section-preview-title"
+      className="bg-white rounded-2xl shadow-md border-2 border-[#233b6b]/10 overflow-hidden sticky top-0 z-10"
+    >
+      <header className="px-6 py-4 border-b border-gray-100 bg-gradient-to-r from-slate-50 to-blue-50/30 flex items-center gap-3 flex-wrap">
+        <div className="p-2 rounded-lg bg-[#233b6b] text-white border border-[#233b6b] shadow-sm">
+          <Zap className="w-5 h-5" />
+        </div>
+        <div className="flex-1 min-w-[240px]">
+          <h2
+            id="section-preview-title"
+            className="text-lg font-black text-gray-900 tracking-tight"
+          >
+            Preview en vivo — cascada de precio
+          </h2>
+          <p className="text-xs text-gray-700 mt-0.5">
+            Reusa el motor real (<code className="text-slate-800 bg-slate-100 px-1 rounded">aplicarMarkup</code>) — el precio publicado que ves acá es <strong>byte-idéntico</strong> al que va a devolver una cotización real. Editar cualquier variable abajo actualiza el preview.
+          </p>
+        </div>
+      </header>
+
+      {/* Inputs */}
+      <div className="px-6 py-4 border-b border-gray-100 bg-white">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label
+              htmlFor="preview-courier"
+              className="text-[10px] font-black text-gray-700 uppercase tracking-wider block mb-1"
+            >
+              Courier (que despacha)
+            </label>
+            <select
+              id="preview-courier"
+              value={inputs.courierId ?? ""}
+              onChange={(e) =>
+                setInputs((s) => ({
+                  ...s,
+                  courierId: e.target.value ? Number(e.target.value) : null,
+                }))
+              }
+              className={
+                "w-full border-2 border-gray-200 rounded-lg px-2 py-2 text-sm font-bold text-gray-800 outline-none focus:border-[#233b6b] " +
+                focusRing
+              }
+            >
+              {filas.length === 0 ? (
+                <option value="">— sin couriers —</option>
+              ) : (
+                filas.map((f) => (
+                  <option key={f.courier.id} value={f.courier.id}>
+                    {f.courier.nombre}
+                  </option>
+                ))
+              )}
+            </select>
+          </div>
+          <div>
+            <label
+              htmlFor="preview-empresa"
+              className="text-[10px] font-black text-gray-700 uppercase tracking-wider block mb-1"
+            >
+              Empresa (para el Fee)
+            </label>
+            <select
+              id="preview-empresa"
+              value={inputs.empresaId ?? ""}
+              onChange={(e) =>
+                setInputs((s) => ({
+                  ...s,
+                  empresaId: e.target.value ? Number(e.target.value) : null,
+                }))
+              }
+              className={
+                "w-full border-2 border-gray-200 rounded-lg px-2 py-2 text-sm font-bold text-gray-800 outline-none focus:border-[#233b6b] " +
+                focusRing
+              }
+            >
+              {fees.length === 0 ? (
+                <option value="">— sin empresas —</option>
+              ) : (
+                fees.map((f) => (
+                  <option key={f.empresa.id} value={f.empresa.id}>
+                    {f.empresa.nombre}
+                  </option>
+                ))
+              )}
+            </select>
+          </div>
+          <div>
+            <label
+              htmlFor="preview-seco"
+              className="text-[10px] font-black text-gray-700 uppercase tracking-wider block mb-1"
+            >
+              Tarifa API sample ($ neto)
+            </label>
+            <div className="flex items-center gap-1">
+              <input
+                id="preview-seco"
+                type="number"
+                min="0"
+                step="0.01"
+                value={inputs.secoNetoSample}
+                onChange={(e) =>
+                  setInputs((s) => ({ ...s, secoNetoSample: e.target.value }))
+                }
+                className={
+                  "flex-1 border-2 border-gray-200 rounded-lg px-2 py-2 text-sm font-bold text-gray-800 outline-none focus:border-[#233b6b] " +
+                  focusRing
+                }
+                placeholder="10000"
+              />
+              <div className="flex items-center gap-0.5">
+                {[5000, 10000, 20000].map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() =>
+                      setInputs((s) => ({ ...s, secoNetoSample: String(v) }))
+                    }
+                    className={
+                      "px-1.5 py-1 text-[10px] font-bold text-gray-600 bg-gray-100 rounded hover:bg-gray-200 " +
+                      focusRing
+                    }
+                    aria-label={`Preset ${v}`}
+                  >
+                    {v >= 1000 ? `${v / 1000}k` : v}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Advanced options */}
+        <button
+          type="button"
+          onClick={() => setAvanzadoOpen(!avanzadoOpen)}
+          aria-expanded={avanzadoOpen}
+          aria-controls="preview-avanzado"
+          className={
+            "mt-3 inline-flex items-center gap-1 text-[11px] font-bold text-gray-700 hover:text-gray-900 " +
+            focusRing
+          }
+        >
+          {avanzadoOpen ? (
+            <ChevronDown className="w-3 h-3" />
+          ) : (
+            <ChevronRight className="w-3 h-3" />
+          )}
+          Opciones avanzadas
+        </button>
+        {avanzadoOpen && (
+          <div
+            id="preview-avanzado"
+            className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-3 text-xs bg-slate-50 border border-slate-200 rounded-lg p-3 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200"
+          >
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={inputs.usaCredencialesPropias}
+                onChange={(e) =>
+                  setInputs((s) => ({
+                    ...s,
+                    usaCredencialesPropias: e.target.checked,
+                  }))
+                }
+                className={"w-3.5 h-3.5 " + focusRing}
+              />
+              <span className="font-bold text-gray-700">
+                usaCredencialesPropias (Rama B)
+              </span>
+            </label>
+            <div>
+              <label
+                htmlFor="preview-propietario"
+                className="block font-bold text-gray-700 mb-1"
+              >
+                propietarioTipo
+              </label>
+              <select
+                id="preview-propietario"
+                value={inputs.propietarioTipo}
+                onChange={(e) =>
+                  setInputs((s) => ({
+                    ...s,
+                    propietarioTipo: e.target.value as PreviewInputs["propietarioTipo"],
+                  }))
+                }
+                className={
+                  "w-full border-2 border-gray-200 rounded px-2 py-1 text-xs font-bold text-gray-800 " +
+                  focusRing
+                }
+              >
+                <option value="COURIER">COURIER (con markup dueño)</option>
+                <option value="SHIPRO">SHIPRO (creds Shipro-owned)</option>
+                <option value="CLIENTE">CLIENTE (defensivo — implica Rama B)</option>
+              </select>
+            </div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={inputs.tarifaIncluyeIva}
+                onChange={(e) =>
+                  setInputs((s) => ({ ...s, tarifaIncluyeIva: e.target.checked }))
+                }
+                className={"w-3.5 h-3.5 " + focusRing}
+              />
+              <span className="font-bold text-gray-700">
+                tarifaIncluyeIva (strip 1.21 al intake)
+              </span>
+            </label>
+          </div>
+        )}
+      </div>
+
+      {/* Cascade output */}
+      <div className="px-6 py-5 bg-slate-50/30 relative">
+        {cargando && (
+          <div className="absolute top-3 right-4 flex items-center gap-1 text-[10px] text-gray-600 font-bold">
+            <Loader2 className="w-3 h-3 animate-spin motion-reduce:animate-none" /> calculando…
+          </div>
+        )}
+        {errorPreview ? (
+          <p className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
+            {errorPreview}
+          </p>
+        ) : preview ? (
+          <div className="motion-safe:transition-all motion-safe:duration-300">
+            {/* Cascade steps */}
+            <div className="grid grid-cols-1 lg:grid-cols-[1fr_auto_1fr] gap-3 items-start">
+              <div className="lg:col-span-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+                {/* Step 1: secoNeto */}
+                <CascadeStep
+                  color="slate"
+                  label="Tarifa API"
+                  sub={
+                    preview.input.tarifaIncluyeIva
+                      ? "con IVA → neto"
+                      : "neto directo"
+                  }
+                  value={fmtMoneyNum(preview.desglose.secoNeto)}
+                />
+                {/* Step 2: +Dueño */}
+                <CascadeStep
+                  color="purple"
+                  label="+ Markup dueño"
+                  sub={
+                    preview.config.intermediarioMarkupPorcentaje != null
+                      ? `× (1 + ${preview.config.intermediarioMarkupPorcentaje}%)`
+                      : "sin intermediario"
+                  }
+                  value={fmtMoneyNum(preview.desglose.baseConIntermediario)}
+                  isArrow
+                />
+                {/* Step 3: +Shipro */}
+                <CascadeStep
+                  color="blue"
+                  label="+ Markup Shipro"
+                  sub={
+                    preview.input.usaCredencialesPropias
+                      ? "Rama B — sin markup"
+                      : `× (1 + ${preview.config.ajusteTarifaPorcentaje}%)`
+                  }
+                  value={fmtMoneyNum(preview.desglose.cascadaNeto)}
+                  isArrow
+                />
+                {/* Step 4: +SMO */}
+                <CascadeStep
+                  color="amber"
+                  label="+ SMO"
+                  sub={`+ ${fmtMoneyNum(preview.desglose.smoAplicado)}`}
+                  value={fmtMoneyNum(
+                    (
+                      Number(preview.desglose.cascadaNeto) +
+                      Number(preview.desglose.smoAplicado)
+                    ).toString()
+                  )}
+                  isArrow
+                />
+                {/* Step 5: +Fee */}
+                <CascadeStep
+                  color="emerald"
+                  label="+ Fee empresa"
+                  sub={
+                    preview.config.feeTipo
+                      ? `${preview.config.feeTipo} → + ${fmtMoneyNum(
+                          preview.desglose.feeAplicado
+                        )}`
+                      : "sin Fee configurado"
+                  }
+                  value={fmtMoneyNum(preview.desglose.netoAcumulado)}
+                  isArrow
+                />
+                {/* Step 6: ×IVA (final) */}
+                <CascadeStep
+                  color="brand"
+                  label="× IVA (final)"
+                  sub={`× ${preview.config.ivaMultiplier.toFixed(2)}`}
+                  value={fmtMoneyNum(preview.precioFinal)}
+                  isArrow
+                  destaca
+                />
+              </div>
+            </div>
+
+            {/* Precio final destacado */}
+            <div className="mt-5 bg-white border-2 border-[#233b6b] rounded-xl p-5 shadow-sm">
+              <div className="flex items-baseline gap-3 flex-wrap">
+                <div>
+                  <p className="text-[10px] font-black text-[#233b6b] uppercase tracking-wider mb-1">
+                    Precio publicado al comprador
+                  </p>
+                  <p className="text-4xl font-black text-[#233b6b] tracking-tight">
+                    {fmtMoneyNum(preview.precioFinal)}
+                  </p>
+                </div>
+                <div className="text-[11px] text-gray-700 md:ml-auto md:text-right space-y-0.5">
+                  <p>
+                    Courier: <strong>{preview.input.courier.nombre}</strong>
+                  </p>
+                  <p>
+                    Empresa: <strong>{preview.input.empresa.nombre}</strong>
+                  </p>
+                  <p className="text-gray-600 font-mono text-[10px]">
+                    tarifa API {fmtMoneyNum(preview.desglose.secoNeto)} → {fmtNum4(preview.precioFinal)}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Fee % honesty note */}
+            {preview.config.feeAproximado && (
+              <p className="mt-3 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                ⚠ Vista previa aproximada para Fee <strong>PORCENTAJE</strong>: el motor vigente pasa <code>basePrecio=0</code> a <code>calcularFeeOperacion</code> (funciona bien solo para tipo FIJO — todos los Fee en prod son FIJO hoy). Cuando se active un Fee % real, el preview reflejará automáticamente el fix del motor.
+              </p>
+            )}
+          </div>
+        ) : (
+          <p className="text-sm text-gray-600">
+            Elegí un courier + una empresa y una tarifa sample para ver el preview.
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function CascadeStep({
+  color,
+  label,
+  sub,
+  value,
+  isArrow,
+  destaca,
+}: {
+  color: "slate" | "purple" | "blue" | "amber" | "emerald" | "brand";
+  label: string;
+  sub: string;
+  value: string;
+  isArrow?: boolean;
+  destaca?: boolean;
+}) {
+  const colorMap: Record<typeof color, string> = {
+    slate: "bg-slate-50 border-slate-200 text-slate-800",
+    purple: "bg-purple-50 border-purple-200 text-purple-900",
+    blue: "bg-blue-50 border-blue-200 text-blue-900",
+    amber: "bg-amber-50 border-amber-200 text-amber-900",
+    emerald: "bg-emerald-50 border-emerald-200 text-emerald-900",
+    brand: "bg-[#233b6b]/5 border-[#233b6b]/30 text-[#233b6b]",
+  };
+  const accentText: Record<typeof color, string> = {
+    slate: "text-slate-700",
+    purple: "text-purple-700",
+    blue: "text-blue-700",
+    amber: "text-amber-700",
+    emerald: "text-emerald-700",
+    brand: "text-[#233b6b]",
+  };
+  return (
+    <div className="relative">
+      {isArrow && (
+        <div
+          aria-hidden="true"
+          className="hidden sm:flex absolute -left-2.5 top-1/2 -translate-y-1/2 z-10 items-center justify-center w-5 h-5 bg-white border border-gray-300 rounded-full shadow-sm"
+        >
+          <ArrowRight className="w-2.5 h-2.5 text-gray-500" />
+        </div>
+      )}
+      <div
+        className={
+          "rounded-lg border-2 px-3 py-2.5 h-full " +
+          colorMap[color] +
+          (destaca ? " shadow-md" : "")
+        }
+      >
+        <p
+          className={
+            "text-[10px] font-black uppercase tracking-wider mb-1 " + accentText[color]
+          }
+        >
+          {label}
+        </p>
+        <p className={"text-base font-black tracking-tight " + (destaca ? "text-lg" : "")}>
+          {value}
+        </p>
+        <p className={"text-[10px] mt-0.5 " + accentText[color]}>{sub}</p>
       </div>
     </div>
   );
@@ -1348,6 +1915,9 @@ export default function ConsolaTarifaPage() {
   // Accordion state global markup + Fee search filter.
   const [globalHistExpandido, setGlobalHistExpandido] = useState(false);
   const [feeSearch, setFeeSearch] = useState("");
+  // Preview reload key — increments after each successful save below, triggers
+  // the SectionPreview to re-fetch (config changed → precioFinal changed).
+  const [previewReloadKey, setPreviewReloadKey] = useState(0);
 
   const cargar = useCallback(async () => {
     setCargando(true);
@@ -1396,6 +1966,8 @@ export default function ConsolaTarifaPage() {
       if (res.ok) {
         setEditKey(editKey, false);
         cargar();
+        // Config cambió → triggerea re-fetch del preview live (SectionPreview).
+        setPreviewReloadKey((k) => k + 1);
       } else {
         const data = await res.json();
         alert(data.error || "Error al guardar");
@@ -1466,6 +2038,15 @@ export default function ConsolaTarifaPage() {
           </div>
         ) : (
           <>
+          {/* SECCIÓN PREVIEW LIVE — sticky top */}
+          {filas.length > 0 && fees.length > 0 && (
+            <SectionPreview
+              filas={filas}
+              fees={fees}
+              reloadKey={previewReloadKey}
+            />
+          )}
+
           {filas.length === 0 ? (
           <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-12 text-center text-gray-600">
             No hay couriers activos.

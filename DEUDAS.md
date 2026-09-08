@@ -3502,9 +3502,9 @@ Hoy la única forma de dar de alta o cambiar un intermediario es SQL directo o m
 
 ---
 
-## DEUDA 170 — Consola de Tarifa Unificada Shipro-only: 5 variables (markup dueño + markup Shipro global/courier + SMO + Fee + IVA) en una pantalla (registrada 2026-09-07, propuesta Nacho, RECATEGORIZADA 2026-09-07 ESTRATÉGICA — 2 partes: P1 media-alta + P2 alta)
+## DEUDA 170 — Consola de Tarifa Unificada Shipro-only: 5 variables (markup dueño + markup Shipro global/courier + SMO + Fee + IVA) en una pantalla (registrada 2026-09-07, propuesta Nacho, RECATEGORIZADA 2026-09-07 ESTRATÉGICA — 2 partes: P1 media-alta + P2 alta; P1 EN PROGRESO 2026-09-08 vía Camino 2)
 
-**Status:** REGISTRADA + SPLIT en 2 partes con prioridades distintas (recategorización Nacho 2026-09-07 — la versión inicial la clasificó como "UX/refactor prioridad baja"; **ese framing era incorrecto**: la tarifa es la palanca comercial más sensible del negocio). Absorbe [[DEUDA 155]] (UI del markup del dueño/intermediario) — cerrada por la Parte 1.
+**Status:** REGISTRADA + SPLIT en 2 partes con prioridades distintas (recategorización Nacho 2026-09-07 — la versión inicial la clasificó como "UX/refactor prioridad baja"; **ese framing era incorrecto**: la tarifa es la palanca comercial más sensible del negocio). Absorbe [[DEUDA 155]] (UI del markup del dueño/intermediario) — cerrada por la Parte 1. **Parte 1 EN PROGRESO 2026-09-08 vía Camino 2** (migración al patrón MarkupCourier con modelo per-courier keyed por dispatching — ver "Avance Camino 2" al final de Parte 1).
 
 **Contexto — la tarifa publicada se arma con 5 variables, hoy DESPERDIGADAS:**
 La fórmula (verificada, canónica) es:
@@ -3534,6 +3534,29 @@ Ejemplo canónico Andreani + Mocis (verificado en localhost): `10.000 + 10% Moci
 **Alcance mínimo:** un CRUD Shipro-only del markup de `CourierIntermediario` — listar los intermediarios existentes con su porcentaje, editar el porcentaje, dar de alta uno nuevo. Puede vivir standalone (pantalla temporal) hasta que la Parte 2 la absorba en la consola unificada, o hacerse directamente dentro de `/admin-markup-courier` como sección adicional (ver Parte 2 propuesta a).
 
 **Cierra:** [[DEUDA 155]] al ejecutarse.
+
+**Avance Camino 2 — 2026-09-08 (LOCAL, pendiente deploy):**
+
+Contexto de la decisión Camino 2: el primer intento de Parte 1 (commit `c453d03` local) construyó la pantalla `/admin-markup-dueno` apuntando al modelo VIEJO `CourierIntermediario` (owner-keyed via `propietarioCourierId`). Verificación empírica reveló un desajuste semántico crítico:
+- **El resultado "backwards" reportado por Nacho** (2 pruebas en localhost): Andreani con markup 28%/Mocis 0% → precio Andreani $13.091; Andreani 0%/Mocis 28% → precio Andreani $16.173. El precio de Andreani subió al bajar SU markup — imposible bajo un modelo consistente.
+- **Diagnóstico:** el motor (`resolvers-tarifa.ts:220`) lee `CourierIntermediario` por `propietarioCourierId` (owner de la credencial usada). Andreani despacha con credenciales prestadas por Mocis → el motor lee la fila de Mocis, no la de Andreani. Editar la fila "Andreani" en la UI escribía una row que el motor NUNCA consultaba para despachos de Andreani → **perilla desconectada**. El cambio de precio observado se debía a que Nacho también movió la fila Mocis (la que sí consultaba el motor).
+- **Modelo Nacho locked:** el markup del intermediario es **POR COURIER QUE DESPACHA** — "Andreani cuesta +28% porque sus credenciales son de un tercero; 0% si son de Shipro". Configurable per-courier a mano. NO se calcula desde el owner de la credencial. Semántica más simple, alineada con la mental model del operador.
+
+**Piezas HECHAS local 2026-09-08:**
+
+- **Pieza 1 — modelo nuevo `MarkupIntermediarioCourier` (commit `8e2f447`, HECHA local).** Migración aditiva pura (`CREATE TABLE` + FK + `@@index([courierId, activo])`; cero DROP/ALTER). Modelo hermano de `MarkupCourier`: per-courier + vigencias, `valorPorcentaje Decimal(12,4)`, **sin field `modo`** (a diferencia de MarkupCourier — el intermediario no tiene un valor global del cual heredar, cada courier tiene su propio % o 0). Espejo estructural de `SmoCourier`. La tabla vieja `CourierIntermediario` (owner-keyed) sigue viva y sigue siendo la fuente que lee el motor — se dropea en la última pieza (jubilar).
+
+- **Pieza pantalla — retarget de `/admin-markup-dueno` al modelo nuevo (commit `8fcd6db`, HECHA local, verificada).** La pantalla (que ya existía apuntando al modelo viejo) fue **adaptada in-place** para escribir en `MarkupIntermediarioCourier` keyed por `courierId` (dispatching courier), mirror de `/admin-markup-courier` (patrón per-courier + vigencia-swap "cerrar+crear"). Ya NO escribe `CourierIntermediario` (grep verificado). Alineación clave: el **write-key (courierId)** coincide con lo que el motor va a leer en la pieza siguiente → cero repetición del desajuste de la Pieza A original. Verificada local: pantalla lista todos los couriers activos, tabla nueva arranca vacía, guardar crea vigencia activa, editar cierra la previa + crea nueva. UI copy actualizada con el semantic correcto + advertencia amber "el motor lee la tabla vieja hasta Pieza motor — editar acá NO cambia precios en vivo todavía". tsc = 0.
+
+**Decisión — arranque limpio (Nacho 2026-09-08):** la tabla nueva `MarkupIntermediarioCourier` arranca **VACÍA**. NO se migran datos desde `CourierIntermediario` (parte eran pruebas confusas del proceso de descubrimiento del desajuste; parte era el seed `Mocis→Andreani 10%` que refleja una semántica owner-keyed que no aplica al modelo nuevo). Nacho carga los markups reales desde la pantalla per-courier (Andreani = X% si sus creds son prestadas, Mocis = 0%, OCA = 0%, etc.). Ya cargados en LOCAL; pendiente cargar en PROD post-deploy de la pantalla y ANTES de deployar la pieza del motor.
+
+**Piezas SIGUIENTES (ordenadas):**
+
+1. **Pieza motor (MONEY-CRÍTICA, próxima).** Rewire de `resolverIntermediarioMarkupPorcentaje` (`lib/utils/resolvers-tarifa.ts:220-224`): cambiar el `findFirst({ propietarioCourierId })` sobre el modelo viejo por `findFirst({ courierId })` sobre `MarkupIntermediarioCourier`. Case COURIER pasa a leer del modelo nuevo. Rama B (`usaCredencialesPropias=true`) + case SHIPRO + case CLIENTE preservados byte-idénticos (return null antes de cualquier query). Verificación numérica obligatoria: snapshot de cotizaciones ANTES/DESPUÉS para 5 pares representativos (Andreani/Mocis/OCA/Intralog/Correo × cliente demo). Delta esperado ≠ 0 solo donde la tabla nueva tenga un valor distinto al que la tabla vieja devolvía (via el owner). Deploy secuencia: **pantalla + tabla nueva en prod → Nacho carga valores → motor rewire → verificación snapshot**. Ver [[DEUDA 170]] recon del 2026-09-08 para el plan piece-by-piece detallado.
+2. **Pieza conciliación + audit.** El call site en `app/api/conciliacion/route.ts:319` pasa por el mismo resolver → automáticamente picks up el cambio. El campo audit-trail `FinanzasEnvio.markupIntermediarioPorcentajeAplicado` es un DERIVED value (baseConIntermediario − secoNeto) → source-agnostic, sigue funcionando byte-idéntico. Cero cambios explícitos necesarios; solo verificar que la reconciliación de un envío nuevo post-swap no drift-ea contra su cotización.
+3. **Pieza jubilar.** `DROP TABLE CourierIntermediario` + back-relation en Courier + limpieza de la row del seed (`prisma/seed.ts:132-149`). Solo cuando `grep -rn "courierIntermediario" --include="*.ts"` = 0 hits post-Pieza-motor. Migration destructiva pero aislada (nadie escribe ni lee ya).
+
+**Coherencia motor↔UI (garantía de construcción):** la UI ya escribe por `courierId` (dispatching). El motor leerá por `courierId` (dispatching). Match por construcción — **no se puede repetir el bug de la Pieza A original** que tenía UI y motor divergentes en la interpretación semántica de la key.
 
 ---
 

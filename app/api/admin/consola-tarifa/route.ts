@@ -1,11 +1,19 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { IVA_AR_MULTIPLIER_NUM } from "@/lib/constants/iva";
 
-// DEUDA 170 Parte 2 Pieza 1 (2026-09-08, elevada 2026-09-08): GET consolidado
-// de la Consola de Tarifa. Devuelve, per courier activo, las 3 variables
-// per-courier vigentes de la cascada de precio + su HISTORIAL reciente (top 5)
-// para el accordion inline. Además incluye el `globalActivo` del markup Shipro
-// (hint del modo HEREDA).
+// DEUDA 170 Parte 2 Piezas 1+2+3+4 (2026-09-08): GET consolidado de la Consola
+// de Tarifa. Devuelve las 5 variables de la cascada de precio en un solo
+// round-trip:
+//
+//   [1] Por courier (tabla): las 3 variables per-courier vigentes + historial
+//       top-5 (Markup del DUEÑO, Markup de SHIPRO, SMO).
+//   [2] Global: Markup SHIPRO GLOBAL vigente + historial top-10 (el valor
+//       que siguen los couriers en modo HEREDA).
+//   [3] Per empresa: Fee (OperacionFee) vigente por empresa activa. Vista
+//       compacta para el caso común; la pantalla /admin-fee mantiene el
+//       flow avanzado (mass-adjust + promos).
+//   [4] Constante: IVA (multiplier, literal) — display-only.
 //
 // Variables por courier:
 //   - Markup del DUEÑO (MarkupIntermediarioCourier.valorPorcentaje)
@@ -31,6 +39,7 @@ import prisma from "@/lib/prisma";
 // GATE: admin_shipro.
 
 const HISTORIAL_TAKE = 5;
+const HISTORIAL_GLOBAL_TAKE = 10;
 
 function esVigenciaActiva(row: { activo: boolean; vigenciaDesde: Date; vigenciaHasta: Date | null }) {
   const ahora = new Date();
@@ -71,20 +80,28 @@ export async function GET(request: Request) {
   }
 
   try {
-    // Batch paralelo. Los 3 findMany fetchean ALL vigencias (active+closed),
-    // ordered desc — cero N+1. La reducción in-memory extrae la vigente y
-    // el historial top-5 por courier. Volumen minúsculo (6 couriers × 3 vars ×
-    // ~5 vigencias = ~90 rows max) — trivial en overhead.
-    const [couriers, globalActivo, allDueno, allShipro, allSmo] = await Promise.all([
+    // Batch paralelo. Los findMany per-courier fetchean ALL vigencias
+    // (active+closed) ordered desc — cero N+1. Global markup Shipro trae
+    // historial top-10 (el más relevante de mostrar completo). Per-empresa
+    // Fee trae solo la vigente por empresa (el flow completo con historial
+    // + mass-adjust sigue viviendo en /admin-fee).
+    const [
+      couriers,
+      allGlobal,
+      allDueno,
+      allShipro,
+      allSmo,
+      empresas,
+      feesActivos,
+    ] = await Promise.all([
       prisma.courier.findMany({
         where: { activo: true },
         orderBy: { nombre: "asc" },
         select: { id: true, nombre: true },
       }),
-      prisma.markupShiproVigencia.findFirst({
-        where: { activo: true },
+      prisma.markupShiproVigencia.findMany({
         orderBy: { vigenciaDesde: "desc" },
-        select: { id: true, valorPorcentaje: true, vigenciaDesde: true },
+        take: HISTORIAL_GLOBAL_TAKE,
       }),
       prisma.markupIntermediarioCourier.findMany({
         orderBy: { vigenciaDesde: "desc" },
@@ -94,6 +111,15 @@ export async function GET(request: Request) {
       }),
       prisma.smoCourier.findMany({
         orderBy: { vigenciaDesde: "desc" },
+      }),
+      prisma.empresa.findMany({
+        where: { activo: true },
+        orderBy: { nombre: "asc" },
+        select: { id: true, nombre: true, cuit: true },
+      }),
+      prisma.operacionFee.findMany({
+        where: { activo: true },
+        orderBy: { vigenteDesde: "desc" },
       }),
     ]);
 
@@ -113,7 +139,40 @@ export async function GET(request: Request) {
       },
     }));
 
-    return NextResponse.json({ filas, globalActivo });
+    // Global markup Shipro: la activa + el historial top-N. `globalActivo`
+    // preserva el shape que la Pieza 1 ya consumía (backward compat de la UI).
+    const globalActivo =
+      allGlobal.find((r) => esVigenciaActiva(r)) ?? null;
+
+    // Per-empresa Fee: 1 row por empresa activa. Si la empresa no tiene Fee
+    // configurado, `fee` viene null (aparece en la UI como "sin configurar" +
+    // link para setear via /admin-fee). Enforce single active vigencia per
+    // empresa (la primera desc gana) — mismo criterio que el resolver del
+    // motor lee en calcularFeeOperacion.
+    const feePorEmpresa = new Map<number, (typeof feesActivos)[number]>();
+    for (const f of feesActivos) {
+      if (!feePorEmpresa.has(f.empresaId)) feePorEmpresa.set(f.empresaId, f);
+    }
+    const fees = empresas.map((e) => ({
+      empresa: e,
+      fee: feePorEmpresa.get(e.id) ?? null,
+    }));
+
+    // IVA: constante en código (lib/constants/iva.ts). Display-only en la
+    // consola — la eventual promoción a MODELO editable (IvaVigencia) es
+    // sub-pieza futura, no en scope hoy.
+    const iva = {
+      multiplier: IVA_AR_MULTIPLIER_NUM,
+      porcentaje: (IVA_AR_MULTIPLIER_NUM - 1) * 100, // 21 (%)
+    };
+
+    return NextResponse.json({
+      filas,
+      globalActivo,
+      globalHistorial: allGlobal,
+      fees,
+      iva,
+    });
   } catch (error) {
     console.error("Error cargando consola de tarifa:", error);
     return NextResponse.json({ error: "Error interno" }, { status: 500 });

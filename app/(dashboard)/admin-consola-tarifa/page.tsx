@@ -43,7 +43,7 @@
 //
 // GATE: admin_shipro.
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Fragment } from "react";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
 import {
@@ -1503,8 +1503,8 @@ export default function ConsolaTarifaPage() {
                   {filas.map((f) => {
                     const abierto = !!expandido[f.courier.id];
                     return (
-                      <>
-                        <tr key={f.courier.id} className="hover:bg-slate-50/40">
+                      <Fragment key={f.courier.id}>
+                        <tr className="hover:bg-slate-50/40">
                           <td className="px-6 py-4 align-top">
                             <div className="flex items-start gap-2">
                               <button
@@ -1613,7 +1613,7 @@ export default function ConsolaTarifaPage() {
                             </td>
                           </tr>
                         )}
-                      </>
+                      </Fragment>
                     );
                   })}
                 </tbody>

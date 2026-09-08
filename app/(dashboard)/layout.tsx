@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { Sora } from "next/font/google";
 import Link from "next/link";
-import { Inbox, Tags, Package, LayoutDashboard, Truck, ShieldAlert, Users, CreditCard, ArrowRightLeft, Activity, LogOut, Building2, Calculator, Landmark, Scale, FileSpreadsheet, Settings2, Settings, ScrollText, Percent, Shield, Receipt, Plug, Handshake } from 'lucide-react';
+import { Inbox, Tags, Package, LayoutDashboard, Truck, ShieldAlert, Users, CreditCard, ArrowRightLeft, Activity, LogOut, Building2, Calculator, Landmark, Scale, FileSpreadsheet, Settings2, Settings, ScrollText, Percent, Shield, Receipt, Plug, Handshake, Sliders } from 'lucide-react';
 import { useSession, signOut } from "next-auth/react";
 import CotizadorModal from '@/components/CotizadorModal';
 import "../globals.css";
@@ -158,6 +158,11 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
                   {/* NUEVO BOTÓN: ABM COURIERS MAESTRO */}
                   <Link href="/admin-couriers" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-violet-50 hover:text-violet-800 rounded-lg font-medium text-sm transition-all mt-2 bg-violet-50/50 border border-violet-100">
                     <Settings2 className="w-5 h-5 text-violet-600" /><span className="font-bold text-violet-800">Gestión de Couriers</span>
+                  </Link>
+
+                  {/* DEUDA 170 Parte 2 Pieza 1 (2026-09-08): Consola de Tarifa — vista unificada per-courier (markup dueño + Shipro + SMO). */}
+                  <Link href="/admin-consola-tarifa" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-slate-100 hover:text-slate-800 rounded-lg font-medium text-sm transition-all mt-2 bg-slate-50 border border-slate-200">
+                    <Sliders className="w-5 h-5 text-slate-700" /><span className="font-bold text-slate-800">Consola de Tarifa</span>
                   </Link>
 
                   {/* FASE 2 sub 2a: parámetros de tarifa (markup Shipro global con vigencias). */}

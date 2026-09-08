@@ -152,29 +152,35 @@ export async function resolverSmoNeto(
 }
 
 /**
- * Resuelve el % del markup del intermediario (dueño de credenciales), Rama A.
+ * Resuelve el % del markup del intermediario, Rama A.
  *
- * REGLA (Nacho, 2026-08-03, ver DISENO-MODELO-DATOS-CONFIG-VARIABLES.md §5.1
- * + DISENO-PROPIEDAD-CREDENCIALES.md):
- *   - Rama B (usaCredencialesPropias=true) → null: sin cascada de intermediario.
- *   - propietarioTipo === "SHIPRO"  → null: Shipro es dueño, no hay markup
- *     de intermediario (no es "tercero prestando"; Shipro se cobra a sí misma
- *     vía el markup Shipro global).
- *   - propietarioTipo === "COURIER" → owner-keyed: activo/vigente en
- *     CourierIntermediario donde propietarioCourierId === el dueño de la
- *     credencial. Si propietarioCourierId es null pese al tipo COURIER
- *     (inconsistencia), warn + null. Sin fila para ese dueño → null.
+ * REGLA (Nacho, 2026-09-08 — DEUDA 170 Pieza motor, modelo per-COURIER-que-despacha):
+ *   - Rama B (usaCredencialesPropias=true) → null: sin cascada de intermediario
+ *     (el cliente pone sus propias credenciales, no hay intermediario prestando).
+ *   - propietarioTipo === "SHIPRO"  → null: Shipro es dueña de las credenciales,
+ *     no hay intermediario cobrando (Shipro se cobra a sí misma vía el markup
+ *     Shipro global, no vía intermediario).
  *   - propietarioTipo === "CLIENTE" → null: defensivo (CLIENTE implica Rama B
  *     por construcción; si llegó acá con usaCredencialesPropias=false hay
  *     inconsistencia — warn).
- *   - propietarioTipo === null (LEGACY antes de FASE 2 pieza 1) → FALLBACK
- *     al lookup EJECUTOR-keyed histórico (CourierIntermediario.courierId ===
- *     courierEjecutorId). Preserva números de cotización pre-migración; la
- *     creación de envío YA bloquea estos casos con BLOQUEADO_CREDENCIAL
- *     (commit c85269d), así que este fallback sólo aplica al browse/quote.
+ *   - propietarioTipo === "COURIER" (Rama A + creds de tercero) o null (legacy
+ *     sin propietario seteado) → **PER-DISPATCHER LOOKUP**: activo/vigente en
+ *     `MarkupIntermediarioCourier` donde `courierId === courierEjecutorId`. Si
+ *     no hay row para ese courier → null (equivalente a "sin intermediario
+ *     configurado" → factor 1 en la cascada). Valor 0 explícito también da null
+ *     efectivo en la cascada (factor 1).
  *
- * `courierIntermediario.markupPorcentaje` en schema es Float @default(0.0);
- * lo devolvemos como number sin transformar.
+ * MIGRACIÓN 2026-09-08 (DEUDA 170 Pieza motor): antes esta función leía de
+ * `CourierIntermediario` keyed por `propietarioCourierId` (owner-keyed). El
+ * modelo owner-keyed no matcheaba la mental model del operador ("Andreani
+ * cuesta +X%") y producía resultados contra-intuitivos (editar la fila
+ * Andreani no afectaba a Andreani porque el motor leía la row del dueño). El
+ * modelo per-dispatcher es coherente con la UI de `/admin-markup-dueno` y con
+ * cómo Nacho piensa el pricing: valor por courier que despacha, 0 si sus
+ * creds son de Shipro.
+ *
+ * `markupIntermediarioCourier.valorPorcentaje` en schema es Decimal(12,4);
+ * lo devolvemos como number (Number(Decimal) es la conversión estándar).
  */
 export async function resolverIntermediarioMarkupPorcentaje(
   credencial: {
@@ -183,9 +189,9 @@ export async function resolverIntermediarioMarkupPorcentaje(
     propietarioCourierId: number | null;
   },
   courierEjecutorId: number,
-  client: { courierIntermediario: typeof prisma.courierIntermediario } = prisma
+  client: { markupIntermediarioCourier: typeof prisma.markupIntermediarioCourier } = prisma
 ): Promise<number | null> {
-  // Rama B: sin intermediario en la cascada.
+  // Rama B: sin intermediario en la cascada (early return ANTES del switch).
   if (credencial.usaCredencialesPropias === true) return null;
 
   const ahora = new Date();
@@ -210,33 +216,21 @@ export async function resolverIntermediarioMarkupPorcentaje(
       );
       return null;
 
-    case "COURIER": {
-      if (credencial.propietarioCourierId == null) {
-        console.warn(
-          "[resolverIntermediarioMarkupPorcentaje] Credencial con propietarioTipo=COURIER pero propietarioCourierId=null — inconsistencia de datos. Devolviendo null."
-        );
-        return null;
-      }
-      const inter = await client.courierIntermediario.findFirst({
-        where: { propietarioCourierId: credencial.propietarioCourierId, ...vigenciaFilter },
-        orderBy: { vigenciaDesde: "desc" },
-      });
-      return inter ? Number(inter.markupPorcentaje) : null;
-    }
-
+    case "COURIER":
     case null:
     default: {
-      // LEGACY: credenciales pre-FASE-2-pieza-1 sin propietario seteado.
-      // Fallback ejecutor-keyed histórico (mismo lookup que el motor
-      // pre-cambio) para no cambiar los números de cotización de configs
-      // viejas. La creación de envío ya bloquea estos casos con
-      // BLOQUEADO_CREDENCIAL (sub-piece 3, commit c85269d), así que este
-      // fallback sólo aplica al camino de browse/quote.
-      const inter = await client.courierIntermediario.findFirst({
+      // PER-DISPATCHER LOOKUP (DEUDA 170 Pieza motor, 2026-09-08).
+      // Cases COURIER y LEGACY (propietarioTipo=null) convergen en el mismo
+      // query: leer `MarkupIntermediarioCourier` por el courier que despacha
+      // (courierEjecutorId). Cero dependencia de `propietarioCourierId` en
+      // el motor — ese field sigue existiendo en CredencialCourier como
+      // referencia audit (quién es el dueño de la credencial) pero NO
+      // participa del cálculo de plata.
+      const inter = await client.markupIntermediarioCourier.findFirst({
         where: { courierId: courierEjecutorId, ...vigenciaFilter },
         orderBy: { vigenciaDesde: "desc" },
       });
-      return inter ? Number(inter.markupPorcentaje) : null;
+      return inter ? Number(inter.valorPorcentaje) : null;
     }
   }
 }

@@ -312,8 +312,10 @@ export async function POST(request: Request) {
 
           // FASE 2 motor mov 2 (2026-08-03): pivote de las 3 fuentes a los
           // resolvers (mismo camino que cotización + fallback en crear.ts).
-          // Owner-keyed intermediario / SmoCourier vigente / MarkupShiproVigencia
-          // global con override. Ver lib/utils/resolvers-tarifa.ts.
+          // Per-dispatcher intermediario (MarkupIntermediarioCourier, DEUDA 170
+          // Pieza motor 2026-09-08 — antes era owner-keyed en CourierIntermediario) /
+          // SmoCourier vigente / MarkupShiproVigencia global con override.
+          // Ver lib/utils/resolvers-tarifa.ts.
           // La ausencia de deltas espurios entre cotización y conciliación
           // depende de que ambas usen la MISMA fuente — de ahí la pivote acá.
           const intermediarioMarkupPorcentaje = await resolverIntermediarioMarkupPorcentaje(

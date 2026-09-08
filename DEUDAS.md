@@ -4078,3 +4078,42 @@ El endpoint `/v1/agencies` de Paq.ar filtra por `stateId` (provincia), no por CP
 **Origen:** cross-check de Chat B del adapter existente contra la doc oficial de Correo Argentino (via Gemini) el 2026-09-07, antes de tener credenciales para validar en vivo — para llegar preparados al momento en que Correo entregue las credenciales de QA.
 
 ---
+
+## DEUDA 172 — Markup Shipro % vs markup fijo $: el código los aplica JUNTOS, el modelo de negocio es EXCLUYENTE (uno u otro) (registrada 2026-09-08, latente, scope chico-medio, prioridad baja hoy)
+
+**Status:** LATENTE — el desajuste existe en el código pero **no afecta precios hoy** porque el `markupFijo` está en 0 en todas las credenciales/empresas verificadas (sesiones previas confirmaron). Sumar 0 no cambia nada. **Se convierte en bug de facturación en el momento en que alguien cargue un `markupFijo > 0` esperando que REEMPLACE al %.**
+
+**Modelo de negocio (Nacho, 2026-09-08):** el markup Shipro por courier es **UNA de dos cosas** — o un **PORCENTAJE (%)** sobre la base con intermediario, o un **valor FIJO ($)** neto. **NUNCA los dos juntos.** Es exclusivo por naturaleza: si el operador decide poner un fijo de $500, es porque quiere ese fijo y NO un %; y viceversa. La UI de configuración debería impedir cargar ambos.
+
+**Código actual (bug latente):** [lib/cotizador.ts](lib/cotizador.ts) L235-238 en `aplicarMarkup`, Rama A:
+```typescript
+costoConMarkup = baseConIntermediario
+  .mul(new Prisma.Decimal(1).add(new Prisma.Decimal(porcentajeMarkup).div(100)))
+  .add(fijoMarkup);
+```
+Primero multiplica por `(1 + porcentajeMarkup/100)` y **después SUMA `fijoMarkup`**. Los dos se aplican en cascada, no como opciones excluyentes. En Rama B (usaCredencialesPropias) L227-231 solo se suma el fijo (sin %) → esa rama SÍ trata el fijo como el único mecanismo.
+
+**Impacto HOY:** cero. Verificaciones previas confirmaron que `CredencialCourier.markupFijo` está en `0` (o `null`) en todas las credenciales activas de todas las empresas. Sumar 0 al final del cálculo no cambia el `costoConMarkup`. El motor produce precios correctos por accidente — la fórmula está mal pero el multiplicando anula el error.
+
+**Riesgo FUTURO (cuando aparezca un `markupFijo > 0`):**
+1. **Bug silencioso de facturación:** operador carga `markupFijo=$500` en una credencial pensando "cobrale $500 fijo de markup, sin porcentaje", pero pone también `ajusteTarifaPorcentaje` en algún valor por default → el motor cobraría `(baseConIntermediario × (1 + %/100)) + 500` = doble markup en la misma línea. Precio final más alto que el esperado, cliente confundido, discrepancia en facturación.
+2. **Precios inflados en cotización:** si el `%` estaba cargado como "config vigente global" (mediante MarkupCourier HEREDA + MarkupShiproVigencia) y se agrega un fijo pensando en reemplazar, el fijo se SUMA al % heredado → precio también sube inesperadamente.
+3. **Reconciliación:** el snapshot `markupIntermediarioPorcentajeAplicado` es derivado del cascade → captaría el precio inflado (source-agnostic) → no dispararía alerta. El drift solo se detectaría revisando la fórmula.
+
+**Fix propuesto (cuando se active):** en `aplicarMarkup` Rama A, hacer el markup Shipro **excluyente**. Reglas candidatas de precedencia (Nacho decide):
+- **Opción A:** si `markupFijo > 0` → usar SOLO fijo (`costoConMarkup = baseConIntermediario + markupFijo`); si no → usar SOLO % (`costoConMarkup = baseConIntermediario × (1 + %/100)`).
+- **Opción B:** si `%` > 0 → gana el %; si `%` = 0 y `fijo` > 0 → gana el fijo. (Precedencia del %.)
+- **Opción C:** enforcement en la UI + validación en el POST del admin — impedir que ambos se carguen simultáneamente. El motor asume que solo uno viene populado.
+
+Money-crítico → **verificación numérica antes/después** en snapshot obligatoria. Testing: crear una credencial con `markupFijo > 0` + `%` = 0 y otra al revés, cotizar, comparar contra la fórmula esperada. Con el fix, la Rama A del motor pasa a tener 2 branches (fijo XOR %) o consume solo uno de los dos según la regla decidida.
+
+**Relación:**
+- [[DEUDA 170]] (consola de tarifa unificada — la UI ideal impediría cargar ambos, integrando este constraint en el diseño de la Parte 2). Este bug reforzaría el argumento de "la consola debería validar exclusividad en la carga de las 5 variables".
+- [[DEUDA 158]] (renames de audit trail): `markupFijo` está pendiente de rename a `markupFijoShipro` (identificado como entangled con DEUDA 157/consola). Cuando se ejecute ese rename, aprovechar para reevaluar la semántica (fijo vs %) también.
+- [[DEUDA 157]] (markup Shipro por courier — closed, DEUDA 157 vive en `MarkupCourier` con `valorPorcentaje` + `modo HEREDA/PROPIO`). El fijo NO tiene equivalente en `MarkupCourier` — sigue viviendo solo en `CredencialCourier.markupFijo` (per-credencial legacy). Al aliviar este desajuste habría que decidir si el fijo también se promueve a un `MarkupFijoCourier` o queda per-credential.
+
+**Prioridad:** **baja hoy** (fijo=0 en producción, sin impacto real). **Media** cuando el negocio decida usar el fijo (ej. contratos flat-fee, promociones fijas). Se activa recién cuando alguien lo cargue.
+
+**Origen:** hallazgo emergente durante el rewire del resolver del intermediario (DEUDA 170 Pieza motor 2026-09-08) — al revisar la cascada de `aplicarMarkup` para verificar preservación byte-idéntica, Nacho notó que el fijo se sumaba post-%, contradiciendo su modelo mental de "uno u otro". Se registra ahora para no perderlo aunque no requiera acción inmediata.
+
+---

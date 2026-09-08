@@ -1,14 +1,16 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
-// DEUDA 170 Parte 2 Pieza 1 (2026-09-08): GET consolidado de la Consola de
-// Tarifa — devuelve, per courier activo, las 3 variables per-courier de la
-// cascada de precio en una sola respuesta:
+// DEUDA 170 Parte 2 Pieza 1 (2026-09-08, elevada 2026-09-08): GET consolidado
+// de la Consola de Tarifa. Devuelve, per courier activo, las 3 variables
+// per-courier vigentes de la cascada de precio + su HISTORIAL reciente (top 5)
+// para el accordion inline. Además incluye el `globalActivo` del markup Shipro
+// (hint del modo HEREDA).
+//
+// Variables por courier:
 //   - Markup del DUEÑO (MarkupIntermediarioCourier.valorPorcentaje)
 //   - Markup de SHIPRO (MarkupCourier: modo HEREDA/PROPIO + valorPorcentaje)
 //   - SMO (SmoCourier.valorNeto — monto $ neto, no %)
-// Además incluye `globalActivo` del `MarkupShiproVigencia` (para el hint
-// "hereda X%" cuando el modo de Shipro-per-courier es HEREDA).
 //
 // ARQUITECTURA: solo GET (read consolidado). Los SAVES los hace la pantalla
 // via los 3 endpoints existentes: POST /api/admin/markup-dueno,
@@ -21,23 +23,43 @@ import prisma from "@/lib/prisma";
 //
 // AISLAMIENTO DEL MOTOR: cero cambios en el motor de precios. Este endpoint
 // lee los MISMOS modelos que el motor ya lee (via los resolvers
-// resolverMarkupCourierPorcentaje, resolverSmoNeto, resolverIntermediarioMarkupPorcentaje).
-// Editar valores desde la consola cambia precios en la próxima cotización
-// (mismo efecto que editar desde las pantallas atómicas).
+// resolverMarkupCourierPorcentaje, resolverSmoNeto,
+// resolverIntermediarioMarkupPorcentaje). Editar valores desde la consola
+// cambia precios en la próxima cotización (mismo efecto que editar desde las
+// pantallas atómicas — single source of truth).
 //
-// GATE: admin_shipro. Espejo del pattern de las 3 pantallas hermanas.
+// GATE: admin_shipro.
 
-const VIGENCIA_FILTER = () => {
+const HISTORIAL_TAKE = 5;
+
+function esVigenciaActiva(row: { activo: boolean; vigenciaDesde: Date; vigenciaHasta: Date | null }) {
   const ahora = new Date();
-  return {
-    activo: true,
-    vigenciaDesde: { lte: ahora },
-    OR: [
-      { vigenciaHasta: null as Date | null },
-      { vigenciaHasta: { gte: ahora } },
-    ],
-  };
-};
+  return (
+    row.activo &&
+    row.vigenciaDesde <= ahora &&
+    (row.vigenciaHasta === null || row.vigenciaHasta >= ahora)
+  );
+}
+
+// Reduce: para una lista de vigencias ordenadas por vigenciaDesde desc, extrae
+// la ACTIVA (primera que cumple activo + rango) y el HISTORIAL (top N por
+// courier, incluye la activa como primer elemento por convenio de la UI).
+function reducirPorCourier<T extends { courierId: number; activo: boolean; vigenciaDesde: Date; vigenciaHasta: Date | null }>(
+  rows: T[],
+  take: number = HISTORIAL_TAKE
+) {
+  const activas = new Map<number, T>();
+  const historial = new Map<number, T[]>();
+  for (const r of rows) {
+    if (esVigenciaActiva(r) && !activas.has(r.courierId)) {
+      activas.set(r.courierId, r);
+    }
+    const arr = historial.get(r.courierId) ?? [];
+    if (arr.length < take) arr.push(r);
+    historial.set(r.courierId, arr);
+  }
+  return { activas, historial };
+}
 
 export async function GET(request: Request) {
   const rol = request.headers.get("x-rol") || "";
@@ -49,11 +71,11 @@ export async function GET(request: Request) {
   }
 
   try {
-    const filtro = VIGENCIA_FILTER();
-
-    // Batch en paralelo: couriers + global + los 3 conjuntos de vigencias
-    // activas de una sola pasada. Cero N+1.
-    const [couriers, globalActivo, markupsDueno, markupsShipro, smos] = await Promise.all([
+    // Batch paralelo. Los 3 findMany fetchean ALL vigencias (active+closed),
+    // ordered desc — cero N+1. La reducción in-memory extrae la vigente y
+    // el historial top-5 por courier. Volumen minúsculo (6 couriers × 3 vars ×
+    // ~5 vigencias = ~90 rows max) — trivial en overhead.
+    const [couriers, globalActivo, allDueno, allShipro, allSmo] = await Promise.all([
       prisma.courier.findMany({
         where: { activo: true },
         orderBy: { nombre: "asc" },
@@ -65,40 +87,30 @@ export async function GET(request: Request) {
         select: { id: true, valorPorcentaje: true, vigenciaDesde: true },
       }),
       prisma.markupIntermediarioCourier.findMany({
-        where: filtro,
         orderBy: { vigenciaDesde: "desc" },
       }),
       prisma.markupCourier.findMany({
-        where: filtro,
         orderBy: { vigenciaDesde: "desc" },
       }),
       prisma.smoCourier.findMany({
-        where: filtro,
         orderBy: { vigenciaDesde: "desc" },
       }),
     ]);
 
-    // Reducer per courier: primera vigencia activa (findFirst semantics — la
-    // más reciente por vigenciaDesde). Un courier sin fila deja el field null,
-    // que la UI presenta como "sin configurar" (semánticamente = valor 0 en la
-    // cascada del motor).
-    const primeroPorCourier = <T extends { courierId: number }>(rows: T[]) => {
-      const map = new Map<number, T>();
-      for (const r of rows) {
-        if (!map.has(r.courierId)) map.set(r.courierId, r);
-      }
-      return map;
-    };
-
-    const dueno = primeroPorCourier(markupsDueno);
-    const shipro = primeroPorCourier(markupsShipro);
-    const smo = primeroPorCourier(smos);
+    const dueno = reducirPorCourier(allDueno);
+    const shipro = reducirPorCourier(allShipro);
+    const smo = reducirPorCourier(allSmo);
 
     const filas = couriers.map((c) => ({
       courier: c,
-      markupDueno: dueno.get(c.id) ?? null,
-      markupShipro: shipro.get(c.id) ?? null,
-      smo: smo.get(c.id) ?? null,
+      markupDueno: dueno.activas.get(c.id) ?? null,
+      markupShipro: shipro.activas.get(c.id) ?? null,
+      smo: smo.activas.get(c.id) ?? null,
+      historial: {
+        dueno: dueno.historial.get(c.id) ?? [],
+        shipro: shipro.historial.get(c.id) ?? [],
+        smo: smo.historial.get(c.id) ?? [],
+      },
     }));
 
     return NextResponse.json({ filas, globalActivo });

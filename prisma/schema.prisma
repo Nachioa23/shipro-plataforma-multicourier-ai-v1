@@ -301,6 +301,13 @@ model Courier {
   // (Paso 2 + 3) al override per-credencial CredencialCourier.ajusteTarifaPorcentaje.
   markupsCourier MarkupCourier[]
 
+  // DEUDA 170 Pieza 1 (2026-09-08): historial de markup del INTERMEDIARIO/DUEÑO
+  // por courier (MarkupIntermediarioCourier). Modelo Nacho: el markup vive en
+  // el courier que despacha (courierId), es 0 cuando Shipro es dueño de las
+  // creds. Reemplazará al modelo legacy CourierIntermediario (owner-keyed) —
+  // Pieza 3 rewire del motor, Pieza 2 migra datos, Pieza 6 dropea el viejo.
+  markupsIntermediarioCourier MarkupIntermediarioCourier[]
+
   // DEUDA 19: audit log de cambios sensibles per-courier (credencialesJson, tipoCuenta, etc).
   auditoriasConfiguracion AuditoriaConfiguracion[]
 }
@@ -1696,6 +1703,42 @@ model MarkupCourier {
   // HEREDA = sigue el global MarkupShiproVigencia en vivo; PROPIO = usa valorPorcentaje fijo.
   // PROPIO permite 0% (apagado intencional). DEUDA 157 markup unificado Pieza 1 (2026-09-01).
   modo MarkupCourierModo @default(HEREDA)
+
+  activo        Boolean   @default(true)
+  vigenciaDesde DateTime  @default(now())
+  vigenciaHasta DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([courierId, activo])
+}
+
+/// DEUDA 170 Pieza 1 (2026-09-08): Markup del INTERMEDIARIO/dueño de credenciales,
+/// POR COURIER que despacha. Modelo Nacho: el markup vive en el courier ejecutor
+/// (courierId), es 0 cuando Shipro es dueño de las credenciales (sin cascada de
+/// intermediario). Hermano de MarkupCourier (markup Shipro por courier) — mismo
+/// patrón per-courier + vigencias, distinto significado semántico.
+///
+/// SIN modo HEREDA/PROPIO: a diferencia de MarkupCourier, el markup del intermediario
+/// NO tiene un valor global del cual heredar (no existe MarkupIntermediarioVigencia).
+/// Cada courier tiene su propio %, o 0 si sus creds son de Shipro. Espejo del
+/// patrón de SmoCourier (per-courier + vigencias, sin modo).
+///
+/// REEMPLAZARÁ al modelo legacy CourierIntermediario (owner-keyed, cascadeando via
+/// propietarioCourierId) — la migración de datos vive en Pieza 2 y el rewire del
+/// motor (resolver + call sites) en Pieza 3. Este modelo NACE AISLADO: ningún
+/// path lo lee todavía (mismo criterio que SmoCourier / MarkupCourier al nacer).
+///
+/// AISLAMIENTO DEL MOTOR: hoy el resolver sigue leyendo CourierIntermediario
+/// (owner-keyed). El swap ocurre en Pieza 3. Editar/poblar esta tabla NO cambia
+/// precios hasta que Pieza 3 conecte el reader.
+model MarkupIntermediarioCourier {
+  id        Int     @id @default(autoincrement())
+  courierId Int
+  courier   Courier @relation(fields: [courierId], references: [id], onDelete: Cascade)
+
+  valorPorcentaje Decimal @db.Decimal(12, 4)
 
   activo        Boolean   @default(true)
   vigenciaDesde DateTime  @default(now())

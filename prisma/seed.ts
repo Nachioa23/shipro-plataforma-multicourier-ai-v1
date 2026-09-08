@@ -82,7 +82,7 @@ async function main() {
   }
 
   // === FASE 2 sub 1 (2026-07-31): SmoCourier — historial de SMO por courier ===
-  // Espejo del patrón de vigencias de CourierIntermediario. Nada lo lee todavía
+  // Patrón de vigencias per-courier (MarkupCourier/SmoCourier). Nada lo lee todavía
   // para pricing (el motor se conecta en una sub-piece posterior); se siembra
   // ahora para que el histórico arranque desde el bootstrap. Valor NETO (SIN IVA).
   // Política vigente (confirmada por Nacho, 2026-08-01): SMO parejo por courier
@@ -126,28 +126,11 @@ async function main() {
     });
   }
 
-  // === DEUDA 107 + FASE 2 pieza 1: intermediario que presta credenciales (Mocis presta Andreani) ===
-  // Valores SIN IVA (criterio "todo neto, IVA al final", DEUDA 73). El seguro fijo es dato de
-  // conciliación (lo que Mocis factura a Shipro), NO entra en la tarifa publicada — esa usa el SMO.
-  // FASE 2 pieza 1: nombreIntermediario (String) fue reemplazado por propietarioCourierId (FK a Courier).
-  const andreani = await prisma.courier.findUnique({ where: { nombre: "Andreani" } });
-  const mocis    = await prisma.courier.findUnique({ where: { nombre: "Moci's" } });
-  if (andreani && mocis) {
-    const yaExiste = await prisma.courierIntermediario.findFirst({
-      where: { courierId: andreani.id, propietarioCourierId: mocis.id, activo: true },
-    });
-    const datos = {
-      markupPorcentaje: 10.0,
-      notas: "Mocis presta credenciales de Andreani. Markup 10% sobre tarifa.",
-    };
-    if (yaExiste) {
-      await prisma.courierIntermediario.update({ where: { id: yaExiste.id }, data: datos });
-    } else {
-      await prisma.courierIntermediario.create({
-        data: { courierId: andreani.id, propietarioCourierId: mocis.id, activo: true, ...datos },
-      });
-    }
-  }
+  // DEUDA 170 Pieza jubilar (2026-09-08): el seed del intermediario Andreani→Mocis
+  // (`CourierIntermediario`, owner-keyed) fue removido junto con el drop del
+  // modelo viejo. El markup del intermediario ahora vive en `MarkupIntermediarioCourier`
+  // (per-courier que despacha) y se carga a mano por Shipro desde `/admin-markup-dueno`
+  // (arranque limpio, sin seed — decisión Nacho 2026-09-08).
 
   // DEUDA 123 mov 3 (2026-08-03): el bloque updateMany DEUDA 73 (IVA policy)
   // que seteaba tarifaIncluyeIva=false por courier fue eliminado. La bandera

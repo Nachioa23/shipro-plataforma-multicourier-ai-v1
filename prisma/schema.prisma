@@ -221,7 +221,7 @@ model Courier {
 
   // DEUDA 73 (SMO): Seguro Mínimo de Shipro. Precio FIJO que Shipro le cobra al cliente por courier
   // (ej. $121,50 para Andreani). Distinto del markup % del intermediario
-  // (CourierIntermediario.markupPorcentaje, ej. Mocis 10%). La diferencia es el margen.
+  // (MarkupIntermediarioCourier.valorPorcentaje, ej. Andreani 10%). La diferencia es el margen.
   // Interruptor apagado por defecto: se activa por courier cuando Shipro decide cobrarlo.
   smoActivo                Boolean @default(false)
   smoPrecioAlClienteConIva Decimal @default(0) @db.Decimal(12, 2)
@@ -279,16 +279,10 @@ model Courier {
   // DEUDA 32+37: servicios comerciales que este courier ofrece al cliente final.
   servicios ServicioCourier[]
 
-  // DEUDA 107: cadena de intermediarios asociados a este courier como EJECUTOR
-  // (courierId apunta acá). Se conserva por compatibilidad con el include actual
-  // del motor de plata (cotizador.ts); Forma 2 (owner-axis) usa la relación de
-  // abajo.
-  intermediarios CourierIntermediario[]
-
-  // FASE 2 pieza 1 (2026-07-30): back-relations del rol PROPIETARIO — este
-  // courier es el DUEÑO de credenciales o de rows de markup. Sub-piece 4 lee por acá.
+  // FASE 2 pieza 1 (2026-07-30): back-relation del rol PROPIETARIO — este
+  // courier es el DUEÑO de credenciales prestadas a clientes (via
+  // CredencialCourier.propietarioTipo=COURIER + propietarioCourierId).
   credencialesComoPropietario     CredencialCourier[]     @relation("CredencialPropietario")
-  intermediariosComoPropietario   CourierIntermediario[]  @relation("IntermediarioPropietario")
 
   // FASE 2 sub 1 (config variables tarifa, 2026-07-31): historial de SMO por
   // courier (SmoCourier). Migra la fuente de verdad desde los campos legacy
@@ -301,60 +295,15 @@ model Courier {
   // (Paso 2 + 3) al override per-credencial CredencialCourier.ajusteTarifaPorcentaje.
   markupsCourier MarkupCourier[]
 
-  // DEUDA 170 Pieza 1 (2026-09-08): historial de markup del INTERMEDIARIO/DUEÑO
-  // por courier (MarkupIntermediarioCourier). Modelo Nacho: el markup vive en
-  // el courier que despacha (courierId), es 0 cuando Shipro es dueño de las
-  // creds. Reemplazará al modelo legacy CourierIntermediario (owner-keyed) —
-  // Pieza 3 rewire del motor, Pieza 2 migra datos, Pieza 6 dropea el viejo.
+  // DEUDA 170 (2026-09-08): historial de markup del INTERMEDIARIO/DUEÑO por
+  // courier (MarkupIntermediarioCourier). Modelo Nacho: el markup vive en el
+  // courier que despacha (courierId), es 0 cuando Shipro es dueño de las creds.
+  // Reemplazó al viejo CourierIntermediario (owner-keyed) — motor rewireado
+  // 2026-09-08, tabla vieja droppeada en la pieza jubilar.
   markupsIntermediarioCourier MarkupIntermediarioCourier[]
 
   // DEUDA 19: audit log de cambios sensibles per-courier (credencialesJson, tipoCuenta, etc).
   auditoriasConfiguracion AuditoriaConfiguracion[]
-}
-
-// ==========================================
-// DEUDA 107: CourierIntermediario
-// Quién presta las credenciales de un courier (ej. Mocis presta Andreani).
-// Modelo A solo — cuando usaCredencialesPropias=false. Vigencias permiten
-// intercambiar el intermediario (Mocis→Intralog) sin perder histórico.
-// ==========================================
-model CourierIntermediario {
-  id        Int     @id @default(autoincrement())
-
-  // Legacy DEUDA 107: courier EJECUTOR (el courier cuyas credenciales se están
-  // prestando; ej. Andreani cuando Mocis lo presta). Se conserva para no romper
-  // el include actual en cotizador.ts (motor de plata en vivo). Sub-piece 4
-  // podrá dejar de leer por este eje una vez que la lectura pivotee al OWNER.
-  courierId Int
-  courier   Courier @relation(fields: [courierId], references: [id], onDelete: Cascade)
-
-  // FASE 2 pieza 1 (2026-07-30): Forma 2 — dueño de las credenciales que se
-  // prestan (ej. Mocis en el par Mocis→Andreani). El markup del row se cascadeará
-  // como el markup del DUEÑO. Reemplaza al viejo nombreIntermediario (String)
-  // por una FK real a Courier; el string legacy nunca fue leído por lógica,
-  // sólo escrito por el seed (recon 2026-07-30).
-  propietarioCourierId  Int
-  propietarioCourier    Courier @relation("IntermediarioPropietario", fields: [propietarioCourierId], references: [id], onDelete: Cascade)
-
-  // Markup que el DUEÑO cobra por prestar credenciales, sobre la tarifa cruda del ejecutor.
-  // DEUDA 160 (2026-08-31): dropeados seguroFijoIntermediarioConIva + tarifaIncluyeIvaIntermediario
-  // (fantasmas — el intermediario solo cobra %; el componente fijo es N/A permanente, confirmado Nacho).
-  markupPorcentaje Float @default(0.0) // ej. 10.0 = +10%
-
-  // Vigencias: permiten cambiar de intermediario (Mocis→Intralog) sin perder histórico.
-  activo        Boolean   @default(true)
-  vigenciaDesde DateTime  @default(now())
-  vigenciaHasta DateTime?
-
-  notas String? // ej. "Andreani cobra $10+IVA de seguro; Mocis factura $90+IVA"
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Índice legacy — todavía usado por cotizador.ts:279 include.
-  @@index([courierId, activo])
-  // FASE 2 pieza 1: Forma 2 — lookup por DUEÑO (el motor lo consumirá en sub-piece 4).
-  @@index([propietarioCourierId, activo])
 }
 
 // ==========================================
@@ -398,8 +347,10 @@ model ServicioCourier {
 //   SHIPRO   = Rama A: las credenciales son de Shipro. No hay markup de dueño
 //              (sólo la cascada Shipro + SMO + Fee).
 //   COURIER  = Rama A: las credenciales son de OTRO courier integrado (ej. Mocis
-//              presta Andreani). El markup del dueño (CourierIntermediario) se
-//              cascadeará ANTES del markup Shipro. Requiere propietarioCourierId.
+//              presta Andreani). El markup del intermediario, per-courier que
+//              despacha (MarkupIntermediarioCourier), se cascadea ANTES del markup
+//              Shipro. Requiere propietarioCourierId como referencia de audit
+//              (quién es el dueño de esta credencial en particular).
 // ==========================================
 enum PropietarioTipo {
   CLIENTE
@@ -486,9 +437,11 @@ model CredencialCourier {
   //
   //   propietarioTipo=CLIENTE  ↔ usaCredencialesPropias=true  (Rama B)
   //   propietarioTipo=SHIPRO   ↔ usaCredencialesPropias=false, sin markup dueño
-  //   propietarioTipo=COURIER  ↔ usaCredencialesPropias=false, propietarioCourierId REQUERIDO
-  //                              (el motor de plata en sub-piece 4 leerá el markup
-  //                              del dueño desde CourierIntermediario keyed by owner)
+  //   propietarioTipo=COURIER  ↔ usaCredencialesPropias=false, propietarioCourierId
+  //                              como referencia de audit (identifica al dueño);
+  //                              el motor lee el markup desde MarkupIntermediarioCourier
+  //                              por courier que despacha, NO usa propietarioCourierId
+  //                              como lookup key (DEUDA 170 Pieza motor, 2026-09-08).
   //
   // propietarioCourierId sólo tiene sentido cuando propietarioTipo=COURIER; en los
   // otros dos casos DEBE ser NULL. La coherencia se enforce en aplicación (schema
@@ -1725,14 +1678,10 @@ model MarkupCourier {
 /// Cada courier tiene su propio %, o 0 si sus creds son de Shipro. Espejo del
 /// patrón de SmoCourier (per-courier + vigencias, sin modo).
 ///
-/// REEMPLAZARÁ al modelo legacy CourierIntermediario (owner-keyed, cascadeando via
-/// propietarioCourierId) — la migración de datos vive en Pieza 2 y el rewire del
-/// motor (resolver + call sites) en Pieza 3. Este modelo NACE AISLADO: ningún
-/// path lo lee todavía (mismo criterio que SmoCourier / MarkupCourier al nacer).
-///
-/// AISLAMIENTO DEL MOTOR: hoy el resolver sigue leyendo CourierIntermediario
-/// (owner-keyed). El swap ocurre en Pieza 3. Editar/poblar esta tabla NO cambia
-/// precios hasta que Pieza 3 conecte el reader.
+/// Reemplazó al modelo legacy CourierIntermediario (owner-keyed via propietarioCourierId)
+/// — motor rewireado 2026-09-08 (DEUDA 170 Pieza motor, commit 7448574), tabla vieja
+/// droppeada en la pieza jubilar. El resolver `resolverIntermediarioMarkupPorcentaje`
+/// consulta esta tabla por `courierId` del courier que despacha.
 model MarkupIntermediarioCourier {
   id        Int     @id @default(autoincrement())
   courierId Int

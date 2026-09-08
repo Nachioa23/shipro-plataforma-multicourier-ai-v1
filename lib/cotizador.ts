@@ -343,24 +343,11 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
   // != null) AND (2) admin lo prendio (activo=true). Ademas se AND'ea con el flag
   // per-empresa (CredencialCourier.ofrece*), que queda como tercer gate cliente-level.
   const nombresCouriers = couriersAptos.map((c: any) => c.nombreCourier);
-  const ahoraCotizacion = new Date();
   const couriersReales = await prisma.courier.findMany({
     where: { nombre: { in: nombresCouriers } },
     include: {
       servicios: {
         where: { activo: true, capacidadTecnicaMapeada: { not: null } },
-      },
-      // DEUDA 107 capa 1: intermediario activo y vigente al momento de la cotizacion.
-      // Se usa en aplicarMarkup para la cascada (Modelo A). Modelo B lo ignora.
-      intermediarios: {
-        where: {
-          activo: true,
-          vigenciaDesde: { lte: ahoraCotizacion },
-          OR: [
-            { vigenciaHasta: null },
-            { vigenciaHasta: { gte: ahoraCotizacion } },
-          ],
-        },
       },
     },
   });

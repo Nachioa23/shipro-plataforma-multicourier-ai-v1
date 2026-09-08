@@ -1,24 +1,27 @@
 "use client";
 
-// DEUDA 170 Pieza A (2026-09-07): pantalla admin del markup del DUEÑO de
-// credenciales (CourierIntermediario). Calqueada de /admin-markup-courier
-// (DEUDA 157 Paso 1) — mismo shape "listar couriers activos + vigencias per
-// courier con asiento inverso", pero SIN el toggle HEREDA/PROPIO (el markup
-// del dueño no tiene un "global vigente" del que herede — es siempre valor
-// propio o cero).
+// DEUDA 170 Pieza 2 (2026-09-08): pantalla admin del markup del INTERMEDIARIO/
+// dueño de credenciales, POR COURIER que despacha. Reescrito para apuntar al
+// modelo NUEVO MarkupIntermediarioCourier (Pieza 1) — hermano de MarkupCourier,
+// per-courier + vigencias, sin toggle HEREDA/PROPIO (el intermediario no tiene
+// un valor global del cual heredar — cada courier tiene su propio %, o 0 si
+// sus creds son de Shipro).
 //
-// SEMÁNTICA — QUÉ ES ESTA PANTALLA:
-// - Cada fila = "el markup que ESTE courier cobra cuando es DUEÑO prestando
-//   sus credenciales a otro". Ej. Mocis 10% en el par Mocis→Andreani.
-// - Valor 0 = ese courier no cobra intermediario (dueño de facto Shipro, o no
-//   presta credenciales). Distinto del markup de Shipro que va en
-//   /admin-markup-courier (esa pantalla es OTRA cosa).
+// SEMÁNTICA — QUÉ ES ESTA PANTALLA (modelo Nacho per-courier):
+// - Cada fila = "cuando se despacha con ESTE courier, cuánto cobra el dueño
+//   de sus credenciales". Ej. fila "Andreani" = 10% si sus creds son de Mocis;
+//   fila "Andreani" = 0 si sus creds son de Shipro.
+// - Valor 0 = las credenciales de este courier son de Shipro (sin intermediario).
+// - Distinto del markup de SHIPRO que va en /admin-markup-courier (esa pantalla
+//   es otro pricing dimension — el margen Shipro sobre el neto).
 //
-// CONFIG↔ENGINE: la UI escribe `CourierIntermediario.markupPorcentaje` keyed
-// por `propietarioCourierId`. El engine ya lee EXACTAMENTE ese field/key
-// (lib/utils/resolvers-tarifa.ts:220 → `findFirst({ propietarioCourierId, ... })`).
-// Zero cambio de motor. Editar acá cambia precios en vivo (para el par
-// donde este courier es el dueño de las credenciales usadas).
+// CONFIG↔ENGINE: la UI escribe `MarkupIntermediarioCourier.valorPorcentaje`
+// keyed por `courierId` (el courier que despacha). El engine leerá EXACTAMENTE
+// ese field/key en Pieza 4 (rewire del resolver: `findFirst({ courierId })`).
+// Mientras tanto (Pieza 2 → Pieza 4), el motor SIGUE leyendo el modelo viejo
+// CourierIntermediario → editar acá NO cambia precios hasta el rewire. Esto
+// permite a Nacho POBLAR la fuente de verdad futura antes del swap del motor.
+// Consistent con el playbook DEUDA 157 / SmoCourier (modelo aislado antes del wire).
 
 import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
@@ -36,8 +39,7 @@ import {
 type Vigencia = {
   id: number;
   courierId: number;
-  propietarioCourierId: number;
-  markupPorcentaje: number;
+  valorPorcentaje: string; // Decimal serialized as string via JSON
   activo: boolean;
   vigenciaDesde: string;
   vigenciaHasta: string | null;
@@ -72,7 +74,7 @@ export default function AdminMarkupDueno() {
         // Prefill con el valor de la vigencia activa (o "" si no hay).
         const valores: Record<number, string> = {};
         for (const f of filasResp) {
-          valores[f.courier.id] = f.activa ? String(f.activa.markupPorcentaje) : "";
+          valores[f.courier.id] = f.activa ? String(f.activa.valorPorcentaje) : "";
         }
         setNuevoValor(valores);
       }
@@ -94,23 +96,23 @@ export default function AdminMarkupDueno() {
     const valor = parseFloat(rawValor);
     if (!Number.isFinite(valor) || valor < 0 || valor > 100) {
       alert(
-        "Ingresá un porcentaje válido entre 0 y 100 (0 = este courier no cobra intermediario cuando presta sus credenciales)."
+        "Ingresá un porcentaje válido entre 0 y 100 (0 = las credenciales de este courier son de Shipro; sin intermediario)."
       );
       return;
     }
 
     const previaStr = fila.activa
-      ? `${fmtPct(fila.activa.markupPorcentaje)}`
+      ? `${fmtPct(fila.activa.valorPorcentaje)}`
       : "sin vigencia activa";
     const nuevaStr =
       valor === 0
-        ? "0% — no cobra intermediario"
-        : `${fmtPct(valor)} — cobra como dueño de credenciales`;
+        ? "0% — sin intermediario (creds Shipro)"
+        : `${fmtPct(valor)} — el dueño de las creds cobra este %`;
     const ok = confirm(
-      `Vas a crear una nueva vigencia del markup del DUEÑO para ${fila.courier.nombre}:\n` +
+      `Vas a crear una nueva vigencia del markup del INTERMEDIARIO para ${fila.courier.nombre}:\n` +
         `  Anterior: ${previaStr}\n` +
         `  Nueva:    ${nuevaStr}\n\n` +
-        `Este valor se cobra cuando OTRO courier despacha con las credenciales de ${fila.courier.nombre}. ` +
+        `Este valor se cobrará cuando se despache con ${fila.courier.nombre} (una vez que Pieza 4 conecte el motor a la nueva tabla). ` +
         `La vigencia actual queda jubilada (activo=false, vigenciaHasta=hoy) — es un asiento inverso, nunca se pisa el valor anterior. ¿Confirmás?`
     );
     if (!ok) return;
@@ -165,16 +167,19 @@ export default function AdminMarkupDueno() {
           </div>
           <div>
             <h2 className="text-2xl font-black text-gray-800 tracking-tight">
-              Markup del Dueño de Credenciales
+              Markup del Intermediario por Courier
             </h2>
             <p className="text-sm font-medium text-gray-500 mt-1">
-              Markup (%) que cobra un courier cuando actúa como <strong>dueño</strong> prestando
-              sus credenciales a otro (ej. Mocis en el par Mocis→Andreani).
-              Valor <strong>0</strong> = ese courier no cobra intermediario (dueño de facto Shipro,
-              o no presta credenciales). Editable con vigencias (asiento inverso).
+              % que el <strong>dueño de las credenciales</strong> de este courier cobra sobre la tarifa,
+              cuando se despacha con él (ej. Andreani cuyas creds presta Mocis → fila Andreani = 10%).
+              Valor <strong>0</strong> = las credenciales son de Shipro (sin intermediario).
+              Editable con vigencias (asiento inverso).
             </p>
             <p className="text-xs font-bold text-purple-700 mt-2">
-              Distinto del <a href="/admin-markup-courier" className="underline hover:text-purple-900">markup Shipro por courier</a>: este es el % que cobra el DUEÑO, aquél es el % que cobra Shipro.
+              Distinto del <a href="/admin-markup-courier" className="underline hover:text-purple-900">markup Shipro por courier</a>: este es el % del DUEÑO de las creds, aquél es el margen que agrega Shipro.
+            </p>
+            <p className="text-[11px] font-medium text-amber-700 mt-1">
+              ⚠ Tabla nueva (DEUDA 170 Pieza 1). El motor la lee recién en Pieza 4 — hasta entonces, editar acá NO cambia precios en vivo (populación previa al rewire).
             </p>
           </div>
         </div>
@@ -201,7 +206,7 @@ export default function AdminMarkupDueno() {
                 <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
                   <div>
                     <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">
-                      Courier (como dueño)
+                      Courier (que despacha)
                     </p>
                     <h3 className="text-xl font-black text-gray-800">
                       {f.courier.nombre}
@@ -214,12 +219,12 @@ export default function AdminMarkupDueno() {
                     {f.activa ? (
                       <>
                         <p className="text-2xl font-black text-purple-900">
-                          {fmtPct(f.activa.markupPorcentaje)}
+                          {fmtPct(f.activa.valorPorcentaje)}
                         </p>
                         <p className="text-[10px] text-purple-700 mt-1">
-                          {f.activa.markupPorcentaje === 0
-                            ? "No cobra intermediario"
-                            : "Cobra como dueño"}
+                          {Number(f.activa.valorPorcentaje) === 0
+                            ? "Sin intermediario (creds Shipro)"
+                            : "El dueño de las creds cobra este %"}
                         </p>
                       </>
                     ) : (
@@ -254,10 +259,10 @@ export default function AdminMarkupDueno() {
                           }))
                         }
                         className="w-full border-2 border-gray-200 rounded-lg p-2.5 text-base font-black text-gray-800 outline-none focus:border-purple-500"
-                        placeholder="Ej: 10 (0 = no cobra)"
+                        placeholder="Ej: 10 (0 = creds Shipro, sin intermediario)"
                       />
                       <p className="text-[10px] text-gray-500 mt-1">
-                        0% = este courier no cobra cuando presta sus credenciales.
+                        0% = las credenciales de este courier son de Shipro (no hay intermediario cobrando).
                       </p>
                     </div>
                     <button
@@ -316,7 +321,7 @@ export default function AdminMarkupDueno() {
                           f.historial.map((h) => (
                             <tr key={h.id} className={h.activo ? "bg-emerald-50/40" : ""}>
                               <td className="px-6 py-3 font-bold text-gray-800">
-                                {fmtPct(h.markupPorcentaje)}
+                                {fmtPct(h.valorPorcentaje)}
                               </td>
                               <td className="px-6 py-3 text-gray-600">
                                 {fmtFecha(h.vigenciaDesde)}

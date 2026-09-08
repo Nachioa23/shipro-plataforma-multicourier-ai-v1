@@ -1,36 +1,40 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 
-// DEUDA 170 Pieza A (2026-09-07): admin ver/editar el markup del DUEÑO de
-// credenciales (CourierIntermediario). Calqueada de app/api/admin/markup-courier
-// (DEUDA 157 Paso 1) — mismo shape "cerrar + crear vigencia" per courier,
-// simplificada porque el markup del dueño no tiene el switch HEREDA/PROPIO
-// (siempre valor propio o cero).
+// DEUDA 170 Pieza 2 (2026-09-08): admin ver/editar el markup del INTERMEDIARIO /
+// dueño de credenciales, POR COURIER que despacha. Reescrito para apuntar al
+// modelo nuevo MarkupIntermediarioCourier (creado en Pieza 1) — hermano de
+// MarkupCourier, per-courier + vigencias, sin modo HEREDA/PROPIO (no hay global
+// del cual heredar). Mirror del patrón de /api/admin/markup-courier (que ya vive
+// en MarkupCourier con vigencia-swap "cerrar + crear").
 //
-// SEMÁNTICA — CADA ROW REPRESENTA "EL MARKUP QUE UN COURIER COBRA CUANDO ES DUEÑO
-// PRESTANDO SUS CREDENCIALES":
-// - courier fila X en la UI = "cuánto cobra X cuando otro courier despacha con
-//   las credenciales de X".
-// - valor 0 = X no cobra intermediario (ej. X es Shipro-owned de facto, o no
-//   presta credenciales). Distinto de "sin fila" en semántica UI, pero
-//   equivalente en el motor (resolverIntermediario retorna null → factor 1).
-// - valor > 0 = X es intermediario y cobra ese % (ej. Mocis 10% en el par
-//   Mocis→Andreani).
+// SEMÁNTICA — CADA ROW ES "EL MARKUP QUE APLICA CUANDO SE DESPACHA CON ESTE COURIER":
+// - courier fila X en la UI = "cuánto cobra el dueño de las credenciales de X
+//   cuando X despacha". Valor 0 = las credenciales de X son de Shipro (o no
+//   tienen intermediario) → sin cascada de intermediario.
+// - valor > 0 = las credenciales de X son de un tercero que cobra ese % (ej.
+//   Andreani cuyas credenciales presta Mocis → fila Andreani = 10%).
 //
-// KEY: propietarioCourierId (el DUEÑO). El engine lee EXACTAMENTE por este
-// eje (lib/utils/resolvers-tarifa.ts:220 → `findFirst({ propietarioCourierId, ... })`).
-// El campo `courierId` (ejecutor legacy DEUDA 107) se setea = propietarioCourierId
-// para no romper el @@index legacy `[courierId, activo]` ni el include vigente
-// de cotizador.ts:279. El resolver moderno NO consulta el eje ejecutor excepto
-// en el fallback legacy `propietarioTipo=null` (que este endpoint nunca genera).
+// KEY: courierId (el COURIER QUE DESPACHA). El engine lo va a leer EXACTAMENTE
+// por este eje en Pieza 4 (rewire del resolver: `findFirst({ courierId })`).
+// La key acá coincide con la key futura del engine — cero mismatch de dos-fuentes
+// (a diferencia del intento anterior que escribía en CourierIntermediario keyed
+// por propietarioCourierId mientras el engine también leía por owner: al menos
+// era key-consistente, pero la SEMÁNTICA per-owner no matcheaba el modelo Nacho
+// per-courier — de ahí el "backwards" reportado en las pruebas).
 //
-// AISLAMIENTO DEL MOTOR: NINGÚN cambio a resolvers-tarifa.ts / cotizador.ts /
-// crear.ts. La UI escribe el MISMO field/key que el engine ya lee — config↔engine
-// alineado por construcción.
+// AISLAMIENTO DEL MOTOR: hoy el motor de plata SIGUE leyendo el modelo VIEJO
+// CourierIntermediario (owner-keyed). Editar/poblar MarkupIntermediarioCourier
+// desde acá NO cambia precios hasta que Pieza 4 haga el swap del resolver.
+// Este endpoint pobla la fuente de verdad futura; Nacho carga valores acá antes
+// del rewire del motor. Consistent con el playbook DEUDA 157 / SmoCourier.
 //
-// PATRÓN DE ESCRITURA: mismo "cerrar + crear" atómico que markup-courier /
-// smo-courier / markupShiproVigencia. Nunca se pisa una fila existente: cierra
-// la vigencia activa del owner y crea una nueva. No-op guard por valor único.
+// PATRÓN DE ESCRITURA — "cerrar + crear" por courier (asiento inverso, mismo
+// que /admin-markup-courier / /admin-smo). Cambiar el valor de un courier NUNCA
+// pisa una fila existente: cierra la vigencia activa del courier
+// (activo=false, vigenciaHasta=now) y crea una nueva (activo=true, vigenciaDesde=now).
+// Ambos writes en una $transaction: si el create falla, el close rollbackea.
 //
 // AUDITORÍA: console.log estructurado (mismo motivo que hermanos:
 // registrarCambioConfiguracion exige empresaId no-null y esto es config global).
@@ -56,12 +60,12 @@ export async function GET(request: Request) {
 
     const filas = await Promise.all(
       couriers.map(async (c) => {
-        const activa = await prisma.courierIntermediario.findFirst({
-          where: { propietarioCourierId: c.id, activo: true },
+        const activa = await prisma.markupIntermediarioCourier.findFirst({
+          where: { courierId: c.id, activo: true },
           orderBy: { vigenciaDesde: "desc" },
         });
-        const historial = await prisma.courierIntermediario.findMany({
-          where: { propietarioCourierId: c.id },
+        const historial = await prisma.markupIntermediarioCourier.findMany({
+          where: { courierId: c.id },
           orderBy: { vigenciaDesde: "desc" },
           take: 50,
         });
@@ -71,7 +75,7 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ filas });
   } catch (error) {
-    console.error("Error cargando markup del dueño:", error);
+    console.error("Error cargando markup del intermediario por courier:", error);
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }
@@ -94,12 +98,12 @@ export async function POST(request: Request) {
         ? body.motivo.trim()
         : null;
 
-    // courierId acá se interpreta como el DUEÑO (propietarioCourierId). La UI
-    // lista couriers 1:1 con este endpoint — cada fila es "este courier cuando
-    // actúa como dueño prestando credenciales".
-    const propietarioCourierId =
+    // courierId acá es el COURIER QUE DESPACHA. La UI lista couriers 1:1 con
+    // este endpoint — cada fila = "cuando despachamos con este courier, cuánto
+    // cobra el dueño de sus credenciales".
+    const courierId =
       typeof courierIdRaw === "number" ? courierIdRaw : Number(courierIdRaw);
-    if (!Number.isInteger(propietarioCourierId) || propietarioCourierId <= 0) {
+    if (!Number.isInteger(courierId) || courierId <= 0) {
       return NextResponse.json(
         { error: "courierId inválido." },
         { status: 400 }
@@ -107,12 +111,12 @@ export async function POST(request: Request) {
     }
 
     const courier = await prisma.courier.findUnique({
-      where: { id: propietarioCourierId },
+      where: { id: courierId },
       select: { id: true, nombre: true },
     });
     if (!courier) {
       return NextResponse.json(
-        { error: `Courier ${propietarioCourierId} no existe.` },
+        { error: `Courier ${courierId} no existe.` },
         { status: 404 }
       );
     }
@@ -127,39 +131,34 @@ export async function POST(request: Request) {
       );
     }
 
-    // markupPorcentaje es Float en schema (a diferencia de MarkupCourier que es
-    // Decimal); se compara con === numérico directo en el no-op guard.
-    const nuevoValor = parsed;
+    const nuevoValor = new Prisma.Decimal(parsed.toString()).toDecimalPlaces(4);
     const ahora = new Date();
 
     const resultado = await prisma.$transaction(async (tx) => {
-      const previa = await tx.courierIntermediario.findFirst({
-        where: { propietarioCourierId, activo: true },
+      const previa = await tx.markupIntermediarioCourier.findFirst({
+        where: { courierId, activo: true },
         orderBy: { vigenciaDesde: "desc" },
       });
 
       // No-op guard: si el valor no cambia, no se crean filas idénticas.
-      if (previa && previa.markupPorcentaje === nuevoValor) {
+      if (previa && previa.valorPorcentaje.equals(nuevoValor)) {
         return { previa, nueva: previa, noop: true };
       }
 
-      // Cerrar la vigencia activa de ESTE dueño si existe.
+      // Cerrar la vigencia activa de ESTE courier si existe.
       if (previa) {
-        await tx.courierIntermediario.update({
+        await tx.markupIntermediarioCourier.update({
           where: { id: previa.id },
           data: { activo: false, vigenciaHasta: ahora },
         });
       }
 
-      // Crear la nueva vigencia activa para el dueño. `courierId` (ejecutor
-      // legacy) se setea = propietarioCourierId (self-refer) — el schema lo
-      // requiere NOT NULL y el resolver moderno NO consulta este eje excepto
-      // en el fallback `propietarioTipo=null` que este endpoint nunca genera.
-      const nueva = await tx.courierIntermediario.create({
+      // Crear la nueva vigencia activa para el courier. Mirror plain de
+      // MarkupCourier (sin field `modo` — el intermediario no tiene HEREDA).
+      const nueva = await tx.markupIntermediarioCourier.create({
         data: {
-          courierId: propietarioCourierId,
-          propietarioCourierId,
-          markupPorcentaje: nuevoValor,
+          courierId,
+          valorPorcentaje: nuevoValor,
           activo: true,
           vigenciaDesde: ahora,
         },
@@ -176,17 +175,17 @@ export async function POST(request: Request) {
       request.headers.get("x-real-ip") ||
       null;
     console.log(
-      "[AUDIT courierIntermediario]",
+      "[AUDIT markupIntermediarioCourier]",
       JSON.stringify({
         usuarioEmail,
         rolUsuario: rol,
         ipOrigen,
-        campo: "markupDueno",
-        propietarioCourierId,
+        campo: "markupIntermediarioCourier",
+        courierId,
         courierNombre: courier.nombre,
         sensible: true,
-        valorAnterior: resultado.previa?.markupPorcentaje ?? null,
-        valorNuevo: resultado.nueva.markupPorcentaje,
+        valorAnterior: resultado.previa?.valorPorcentaje?.toString() ?? null,
+        valorNuevo: resultado.nueva.valorPorcentaje.toString(),
         motivo,
         noop: resultado.noop,
         timestamp: ahora.toISOString(),
@@ -195,7 +194,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true, courier, ...resultado });
   } catch (error: any) {
-    console.error("Error guardando markup del dueño:", error);
+    console.error("Error guardando markup del intermediario por courier:", error);
     return NextResponse.json(
       { error: error?.message || "Error al guardar" },
       { status: 500 }

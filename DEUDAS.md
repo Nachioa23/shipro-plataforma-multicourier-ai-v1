@@ -3475,7 +3475,7 @@ Solo se activa cuando es **> 0**. Un valor 0 o negativo cae al `MarkupShiproVige
 
 ---
 
-## DEUDA 155 — Sin UI para configurar el markup del intermediario (CourierIntermediario): hoy solo por SQL/seed (registrada 2026-08-28, scope medio, prioridad media)
+## DEUDA 155 — Sin UI para configurar el markup del intermediario (CourierIntermediario): hoy solo por SQL/seed (registrada 2026-08-28, RESUELTA 2026-09-08 vía DEUDA 170 Parte 1 — la pantalla `/admin-markup-dueno` existe + el modelo se migró a `MarkupIntermediarioCourier`)
 
 **Status:** ABIERTA — no bloquea el pipeline (el motor lee y aplica el markup del intermediario correctamente), pero bloquea el alta/edición de intermediarios sin tocar la base a mano.
 
@@ -3502,9 +3502,14 @@ Hoy la única forma de dar de alta o cambiar un intermediario es SQL directo o m
 
 ---
 
-## DEUDA 170 — Consola de Tarifa Unificada Shipro-only: 5 variables (markup dueño + markup Shipro global/courier + SMO + Fee + IVA) en una pantalla (registrada 2026-09-07, propuesta Nacho, RECATEGORIZADA 2026-09-07 ESTRATÉGICA — 2 partes: P1 media-alta + P2 alta; P1 EN PROGRESO 2026-09-08 vía Camino 2)
+## DEUDA 170 — Consola de Tarifa Unificada Shipro-only: 5 variables (markup dueño + markup Shipro global/courier + SMO + Fee + IVA) en una pantalla (registrada 2026-09-07, RECATEGORIZADA 2026-09-07 ESTRATÉGICA — 2 partes: P1 media-alta + P2 alta; **P1 COMPLETA EN PROD 2026-09-08 vía Camino 2**; P2 pendiente)
 
-**Status:** REGISTRADA + SPLIT en 2 partes con prioridades distintas (recategorización Nacho 2026-09-07 — la versión inicial la clasificó como "UX/refactor prioridad baja"; **ese framing era incorrecto**: la tarifa es la palanca comercial más sensible del negocio). Absorbe [[DEUDA 155]] (UI del markup del dueño/intermediario) — cerrada por la Parte 1. **Parte 1 EN PROGRESO 2026-09-08 vía Camino 2** (migración al patrón MarkupCourier con modelo per-courier keyed por dispatching — ver "Avance Camino 2" al final de Parte 1).
+**Status:** REGISTRADA + SPLIT en 2 partes con prioridades distintas (recategorización Nacho 2026-09-07 — la versión inicial la clasificó como "UX/refactor prioridad baja"; **ese framing era incorrecto**: la tarifa es la palanca comercial más sensible del negocio). Absorbe [[DEUDA 155]] (UI del markup del dueño/intermediario) — **cerrada** por la Parte 1. **Parte 1 COMPLETA EN PROD 2026-09-08** vía Camino 2 (migración al patrón MarkupCourier con modelo per-courier keyed por dispatching — ver "Cierre obra Camino 2" al final de Parte 1). Parte 2 (consola unificada con las 5 variables) sigue pendiente.
+
+**Nota autoritativa sobre Rama A / Rama B (Nacho, 2026-09-08 — para futura referencia):**
+- **RAMA A** = el cliente usa las **credenciales de la NPMS / Shipro** (o propias de Shipro — como Mocis, Intralog — O de un tercero courier que se las presta a Shipro). Shipro factura el envío al cliente y cobra la tarifa completa. Es el flujo por default de la plataforma.
+- **RAMA B** = el cliente usa **SUS PROPIAS credenciales** de courier (cuentas del cliente en Andreani/Mocis/Intralog/cualquiera). El courier le factura directo al cliente; Shipro solo cobra el fee de la NPMS por usar la plataforma (no la tarifa del envío).
+- **Confusión frecuente a evitar:** **Mocis NO es "Rama B"**. Mocis es Rama A con credenciales propias de Shipro (markup del intermediario = 0 porque no hay tercero prestando, NO porque sea Rama B). En el resolver, la Rama A + `propietarioTipo=SHIPRO` (creds Shipro-owned como Mocis) → return null porque no hay intermediario, NO porque sea Rama B. El gate de Rama B es `usaCredencialesPropias=true` (early return), y ese flag distingue "el cliente puso su propia cuenta" vs "Shipro usa alguna cuenta (propia o prestada)".
 
 **Contexto — la tarifa publicada se arma con 5 variables, hoy DESPERDIGADAS:**
 La fórmula (verificada, canónica) es:
@@ -3557,6 +3562,27 @@ Contexto de la decisión Camino 2: el primer intento de Parte 1 (commit `c453d03
 3. **Pieza jubilar.** `DROP TABLE CourierIntermediario` + back-relation en Courier + limpieza de la row del seed (`prisma/seed.ts:132-149`). Solo cuando `grep -rn "courierIntermediario" --include="*.ts"` = 0 hits post-Pieza-motor. Migration destructiva pero aislada (nadie escribe ni lee ya).
 
 **Coherencia motor↔UI (garantía de construcción):** la UI ya escribe por `courierId` (dispatching). El motor leerá por `courierId` (dispatching). Match por construcción — **no se puede repetir el bug de la Pieza A original** que tenía UI y motor divergentes en la interpretación semántica de la key.
+
+**Cierre obra Camino 2 — COMPLETA EN PROD 2026-09-08.** Las 6 piezas de la migración owner-keyed → per-dispatcher fueron ejecutadas y verificadas, cerrando la obra del markup del intermediario. Resumen del recorrido completo:
+
+| # | Pieza | Commit | Estado | Detalle |
+| --- | --- | --- | --- | --- |
+| 1 | Modelo nuevo `MarkupIntermediarioCourier` | `8e2f447` | ✅ prod | Per-courier, `valorPorcentaje Decimal(12,4)` + vigencias, sin `modo` (hermano de MarkupCourier, espejo estructural de SmoCourier). Migración aditiva pura. |
+| 2 | Pantalla `/admin-markup-dueno` retargeteada | `8fcd6db` | ✅ prod | Escribe `MarkupIntermediarioCourier` keyed por `courierId` (dispatching). Mirror de `/admin-markup-courier`. Ya no escribe el modelo viejo. UI copy actualizada al modelo per-dispatcher. |
+| 3 | Motor `resolverIntermediarioMarkupPorcentaje` rewireado | `7448574` | ✅ prod verificado | Case COURIER + LEGACY convergen en `findFirst({ courierId })` sobre el modelo nuevo. Rama B (`usaCredencialesPropias=true`) + case SHIPRO + case CLIENTE preservados byte-idénticos. Cascada intacta (`aplicarMarkup` sin cambios). Verificación numérica antes/después con Andreani/Mocis/OCA/Intralog/Correo — precios coherentes con el modelo Nacho. |
+| 4 | Fix del sobreprecio del seed espurio | (integrado en Pieza 2 populación manual) | ✅ prod | El seed viejo cargaba `CourierIntermediario(Andreani, propietarioCourierId=Mocis, 10%)` — un acuerdo hipotético que nunca fue real. Al arrancar limpio (tabla nueva vacía + Nacho cargó valores reales per courier), ese sobreprecio quedó fuera. Andreani ahora arranca en 0% real. |
+| 5 | Limpieza dead code (schema/back-relations/seed/include huérfano) | `70416ec` | ✅ prod | Removido `model CourierIntermediario` + 2 back-relations en `Courier` + bloque del seed + `include: { intermediarios }` huérfano en `lib/cotizador.ts` (dead code post-motor-rewire, cero readers). tsc = 0 tras la limpieza. Price-neutral por construcción. |
+| 6 | `DROP TABLE CourierIntermediario` | `3383a24` | ✅ prod | Migración destructiva verificada: SQL exactamente `DROP CONSTRAINT courierId_fkey + DROP CONSTRAINT propietarioCourierId_fkey + DROP TABLE`. Backup diario de prod confirmado antes del deploy. Verificado local: tabla droppeada, `MarkupIntermediarioCourier` intacta (6 rows activas: Andreani, Mocis, Correo, Hop, Intralog, OCA), resolver + prices byte-idénticos a pre-drop. |
+
+**Verificación e2e en prod (cierre 2026-09-08):**
+- ✅ Cambiar el markup de un courier desde `/admin-markup-dueno` cambia SU precio en la próxima cotización (**bug backwards resuelto** — editar la fila de Andreani ahora afecta directamente a Andreani, no a Mocis).
+- ✅ La tabla vieja `CourierIntermediario` no existe en prod (`SELECT * FROM "CourierIntermediario"` → *"relation does not exist"*).
+- ✅ La tabla nueva `MarkupIntermediarioCourier` tiene sus valores intactos y editables via la pantalla.
+- ✅ Reconciliación de envíos post-cierre: coherente con las cotizaciones (el campo audit-trail `FinanzasEnvio.markupIntermediarioPorcentajeAplicado` sigue siendo derivado del cascade, source-agnostic).
+
+**Cierra:** [[DEUDA 155]] (UI del markup del intermediario) + [[DEUDA 170]] Parte 1. Parte 2 (consola de tarifa unificada con las 5 variables) sigue pendiente como obra propia con design doc.
+
+**Sub-deuda registrada durante la obra:** [[DEUDA 172]] — el markup Shipro `%` y `markupFijo $` se aplican JUNTOS en la cascada, el modelo Nacho es excluyente (uno u otro). Latente hoy (`markupFijo=0` en todo prod), corregir cuando se decida usar el fijo.
 
 ---
 

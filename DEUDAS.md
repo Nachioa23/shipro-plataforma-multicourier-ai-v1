@@ -3502,7 +3502,7 @@ Hoy la única forma de dar de alta o cambiar un intermediario es SQL directo o m
 
 ---
 
-## DEUDA 170 — Consola de Tarifa Unificada Shipro-only: 5 variables (markup dueño + markup Shipro global/courier + SMO + Fee + IVA) en una pantalla (registrada 2026-09-07, RECATEGORIZADA 2026-09-07 ESTRATÉGICA — 2 partes: P1 media-alta + P2 alta; **P1 COMPLETA EN PROD 2026-09-08 vía Camino 2**; P2 pendiente)
+## DEUDA 170 — Consola de Tarifa Unificada Shipro-only: 5 variables (markup dueño + markup Shipro global/courier + SMO + Fee + IVA) en una pantalla (registrada 2026-09-07, RECATEGORIZADA 2026-09-07 ESTRATÉGICA — 2 partes: P1 media-alta + P2 alta; **P1 COMPLETA EN PROD 2026-09-08 vía Camino 2**; **P2 COMPLETA + VERIFICADA LOCAL 2026-09-09 — pend. deploy**)
 
 **Status:** REGISTRADA + SPLIT en 2 partes con prioridades distintas (recategorización Nacho 2026-09-07 — la versión inicial la clasificó como "UX/refactor prioridad baja"; **ese framing era incorrecto**: la tarifa es la palanca comercial más sensible del negocio). Absorbe [[DEUDA 155]] (UI del markup del dueño/intermediario) — **cerrada** por la Parte 1. **Parte 1 COMPLETA EN PROD 2026-09-08** vía Camino 2 (migración al patrón MarkupCourier con modelo per-courier keyed por dispatching — ver "Cierre obra Camino 2" al final de Parte 1). Parte 2 (consola unificada con las 5 variables) sigue pendiente.
 
@@ -3609,6 +3609,41 @@ Contexto de la decisión Camino 2: el primer intento de Parte 1 (commit `c453d03
 **Requiere design doc + plan de piezas propio** antes de la implementación. NO improvisar sobre `/admin-markup-courier` — ampliar esa pantalla incrementalmente termina en el mismo problema disperso, solo que peor.
 
 **Renames pendientes de [[DEUDA 158]] atados a esta obra:** `markupFijo → markupFijoShipro`, `ajusteTarifaPorcentaje → overrideMarkupShiproPorcentaje` (hacerlos AS PART del rediseño, no standalone — ya identificados como entangled con [[DEUDA 157]] / esta consola).
+
+**Cierre Parte 2 — COMPLETA + VERIFICADA LOCAL 2026-09-09 (pend. deploy prod).** 5 piezas construidas + verificadas end-to-end, todas config-only con el motor de plata intacto, dentro del sistema de diseño existente (Sora + `#233b6b` + color-coding por dominio: purple=dueño, blue=Shipro, amber=SMO, emerald=Fee, slate=IVA/chrome), con estándar de accesibilidad completo (labels + aria-labels + focus-visible rings + contrast AA + motion-safe animations):
+
+| # | Pieza | Commits | Detalle |
+| --- | --- | --- | --- |
+| 1 | Tabla per-courier con las 3 variables + edición calma + historial accordion + HEREDA/PROPIO toggle | `ba33466` + `3e5d5e9` | Un row por courier activo, columnas Markup dueño / Markup Shipro (modo + valor) / SMO. Display mode con pill color-coded + pencil icon. Edit mode inline con save/cancel/keyboard shortcuts (Enter/Escape). Chevron por row abre accordion con últimas 5 vigencias de las 3 variables. |
+| 2 | Sección global — Markup Shipro global (hero + inline edit + historial expandible) | `f81a89b` | Hero display `text-4xl font-black text-[#233b6b]` con el valor vigente + hint "los couriers en HEREDA usan este valor" + editor inline (POST `/api/admin/markup-shipro`) + historial top-10 vigencias colapsable. |
+| 3 | Sección Fee por empresa — búsqueda + edit inline + MOTIVO OBLIGATORIO + link a `/admin-fee` para flow avanzado | `f81a89b` | Compact table con búsqueda por nombre/CUIT. Toggle FIJO/PORCENTAJE + valor + motivo (REQUIRED — el Fee mueve plata en vivo, warning amber visible). Link explícito a `/admin-fee` para mass-adjust + promos + historial completo (fuera de scope de la consola). |
+| 4 | Sección IVA — display constante | `f81a89b` | Card slate mostrando `× 1.21` + equivalencia a 21% + nota "Fuente única: `lib/constants/iva.ts`. Editable solo con code push. Una futura sub-pieza puede promoverlo a modelo editable (IvaVigencia)." |
+| 5 | **Preview en vivo de la cascada** (sticky top, feedback loop al editar) | `cb1564b` | Endpoint `POST /api/admin/consola-tarifa/preview` que **REUSA `aplicarMarkup` real + los 4 resolvers reales** (`resolverMarkupCourierPorcentaje`, `resolverSmoNeto`, `resolverIntermediarioMarkupPorcentaje`, `calcularFeeOperacion`) — cero replica de fórmula → **cero drift**. UI sticky arriba: dropdown courier + empresa + input secoNeto sample + opciones avanzadas colapsables (Rama A/B, propietarioTipo, tarifaIncluyeIva). Cascade de 6 pasos con arrows + precio final destacado. Debounce 300ms en cambios de input + auto re-fetch tras cada save exitoso abajo (feedback loop cerrado). Nota honesta si el Fee es PORCENTAJE. |
+| fix | Keys únicas React (Fragment key en la table principal) | `3b57a64` | Warning del `map.return(<>)` corregido — el key ahora vive en `<Fragment key={f.courier.id}>`. Cosmético + correctness (state reconciliation ahora estable ante reordering). |
+
+**Verificación e2e con datos reales (2026-09-09):**
+- Preview con **Comercio Demo S.A. + Andreani + secoNeto=$8.270,63** → **$16.173,52**.
+- Cotización rápida real (misma empresa, 2kg, 20x20x20 cm) → **$16.173,52**.
+- **IDÉNTICO byte-a-byte** → preview fiel al motor **confirmado con datos reales**. Zero drift, garantía funcional del "reusar `aplicarMarkup` via endpoint" verificada empíricamente.
+
+**Aprendizaje diagnosticado durante la validación:** la discrepancia inicial observada (preview $16.173 vs quote $11.619) **NO era un bug** — era **mismatch de ENTRADAS** entre lo tipeado en el preview y la cotización rápida (empresa distinta, o Rama B, o base distinta). Con entradas idénticas (misma empresa Rama A + misma base) coinciden exacto. **El preview asume por default Rama A + `propietarioTipo=COURIER`** — refleja la realidad SOLO si la empresa elegida es ese caso (2 de 4 empresas hoy). Para Rama B o para credenciales con owner distinto, el operador debe usar los toggles avanzados para replicar la realidad de esa credencial (o esperar Mejora A abajo, que lo hace automático).
+
+**Pantallas atómicas intactas y funcionando** (verificado: byte-idénticas al pre-Consola):
+- `/admin-markup-dueno`, `/admin-markup-courier`, `/admin-smo`, `/admin-parametros-tarifa`, `/admin-fee` — todas operativas.
+- **Single source of truth confirmado:** editar cualquier variable en la consola refleja en la pantalla atómica correspondiente (mismos modelos, mismos endpoints POST reusados desde la consola).
+- Limpieza del menú (sacar las 5 links viejas del sidebar) es follow-up cuando (i) la consola cubra todos los casos edge que las pantallas viejas cubren y (ii) Nacho decida sunset — no ahora.
+
+**Estado money-safe:** cero cambio de precios. `markupFijo` sigue en 0 en todas las credenciales activas (verificado en el recon previo) → [[DEUDA 172]] sigue latente sin impacto. IVA constante `1.21` inalterado. `aplicarMarkup` byte-idéntico. Los 4 resolvers byte-idénticos. Todos los saves de la consola pasan por los mismos endpoints POST atómicos que ya estaban en producción (`markup-dueno`, `markup-courier`, `smo-courier`, `markup-shipro`, `operacion-fee`) — cero write path nuevo.
+
+**Pendiente de deploy prod:** 5 commits money-safe config-only (`ba33466`, `3e5d5e9`, `f81a89b`, `3b57a64`, `cb1564b`) + docs `78499fd` (cierre obra intermediario) + el docs de este cierre. Deploy es reversible (revert commits) y verificable en prod con el mismo test e2e ($16.173,52 preview == cotización real).
+
+**Follow-up mejoras identificadas durante la validación (NUEVAS sub-piezas P2 opcionales, prioridad media):**
+
+- **MEJORA A — Preview fiel a la credencial real** (prioridad media, UX correctness). Hoy el preview default asume Rama A + `propietarioTipo=COURIER` (caso optimista con markups aplicados). Debería **leer la `CredencialCourier` de la empresa elegida en el dropdown** y usar sus valores reales (`usaCredencialesPropias`, `propietarioTipo`, `propietarioCourierId`) en vez del optimista. Consecuencia: si la empresa es Rama B → preview automáticamente muestra sin markups; si `propietarioTipo=SHIPRO` → preview sin intermediario. Elimina la confusión "preview optimista vs realidad". Hoy se resuelve con el toggle avanzado manual — la Mejora A lo hace automático. Cambio: el endpoint `/preview` acepta `courierId + empresaId + secoNetoSample` y consulta `CredencialCourier(empresaId, nombreCourier=courier)` para popular los flags reales. UI: los toggles avanzados quedan opcionales, mostrados con el valor "detectado de la credencial" como default.
+
+- **MEJORA B — Botón "traer tarifa real de Andreani ahora"** (prioridad media, UX cierra-el-loop). Hoy el operador tipea `secoNetoSample` a mano o copia de un envío viejo — pero la tarifa real del courier fluctúa (peso, dims, CP). Un botón nuevo en el preview dispara `POST /api/cotizar` con el courier + peso/CP tipeados + empresa elegida → autocompleta el `secoNetoSample` con el `costoCourierNativo` que la API del courier acaba de devolver **en vivo**. Cierra el mismatch de entradas de raíz — el operador ya no tiene que adivinar la base, ni copiar de envíos históricos que pueden diferir de la tarifa live. Cambio: agregar botón + input peso/CP en el preview + call a `/api/cotizar` → parsear response → set `secoNetoSample` con la opción del courier seleccionado. Bonus: el response también trae el precio final que Shipro publicaría → doble-check redundante de `preview==cotización real`.
+
+Ambas mejoras son opcionales — la consola ya funciona correcta y verificada end-to-end sin ellas. Levantan la barra de UX sin cambiar la corrección del cálculo. Se pueden diferir a follow-ups cuando el deploy prod se estabilice.
 
 ---
 

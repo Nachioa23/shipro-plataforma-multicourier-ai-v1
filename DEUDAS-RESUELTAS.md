@@ -1301,3 +1301,35 @@ No tocados en `ef00894` por scope estricto — solo route de admin-couriers. Reg
 
 ---
 
+## DEUDA 145 — Timeout de courier: bajar de 8s a <5s parametrizable por-call para el plugin (registrada 2026-08-10, RESUELTA 2026-09-09 en 3 partes A + B + C)
+
+**Status:** RESUELTA 2026-09-09. Cerrada en 3 partes cross-chat.
+
+**Cierre:**
+
+- **Parte A — Núcleo (cotizador paralelizado):** el loop serial `for (const config of couriersAptos)` en `lib/cotizador.ts:484` se reemplazó por `Promise.allSettled(couriersAptos.map(...))` preservando el orden vía merge post-loop. La cotización pasó de "suma de latencias de todos los couriers" a "el courier más lento" — con la parametrización de Parte B ese máximo queda con techo de 8s, y en condiciones normales la cotización responde en ~3-3.5s. Money-safe: precios/orden/manejo de errores byte-identicos, solo cambia la orquestación. Commit `59f3f4c`, en prod.
+
+- **Parte B — Couriers (timeout parametrizable por-call):** en los 6 adapters (Andreani, Correo Argentino, Hop Envíos, Intralog, Moci's, OCA) se parametrizó `fetchConTimeout(input, init?, timeoutMs = COURIER_TIMEOUT_MS)` y se agregó `ETIQUETA_TIMEOUT_MS = 30000`. Cotización/despacho/rastreo/cancelación siguen a **8s** (bajo el circuit breaker de Tiendanube de 10s). La **descarga de etiqueta** pasa a **30s** — es back-office (el operador aprieta "Imprimir", espera; no hay cutoff de plataforma) y los couriers arman el PDF on-demand, con tiempos legítimos de varios segundos. OCA además parametriza `soapPost(..., timeoutMs)` para poder pasar el override sólo al método de etiqueta (`GetEtiquetasPorOrdenOrNumeroEnvio_PDF`); el resto de SOAPs mantiene 8s. Commits `1f05f24` (Intralog, ya en prod) + `97bf443` (los 5 restantes), en prod.
+
+- **Parte C — Plugin WooCommerce:** timeout de cotización del plugin fijado a **10s** (valor de producción, no temporal). Cubre el techo de 8s de la cotización de Shipro + margen, y respeta el límite de las plataformas donde se publica tarifa (Tiendanube 10s). Comentario en el plugin actualizado para dejar asentada la decisión. Commit `6dad59c` en el repo `shipro-woocommerce`, con **release v0.1.0** publicado (tag `v0.1.0`, .zip attach, download URL fijo `https://github.com/Nachioa23/shipro-woocommerce/releases/download/v0.1.0/shipro-woocommerce-0.1.0.zip`).
+
+**Decisión de negocio asentada:** el timeout del plugin **no se fija arbitrariamente** — lo fija el techo más bajo de las plataformas donde se publica tarifa. Hoy 8s cubre a todas (Tiendanube 10s). La cotización de Shipro está diseñada para responder por debajo de ese techo (cotizador paralelizado + timeout por courier). Si entra Shopify alto volumen (~3s de ventana) al roadmap, se reevalúa por plataforma. La etiqueta es back-office (sin cutoff), por eso queda uniforme en 30s.
+
+**Desbloquea:** DEUDA 150 Pieza 3 (mandar plugin desde el hub — necesitaba el `.zip` en URL pública fija, resuelto por el release v0.1.0). DEUDA 144 (rates callback Tiendanube — queda con margen de sobra sobre los 5s del circuit breaker gracias a la Parte A + B).
+
+---
+
+### Texto original de la deuda (preservado)
+
+**Status:** ABIERTA — prerequisito de calidad del rates callback (DEUDA 144).
+
+**Problema:** `COURIER_TIMEOUT_MS = 8000` está hardcodeado y DUPLICADO en ambos adapters (MocisAdapter + AndreaniAdapter), no parametrizable por-llamada. Tiendanube corta el rates callback a los 5s (circuit breaker, DEUDA 130). Con 8s de techo por courier, una cotización lenta puede pasarse de los 5s de Tiendanube.
+
+**Solución (diseño):** parametrizar el timeout como parámetro opcional del adapter (o del `fetchConTimeout`), para que el contexto "checkout" use < 5s sin bajar el global de 8s (que sirve al dashboard, donde 8s está bien). Opción (a) parametrizar per-call — preferida; opción (b) bajar la constante global — descartada (afecta dashboard).
+
+**Nota:** el wrapper `fetchConTimeout` ya quedó SANO post-fix del bug de recursión (ver suplemento de DEUDA 129, commit 709d995). Este cambio es sobre el VALOR del timeout, no sobre el wrapper roto (ya arreglado).
+
+**Relación:** DEUDA 129 (donde vive el timeout), DEUDA 144 (el rates callback que lo necesita <5s), DEUDA 130 (los 5s de Tiendanube).
+
+---
+

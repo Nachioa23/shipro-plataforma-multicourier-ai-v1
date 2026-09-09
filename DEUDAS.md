@@ -2548,20 +2548,6 @@ Urbano Express, Hop Envíos, Pickit, Moova, Intralog.
 
 ---
 
-## DEUDA 145 — Timeout de courier: bajar de 8s a <5s parametrizable por-call para el plugin (ABIERTA, prerequisito del rates callback, registrada 2026-08-10)
-
-**Status:** ABIERTA — prerequisito de calidad del rates callback (DEUDA 144).
-
-**Problema:** `COURIER_TIMEOUT_MS = 8000` está hardcodeado y DUPLICADO en ambos adapters (MocisAdapter + AndreaniAdapter), no parametrizable por-llamada. Tiendanube corta el rates callback a los 5s (circuit breaker, DEUDA 130). Con 8s de techo por courier, una cotización lenta puede pasarse de los 5s de Tiendanube.
-
-**Solución (diseño):** parametrizar el timeout como parámetro opcional del adapter (o del `fetchConTimeout`), para que el contexto "checkout" use < 5s sin bajar el global de 8s (que sirve al dashboard, donde 8s está bien). Opción (a) parametrizar per-call — preferida; opción (b) bajar la constante global — descartada (afecta dashboard).
-
-**Nota:** el wrapper `fetchConTimeout` ya quedó SANO post-fix del bug de recursión (ver suplemento de DEUDA 129, commit 709d995). Este cambio es sobre el VALOR del timeout, no sobre el wrapper roto (ya arreglado).
-
-**Relación:** DEUDA 129 (donde vive el timeout), DEUDA 144 (el rates callback que lo necesita <5s), DEUDA 130 (los 5s de Tiendanube).
-
----
-
 ## DEUDA 146 — sendMail bloqueante alarga el request del cruce cuando el SMTP falla (registrada 2026-08-11, scope chico, prioridad baja)
 
 **Status:** ABIERTA — no urgente, no bloquea el plugin.

@@ -4178,3 +4178,98 @@ Money-crítico → **verificación numérica antes/después** en snapshot obliga
 **Origen:** hallazgo emergente durante el rewire del resolver del intermediario (DEUDA 170 Pieza motor 2026-09-08) — al revisar la cascada de `aplicarMarkup` para verificar preservación byte-idéntica, Nacho notó que el fijo se sumaba post-%, contradiciendo su modelo mental de "uno u otro". Se registra ahora para no perderlo aunque no requiera acción inmediata.
 
 ---
+
+## DEUDA 173 — Estados de envío (`estadoActual`) son String libre sin centralizar → formatos inconsistentes + sin fuente de verdad para los plugins (registrada 2026-09-09, scope alto, prioridad media, obra grande + cross-chat)
+
+**Status:** ABIERTA. No rompe hoy si los plugins usan los literales exactos, pero es deuda técnica real que causa fricción recurrente cada vez que un plugin nuevo (WooCommerce, Tiendanube, futuros Shopify/VTEX) intenta consumir los estados.
+
+**PROBLEMA:** `Envio.estadoActual` está declarado como `String @default("IMPRESO")` en el schema (`prisma/schema.prisma:780`) — **no es un enum Prisma, no hay constante centralizada** (`grep EstadoEnvio/ESTADO_ENVIO/ESTADOS_ENVIO` en `lib/` + `prisma/schema.prisma` = 0 hits). Cada asignación en el código es un string literal libre → **formatos MEZCLADOS conviven en la DB y el código:**
+
+- **Title-case con acento:** `"Pendiente"`, `"Retenido"`.
+- **UPPER_SNAKE:** `"PENDIENTE"`, `"RETENIDO"`, `"BLOQUEADO_SALDO"`, `"BLOQUEADO_DEPOSITO"`, `"BLOQUEADO_CREDENCIAL"`, `"BLOQUEADO_OPERATIVIDAD"`, `"BLOQUEADO_DATOS_PAQUETE"`, `"BLOQUEADO_PARCIAL"`, `"IMPRESO"`.
+
+Evidencia de que ambos coexisten en la DB: el filtro en `app/api/envios/route.ts:60-75` explícitamente hace matches CASE-VARIANT — `where.estadoActual = { in: ["RETENIDO", "Retenido"] }` y `{ in: ["PENDIENTE", "Pendiente"] }`. El propio código admite que hay rows con AMBAS variantes escritos por paths históricos distintos sin normalizador común.
+
+**Consecuencia para los plugins (Chat C):** descubren los estados DE A UNO cuando el plugin se rompe. Ejemplo real: apareció `"RETENIDO"` (agregaron un case), después apareció `"Pendiente"` (que caía en `default: "status desconocido"` porque el switch solo tenía "CREADO"/"BLOQUEADO_*"/"RETENIDO"). No escala — cada plugin futuro tropieza igual.
+
+**LISTA CANÓNICA ACTUAL (literales EXACTOS extraídos del código 2026-09-09, agrupados por acción esperada del plugin):**
+
+**Grupo A — ÉXITO** (etiqueta creada, mostrar tracking + link + PDF):
+- **`"Pendiente"`** — canónico del camino feliz post-`crearEnvio` L150 + `procesar-bloqueados*` (al destrabe automático). Es lo que el motor asigna hoy en el 99% de los casos exitosos.
+- `"PENDIENTE"` — legacy upper-case (rows históricos en la DB; también posible via replay idempotente si algún path viejo escribió upper).
+- `"IMPRESO"` — schema default (nunca usado en runtime porque `crear.ts` L1009 siempre asigna explícito) + `app/api/envios/inversa/route.ts:122` (logística inversa — path diferente al POST normal) + rows históricos.
+
+**Grupo B — ESPERA / ACCIÓN DEL COMPRADOR** (envío creado, etiqueta pendiente por corrección de datos):
+- **`"RETENIDO"`** — canónico. `crear.ts:347` cuando la validación de dirección (peaje/Google Maps) falla. El comprador debe completar la corrección desde `/corregir/[tracking]?token=X` → job auto-genera etiqueta.
+- `"Retenido"` — legacy title-case (rows históricos).
+
+**Grupo C — BLOQUEO** (envío creado, NO despachado — requiere acción del cliente/admin):
+- **`"BLOQUEADO_SALDO"`** — `crear.ts:873`. Cliente carga saldo → `procesar-bloqueados.ts` destraba automáticamente.
+- **`"BLOQUEADO_DEPOSITO"`** — `crear.ts:303`. Empresa sin depósito predeterminado activo.
+- **`"BLOQUEADO_CREDENCIAL"`** — `crear.ts:428`. Credencial Rama A + `propietarioTipo=COURIER` + `propietarioCourierId=null` (inconsistencia). Admin Shipro asigna dueño → destrabe.
+- **`"BLOQUEADO_OPERATIVIDAD"`** — `crear.ts:471`. Par (depósito × courier) no operativo. Cliente configura el par → destrabe.
+- **`"BLOQUEADO_DATOS_PAQUETE"`** — `crear.ts:380`. Peso o dimensiones faltantes/inválidos.
+- **`"BLOQUEADO_PARCIAL"`** — `crear.ts:945`. Envío multi-tramo con al menos un tramo fallado (otros OK).
+
+**Response shape del plugin (diferencia crítica que Chat C debe manejar):**
+- **Primera invocación (envío nuevo, camino feliz):** `route.ts:234` retorna el objeto crudo `{ estado: "Pendiente", ...bloqueado flags, tracking }` **SIN campo `status`**. El plugin lee `data.status` → recibe `undefined`. Fallback: leer `data.estado`.
+- **Replay idempotente (misma Idempotency-Key):** `route.ts:141` retorna `{ tracking, status: existing.estadoActual, replayed: true }` — con campo `status` (leído del DB row).
+- **Bloqueado (los 4):** `route.ts:196-233` retorna `{ ..., status: "BLOQUEADO_*", warning }` — con `status` explícito.
+
+**Estrategia defensive para los plugins (mientras no exista el enum):**
+```
+$statusRaw = $data['status'] ?? $data['estado'] ?? '';
+$statusUpper = strtoupper($statusRaw);
+if ($statusUpper === 'PENDIENTE' || $statusUpper === 'IMPRESO') { /* éxito */ }
+else if ($statusUpper === 'RETENIDO') { /* retenido — pendiente corrección */ }
+else if (str_starts_with($statusUpper, 'BLOQUEADO_')) { /* bloqueado con motivo */ }
+```
+
+**DRIFT CONTRATO ↔ CÓDIGO (Chat C corrige):** el OpenAPI v1.1 (territorio Chat C) declara el estado de éxito como `"CREADO"`. **`grep '"CREADO"' lib/envios/ app/api/envios/` = 0 hits.** El código NUNCA emite `"CREADO"` — devuelve `"Pendiente"`. **El contrato miente.** Chat C debe actualizar el OpenAPI para reemplazar `"CREADO"` por el conjunto real del Grupo A (`"Pendiente" | "PENDIENTE" | "IMPRESO"`) con `"Pendiente"` como canónico, y agregar los Grupos B/C completos.
+
+**Fuera del scope del path normal (registrar por completitud):**
+- **`fechaImpresion` es la fecha runtime** (no `createdAt`).
+- **`EventoTracking.estado`** (tabla separada) es el histórico granular; `Envio.estadoActual` es el snapshot vigente. Ambos son String libre — este debt aplica a ambos si se hace la centralización.
+- **`Manifiesto.estadoActual` + `Bulto.estadoActual`** (`schema.prisma:1356` + `:1414`) también son String libre con `@default("PENDIENTE")` — mismo problema en tablas hermanas. La centralización debería abarcarlas o registrarlas como sub-piezas del mismo esfuerzo.
+
+**FIX DE FONDO (esta deuda propone):** centralizar los estados en un enum Prisma **O** una constante única — 1 solo lugar que defina todos los estados válidos + un solo formato canónico (recomendado: UPPERCASE, consistente con el patrón de los `BLOQUEADO_*` que ya son upper y de la mayoría de enums Prisma en el codebase — ej. `PropietarioTipo`, `MarkupCourierModo`, `EstadoConexion`, etc.).
+
+**Diseño propuesto (borrador — requiere design doc dedicado):**
+1. Crear `lib/constants/estados-envio.ts` con `export const ESTADOS_ENVIO = { PENDIENTE: "PENDIENTE", RETENIDO: "RETENIDO", BLOQUEADO_SALDO: "BLOQUEADO_SALDO", ... }` — literales canónicos UPPERCASE.
+2. Reemplazar TODOS los string literals `"Pendiente"`, `"RETENIDO"`, `"BLOQUEADO_*"` en `crear.ts` + `procesar-bloqueados*.ts` + `route.ts` + Torre + conciliación + webhooks + eventos tracking + inversa por imports de esa const. **tsc-guided cascade** (renombrar la const → tsc muestra todos los sitios afectados).
+3. Migration de data: `UPDATE "Envio" SET "estadoActual" = 'PENDIENTE' WHERE "estadoActual" = 'Pendiente';` + `... 'RETENIDO' WHERE ... = 'Retenido';` (idem para todas las variantes legacy). Money-safe (cero cambio de valor, solo normalización de format). Money-neutral.
+4. Actualizar el schema: `estadoActual EstadoEnvio` (Prisma enum) con default `PENDIENTE`. Cuando el enum es Prisma-native, imposible escribir un estado inválido — el schema es la fuente de verdad.
+5. Coordinar con Chat C ANTES del deploy: la centralización puede cambiar los literales (ej. si hoy `"Pendiente"` pasa a ser `"PENDIENTE"` canónico, el plugin necesita adaptarse). Chat C actualiza el switch de plugins + el OpenAPI en el mismo release cycle.
+
+**⚠️ Por qué es OBRA GRANDE + PELIGROSA + CROSS-CHAT:**
+- **`estadoActual` se usa en TODO el sistema:** motor (`crear.ts`, `procesar-bloqueados*`), Torre de Control (queries y filtros de métricas), conciliación (audit trail), webhooks Tiendanube (Chat B), plugins (Chat C), UI del dashboard (filtros por estado, chips visuales), reports/exports Excel, mails de estado, tests. Normalizar formatos (ej. `"Pendiente" → "PENDIENTE"`) obliga a actualizar EN SINCRONÍA todo lo que compara estados.
+- **Migración de datos:** los envíos históricos tienen formatos mezclados. UPDATE masivo requiere revisar todos los indexes que dependen de `estadoActual` (hay `@@index([estadoActual])` en `Manifiesto` L1379 — verificar performance del UPDATE).
+- **Coordinación cross-chat obligatoria:** Chat B (Tiendanube webhooks que mapean estados) + Chat C (plugins que consumen los estados + OpenAPI). Un cambio mal coordinado rompe en cascada — Tiendanube webhooks reciben "PENDIENTE" pero el core espera "Pendiente" → orders quedan con estado incorrecto. WooCommerce plugin falla al matchear.
+- **Testing exhaustivo:** cada path que asigna o lee `estadoActual` debe verificarse post-migración. Torre de Control tiene ~15 métricas que filtran por estado — todas deben validarse contra datos post-normalización.
+
+**NO hacer sin plan dedicado.** Requiere design doc (mismo estilo que `DISENO-CONFIG-VARIABLES-TARIFA.md` o `DISENO-PROPIEDAD-CREDENCIALES.md`) que enumere: (i) todos los sitios afectados, (ii) el orden de despliegue (data migration → schema change → code deploy — o al revés, decidir), (iii) el plan de rollback, (iv) la ventana de coordinación con Chat B/C.
+
+**Mientras tanto (hoy 2026-09-09):**
+- Los plugins usan los literales EXACTOS como están hoy (Chat C ya recibió la lista canónica de arriba en el recon 2026-09-09 y adoptó la estrategia defensive: leer `status ?? estado`, comparar case-insensitive).
+- Chat C corrige el OpenAPI v1.1 para reflejar los estados reales (drift fix).
+- Chat A registra esta deuda para no perderla.
+
+**Cuando se ejecute la centralización — checklist obligatorio pre-deploy:**
+- [ ] Avisar a Chat B con la lista final de literales canónicos (Tiendanube webhooks).
+- [ ] Avisar a Chat C con la lista final + fecha de release (plugins + OpenAPI).
+- [ ] Coordinar migration en ventana de bajo tráfico.
+- [ ] Verificar todas las métricas de Torre de Control post-migration (queries que filtran por estado).
+- [ ] Verificar procesos automáticos (`procesar-bloqueados-*`) no queden colgados por diferencia de literal.
+- [ ] Rollback plan: script SQL inverso pre-generado.
+
+**Relación:**
+- [[DEUDA 26]] (limpieza estructural de la BD) — pertenece a la misma familia de "normalizar datos legacy". Se puede abordar en la misma campaña o separado.
+- [[DEUDA 39]] (Torre de Control) — Torre lee `estadoActual` extensivamente. La centralización mejora la robustez de sus queries.
+- [[DEUDA 158]] (renames money-safe) — patrón similar (rename con `@map` conservando la columna física). Acá el patrón sería enum-migration con data update.
+- Plugins e-commerce (WooCommerce, futuro Shopify/VTEX/Tiendanube absorción) — consumidores directos que se benefician del enum.
+
+**Prioridad:** **media**. No bloquea deploys ni rompe cotización/facturación. Bloquea la robustez de plugins futuros y la sanidad del schema. Se activa cuando Chat A tenga ancho de banda + Chat B/C alineados para ejecutar en simultáneo.
+
+**Origen:** flagueado por Chat C el 2026-09-09 al descubrir que el plugin de WooCommerce recibía `"Pendiente"` (title-case) mientras el switch del plugin solo tenía casos para `"CREADO"`/`"RETENIDO"`/`"BLOQUEADO_*"` — cayendo en `default: "status desconocido"`. Recon en Chat A confirmó (i) que `"CREADO"` es ficción del OpenAPI, (ii) que los formatos son mixtos por diseño (String libre), (iii) que la lista canónica actual son los literales de arriba. Se registra ahora la deuda de fondo para no perderla — mientras tanto, plugin y OpenAPI se acomodan a la realidad del código.
+
+---

@@ -481,9 +481,39 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
     };
   };
 
-  for (const config of couriersAptos) {
-    try {
-      const nombreNormalizado = normalizarParaComparacion(config.nombreCourier);
+  // DEUDA 145 (2026-09-09): paralelización del loop per-courier.
+  //
+  // Antes: `for (const config of couriersAptos)` con await interno → total ≈
+  // suma de latencias (6-15s con 4-6 couriers). Forzaba al plugin WooCommerce
+  // a un timeout de 15s.
+  //
+  // Ahora: cada iteración corre en paralelo con Promise.allSettled → total ≈
+  // courier más lento (~2-3s). Combined con el fix per-call timeout <5s
+  // (DEUDA 145 Chat B), garantiza respuesta <5s para checkout.
+  //
+  // MONEY-SAFE — cambio SOLO de orquestación, cero cambio de math:
+  //   - Cada iteración es totalmente independiente (config local + resolvers
+  //     per-courier + adapter local + aplicarMarkup puro). Cero shared mutable
+  //     state en el compute → cero riesgo de race condition en precios.
+  //   - Los 2 pushes a `opcionesDomicilio/opcionesSucursal` se hacen en LOCAL
+  //     por task; se mergean POST-allSettled en el mismo ORDEN de couriersAptos
+  //     (preserva byte-idéntico el pre-sort del array). El sort final por
+  //     precioFinal (L705-706) sigue siendo determinístico.
+  //   - Error handling verbatim: los 3 try/catch (2 per-modality + 1 outer
+  //     errorFatal con fallback) se mueven tal cual dentro del async body.
+  //     Promise.allSettled es capa defensiva por si un error escapa los
+  //     try/catches internos — se loguea + skip (nunca 500 por 1 courier bug).
+  //   - guardarHistorico(...) sigue siendo fire-and-forget con upsert per
+  //     (courierId, cp, peso, modalidad) — cada courier tiene tupla única
+  //     entre sí, sin race sobre la misma row.
+  type CourierQuoteResult = { domicilio: OpcionTarifa[]; sucursal: OpcionTarifa[] };
+
+  const resultadosPorCourier = await Promise.allSettled(
+    couriersAptos.map(async (config: any): Promise<CourierQuoteResult> => {
+      const domLocal: OpcionTarifa[] = [];
+      const sucLocal: OpcionTarifa[] = [];
+      try {
+        const nombreNormalizado = normalizarParaComparacion(config.nombreCourier);
 
       // Si el cliente usa credenciales propias inválidas, parsearCredencialesPropias
       // lanza y este courier se salta (no aparece en las opciones).
@@ -569,7 +599,7 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
           for (const op of opciones) {
             const precios = calcularPrecios(op.precioNeto);
             guardarHistorico(mapaCourierIds.get(config.nombreCourier), op.precioNeto, "domicilio");
-            opcionesDomicilio.push({
+            domLocal.push({
               id: `dom-${nombreNormalizado}-${op.servicio.replace(/\s/g, '')}`,
               courier: config.nombreCourier.toUpperCase(),
               modalidad: `Entrega a Domicilio (${op.servicio})`,
@@ -605,7 +635,7 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
           // (per-courier > per-empresa) para que el comprador no perciba el fallo.
           console.warn("[cotizador] courier falló:", e instanceof Error ? e.message : String(e));
           const fb = await construirOpcionFallback(config, "domicilio");
-          if (fb) { fb.codigoServicio = mapaCodigoServicio.get(nombreNormalizado)?.domicilio; opcionesDomicilio.push(fb); }
+          if (fb) { fb.codigoServicio = mapaCodigoServicio.get(nombreNormalizado)?.domicilio; domLocal.push(fb); }
         }
       }
 
@@ -615,7 +645,7 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
           for (const op of opciones) {
             const precios = calcularPrecios(op.precioNeto);
             guardarHistorico(mapaCourierIds.get(config.nombreCourier), op.precioNeto, "sucursal");
-            opcionesSucursal.push({
+            sucLocal.push({
               id: `suc-${nombreNormalizado}`,
               courier: config.nombreCourier.toUpperCase(),
               modalidad: `Retiro en Sucursal (${op.servicio})`,
@@ -645,10 +675,10 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
           // el catch de domicilio: log + fallback con nombre real del courier.
           console.warn("[cotizador] courier falló:", e instanceof Error ? e.message : String(e));
           const fb = await construirOpcionFallback(config, "sucursal");
-          if (fb) { fb.codigoServicio = mapaCodigoServicio.get(nombreNormalizado)?.sucursal; opcionesSucursal.push(fb); }
+          if (fb) { fb.codigoServicio = mapaCodigoServicio.get(nombreNormalizado)?.sucursal; sucLocal.push(fb); }
         }
       }
-    } catch (errorFatal: any) {
+      } catch (errorFatal: any) {
       // DEUDA 129: fallo courier-level ANTES de intentar sucursal o domicilio
       // (ej. credencial malformada, CourierFactory rechazó). Logueamos + pusheamos
       // fallback en AMBAS modalidades habilitadas por el cliente para que el
@@ -666,13 +696,31 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
       const courierPuedeSucursalFB = capacidadesCourierFB?.has("sucursal") ?? false;
       if (config.ofreceDomicilio !== false && courierPuedeDomicilioFB) {
         const fbDom = await construirOpcionFallback(config, "domicilio");
-        if (fbDom) { fbDom.codigoServicio = mapaCodigoServicio.get(normalizarParaComparacion(config.nombreCourier))?.domicilio; opcionesDomicilio.push(fbDom); }
+        if (fbDom) { fbDom.codigoServicio = mapaCodigoServicio.get(normalizarParaComparacion(config.nombreCourier))?.domicilio; domLocal.push(fbDom); }
       }
       if (config.ofreceSucursal !== false && courierPuedeSucursalFB) {
         const fbSuc = await construirOpcionFallback(config, "sucursal");
-        if (fbSuc) { fbSuc.codigoServicio = mapaCodigoServicio.get(normalizarParaComparacion(config.nombreCourier))?.sucursal; opcionesSucursal.push(fbSuc); }
+        if (fbSuc) { fbSuc.codigoServicio = mapaCodigoServicio.get(normalizarParaComparacion(config.nombreCourier))?.sucursal; sucLocal.push(fbSuc); }
       }
-      continue;
+      }
+      return { domicilio: domLocal, sucursal: sucLocal };
+    })
+  );
+
+  // Merge en el orden de couriersAptos (preserva byte-idéntico el pre-sort).
+  // Cada task con status="fulfilled" contribuye sus 2 arrays; los "rejected"
+  // son defensive (deberían ser 0 con los try/catches internos) — se loguean y
+  // se skip para no romper el resto del batch (mismo espíritu que el catch
+  // errorFatal actual, que capturaba courier-level y pusheaba fallback).
+  for (const settled of resultadosPorCourier) {
+    if (settled.status === "fulfilled") {
+      opcionesDomicilio.push(...settled.value.domicilio);
+      opcionesSucursal.push(...settled.value.sucursal);
+    } else {
+      console.warn(
+        "[cotizador] Task de courier rechazada inesperadamente (defensive skip — revisar):",
+        settled.reason instanceof Error ? settled.reason.message : String(settled.reason)
+      );
     }
   }
 

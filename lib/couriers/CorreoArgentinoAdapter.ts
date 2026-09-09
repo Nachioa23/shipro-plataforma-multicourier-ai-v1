@@ -16,15 +16,16 @@ export type { CredencialesCorreoArgentino } from './credenciales/correoargentino
 // + reclasificación de AbortError como CourierTimeout. 8s consistente con los otros
 // adapters — CA/Paq.ar es REST, budget típico < 2s.
 const COURIER_TIMEOUT_MS = 8000;
+const ETIQUETA_TIMEOUT_MS = 30000; // etiqueta es back-office (sin presión de checkout) — 30s uniforme (decisión Nacho)
 
-async function fetchConTimeout(input: string | URL, init?: RequestInit): Promise<Response> {
+async function fetchConTimeout(input: string | URL, init?: RequestInit, timeoutMs: number = COURIER_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), COURIER_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(input, { ...init, signal: controller.signal });
   } catch (e: any) {
     if (e?.name === "AbortError") {
-      throw new Error("CourierTimeout: Correo Argentino no respondió en " + COURIER_TIMEOUT_MS + "ms");
+      throw new Error("CourierTimeout: Correo Argentino no respondió en " + timeoutMs + "ms");
     }
     throw e;
   } finally {
@@ -276,7 +277,7 @@ export class CorreoArgentinoAdapter implements ICourierIntegrator {
       method: "POST",
       headers: this.paqarAuthHeaders(),
       body: JSON.stringify(body),
-    });
+    }, ETIQUETA_TIMEOUT_MS);
 
     if (!res.ok) {
       const detalle = await res.text().catch(() => "");

@@ -15,15 +15,16 @@ export type { CredencialesHopEnvios } from './credenciales/hopenvios';
 // como CourierTimeout. 8s consistente con los otros adapters — Hop es REST, budget
 // típico < 2s por endpoint.
 const COURIER_TIMEOUT_MS = 8000;
+const ETIQUETA_TIMEOUT_MS = 30000; // etiqueta es back-office (sin presión de checkout) — 30s uniforme (decisión Nacho)
 
-async function fetchConTimeout(input: string | URL, init?: RequestInit): Promise<Response> {
+async function fetchConTimeout(input: string | URL, init?: RequestInit, timeoutMs: number = COURIER_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), COURIER_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(input, { ...init, signal: controller.signal });
   } catch (e: any) {
     if (e?.name === "AbortError") {
-      throw new Error("CourierTimeout: Hop Envíos no respondió en " + COURIER_TIMEOUT_MS + "ms");
+      throw new Error("CourierTimeout: Hop Envíos no respondió en " + timeoutMs + "ms");
     }
     throw e;
   } finally {
@@ -326,7 +327,7 @@ export class HopEnviosAdapter implements ICourierIntegrator {
         `Hop Envíos: no hay URL de etiqueta para ${ref.trackingNumber}. Re-despachá para regenerar.`,
       );
     }
-    const res = await fetchConTimeout(ref.etiquetaUrl, { method: "GET" });
+    const res = await fetchConTimeout(ref.etiquetaUrl, { method: "GET" }, ETIQUETA_TIMEOUT_MS);
     if (!res.ok) {
       throw new Error(
         `Hop Envíos: error al descargar etiqueta (HTTP ${res.status}) para ${ref.trackingNumber}`,

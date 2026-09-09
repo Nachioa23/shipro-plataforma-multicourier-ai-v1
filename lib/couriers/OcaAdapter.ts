@@ -11,15 +11,16 @@ import {
 // que Andreani/Mocis. OCA (SOAP legacy) tiene budget más alto que los REST
 // modernos, pero 8s alcanza para las operaciones típicas de e-Pak.
 const COURIER_TIMEOUT_MS = 8000;
+const ETIQUETA_TIMEOUT_MS = 30000; // etiqueta es back-office (sin presión de checkout) — 30s uniforme (decisión Nacho)
 
-async function fetchConTimeout(input: string | URL, init?: RequestInit): Promise<Response> {
+async function fetchConTimeout(input: string | URL, init?: RequestInit, timeoutMs: number = COURIER_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), COURIER_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(input, { ...init, signal: controller.signal });
   } catch (e: any) {
     if (e?.name === "AbortError") {
-      throw new Error("CourierTimeout: OCA no respondió en " + COURIER_TIMEOUT_MS + "ms");
+      throw new Error("CourierTimeout: OCA no respondió en " + timeoutMs + "ms");
     }
     throw e;
   } finally {
@@ -119,7 +120,7 @@ ${cuerpo}
   // ==========================================
   // SOAP POST — helper común para todos los métodos SOAP de e-Pak.
   // ==========================================
-  private async soapPost(methodName: string, params: Record<string, string>): Promise<string> {
+  private async soapPost(methodName: string, params: Record<string, string>, timeoutMs: number = COURIER_TIMEOUT_MS): Promise<string> {
     const envelope = this.buildSoapEnvelope(methodName, params);
     const res = await fetchConTimeout(`${this.baseUrl}/${methodName}`, {
       method: "POST",
@@ -128,7 +129,7 @@ ${cuerpo}
         "SOAPAction": `"${OCA_SOAP_NS}${methodName}"`,
       },
       body: envelope,
-    });
+    }, timeoutMs);
     if (!res.ok) {
       throw new Error(`OCA SOAP ${res.status} en ${methodName}`);
     }
@@ -285,7 +286,7 @@ ${paquetesXml}
       usr: this.creds.usuario,
       psw: this.creds.password,
       nroEnvio: ref.trackingNumber,
-    });
+    }, ETIQUETA_TIMEOUT_MS);
 
     // Probar tags conocidos donde OCA suele empaquetar el Base64. El primero que
     // dé un string no-vacío se decodifica.

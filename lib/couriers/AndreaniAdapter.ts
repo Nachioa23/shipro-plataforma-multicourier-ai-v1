@@ -11,15 +11,16 @@ import {
 // 8s queda por debajo del threshold del circuit breaker de Tiendanube (10s) y por
 // encima del budget típico de Andreani (<2s), con margen para picos legítimos.
 const COURIER_TIMEOUT_MS = 8000; // 8 seconds — below Tiendanube's 10s circuit breaker threshold
+const ETIQUETA_TIMEOUT_MS = 30000; // etiqueta es back-office (sin presión de checkout) — 30s uniforme (decisión Nacho)
 
-async function fetchConTimeout(input: string | URL, init?: RequestInit): Promise<Response> {
+async function fetchConTimeout(input: string | URL, init?: RequestInit, timeoutMs: number = COURIER_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), COURIER_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(input, { ...init, signal: controller.signal });
   } catch (e: any) {
     if (e?.name === "AbortError") {
-      throw new Error("CourierTimeout: Andreani no respondió en " + COURIER_TIMEOUT_MS + "ms");
+      throw new Error("CourierTimeout: Andreani no respondió en " + timeoutMs + "ms");
     }
     throw e;
   } finally {
@@ -469,7 +470,7 @@ export class AndreaniAdapter implements ICourierIntegrator {
     const res = await fetchConTimeout(ref.etiquetaUrl, {
       method: 'GET',
       headers: { 'Authorization': `Bearer ${token}`, 'x-authorization-token': token }
-    });
+    }, ETIQUETA_TIMEOUT_MS);
 
     if (!res.ok) throw new Error("Andreani bloqueó la descarga del PDF");
     return new Uint8Array(await res.arrayBuffer());

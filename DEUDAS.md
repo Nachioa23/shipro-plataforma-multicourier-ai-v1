@@ -4260,9 +4260,9 @@ else if (str_starts_with($statusUpper, 'BLOQUEADO_')) { /* bloqueado con motivo 
 
 ---
 
-## DEUDA 174 — Política de Débito Unificada: el momento del débito (Fee / chain) no cumple la política de negocio en 8 casos (money-crítico, registrada 2026-09-10)
+## DEUDA 174 — Política de Débito Unificada: el momento del débito (Fee / chain) no cumple la política de negocio en 8 casos (money-crítico, registrada 2026-09-10, Pieza 1 + Pieza 2 HECHAS + VERIFICADAS LOCAL 2026-09-10, pendiente deploy prod + P3-P5)
 
-**Status:** ABIERTA. Money-crítico. Prioridad alta (bugs de plata en ambas direcciones — cobra de más y cobra de menos según el caso). Sin backfill histórico requerido (prod = data de prueba, sin clientes reales todavía). Se construye limpia en 5 piezas money-safe. Prerequisito duro: mecanismo anti-doble-débito ANTES de tocar cualquier guard.
+**Status:** EN PROGRESO. Money-crítico. Prioridad alta (bugs de plata en ambas direcciones — cobra de más y cobra de menos según el caso). Sin backfill histórico requerido (prod = data de prueba, sin clientes reales todavía). Se construye limpia en 5 piezas money-safe. Prerequisito duro: mecanismo anti-doble-débito ANTES de tocar cualquier guard. **Piezas 1 + 2 HECHAS + VERIFICADAS local 2026-09-10; pendientes deploy prod + Piezas 3-5.**
 
 **Principio rector (Nacho, LOCKED):** "el débito refleja quién hizo su trabajo".
 - **Fee+IVA** se cobra cuando Shipro generó CUALQUIER etiqueta (genérica SHP-* o del courier real) — ambas ramas.
@@ -4313,8 +4313,8 @@ else if (str_starts_with($statusUpper, 'BLOQUEADO_')) { /* bloqueado con motivo 
 
 **Plan de piezas (money-safe, secuencial, verificación numérica en cada una):**
 
-- **Pieza 1 — Mecanismo anti-doble-débito (PREREQUISITO DURO).** Opción a decidir por Nacho (flag `FinanzasEnvio.feeCobradoAlCrear` vs query MovimientoFinanciero vs invariante estricto). Se implementa PRIMERO. Verificación: cero cambio de comportamiento (todos los envíos siguen debitando lo mismo); solo se agrega el mecanismo que las siguientes piezas van a consultar.
-- **Pieza 2 — Rama B: Fee al crear cualquier etiqueta (incl. bloqueados).** Modifica guard L1116 para que Rama B debite Fee siempre (excepto SALDO donde no hay plata). Modifica handlers destrabe Rama B para que NO re-debiten Fee (usan mecanismo Pieza 1). Verificación: crear envío Rama B forzando cada BLOQUEADO_*, verificar MovimientoFinanciero Fee+IVA en creación; verificar que destrabe NO agrega segundo débito.
+- **Pieza 1 — Mecanismo anti-doble-débito (PREREQUISITO DURO). HECHA + VERIFICADA local 2026-09-10 (commit `ae9e700`).** Opción elegida: **query source-agnostic al ledger** (no flag). Helper nuevo `lib/finanzas/debito-aplicado.ts` con `debitoAplicadoEnvio(envioId, client?)` que suma en valor absoluto los `DEBITO_ENVIO` de un envío (`MovimientoFinanciero` es la fuente de verdad; `saldoActivo` es su suma). Cero migración de schema. Sanity contra BD local: envío ya cobrado devuelve el monto positivo; envío bloqueado sin débito devuelve 0; sign handling correcto (raw `-14385.64` → `14385.64`). Pendiente deploy prod (junto con Pieza 2).
+- **Pieza 2 — Rama B: Fee al crear cualquier etiqueta (incl. bloqueados). HECHA + VERIFICADA local 2026-09-10 (commit `c6beebe`, 5 archivos: `crear.ts` + 4 handlers).** Guard `crear.ts:1116` reescrito rama-aware con `debeDebitarPolíticaHistórica` (todos, no bloqueado) OR `debeDebitarRamaBBloqueada` (`esRamaB && !bloqueadoPorSaldo && algún bloqueo NO-SALDO`). Antes de crear `DEBITO_ENVIO` consulta `debitoAplicadoEnvio` y cobra solo el delta (`saldoPosteriorDelta = saldoActivo - delta`). Los 4 handlers destrabe (`procesar-bloqueados.ts` + `-credencial.ts` + `-deposito.ts` + `-operatividad.ts`) hacen la misma consulta al ledger: `monto = max(0, tarifaFullCotizada - yaAplicado)`. Cuando delta=0 (Rama B ya cobrada al alta), skip `movimientoFinanciero.create + empresa.update saldoActivo`; estado + tramos + eventoTracking se actualizan igual (destrabe funcional). BLOQUEADO_SALDO excluido explícitamente del debit al crear (cushion PREPAGO/POSTPAGO — se cobra en `procesar-bloqueados.ts` al recargar). **Verificación e2e (Cliente Demo S.A., Rama B, saldo positivo, 2026-09-10):** (i) Andreani con dirección NO normalizable por Google Maps (peaje) → envío nace RETENIDO, debita $1.936 (Fee+IVA), NO el valor cotizado; dashboard muestra $1.936. ✅ política Rama B. (ii) Idem cambiando provincia. ✅ (iii) Moci's dispatch fail → `BLOQUEADO_PARCIAL`, debita Fee correctamente. ✅ money-leak cerrado. Helper anti-doble-débito confirmado en acción: Fee entra una vez, no se duplica al destrabar. **Rama A intocada** (`esRamaB=false` no entra a la nueva rama). tsc clean. Pendiente deploy prod.
 - **Pieza 3 — Rama A: NO debitar hasta etiqueta courier real.** Modifica guard L1116 para excluir también RETENIDO/DATOS_PAQUETE del débito Rama A al crear. Agrega DEBITO_ENVIO en `corregir/route.ts` RAMA 1 cuando dispatch OK genera la etiqueta courier (usa mecanismo Pieza 1 para no doble-debitar). Verificación: crear Rama A RETENIDO → cero débito; `/corregir` exitoso → DEBITO_ENVIO full chain aparece.
 - **Pieza 4 — Cancelación rama-aware.** Modifica `cancelar/route.ts` según decisiones a/b/c: cobrar Fee si aplica (Rama A/B sin etiqueta courier y sin Fee cobrado); refundear si aplica (Rama A + etiqueta courier existente + pre-colecta, decisión a). Verificación: cancelar cada combinación estado × rama, verificar MovimientoFinanciero correcto.
 - **Pieza 5 — Courier reject permanente (culpa Shipro).** Diseño del flag `causaFalla` o equivalente para distinguir "culpa Shipro" de "culpa cliente/courier legítimo". Cuando `causaFalla=SHIPRO`, ni siquiera cobra Fee — políticamente distinto de un bloqueado normal.
@@ -4427,5 +4427,46 @@ Dos opciones de fix (decisión de negocio Nacho, apetito de riesgo):
 **Relación:** [[DEUDA 175]] (bug colchón PREPAGO — misma zona del código; los dos amerintan el editor cuando el negocio operacionalice el colchón). [[DEUDA 22]] (suspensión usa el colchón — si el admin ajusta el colchón, los umbrales de suspensión/reactivación cambian automáticamente por multiplicador). [[DEUDA 10]] Paso 5a (D-10-ONBOARDING-DESCUBIERTO — donde el colchón nace).
 
 **Origen:** recon del modelo colchón Chat A 2026-09-10 durante el diseño de Pieza 2 de DEUDA 174. Verificar dónde se configura el `limiteDescubierto` reveló que la única superficie de edición es el POST del onboarding; el PUT es un gate rígido de dos acciones que no cubre este campo. Registrado como deuda separada, no bloquea DEUDA 174 ni DEUDA 175 pero es infra que las hará usables.
+
+---
+
+## DEUDA 177 — Credenciales Rama A vs Rama B: mismo courier, formatos distintos → falla `CredencialesPropiasIncompletas` al reusar credenciales Rama A en Rama B (registrada 2026-09-10, a investigar)
+
+**Status:** ABIERTA. A investigar. Ortogonal a la obra de débito (esto es parseo/formato de credenciales, no timing de débito). Prioridad media (afecta onboarding Rama B; hoy sin clientes reales operando).
+
+**Síntoma (Nacho, prueba 2026-09-10):** al pasar Cliente Demo S.A. de Rama A a Rama B (`usaCredencialesPropias=true`) y cargar como `credencialesJson` las mismas credenciales de Moci's que ya funcionaban en Rama A, el envío falló al despachar con:
+
+> "Bloqueado por falla en despacho del courier: **CredencialesPropiasIncompletas: faltan clientApi o clientSecret**. Tramos persistidos: 0."
+
+Observación crítica: las MISMAS credenciales de Moci's funcionan sin problema en Rama A pero **no** en Rama B. El bug no es de credenciales inválidas — es de formato/parseo distinto entre las dos ramas para el mismo courier.
+
+**Hipótesis a confirmar con recon:**
+- **(a) Formato distinto:** Rama A (credenciales Shipro-managed vía `obtenerCredencialesShipro`, cargadas desde env vars — `MOCIS_USER` / `MOCIS_PASS` u equivalente) y Rama B (`credencialesJson` del cliente parseado por `parsearCredencialesPropias` esperando `clientApi` / `clientSecret`) esperarían **ESTRUCTURAS distintas** para el mismo courier. Al pegar el shape de Rama A en el campo Rama B, no matchea los required keys. Es el escenario más probable dado el mensaje "faltan clientApi o clientSecret".
+- **(b) Bug de parseo:** `parsearCredencialesPropias` puede tener un branch específico Moci's que valida keys que no son las que el resto del sistema espera. Menos probable pero conviene verificar.
+- **(c) Falta validación/documentación:** aún si (a) es correcto, no hay UI/warning que le diga al cliente "para Rama B tenés que cargar `{ clientApi, clientSecret }` — no lo que te pasó Shipro". Al operador solo le llega el error post-facto, sin guía.
+
+**Impacto:** un cliente Rama B que quiera usar sus propias credenciales de un courier no puede si no conoce el formato exacto esperado por Shipro. **Fricción de onboarding Rama B** — el cliente Rama B es exactamente el que necesita cargar credenciales, y hoy es un game-of-guess.
+
+**Sitios de código a inspeccionar:**
+- `lib/couriers/credenciales/` (barrel + per-courier: `andreani.ts`, `mocis.ts`, `intralog.ts`, `hopenvios.ts`, `oca.ts`, `correoargentino.ts`).
+- `parsearCredencialesPropias` (helper que consume `credencialesJson` de `CredencialCourier`).
+- `obtenerCredencialesShipro` (helper Rama A que arma el objeto de credenciales desde env vars).
+- El interface `ICourierIntegrator` y cada adapter para confirmar qué shape final llegan al `.despachar()` — si convergen o divergen post-parseo.
+- Schema: `CredencialCourier.credencialesJson` (String? / Json?) — validación, si hay.
+
+**Alcance del fix (a definir post-recon):**
+- Documentar formato esperado por-courier en un `docs/CREDENCIALES-RAMA-B.md` (mínimo).
+- Homogeneizar: `parsearCredencialesPropias` y `obtenerCredencialesShipro` devuelven la MISMA estructura por courier → un solo shape a documentar.
+- Ideal: validación en el momento de guardar `credencialesJson` (POST `/api/configuracion/couriers` con Zod / schema per-courier) → error temprano con mensaje claro: "faltan las keys X, Y".
+
+**Ortogonalidad con DEUDA 174:** la obra de débito unificada NO se toca. La Pieza 2 debitó el Fee correctamente (BLOQUEADO_PARCIAL Rama B) — el bug es un fallo del setup del adapter aguas abajo, que crear.ts absorbe en el guard L879 y transiciona a BLOQUEADO_PARCIAL. Este bug hace más frecuente el escenario BLOQUEADO_PARCIAL en Rama B, pero la política de débito ya lo maneja.
+
+**Prioridad:** media. Hoy latente (sin clientes reales Rama B operando). Se activa cuando entren clientes Rama B productivos que necesiten cargar sus credenciales.
+
+**Scope:** a determinar con recon (chico si es solo homogeneizar formato + doc; medio si hay que agregar validación runtime + UI).
+
+**Relación:** [[DEUDA 174]] (obra de débito, ortogonal). [[DEUDA 32+37]] (registry de couriers — misma zona semántica). [[DEUDA 12]] (ABM de couriers). [[DEUDA 121]] (verificación e2e destrabe BLOQUEADO_CREDENCIAL vía API — parcial relación en que ambas tocan la carga de credenciales).
+
+**Origen:** verificación e2e de Pieza 2 de DEUDA 174 (Cliente Demo S.A. → Rama B → cargar credenciales Moci's que funcionan en Rama A → probar despacho). Al reproducir el escenario BLOQUEADO_PARCIAL para verificar que la Pieza 2 cobraba el Fee correctamente, apareció este bug secundario. La política de débito Pieza 2 funcionó bien (cobró el Fee del PARCIAL); el bug de credenciales es aparte y merece su propia investigación.
 
 ---

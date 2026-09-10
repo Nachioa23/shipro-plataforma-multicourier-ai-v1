@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { despacharCourier } from "@/lib/envios/dispatch";
 import { enviarMailCreacion } from "@/lib/mailer";
 import { getAppUrl } from "@/lib/utils/app-url";
+import { debitoAplicadoEnvio } from "@/lib/finanzas/debito-aplicado";
 
 const MAX_INLINE = 10;
 
@@ -73,7 +74,13 @@ export async function procesarEnviosBloqueadosPorDeposito(empresaId: number): Pr
   let transicionadosASaldo = 0;
 
   for (const envio of aProcesar) {
-    const monto: Prisma.Decimal = envio.finanzas?.tarifaFullCotizada ?? new Prisma.Decimal(0);
+    // DEUDA 174 Pieza 2 (2026-09-10): anti-doble-débito. Rama B post-P2 cobra Fee al alta
+    // aunque el envío nazca BLOQUEADO_DEPOSITO → en el destrabe `yaAplicado=Fee=target` →
+    // delta=0 → no re-debita. Rama A: nunca cobró al alta → delta=full → debita el chain.
+    const target: Prisma.Decimal = envio.finanzas?.tarifaFullCotizada ?? new Prisma.Decimal(0);
+    const yaAplicado = await debitoAplicadoEnvio(envio.id);
+    const deltaDebito: Prisma.Decimal = target.sub(yaAplicado);
+    const monto: Prisma.Decimal = deltaDebito.isNegative() ? new Prisma.Decimal(0) : deltaDebito;
 
     const credencial = await prisma.credencialCourier.findUnique({
       where: { empresaId_nombreCourier: { empresaId, nombreCourier: envio.courier.nombre } },
@@ -321,22 +328,25 @@ export async function procesarEnviosBloqueadosPorDeposito(empresaId: number): Pr
           });
         }
 
-        await tx.movimientoFinanciero.create({
-          data: {
-            empresaId,
-            tipo: "DEBITO_ENVIO",
-            monto: monto.neg(),
-            saldoPosterior: nuevoSaldo,
-            referencia: trackingReal,
-            descripcion: `Generación de etiqueta ${envio.courier.nombre.toUpperCase()} (desbloqueo post-configuración de depósito)`,
-            envioId: envio.id,
-          },
-        });
+        // DEUDA 174 Pieza 2: escribir MovimientoFinanciero solo si delta > 0.
+        if (monto.gt(0)) {
+          await tx.movimientoFinanciero.create({
+            data: {
+              empresaId,
+              tipo: "DEBITO_ENVIO",
+              monto: monto.neg(),
+              saldoPosterior: nuevoSaldo,
+              referencia: trackingReal,
+              descripcion: `Generación de etiqueta ${envio.courier.nombre.toUpperCase()} (desbloqueo post-configuración de depósito)`,
+              envioId: envio.id,
+            },
+          });
 
-        await tx.empresa.update({
-          where: { id: empresaId },
-          data: { saldoActivo: nuevoSaldo },
-        });
+          await tx.empresa.update({
+            where: { id: empresaId },
+            data: { saldoActivo: nuevoSaldo },
+          });
+        }
 
         await tx.eventoTracking.create({
           data: {

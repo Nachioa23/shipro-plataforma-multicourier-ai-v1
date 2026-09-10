@@ -29,6 +29,7 @@ import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { obtenerCredencialesShipro } from "@/lib/couriers/credenciales";
 import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
 import type { ResultadoBulto } from "@/lib/couriers/CourierInterface";
+import { debitoAplicadoEnvio } from "@/lib/finanzas/debito-aplicado";
 import { Prisma, EstadoLiquidacion, type DepositoCourierConfig } from "@prisma/client";
 
 export interface CrearEnvioInput {
@@ -962,13 +963,10 @@ export async function crearEnvio(input: CrearEnvioInput) {
     const empresaData = await tx.empresa.findUnique({ where: { id: empresaId } });
     if (empresaData) empresaNombreParaMail = empresaData.nombre;
 
-    let nuevoSaldo: Prisma.Decimal = (empresaData?.saldoActivo ?? new Prisma.Decimal(0)).sub(montoDebito);
-
-    // Decision de producto: las etiquetas genericas/bloqueadas NO debitan
-    // nada; el cobro espera a que haya etiqueta real (en el alta, o en el
-    // desbloqueo posterior via procesar-bloqueados*). El monto autoritativo
-    // ya se persiste en FinanzasEnvio.tarifaFullCotizada mas abajo, para que los
-    // desbloqueos debiten el importe correcto sin recotizar.
+    // DEUDA 174 Pieza 2 (2026-09-10): el saldo posterior se calcula EN el bloque de débito
+    // (rama-aware + delta anti-doble-débito), no acá. `montoDebito` sigue siendo autoritativo
+    // (rama-aware) y se persiste en `FinanzasEnvio.tarifaFullCotizada` más abajo — los
+    // handlers de destrabe lo leen y hacen la misma consulta al ledger para no re-cobrar.
 
     // Torre de Control Metrica 2.3 (DEUDA 39, 2026-06-05):
     // Calcular promesa calibrada al crear envio para medir cumplimiento
@@ -1109,53 +1107,86 @@ export async function crearEnvio(input: CrearEnvioInput) {
       });
     }
 
-    // Si BLOQUEADO_SALDO, BLOQUEADO_DEPOSITO, BLOQUEADO_OPERATIVIDAD o
-    // BLOQUEADO_PARCIAL: NO crear MovimientoFinanciero ni actualizar saldo.
-    // El débito se aplica al desbloquear (procesar-bloqueados*), que lee
-    // FinanzasEnvio.tarifaFullCotizada (autoritativo, rama-aware, ya persistido arriba).
-    if (!bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorCredencial && !bloqueadoPorOperatividad && !bloqueadoPorTramoFallido) {
-      // FASE 1 (DEUDA 73/107): montoDebito ya incluye Fee (Rama B: solo Fee;
-      // Rama A: tarifa completa con Fee ya adentro via aplicarMarkup). Un solo
-      // MovimientoFinanciero cubre todo. Rama-aware descripcion para que el
-      // extracto del cliente sea legible.
-      const descripcionRama = credencialMain?.usaCredencialesPropias === true
-        ? `Fee Shipro ${trackingOficial} — ${courierReal.nombre} (flete facturado por el courier al cliente)`
-        : `Envío ${trackingOficial} — ${courierReal.nombre}`;
+    // DEUDA 174 Pieza 2 (Política de Débito Unificada, 2026-09-10) — política rama-aware:
+    //   - Rama B (usaCredencialesPropias=true): debita Fee+IVA al crear cualquier etiqueta
+    //     (incluso en bloqueos NO-SALDO: DEPOSITO/CREDENCIAL/OPERATIVIDAD/PARCIAL). La
+    //     etiqueta genérica SHP-* ya cuenta como trabajo Shipro. Excepción: BLOQUEADO_SALDO
+    //     no debita al crear (no hay wallet capacity o excede colchón); se cobra al destrabar
+    //     (procesar-bloqueados.ts).
+    //   - Rama A (usaCredencialesPropias=false): SIN CAMBIOS. Bloqueados siguen sin debitar al
+    //     crear; el chain completo (flete + markups + SMO + Fee + IVA) se cobra en el destrabe
+    //     via procesar-bloqueados-*.ts. Pieza 3 abordará Rama A cuando corresponda.
+    //   - Anti-doble-débito: consultamos el ledger (debitoAplicadoEnvio) antes de debitar y
+    //     cobramos SOLO el delta. Los handlers de destrabe hacen la misma consulta → Rama B ya
+    //     cobrada al crear devuelve delta=0 en el destrabe. Money-safe por construcción.
+    //
+    // FASE 1 (DEUDA 73/107): montoDebito ya está rama-aware (Rama B: feeConIva; Rama A:
+    // matched.precioFinal). No cambia acá.
+    const esRamaB = credencialMain?.usaCredencialesPropias === true;
+    const debeDebitarPolíticaHistórica =
+      !bloqueadoPorSaldo &&
+      !bloqueadoPorDeposito &&
+      !bloqueadoPorCredencial &&
+      !bloqueadoPorOperatividad &&
+      !bloqueadoPorTramoFallido;
+    const debeDebitarRamaBBloqueada =
+      esRamaB &&
+      !bloqueadoPorSaldo &&
+      (bloqueadoPorDeposito ||
+        bloqueadoPorCredencial ||
+        bloqueadoPorOperatividad ||
+        bloqueadoPorTramoFallido);
 
-      await tx.movimientoFinanciero.create({
-        data: {
-          empresaId,
-          tipo: "DEBITO_ENVIO",
-          monto: montoDebito.neg(),
-          saldoPosterior: nuevoSaldo,
-          referencia: trackingOficial,
-          descripcion: descripcionRama,
-          envioId: envioCreado.id
+    if (debeDebitarPolíticaHistórica || debeDebitarRamaBBloqueada) {
+      // Anti-doble-débito: consulta el ledger DENTRO de la tx para read-your-writes.
+      // Envío recién creado → yaAplicado=0 → delta=montoDebito. Idempotencia adicional si por
+      // alguna razón hubiera un DEBITO_ENVIO previo (retry, race).
+      const yaAplicado = await debitoAplicadoEnvio(envioCreado.id, tx);
+      const delta = montoDebito.sub(yaAplicado);
+
+      if (delta.gt(0)) {
+        const saldoActualEmpresa = empresaData?.saldoActivo ?? new Prisma.Decimal(0);
+        const saldoPosteriorDelta = saldoActualEmpresa.sub(delta);
+
+        const descripcionRama = esRamaB
+          ? `Fee Shipro ${trackingOficial} — ${courierReal.nombre} (flete facturado por el courier al cliente)`
+          : `Envío ${trackingOficial} — ${courierReal.nombre}`;
+
+        await tx.movimientoFinanciero.create({
+          data: {
+            empresaId,
+            tipo: "DEBITO_ENVIO",
+            monto: delta.neg(),
+            saldoPosterior: saldoPosteriorDelta,
+            referencia: trackingOficial,
+            descripcion: descripcionRama,
+            envioId: envioCreado.id
+          }
+        });
+
+        await tx.empresa.update({
+          where: { id: empresaId },
+          data: { saldoActivo: saldoPosteriorDelta }
+        });
+
+        // DEUDA 22 (2026-06-18): evaluar suspension post-debit.
+        // Si saldo cruzo umbral -(limite * 1.5), marcar Empresa.suspendida=true.
+        // El helper suspenderEmpresa actualiza BD + audit log + mail admin.
+        // NOTA: corre fuera de la tx (la tx ya cerro este update). Si suspenderEmpresa
+        // falla, el debit queda commited (intencional: no queremos rollbackear envios
+        // legitimos por fallas en notificaciones).
+        const { debeSuspender } = evaluarSuspension(
+          saldoPosteriorDelta,
+          empresaConData.limiteDescubierto ?? new Prisma.Decimal(0),
+          false  // suspendidaActual = false porque si fuera true, el pre-check lo hubiera bloqueado
+        );
+        if (debeSuspender) {
+          // Schedule post-tx (no await dentro de la tx).
+          suspensionPendiente = {
+            saldoFinal: saldoPosteriorDelta,
+            limiteAfectado: empresaConData.limiteDescubierto ?? new Prisma.Decimal(0),
+          };
         }
-      });
-
-      await tx.empresa.update({
-        where: { id: empresaId },
-        data: { saldoActivo: nuevoSaldo }
-      });
-
-      // DEUDA 22 (2026-06-18): evaluar suspension post-debit.
-      // Si saldo cruzo umbral -(limite * 1.5), marcar Empresa.suspendida=true.
-      // El helper suspenderEmpresa actualiza BD + audit log + mail admin.
-      // NOTA: corre fuera de la tx (la tx ya cerro este update). Si suspenderEmpresa
-      // falla, el debit queda commited (intencional: no queremos rollbackear envios
-      // legitimos por fallas en notificaciones).
-      const { debeSuspender } = evaluarSuspension(
-        nuevoSaldo,
-        empresaConData.limiteDescubierto ?? new Prisma.Decimal(0),
-        false  // suspendidaActual = false porque si fuera true, el pre-check lo hubiera bloqueado
-      );
-      if (debeSuspender) {
-        // Schedule post-tx (no await dentro de la tx).
-        suspensionPendiente = {
-          saldoFinal: nuevoSaldo,
-          limiteAfectado: empresaConData.limiteDescubierto ?? new Prisma.Decimal(0),
-        };
       }
     }
 

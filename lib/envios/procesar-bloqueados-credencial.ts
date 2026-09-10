@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { despacharCourier } from "@/lib/envios/dispatch";
 import { enviarMailCreacion } from "@/lib/mailer";
 import { getAppUrl } from "@/lib/utils/app-url";
+import { debitoAplicadoEnvio } from "@/lib/finanzas/debito-aplicado";
 
 // =============================================================================
 // FASE 2 pieza 1, sub 3 (2026-07-30): Destrabe automático de envíos en
@@ -124,7 +125,16 @@ export async function procesarEnviosBloqueadosPorCredencial(
     }
 
     // --- 3. Validar saldo (mirror de operatividad L150-178) ---
-    const monto: Prisma.Decimal = envio.finanzas?.tarifaFullCotizada ?? new Prisma.Decimal(0);
+    // DEUDA 174 Pieza 2 (2026-09-10): anti-doble-débito. Consultamos el ledger — si el
+    // envío ya cobró parte del `target` al alta (típico Rama B post-P2: Fee cobrado al
+    // crear un BLOQUEADO_CREDENCIAL), el destrabe cobra SOLO la diferencia. Rama A: nunca
+    // cobró al alta (guard L1116 excluye BLOQUEADO_CREDENCIAL para Rama A) → delta=full.
+    // El chequeo de saldo se hace contra `monto` (delta) para no rebotar a BLOQUEADO_SALDO
+    // cuando en realidad ya se cobró.
+    const target: Prisma.Decimal = envio.finanzas?.tarifaFullCotizada ?? new Prisma.Decimal(0);
+    const yaAplicado = await debitoAplicadoEnvio(envio.id);
+    const deltaDebito: Prisma.Decimal = target.sub(yaAplicado);
+    const monto: Prisma.Decimal = deltaDebito.isNegative() ? new Prisma.Decimal(0) : deltaDebito;
     const tipoCuentaEfectivo = credencial.tipoCuenta || empresa.modalidadPago;
     const saldoDisponible = tipoCuentaEfectivo === "PREPAGO"
       ? saldoSimulado
@@ -262,22 +272,27 @@ export async function procesarEnviosBloqueadosPorCredencial(
           });
         }
 
-        await tx.movimientoFinanciero.create({
-          data: {
-            empresaId,
-            tipo: "DEBITO_ENVIO",
-            monto: monto.neg(),
-            saldoPosterior: nuevoSaldo,
-            referencia: trackingReal,
-            descripcion: `Generación de etiqueta ${envio.courier.nombre.toUpperCase()} (desbloqueo post-configuración de dueño)`,
-            envioId: envio.id,
-          },
-        });
+        // DEUDA 174 Pieza 2: escribir MovimientoFinanciero solo si hay delta > 0. Rama B ya
+        // cobrada al alta → monto=0 → skip debit + skip saldo update. El estado + tramos +
+        // eventoTracking sí se actualizan (destrabe funcional).
+        if (monto.gt(0)) {
+          await tx.movimientoFinanciero.create({
+            data: {
+              empresaId,
+              tipo: "DEBITO_ENVIO",
+              monto: monto.neg(),
+              saldoPosterior: nuevoSaldo,
+              referencia: trackingReal,
+              descripcion: `Generación de etiqueta ${envio.courier.nombre.toUpperCase()} (desbloqueo post-configuración de dueño)`,
+              envioId: envio.id,
+            },
+          });
 
-        await tx.empresa.update({
-          where: { id: empresaId },
-          data: { saldoActivo: nuevoSaldo },
-        });
+          await tx.empresa.update({
+            where: { id: empresaId },
+            data: { saldoActivo: nuevoSaldo },
+          });
+        }
 
         await tx.eventoTracking.create({
           data: {

@@ -4,6 +4,7 @@ import { despacharCourier } from "@/lib/envios/dispatch";
 import { enviarMailCreacion } from "@/lib/mailer";
 import { validarOperatividadPar } from "@/lib/depositos/operatividad";
 import { getAppUrl } from "@/lib/utils/app-url";
+import { debitoAplicadoEnvio } from "@/lib/finanzas/debito-aplicado";
 
 // =============================================================================
 // DEUDA 34: Destrabe automatico de envios en BLOQUEADO_OPERATIVIDAD
@@ -148,7 +149,13 @@ export async function procesarEnviosBloqueadosPorOperatividad(
     }
 
     // --- 3. Validar saldo ---
-    const monto: Prisma.Decimal = envio.finanzas?.tarifaFullCotizada ?? new Prisma.Decimal(0);
+    // DEUDA 174 Pieza 2 (2026-09-10): anti-doble-débito. Rama B post-P2 cobra Fee al alta
+    // aunque el envío nazca BLOQUEADO_OPERATIVIDAD → destrabe con `yaAplicado=Fee=target` →
+    // delta=0 → no re-debita. Rama A: nunca cobró al alta → delta=full → debita chain.
+    const target: Prisma.Decimal = envio.finanzas?.tarifaFullCotizada ?? new Prisma.Decimal(0);
+    const yaAplicado = await debitoAplicadoEnvio(envio.id);
+    const deltaDebito: Prisma.Decimal = target.sub(yaAplicado);
+    const monto: Prisma.Decimal = deltaDebito.isNegative() ? new Prisma.Decimal(0) : deltaDebito;
     const tipoCuentaEfectivo = credencial.tipoCuenta || empresa.modalidadPago;
     const saldoDisponible = tipoCuentaEfectivo === "PREPAGO"
       ? saldoSimulado
@@ -296,22 +303,25 @@ export async function procesarEnviosBloqueadosPorOperatividad(
           });
         }
 
-        await tx.movimientoFinanciero.create({
-          data: {
-            empresaId: deposito.empresaId,
-            tipo: "DEBITO_ENVIO",
-            monto: monto.neg(),
-            saldoPosterior: nuevoSaldo,
-            referencia: trackingReal,
-            descripcion: `Generación de etiqueta ${envio.courier.nombre.toUpperCase()} (desbloqueo post-configuración de par)`,
-            envioId: envio.id,
-          },
-        });
+        // DEUDA 174 Pieza 2: escribir MovimientoFinanciero solo si delta > 0.
+        if (monto.gt(0)) {
+          await tx.movimientoFinanciero.create({
+            data: {
+              empresaId: deposito.empresaId,
+              tipo: "DEBITO_ENVIO",
+              monto: monto.neg(),
+              saldoPosterior: nuevoSaldo,
+              referencia: trackingReal,
+              descripcion: `Generación de etiqueta ${envio.courier.nombre.toUpperCase()} (desbloqueo post-configuración de par)`,
+              envioId: envio.id,
+            },
+          });
 
-        await tx.empresa.update({
-          where: { id: deposito.empresaId },
-          data: { saldoActivo: nuevoSaldo },
-        });
+          await tx.empresa.update({
+            where: { id: deposito.empresaId },
+            data: { saldoActivo: nuevoSaldo },
+          });
+        }
 
         await tx.eventoTracking.create({
           data: {

@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { despacharCourier } from "@/lib/envios/dispatch";
 import { enviarMailCreacion } from "@/lib/mailer";
 import { getAppUrl } from "@/lib/utils/app-url";
+import { debitoAplicadoEnvio } from "@/lib/finanzas/debito-aplicado";
 import {
   evaluarSuspension,
   reactivarEmpresa,
@@ -86,7 +87,16 @@ export async function procesarEnviosBloqueados(empresaId: number): Promise<Proce
   let fallados = 0;
 
   for (const envio of aProcesar) {
-    const monto: Prisma.Decimal = envio.finanzas?.tarifaFullCotizada ?? new Prisma.Decimal(0);
+    // DEUDA 174 Pieza 2 (2026-09-10): anti-doble-débito. `target` es la tarifa autoritativa
+    // congelada al alta (Rama A: full chain; Rama B: feeConIva). `yaAplicado` es lo que ya
+    // salió de la wallet por este envío (ledger). El destrabe cobra SOLO la diferencia. Para
+    // el handler SALDO, envíos BLOQUEADO_SALDO nunca debitaron al crear (P2 los excluye
+    // explícitamente) → yaAplicado=0 → delta=target: comportamiento IDÉNTICO a pre-P2. La
+    // consulta al ledger igual protege contra retry del caller / handler double-fire.
+    const target: Prisma.Decimal = envio.finanzas?.tarifaFullCotizada ?? new Prisma.Decimal(0);
+    const yaAplicado = await debitoAplicadoEnvio(envio.id);
+    const deltaDebito: Prisma.Decimal = target.sub(yaAplicado);
+    const monto: Prisma.Decimal = deltaDebito.isNegative() ? new Prisma.Decimal(0) : deltaDebito;
 
     const credencial = await prisma.credencialCourier.findUnique({
       where: { empresaId_nombreCourier: { empresaId, nombreCourier: envio.courier.nombre } }
@@ -252,22 +262,27 @@ export async function procesarEnviosBloqueados(empresaId: number): Promise<Proce
           });
         }
 
-        await tx.movimientoFinanciero.create({
-          data: {
-            empresaId,
-            tipo: "DEBITO_ENVIO",
-            monto: monto.neg(),
-            saldoPosterior: nuevoSaldo,
-            referencia: trackingReal,
-            descripcion: `Generación de etiqueta ${envio.courier.nombre.toUpperCase()} (desbloqueo post-recarga)`,
-            envioId: envio.id
-          }
-        });
+        // DEUDA 174 Pieza 2: solo escribir MovimientoFinanciero si hay delta > 0. Envío ya
+        // cobrado en su totalidad (edge: retry, sub-transición) → skip debit, actualizar
+        // estado + tramos igual (el destrabe funcional sí ocurre).
+        if (monto.gt(0)) {
+          await tx.movimientoFinanciero.create({
+            data: {
+              empresaId,
+              tipo: "DEBITO_ENVIO",
+              monto: monto.neg(),
+              saldoPosterior: nuevoSaldo,
+              referencia: trackingReal,
+              descripcion: `Generación de etiqueta ${envio.courier.nombre.toUpperCase()} (desbloqueo post-recarga)`,
+              envioId: envio.id
+            }
+          });
 
-        await tx.empresa.update({
-          where: { id: empresaId },
-          data: { saldoActivo: nuevoSaldo }
-        });
+          await tx.empresa.update({
+            where: { id: empresaId },
+            data: { saldoActivo: nuevoSaldo }
+          });
+        }
 
         await tx.eventoTracking.create({
           data: {

@@ -1107,37 +1107,43 @@ export async function crearEnvio(input: CrearEnvioInput) {
       });
     }
 
-    // DEUDA 174 Pieza 2 (Política de Débito Unificada, 2026-09-10) — política rama-aware:
-    //   - Rama B (usaCredencialesPropias=true): debita Fee+IVA al crear cualquier etiqueta
-    //     (incluso en bloqueos NO-SALDO: DEPOSITO/CREDENCIAL/OPERATIVIDAD/PARCIAL). La
-    //     etiqueta genérica SHP-* ya cuenta como trabajo Shipro. Excepción: BLOQUEADO_SALDO
-    //     no debita al crear (no hay wallet capacity o excede colchón); se cobra al destrabar
-    //     (procesar-bloqueados.ts).
-    //   - Rama A (usaCredencialesPropias=false): SIN CAMBIOS. Bloqueados siguen sin debitar al
-    //     crear; el chain completo (flete + markups + SMO + Fee + IVA) se cobra en el destrabe
-    //     via procesar-bloqueados-*.ts. Pieza 3 abordará Rama A cuando corresponda.
-    //   - Anti-doble-débito: consultamos el ledger (debitoAplicadoEnvio) antes de debitar y
-    //     cobramos SOLO el delta. Los handlers de destrabe hacen la misma consulta → Rama B ya
-    //     cobrada al crear devuelve delta=0 en el destrabe. Money-safe por construcción.
+    // DEUDA 174 Piezas 2 + 3 (Política de Débito Unificada, 2026-09-10) — política rama-aware:
+    //   - Rama B (usaCredencialesPropias=true): debita Fee+IVA al crear CUALQUIER etiqueta
+    //     (dispatch OK, RETENIDO/DATOS_PAQUETE, o bloqueos NO-SALDO). La etiqueta genérica
+    //     SHP-* ya cuenta como trabajo Shipro. Excepción: BLOQUEADO_SALDO no debita al crear
+    //     (no hay wallet capacity o excede colchón); se cobra al destrabar (procesar-bloqueados.ts).
+    //   - Rama A (usaCredencialesPropias=false): debita el chain completo (flete + markups +
+    //     SMO + Fee + IVA) SOLO cuando existe la etiqueta REAL del courier. Es decir:
+    //     * dispatch OK al crear → debita chain acá.
+    //     * RETENIDO / BLOQUEADO_DATOS_PAQUETE / cualquier BLOQUEADO_* → NO debita al crear.
+    //     El destrabe (procesar-bloqueados-*.ts para BLOQUEADO_*, o /corregir para
+    //     RETENIDO/DATOS_PAQUETE) genera la etiqueta courier real y cobra el chain ahí.
+    //   - Anti-doble-débito (Pieza 1): consultamos el ledger (debitoAplicadoEnvio) antes de
+    //     debitar y cobramos SOLO el delta. Los handlers de destrabe y /corregir hacen la
+    //     misma consulta → Rama B ya cobrada al crear devuelve delta=0 en el destrabe.
+    //     Money-safe por construcción.
     //
     // FASE 1 (DEUDA 73/107): montoDebito ya está rama-aware (Rama B: feeConIva; Rama A:
     // matched.precioFinal). No cambia acá.
     const esRamaB = credencialMain?.usaCredencialesPropias === true;
-    const debeDebitarPolíticaHistórica =
+
+    // "¿Existe una etiqueta REAL del courier?" — solo hay label courier cuando ningún flag
+    // de bloqueo/retención está activo. Cualquier bloqueo o retención implica SHP-* provisorio
+    // sin dispatch efectivo al courier.
+    const hayEtiquetaCourierReal =
       !bloqueadoPorSaldo &&
       !bloqueadoPorDeposito &&
       !bloqueadoPorCredencial &&
       !bloqueadoPorOperatividad &&
-      !bloqueadoPorTramoFallido;
-    const debeDebitarRamaBBloqueada =
-      esRamaB &&
-      !bloqueadoPorSaldo &&
-      (bloqueadoPorDeposito ||
-        bloqueadoPorCredencial ||
-        bloqueadoPorOperatividad ||
-        bloqueadoPorTramoFallido);
+      !bloqueadoPorTramoFallido &&
+      !bloqueadoPorDatosPaquete &&
+      !falloPorPeaje;
 
-    if (debeDebitarPolíticaHistórica || debeDebitarRamaBBloqueada) {
+    // Rama B: cobra Fee si NO es SALDO (cualquier etiqueta — genérica o real — cuenta).
+    // Rama A: cobra chain SOLO si etiqueta real del courier ya existe (dispatch OK).
+    const debeDebitar = esRamaB ? !bloqueadoPorSaldo : hayEtiquetaCourierReal;
+
+    if (debeDebitar) {
       // Anti-doble-débito: consulta el ledger DENTRO de la tx para read-your-writes.
       // Envío recién creado → yaAplicado=0 → delta=montoDebito. Idempotencia adicional si por
       // alguna razón hubiera un DEBITO_ENVIO previo (retry, race).

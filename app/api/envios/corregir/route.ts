@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { getToken } from "next-auth/jwt";
 import { obtenerCredencialCourier } from "@/lib/couriers/normalizar";
 import { despacharCourier } from "@/lib/envios/dispatch";
 import { verificarAccesoEnvio } from "@/lib/envios/ownership";
 import { validarDireccionEnvio } from "@/lib/geo/validar-direccion";
+import { debitoAplicadoEnvio } from "@/lib/finanzas/debito-aplicado";
 
 // DEUDA 106 pieza 2 mov 4 (2026-08-04): dos caminos de auth para corregir.
 //
@@ -427,6 +429,51 @@ export async function POST(request: Request) {
                 sucursalOrigenId: t.sucursalOrigenId ?? null,
                 sucursalDestinoId: t.sucursalDestinoId ?? null,
               })),
+            });
+          }
+
+          // DEUDA 174 Pieza 3 (Política de Débito Unificada, 2026-09-10): débito diferido
+          // cuando /corregir genera la etiqueta REAL del courier al destrabar RETENIDO o
+          // BLOQUEADO_DATOS_PAQUETE.
+          //   - Rama A: al crear NO se debitó (Pieza 3 sacó el débito prematuro en
+          //     RETENIDO/DATOS_PAQUETE). yaAplicado=0 → delta=tarifaFullCotizada (full chain).
+          //     Se cobra el chain aquí, cuando la etiqueta courier real recién existe.
+          //   - Rama B: al crear se cobró Fee+IVA (Pieza 2 política Rama B). yaAplicado=Fee=
+          //     tarifaFullCotizada → delta=0 → skip debit. Idempotente.
+          //   - Retry idempotency: si /corregir se ejecuta 2×, la segunda ve el DEBITO_ENVIO
+          //     de la primera → delta=0.
+          const target: Prisma.Decimal = envio.finanzas?.tarifaFullCotizada ?? new Prisma.Decimal(0);
+          const yaAplicado = await debitoAplicadoEnvio(envio.id, tx);
+          const deltaDebito: Prisma.Decimal = target.sub(yaAplicado);
+          const monto: Prisma.Decimal = deltaDebito.isNegative() ? new Prisma.Decimal(0) : deltaDebito;
+
+          if (monto.gt(0)) {
+            const empresaActual = await tx.empresa.findUnique({
+              where: { id: envio.empresaId },
+              select: { saldoActivo: true },
+            });
+            const saldoActual = empresaActual?.saldoActivo ?? new Prisma.Decimal(0);
+            const nuevoSaldo = saldoActual.sub(monto);
+            // Descripción rama-aware por consistencia con crear.ts + handlers destrabe.
+            const descripcionRama = credencialMain.usaCredencialesPropias === true
+              ? `Fee Shipro ${dispatchResult.tracking} — ${envio.courier.nombre} (delta post-corrección)`
+              : `Envío ${dispatchResult.tracking} — ${envio.courier.nombre} (desbloqueo post-corrección)`;
+
+            await tx.movimientoFinanciero.create({
+              data: {
+                empresaId: envio.empresaId,
+                tipo: "DEBITO_ENVIO",
+                monto: monto.neg(),
+                saldoPosterior: nuevoSaldo,
+                referencia: dispatchResult.tracking!,
+                descripcion: descripcionRama,
+                envioId: envio.id,
+              },
+            });
+
+            await tx.empresa.update({
+              where: { id: envio.empresaId },
+              data: { saldoActivo: nuevoSaldo },
             });
           }
 

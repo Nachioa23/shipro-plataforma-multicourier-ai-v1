@@ -34,7 +34,7 @@ Esta sección es el mapa que cada chat de trabajo lee al arrancar. Fuente de ver
 **Orden de fases (rumbo: plugins vivos → primeros clientes):**
 - FASE 0 — Base limpia (docs). Reconciliación del backlog + este roadmap. HECHA (commits f101c27 + este).
 - FASE 1 — Parar la gotera: DEUDA 123 + 132 + deploy de 129. Deja el cotizador correcto antes de que los plugins se apoyen en él.
-- FASE 2 — Cimientos de plugins (lado servidor): DEUDA 104 (webhooks salientes) + 145 (timeout <5s) + 144 (rates callback) + 103/142/143 (motor de bultos) + 91 (cableado couriers).
+- FASE 2 — Cimientos de plugins (lado servidor): DEUDA 104 (webhooks salientes) + 145 (timeout <8s) + 144 (rates callback) + 103/142/143 (motor de bultos) + 91 (cableado couriers).
 - FASE 3 — Primer plugin no-Tiendanube end-to-end (WooCommerce o Shopify), una vez viva la FASE 2.
 - FASE 4 — Mercado Flex (el más complejo): arranca con recon/spec propio, como se hizo con Tiendanube (DEUDA 130).
 - CARRILES LATERALES (en paralelo, no tocan el núcleo): seguridad/infra (108, 126, 113, 127, 109), Torre de Control restante (39, 62 Phase 3, 8, 65), auth (96, 97, 70), soporte/NPS (59, 60, 85, 90, 53, 54).
@@ -2544,7 +2544,7 @@ Urbano Express, Hop Envíos, Pickit, Moova, Intralog.
 
 **No bloqueante hoy:** OAuth flow + env vars `TIENDANUBE_CLIENT_ID/_SECRET` (el rates callback es autoservicio vía `store_id`; el token OAuth se persiste en el install flow separado, Momento 1 de DEUDA 130). UI de Modo B (los campos se pueden setear por Prisma directo para dogfooding).
 
-**Relación:** DEUDA 130 (spec autoritativa), DEUDA 111 (snapshot obligatorio), DEUDA 143 (Modo B que consume), DEUDA 145 (timeout <5s), DEUDA 129 (resiliencia + fallback que el endpoint hereda de `cotizar()`).
+**Relación:** DEUDA 130 (spec autoritativa), DEUDA 111 (snapshot obligatorio), DEUDA 143 (Modo B que consume), DEUDA 145 (timeout <8s), DEUDA 129 (resiliencia + fallback que el endpoint hereda de `cotizar()`).
 
 ---
 
@@ -4257,5 +4257,72 @@ else if (str_starts_with($statusUpper, 'BLOQUEADO_')) { /* bloqueado con motivo 
 **Prioridad:** **media**. No bloquea deploys ni rompe cotización/facturación. Bloquea la robustez de plugins futuros y la sanidad del schema. Se activa cuando Chat A tenga ancho de banda + Chat B/C alineados para ejecutar en simultáneo.
 
 **Origen:** flagueado por Chat C el 2026-09-09 al descubrir que el plugin de WooCommerce recibía `"Pendiente"` (title-case) mientras el switch del plugin solo tenía casos para `"CREADO"`/`"RETENIDO"`/`"BLOQUEADO_*"` — cayendo en `default: "status desconocido"`. Recon en Chat A confirmó (i) que `"CREADO"` es ficción del OpenAPI, (ii) que los formatos son mixtos por diseño (String libre), (iii) que la lista canónica actual son los literales de arriba. Se registra ahora la deuda de fondo para no perderla — mientras tanto, plugin y OpenAPI se acomodan a la realidad del código.
+
+---
+
+## DEUDA 174 — Política de Débito Unificada: el momento del débito (Fee / chain) no cumple la política de negocio en 8 casos (money-crítico, registrada 2026-09-10)
+
+**Status:** ABIERTA. Money-crítico. Prioridad alta (bugs de plata en ambas direcciones — cobra de más y cobra de menos según el caso). Sin backfill histórico requerido (prod = data de prueba, sin clientes reales todavía). Se construye limpia en 5 piezas money-safe. Prerequisito duro: mecanismo anti-doble-débito ANTES de tocar cualquier guard.
+
+**Principio rector (Nacho, LOCKED):** "el débito refleja quién hizo su trabajo".
+- **Fee+IVA** se cobra cuando Shipro generó CUALQUIER etiqueta (genérica SHP-* o del courier real) — ambas ramas.
+- **Rama A** cobra ADEMÁS el chain completo (tarifa courier + markups + SMO + Fee + IVA) SOLO cuando se genera la etiqueta REAL del courier (en creación o destrabe). Se ajusta luego vs liquidación del courier (ya cubierto por `cron/sweep-6m` + `conciliacion/*`).
+- **Rama A sin etiqueta courier jamás generada** → se comporta como Rama B (solo Fee+IVA). Casos que Nacho definió:
+  - Bloqueado y nunca resuelto (vencido) → Fee+IVA (culpa/decisión del cliente, Shipro trabajó).
+  - Courier rechaza PERMANENTEMENTE (culpa Shipro — adapter roto, credencial Shipro-managed inválida) → NADA hasta que Shipro arregle la causa y las etiquetas se generen; entonces chain completo. NO cobrar al cliente un problema de Shipro.
+  - Cancelado antes de despachar → Fee+IVA (Shipro trabajó, courier no).
+- **Rama B** → Fee+IVA al crear cualquier etiqueta. Nunca el flete (el courier factura flete directo al cliente).
+- **Gatillo del débito**: la EXISTENCIA de la etiqueta real del courier (Rama A) — NO el estado del envío. Rama B: existencia del SHP-* genérico (que es incondicional al crear).
+
+**Las 8 discrepancias código ↔ política** (recon 2026-09-10, `lib/envios/crear.ts:1116` + handlers + corregir + cancelar):
+
+1. **Rama A + RETENIDO al crear → debita FULL sin etiqueta courier.** El guard `crear.ts:1116` no excluye `falloPorPeaje`, entonces `montoDebito = matched.precioFinal` se debita aunque el envío nace RETENIDO (sin dispatch, sin etiqueta courier real). Debería 0 hasta que `/corregir` cierre bien. **Cobra de más al cliente** por un envío que ni salió.
+2. **Rama A + BLOQUEADO_DATOS_PAQUETE al crear → debita FULL sin etiqueta courier.** Guard `crear.ts:1116` no excluye `bloqueadoPorDatosPaquete`. Mismo pattern que #1. Cobra de más.
+3. **Rama A + RETENIDO/DATOS_PAQUETE cancelado sin resolver** → cliente pagó full por envío que jamás salió. `cancelar/route.ts:92-108` no refunda. Combinado con #1/#2: money-loss real para el cliente.
+4. **Rama B + casi todo BLOQUEADO_* al crear → NO debita Fee.** Guard `crear.ts:1116` excluye SALDO/DEPOSITO/CREDENCIAL/OPERATIVIDAD/PARCIAL. En Rama B ese Fee correspondía cobrarlo (SHP-* generado = etiqueta genérica = trabajo hecho). **Money leak Shipro.** Aplica a TODOS los bloqueados Rama B, no solo PARCIAL como se pensó en el turno del fix aislado.
+5. **Rama A + BLOQUEADO_PARCIAL nunca resuelto → 0 total.** Política Nacho: cancelado/vencido sin etiqueta = Fee+IVA (compensación por trabajo Shipro). Falta cobrar Fee. No hay handler `procesar-bloqueados-parcial.ts` — el envío queda en PARCIAL para siempre si el operador no lo toca.
+6. **Rama A + BLOQUEADO_* cancelado sin resolver → no cobra Fee.** Política: Fee+IVA (Shipro trabajó incluso sin llegar al courier). `cancelar/route.ts` no distingue rama ni estado previo.
+7. **`corregir/route.ts` RAMA 1 (destrabe RETENIDO/DATOS_PAQUETE con dispatch OK) → NO debita nada.** L407-453: sin `movimientoFinanciero.create`. Si crear no debitó (correcto per política), corregir tampoco cobra el chain al generar la etiqueta courier real. **Money leak** (Rama A pierde el chain; Rama B pierde el Fee si no se cobró antes). Hoy funciona por accidente en Rama A porque crear cobra full mal (bug #1/#2) — al arreglar #1/#2, corregir debe compensar debitando en el momento correcto.
+8. **`cancelar/route.ts` no refund ni cobro rama-aware.** L92-108 solo marca `estadoActual: "CANCELADO"` + evento. No refunda al cliente que pagó full por envío no salido (Rama A bug #1/#2 combinado con cancel). No cobra Fee del bloqueado cancelado sin etiqueta (bug #6). Sin lógica rama-aware.
+
+**Riesgo doble-débito (frágil hoy):** el sistema funciona por invariante implícito — crear no debita si bloqueado (guard L1116); handlers destrabe solo procesan si estadoActual==BLOQUEADO_X específico. Cero mecanismo explícito. Si algún fix cambia el guard L1116 sin proteger, se puede cobrar 2x. **Prerequisito duro** de toda la obra: un mecanismo anti-doble-débito. Opciones:
+- **Flag persistido:** `FinanzasEnvio.feeCobradoAlCrear: Boolean` (o `debitoInicialAplicado`) que crear.ts setea true si debitó; handlers/corregir/cancelar lo consultan antes de debitar. Requiere migración aditiva.
+- **Query source-agnostic:** antes de cada `DEBITO_ENVIO`, `MovimientoFinanciero.count({ envioId, tipo: "DEBITO_ENVIO" })` — si >0, restar el monto acumulado del nuevo. Sin migración, más queries.
+- **Invariante estricto:** mantener el patrón exclusivo actual + endurecer con test de contrato que verifique en cada handler "no hay DEBITO_ENVIO previo para este envioId". Riesgoso si se olvida un site.
+
+**Ya cubierto (no confundir):**
+- `cron/sweep-6m/route.ts:86` — refund automático del flete Rama A cuando el courier no facturó en 6 meses. **Fee no se toca** (correcto per política: Shipro ya trabajó, cobra el Fee).
+- `conciliacion/route.ts:477` (`DEBITO_AJUSTE_AFORO`) + `conciliacion/revertir/route.ts:210` (`CREDITO_REVERSO_AFORO`) — ajustes cuando el courier factura distinto a lo estimado (Rama A). No afecta Fee.
+- Estos dos mecanismos cumplen el "ajuste vs liquidación del courier" para envíos que sí llegaron a tener etiqueta courier real. La deuda 174 cubre el otro lado: los que NO llegaron.
+
+**Sitios de código exactos:**
+- `lib/envios/crear.ts:1116` — el guard: `if (!bloqueadoPorSaldo && !bloqueadoPorDeposito && !bloqueadoPorCredencial && !bloqueadoPorOperatividad && !bloqueadoPorTramoFallido)`. Necesita: (i) excluir también RETENIDO/DATOS_PAQUETE del debit Rama A al crear (bugs #1/#2), (ii) para Rama B agregar debit Fee incluso cuando bloqueado (bug #4).
+- `lib/envios/crear.ts:595-611` — `montoDebito` rama-aware ya existe (Fee `feeConIva` para Rama B, `matched.precioFinal` para Rama A). Se reusa como está.
+- `lib/utils/operacion-fee.ts:68` — `feeConIva = feePreIva.mul(IVA_AR_MULTIPLIER)` (21%). Fee IVA-inclusive.
+- `lib/envios/procesar-bloqueados.ts:255` + `procesar-bloqueados-credencial.ts:265` + `procesar-bloqueados-deposito.ts:324` + `procesar-bloqueados-operatividad.ts:299` — todos crean DEBITO_ENVIO con `monto = envio.finanzas?.tarifaFullCotizada`. Debe volverse rama-aware + anti-doble-débito.
+- `app/api/envios/corregir/route.ts:407-453` — RAMA 1 destrabe OK. Debe agregar DEBITO_ENVIO rama-aware si crear no lo hizo.
+- `app/api/envios/cancelar/route.ts:92-108` — debe cobrar Fee si el envío se cancela sin etiqueta courier real generada Y no debitó Fee todavía; opcionalmente refundear flete si Rama A + tenía etiqueta pero no salió a colecta (decisión abierta).
+
+**Decisiones de política ABIERTAS** (Nacho define en la obra, por pieza):
+- **a. Cancelación con etiqueta courier ya generada** (envío Pendiente/IMPRESO cancelado antes de colecta): ¿refund inmediato del flete (Rama A) o esperar `sweep-6m`? Hoy: sweep-6m si aplica; Fee siempre queda.
+- **b. Cancelación de bloqueado sin etiqueta courier**: ¿Fee al cancelar como compensación por el trabajo Shipro (SHP-* generado)? Política Nacho apunta a SÍ. Hoy: cero.
+- **c. Cancelación en RETENIDO ya cobrado full** (por bug #1): ¿refund de la diferencia (Full - Fee)? Backfill NO requerido (prod = prueba), pero el criterio queda seteado para el futuro cliente real.
+- **d. Courier rechaza permanentemente por culpa Shipro** (adapter roto, credencial Shipro-managed inválida): confirmar la regla "no cobrar al cliente por falla nuestra" — ni siquiera el Fee. Choca con el default "Rama B cobra Fee al crear generic label": ¿cómo se distingue "culpa Shipro" en runtime? Probablemente flag en el estado o campo `causaFalla` en `FinanzasEnvio`. Diseño detallado en Pieza 5.
+
+**Backfill histórico:** **NO REQUERIDO.** Todo lo que hay en prod hoy es data de prueba (confirmado Nacho 2026-09-10: no hay clientes reales operando en la NPMS todavía). La obra se construye limpia — cero migración de datos financieros, cero re-cálculo de MovimientoFinanciero histórico. La ventana de gracia se cierra cuando entre el primer cliente real; si esta obra no está lista antes, se retoma el backfill después.
+
+**Plan de piezas (money-safe, secuencial, verificación numérica en cada una):**
+
+- **Pieza 1 — Mecanismo anti-doble-débito (PREREQUISITO DURO).** Opción a decidir por Nacho (flag `FinanzasEnvio.feeCobradoAlCrear` vs query MovimientoFinanciero vs invariante estricto). Se implementa PRIMERO. Verificación: cero cambio de comportamiento (todos los envíos siguen debitando lo mismo); solo se agrega el mecanismo que las siguientes piezas van a consultar.
+- **Pieza 2 — Rama B: Fee al crear cualquier etiqueta (incl. bloqueados).** Modifica guard L1116 para que Rama B debite Fee siempre (excepto SALDO donde no hay plata). Modifica handlers destrabe Rama B para que NO re-debiten Fee (usan mecanismo Pieza 1). Verificación: crear envío Rama B forzando cada BLOQUEADO_*, verificar MovimientoFinanciero Fee+IVA en creación; verificar que destrabe NO agrega segundo débito.
+- **Pieza 3 — Rama A: NO debitar hasta etiqueta courier real.** Modifica guard L1116 para excluir también RETENIDO/DATOS_PAQUETE del débito Rama A al crear. Agrega DEBITO_ENVIO en `corregir/route.ts` RAMA 1 cuando dispatch OK genera la etiqueta courier (usa mecanismo Pieza 1 para no doble-debitar). Verificación: crear Rama A RETENIDO → cero débito; `/corregir` exitoso → DEBITO_ENVIO full chain aparece.
+- **Pieza 4 — Cancelación rama-aware.** Modifica `cancelar/route.ts` según decisiones a/b/c: cobrar Fee si aplica (Rama A/B sin etiqueta courier y sin Fee cobrado); refundear si aplica (Rama A + etiqueta courier existente + pre-colecta, decisión a). Verificación: cancelar cada combinación estado × rama, verificar MovimientoFinanciero correcto.
+- **Pieza 5 — Courier reject permanente (culpa Shipro).** Diseño del flag `causaFalla` o equivalente para distinguir "culpa Shipro" de "culpa cliente/courier legítimo". Cuando `causaFalla=SHIPRO`, ni siquiera cobra Fee — políticamente distinto de un bloqueado normal.
+
+**Scope global:** ALTO. 5-6 archivos tocados, cross-cutting money logic. Money-crítico → verificación numérica ANTES/DESPUÉS en cada pieza (test empírico + query directa a MovimientoFinanciero por combinación estado × rama × momento). Prioridad: **alta** (bugs de plata que se materializan al primer cliente real).
+
+**Relación:** [[DEUDA 73]] (rama-aware debit — origen de `feeConIva`/`matched.precioFinal`). [[DEUDA 107]] (Fee de plataforma). [[DEUDA 132]] Paso 3a (barrier DATOS_PAQUETE — bug #2 vive en este barrier). [[DEUDA 106]] Pieza 2 (RETENIDO + /corregir — bugs #1/#7). [[DEUDA 129]] (contrato "venta se hace sí o sí" — bugs #4/#5/#6 lo cumplen a medias: el envío se crea pero Shipro no cobra). [[DEUDA 169]] Fix B (degradación courier ausente — planteamiento inicial de "Rama B + PARCIAL debe cobrar Fee" salió de acá, esta deuda 174 lo generaliza). El `cron/sweep-6m` + `conciliacion/*` cubren el otro lado (envíos con etiqueta courier existente); esta deuda cubre los que no.
+
+**Origen:** cadena de recons money-critical Chat A 2026-09-10, partiendo de la pregunta específica "Rama B + BLOQUEADO_PARCIAL no debita Fee?" (turno previo sobre Fix B de DEUDA 169). Al mapear la política Nacho contra el código completo, se descubrieron 7 discrepancias más y el patrón general "el guard L1116 no está en sync con la política de negocio del débito". Se registra ahora la obra completa para no fragmentar los fixes por pieza aislada — money-critical requiere plan unificado + prerequisito anti-doble-débito.
 
 ---

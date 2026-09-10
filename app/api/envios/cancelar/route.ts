@@ -5,6 +5,7 @@ import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/cou
 import { obtenerCredencialCourier, normalizarParaComparacion } from "@/lib/couriers/normalizar";
 import { resolverContext } from "@/lib/auth-context";
 import { verificarAccesoEnvio } from "@/lib/envios/ownership";
+import { aplicarCancelacionFinanciera } from "@/lib/finanzas/cancelacion-financiera";
 
 export async function POST(request: Request) {
   try {
@@ -89,25 +90,38 @@ export async function POST(request: Request) {
     }
 
     // ============================================================
-    // Marcar CANCELADO en Shipro (siempre, independiente de fallas en couriers).
+    // Marcar CANCELADO en Shipro + aplicar política financiera de cancelación
+    // (DEUDA 174 Pieza 4, 2026-09-10). Atómico: el update de estadoActual, el
+    // eventoTracking, y los MovimientoFinanciero (refund del chain-menos-Fee
+    // si hubo etiqueta courier real, o cobro de Fee si nunca se cobró) van
+    // dentro del mismo `$transaction`. Delega la lógica financiera a
+    // `aplicarCancelacionFinanciera` (helper compartido con el flujo Tiendanube).
+    // Shipro sigue siendo la fuente de verdad del estado — la cancelación en
+    // los couriers (arriba) puede fallar sin abortar esto.
     // ============================================================
-    await prisma.envio.update({
-      where: { id: envio.id },
-      data: { estadoActual: "CANCELADO" },
-    });
-
     const observacionEvento = tramosConTracking.length === 0
       ? "Envío cancelado por el usuario. No había tramos despachados (cancelación solo en Shipro)."
       : tramosFallidos === 0
         ? `Envío cancelado por el usuario. ${tramosCancelados} tramo(s) cancelado(s) en courier(s).`
         : `Envío cancelado por el usuario. ${tramosCancelados} tramo(s) cancelado(s) OK, ${tramosFallidos} con falla (revisar manualmente).`;
 
-    await prisma.eventoTracking.create({
-      data: {
-        estado: "CANCELADO",
-        observacion: observacionEvento,
-        envioId: envio.id,
-      },
+    const resultadoFinanciero = await prisma.$transaction(async (tx) => {
+      await tx.envio.update({
+        where: { id: envio.id },
+        data: { estadoActual: "CANCELADO" },
+      });
+
+      const financiero = await aplicarCancelacionFinanciera(tx, envio.id, envio.trackingNumber);
+
+      await tx.eventoTracking.create({
+        data: {
+          estado: "CANCELADO",
+          observacion: `${observacionEvento} ${financiero.motivo}`.trim(),
+          envioId: envio.id,
+        },
+      });
+
+      return financiero;
     });
 
     return NextResponse.json({
@@ -117,6 +131,8 @@ export async function POST(request: Request) {
         : "Cancelación exitosa",
       tramosCancelados,
       tramosFallidos,
+      reembolsoAplicado: resultadoFinanciero.reembolsoAplicado.toString(),
+      feeCobrado: resultadoFinanciero.feeCobrado.toString(),
     });
 
   } catch (error: any) {

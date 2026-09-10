@@ -1,6 +1,7 @@
 import { NextResponse, after } from "next/server";
 import prisma from "@/lib/prisma";
 import { cancelarTramosEnCourier } from "@/lib/tiendanube/cancelar-tramos";
+import { aplicarCancelacionFinanciera } from "@/lib/finanzas/cancelacion-financiera";
 
 // El path Tiendanube-facing es {callback_labels_url}/cancel. Por eso el archivo vive
 // en /api/tiendanube/labels/cancel/route.ts — Tiendanube nos pega directo acá.
@@ -172,22 +173,27 @@ export async function POST(request: Request) {
 
       // ---- Etiqueta provisoria (SHP-*, sin tramos courier) ----
       // No hay courier al que llamar — marcamos todo cancelado sync y devolvemos OK.
+      // DEUDA 174 Pieza 4 (2026-09-10): aplica la política financiera de cancelación
+      // (misma que /api/envios/cancelar). Envío provisorio típicamente sin etiqueta
+      // courier real → helper cobra el Fee que nunca se cobró (Rama A) o no hace nada
+      // (Rama B, Fee ya cobrado al crear post-Pieza-2).
       if (etiqueta.esProvisoria) {
         const ahora = new Date();
-        await prisma.$transaction([
-          prisma.etiquetaTiendanube.update({
+        await prisma.$transaction(async (tx) => {
+          await tx.etiquetaTiendanube.update({
             where: { id: etiqueta.id },
             data: {
               estado: "CANCELED",
               cancelacionEstado: "OK",
               cancelacionResueltaEn: ahora,
             },
-          }),
-          prisma.envio.update({
+          });
+          await tx.envio.update({
             where: { id: etiqueta.envioId },
             data: { estadoActual: "CANCELADO" },
-          }),
-        ]);
+          });
+          await aplicarCancelacionFinanciera(tx, etiqueta.envioId, etiqueta.envio.trackingNumber);
+        });
         results.push({ fulfillment_order_id: fulfillmentOrderId, label_id: labelId, status: "OK" });
         continue;
       }
@@ -218,16 +224,21 @@ export async function POST(request: Request) {
         })),
       };
 
-      await prisma.$transaction([
-        prisma.envio.update({
+      // DEUDA 174 Pieza 4 (2026-09-10): aplica la política financiera de cancelación
+      // dentro del mismo tx que marca CANCELADO. Envío normal con courier: si tenía
+      // etiqueta courier real (logisticaNetaFacturada > 0), refunda chain − Fee via
+      // CREDITO_CANCELACION + marca logisticaDevuelta=true (excluye sweep-6m). Si por
+      // alguna razón no tenía etiqueta courier (edge), cobra Fee que faltaba.
+      await prisma.$transaction(async (tx) => {
+        await tx.envio.update({
           where: { id: envioId },
           data: { estadoActual: "CANCELADO" },
-        }),
-        prisma.etiquetaTiendanube.update({
+        });
+        await tx.etiquetaTiendanube.update({
           where: { id: etiquetaId },
           data: { estado: "CANCELED" },
-        }),
-        prisma.eventoTracking.create({
+        });
+        await tx.eventoTracking.create({
           data: {
             estado: "CANCELADO",
             observacion: "[Cancelación Tiendanube] Cancelación pedida por Tiendanube; intentando cancelar en courier.",
@@ -236,8 +247,9 @@ export async function POST(request: Request) {
             // DE Tiendanube; no hay que empujársela de vuelta a su timeline.
             sincronizadoTiendanubeEn: ahora,
           },
-        }),
-      ]);
+        });
+        await aplicarCancelacionFinanciera(tx, envioId, trackingNumber);
+      });
 
       // Trabajo pesado — corre después del 200/207.
       after(async () => {

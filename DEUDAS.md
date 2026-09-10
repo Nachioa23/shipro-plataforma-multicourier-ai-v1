@@ -4326,3 +4326,106 @@ else if (str_starts_with($statusUpper, 'BLOQUEADO_')) { /* bloqueado con motivo 
 **Origen:** cadena de recons money-critical Chat A 2026-09-10, partiendo de la pregunta específica "Rama B + BLOQUEADO_PARCIAL no debita Fee?" (turno previo sobre Fix B de DEUDA 169). Al mapear la política Nacho contra el código completo, se descubrieron 7 discrepancias más y el patrón general "el guard L1116 no está en sync con la política de negocio del débito". Se registra ahora la obra completa para no fragmentar los fixes por pieza aislada — money-critical requiere plan unificado + prerequisito anti-doble-débito.
 
 ---
+
+## DEUDA 175 — Colchón PREPAGO inerte: el gate de creación bloquea en $0 sin usar el limiteDescubierto, contra la intención de DEUDA 78 (money-crítico, registrada 2026-09-10)
+
+**Status:** ABIERTA. Money-crítico. Prioridad media (hoy sin clientes reales no muerde; definir antes de onboardear PREPAGO reales, o antes de que un PREPAGO ya operativo dependa del colchón del finde). Sin backfill requerido (prod = data de prueba). Scope chico (el gate son 2 líneas) pero **decisión de negocio bloqueante** — apetito de riesgo de crédito de Shipro.
+
+**Intención declarada (DEUDA 78, verbatim):**
+
+> "Mitigacion actual (sin construir esto): limiteDescubierto calibrado para cubrir un fin de semana de operacion (Paso 5 onboarding) + aviso de saldo bajo (DEUDA 77). Con eso, **el cliente opera en descubierto durante el hueco y no pierde ventas**."
+
+Y en el onboarding ([app/api/clientes/route.ts:100-107](app/api/clientes/route.ts#L100-L107)):
+```
+// DEUDA 10 Paso 5a (D-10-ONBOARDING-DESCUBIERTO): descubierto minimo estandar
+// para PREPAGO ($50.000, colchon de fin de semana mientras se verifica la
+// recarga manual — ver DEUDA 78). POSTPAGO usa el valor que ingresa el admin.
+const MIN_DESCUBIERTO_PREPAGO = 50000;
+```
+
+A todo cliente PREPAGO se le asigna `limiteDescubierto = max(input, $50.000)` **con la promesa explícita de que puede seguir despachando durante el finde** mientras Shipro verifica manualmente su recarga (delay documentado: minutos a ~63 hs de viernes 20hs → lunes 9hs).
+
+**Código real ([crear.ts:857-864](lib/envios/crear.ts#L857-L864)):**
+```
+if (tipoCuentaEfectivo === "PREPAGO") {
+  if ((empresaConData.saldoActivo ?? new Prisma.Decimal(0)).lt(montoDebito)) {
+    bloqueadoPorSaldo = true;
+  }
+} else { // POSTPAGO
+  if ((empresaConData.saldoActivo ?? new Prisma.Decimal(0)).add(empresaConData.limiteDescubierto ?? new Prisma.Decimal(0)).lt(montoDebito)) {
+    bloqueadoPorSaldo = true;
+  }
+}
+```
+
+**PREPAGO bloquea con `saldoActivo < montoDebito` — sin sumar `limiteDescubierto`.** POSTPAGO sí lo suma. Asimetría silenciosa: el gate PREPAGO nunca activa el colchón, aunque el onboarding lo asignó específicamente para eso.
+
+**Consecuencia — el colchón PREPAGO es INERTE:**
+
+- **Al crear envío**: gate bloquea en $0, envío nace `BLOQUEADO_SALDO`, sin dispatch al courier, sin etiqueta imprimible.
+- **Al destrabar** ([procesar-bloqueados-credencial.ts:129-131](lib/envios/procesar-bloqueados-credencial.ts#L129-L131)): mismo patrón asimétrico, `saldoDisponible = saldoSimulado` para PREPAGO (sin colchón), `+ limite` para POSTPAGO.
+- **Suspensión** (`evaluarSuspension`, `-limiteDescubierto × 1.5`): un PREPAGO **nunca puede llegar a saldo negativo** vía operación normal (el gate lo bloquea antes), así que el umbral de suspensión es inalcanzable. El colchón nunca se toca por vía de operación.
+
+Efectivamente, el `MIN_DESCUBIERTO_PREPAGO = $50.000` es **valor huérfano en la BD**: asignado al onboarding, nunca consultado en ninguna decisión operativa. Es código muerto disfrazado de mitigación.
+
+**Escenario operativo real (weekend gap):**
+- Cliente PREPAGO transfiere viernes 20:00, admin_shipro verifica y acredita lunes 09:00.
+- Durante esas ~63 hs el cliente vende en su e-commerce.
+- **Comportamiento esperado (DEUDA 78)**: envíos despachan al courier con `saldoActivo` yendo negativo dentro del colchón ($0 → -$2k → -$5k). Comprador recibe tracking real. Lunes: recarga vuelve saldo a positivo.
+- **Comportamiento actual**: cada envío nace `BLOQUEADO_SALDO`, con SHP-* provisorio sin etiqueta courier real. El comprador ve un tracking Shipro sin movimiento por 63 hs. Lunes: `procesar-bloqueados.ts` batch-processes los envíos apilados. Interpretación amable: "la venta se registra pero se paraliza"; interpretación estricta: "el cliente no puede despachar el finde", contradiciendo lo prometido en el onboarding.
+
+**Veredicto — BUG (intención DEUDA 78 ≠ código):**
+
+Dos opciones de fix (decisión de negocio Nacho, apetito de riesgo):
+
+- **Opción (a) — ARREGLAR (implementar la intención):** el gate PREPAGO suma el colchón:
+  ```
+  if (tipoCuentaEfectivo === "PREPAGO") {
+    if ((empresaConData.saldoActivo ?? new Decimal(0)).add(empresaConData.limiteDescubierto ?? new Decimal(0)).lt(montoDebito)) {
+      bloqueadoPorSaldo = true;
+    }
+  }
+  ```
+  Igual que POSTPAGO. El PREPAGO despacha hasta $50.000 en descubierto durante el finde. Shipro presta ese margen — riesgo acotado por el propio colchón + la suspensión al 1.5×. El destrabe (`procesar-bloqueados-*.ts`) debe alinear el mismo cambio. **Money-critical**: cambia la política de dispatch PREPAGO; verificación empírica requerida en cada estado × rama.
+
+- **Opción (b) — DEJAR + LIMPIAR (código muerto):** aceptar que PREPAGO bloquea en $0 por diseño ("pagás antes de usar, estricto"). Remover `MIN_DESCUBIERTO_PREPAGO = 50000` del onboarding (`app/api/clientes/route.ts`), remover el comment de DEUDA 78 sobre "colchon de fin de semana", actualizar DEUDA 78 para clarificar que la mitigación es distinta (o inexistente). El campo `limiteDescubierto` sigue existiendo pero para PREPAGO es 0 por default; para POSTPAGO sigue como línea de crédito normal.
+
+**Sub-caso raro pero real**: un cliente que hoy sea POSTPAGO puede eventualmente pasar a PREPAGO (o al revés). La política debería definir qué ocurre con su `limiteDescubierto` en ese switch. No hay migración de modalidad implementada hoy — irrelevante por ahora.
+
+**Impacto para DEUDA 174 (Política de Débito Unificada):** el bug es **ortogonal** — DEUDA 174 se puede construir sobre el modelo colchón que ya funciona en POSTPAGO. PREPAGO en las 5 piezas queda con la asimetría heredada: el Fee al crear (Pieza 2 Rama B) se cobra sólo si `saldoActivo ≥ Fee`. Cuando el bug 175 se resuelva (opción a o b), 174 se recomporta consistente sin cambios adicionales.
+
+**Verificaciones sugeridas (para el fix si Nacho elige (a)):**
+1. PREPAGO con `saldoActivo=$0`, `limiteDescubierto=$50k`, `montoDebito=$2k` → envío nace `Pendiente`, dispatch OK, `MovimientoFinanciero DEBITO_ENVIO -$2k`, saldo = -$2k.
+2. Encadenar hasta cruzar `-$50k` cushion: envío nace `BLOQUEADO_SALDO`.
+3. Cruzar $-75k (1.5×): `evaluarSuspension` marca `Empresa.suspendida = true`.
+4. Recarga: `procesar-bloqueados.ts` destraba los pendientes, reactiva si aplica.
+
+**Scope:** chico (2 líneas en crear.ts + análogas en 4 handlers `procesar-bloqueados-*.ts` para simetría). **Prioridad:** media — hoy latente (prod = prueba), pero es la primera política real que cae encima cuando entre el primer cliente PREPAGO productivo.
+
+**Relación:** [[DEUDA 78]] (autoridad de intención — "colchón de finde"). [[DEUDA 22]] (suspensión — usa el colchón por umbral, inalcanzable en PREPAGO por este bug). [[DEUDA 16]] (BLOQUEADO_SALDO, el gate del que sale el bug). [[DEUDA 10]] Paso 5a (D-10-ONBOARDING-DESCUBIERTO, donde se asigna el $50k). [[DEUDA 174]] (política de débito unificada — ortogonal, no bloqueante).
+
+**Origen:** recon money-critical Chat A 2026-09-10 durante el diseño de Pieza 2 de DEUDA 174 (colchón + BLOQUEADO_SALDO Rama B). Al verificar cómo el gate PREPAGO interactúa con el colchón declarado en el onboarding, apareció la asimetría silenciosa. DEUDA 78 dio la evidencia autoritativa de que era bug de política, no diseño intencional.
+
+---
+
+## DEUDA 176 — Sin UI para editar `limiteDescubierto` post-alta: solo se configura al crear el cliente (registrada 2026-09-10, scope chico, prioridad baja)
+
+**Status:** ABIERTA. Prioridad baja (no urgente sin clientes reales; útil para operaciones cuando los haya). Sin backfill (prod = prueba).
+
+**Problema:** `Empresa.limiteDescubierto` se setea **solo al crear el cliente** (`POST /api/clientes` L153 pasa el valor al `prisma.empresa.create`). El `PUT /api/clientes` sólo tiene dos ramas: `accion: "toggle_activo"` y `accion: "crear_usuario"`. **No hay rama para editar el colchón** post-alta. Tampoco hay endpoint dedicado ni UI en el dashboard (`app/(dashboard)/admin-empresas/` NOT FOUND; `admin/finanzas` sólo acredita saldos con recarga manual, no edita el colchón).
+
+**Consecuencia:** si un cliente crece y necesita más colchón (o menos, por gestión de riesgo), la única forma de modificarlo hoy es `UPDATE Empresa SET limiteDescubierto = X` directo en la BD. Igual que el gap histórico de la UI del markup del intermediario: el campo existe + funciona en el motor, pero sin superficie de admin editable = fricción de operaciones cuando el negocio quiera ajustar líneas de crédito por cliente.
+
+**Fix sugerido:**
+- **Opción A (mínima):** rama `accion: "actualizar_limite_descubierto"` en `PUT /api/clientes` con audit log via `registrarCambioConfiguracion` (patrón existente de `toggle_activo`, [app/api/clientes/route.ts:216-225](app/api/clientes/route.ts#L216-L225)). Body: `{ empresaId, limiteDescubiertoNuevo, motivoAuditoria }`. Gate rol: `admin_shipro` (defense-in-depth, mismo patrón).
+- **Opción B (integral):** sección "Límite descubierto" en un editor de cliente en el dashboard, con endpoint dedicado y validación (POSTPAGO > 0, PREPAGO ≥ MIN si sigue vigente después de resolver [[DEUDA 175]]).
+
+**Scope:** chico. Un branch en el PUT (10-20 líneas) + botón en la UI de admin (si se hace la opción B). Sin schema change (el campo existe). Sin migración de datos.
+
+**Prioridad:** baja hoy (prod = prueba, cero clientes reales). Se activa cuando entren clientes POSTPAGO productivos que necesiten ajustes de línea de crédito, o cuando se resuelva [[DEUDA 175]] y el colchón PREPAGO empiece a tener uso real (mismo campo, misma necesidad).
+
+**Relación:** [[DEUDA 175]] (bug colchón PREPAGO — misma zona del código; los dos amerintan el editor cuando el negocio operacionalice el colchón). [[DEUDA 22]] (suspensión usa el colchón — si el admin ajusta el colchón, los umbrales de suspensión/reactivación cambian automáticamente por multiplicador). [[DEUDA 10]] Paso 5a (D-10-ONBOARDING-DESCUBIERTO — donde el colchón nace).
+
+**Origen:** recon del modelo colchón Chat A 2026-09-10 durante el diseño de Pieza 2 de DEUDA 174. Verificar dónde se configura el `limiteDescubierto` reveló que la única superficie de edición es el POST del onboarding; el PUT es un gate rígido de dos acciones que no cubre este campo. Registrado como deuda separada, no bloquea DEUDA 174 ni DEUDA 175 pero es infra que las hará usables.
+
+---

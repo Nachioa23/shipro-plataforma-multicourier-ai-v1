@@ -839,6 +839,15 @@ model Envio {
   correccionToken       String?   @unique
   correccionTokenExpira DateTime?
 
+  // Sub-fase 3 Pieza 1 (Reintento auto de despacho, 2026-09-10): campos para
+  // trackear intentos de reintento de un envío en BLOQUEADO_PARCIAL. Aditivos,
+  // nullable/default — filas históricas heredan retryCount=0 + ultimoReintento=null.
+  // Cero touch a débito/dispatch/cancel; sólo inventario para el cron futuro.
+  // Ver `lib/envios/reintentable.ts` (identificador esReintentable) y los TODOs
+  // pre-existentes en `lib/envios/crear.ts:944` + `lib/envios/dispatch.ts:558-560`.
+  retryCount      Int       @default(0)
+  ultimoReintento DateTime?
+
   // DEUDA 29: cadena de tramos (recolección, entrega, ciclo_completo).
   // Cada tramo tiene su propio courier responsable y trackingExterno.
   tramos TramoEnvio[]

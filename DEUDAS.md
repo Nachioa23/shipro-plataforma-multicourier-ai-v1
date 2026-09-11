@@ -4260,9 +4260,25 @@ else if (str_starts_with($statusUpper, 'BLOQUEADO_')) { /* bloqueado con motivo 
 
 ---
 
-## DEUDA 174 — Política de Débito Unificada: el momento del débito (Fee / chain) no cumple la política de negocio en 8 casos (money-crítico, registrada 2026-09-10, CIRCUITO CERRADO: P1-P4 HECHAS + VERIFICADAS LOCAL 2026-09-10, P5 = caso manual raro no automatizado, pendiente deploy prod)
+## DEUDA 174 — Política de Débito Unificada: el momento del débito (Fee / chain) no cumple la política de negocio en 8 casos (money-crítico, registrada 2026-09-10, CIRCUITO CERRADO local 2026-09-10, DEPLOYADO + VERIFICADO EN PROD 2026-09-11 commit `0a5499f`)
 
-**Status:** **CIRCUITO CERRADO local 2026-09-10.** Money-crítico. Sin backfill (prod = prueba). Piezas 1-4 HECHAS + VERIFICADAS local en el circuito débito+refund; Pieza 5 (courier reject por culpa técnica de Shipro) queda como **caso manual raro no automatizado** — el modelo Nacho refinado disolvió la mayoría de sus sub-casos y el residuo no es auto-distinguible sin refactor de errores tipados (ver detalle en la sección Pieza 5 abajo). **Pendiente**: deploy prod P1-P4 juntas + verificación. **Ortogonal**: obra de REINTENTO de despacho (`Sub-fase 3`, declarada pendiente en `crear.ts:943` + `dispatch.ts:558-560`) cierra el circuito "courier caído un rato → retry hasta lograrlo → cobra".
+**Status:** **CIRCUITO CERRADO Y EN PROD 2026-09-11.** Money-crítico. Sin backfill (prod = prueba). Piezas 1-4 HECHAS + VERIFICADAS **EN PROD** con movimientos reales (detalle en "Verificación en prod" abajo); Pieza 5 (courier reject por culpa técnica de Shipro) queda como **caso manual raro no automatizado** — el modelo Nacho refinado disolvió la mayoría de sus sub-casos y el residuo no es auto-distinguible sin refactor de errores tipados (ver detalle en la sección Pieza 5 abajo). **Ortogonal**: obra de REINTENTO de despacho (`Sub-fase 3`, declarada pendiente en `crear.ts:943` + `dispatch.ts:558-560`) cierra el circuito "courier caído un rato → retry hasta lograrlo → cobra" — Pieza 1 base en prod inerte (ver [[DEUDA 178]]).
+
+**Deploy + verificación en prod (2026-09-11, commit `0a5499f`):**
+- Deploy carrying 10 commits post-`054f886`: 5 code (P1-P4 débito + P1 base reintento) + 5 docs. 14 archivos code-side + 1 migración additive.
+- Migración `20260911012837_reintento_campos` aplicada — 2 `ADD COLUMN` en `Envio` (`retryCount` + `ultimoReintento`), cero touch a money tables (`FinanzasEnvio` / `MovimientoFinanciero` / `Empresa`).
+- Build limpio (`rm -rf .next && npm run build`), reload OK (`pm2 restart #80`).
+- **Money tables intactas**; adapters/cotizador/dispatch intocados.
+
+**Verificación en prod con movimientos reales (2026-09-11):**
+- **Rama B + bloqueo** (Andreani con dirección mal, envío `SHP-195529`) → `DEBITO_ENVIO -$1.936` al crear (Fee+IVA). ✅ Política Rama B "cualquier etiqueta genérica = Fee cobrado" (P2).
+- **Rama A + dirección mal** → **cero débito al crear** (envío nace RETENIDO sin `DEBITO_ENVIO`). ✅ Fix bug #1 P3 (débito prematuro eliminado).
+- **Rama A ciclo completo** (envío `0000132822`, Moci's):
+  - Alta RETENIDO → 0 débito.
+  - `/corregir` OK → `DEBITO_ENVIO -$12.531,37` (full chain). ✅ P3 débito diferido a la generación de la etiqueta courier.
+  - Cancel → `CREDITO_CANCELACION +$10.595,37` (chain − Fee). ✅ P4 refund rama-aware.
+  - **Neto cobrado = $12.531,37 − $10.595,37 = $1.936 = Fee+IVA exacto**. ✅ Política Nacho "solo Fee+IVA cuando no hay etiqueta courier final" cumplida al peso.
+- Los tres escenarios cierran los 3 caminos principales (Rama B never-labelled + Rama A never-labelled + Rama A labelled-then-cancelled).
 
 **Principio rector (Nacho, LOCKED):** "el débito refleja quién hizo su trabajo".
 - **Fee+IVA** se cobra cuando Shipro generó CUALQUIER etiqueta (genérica SHP-* o del courier real) — ambas ramas.

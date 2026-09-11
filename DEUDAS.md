@@ -4497,9 +4497,23 @@ Observación crítica: las MISMAS credenciales de Moci's funcionan sin problema 
 
 ---
 
-## DEUDA 178 — Reintento automático de despacho para BLOQUEADO_PARCIAL transitorio (registrada 2026-09-10, P1 base EN PROD 2026-09-11 inerte + P2 + P3 HECHAS + VERIFICADAS LOCAL 2026-09-11 anti-doble-despacho confirmado; P4 wiring PENDIENTE — va último tras deploy y coordinación Chat C)
+## DEUDA 178 — Reintento automático de despacho para BLOQUEADO_PARCIAL transitorio (registrada 2026-09-10, RESUELTA + EN PROD 2026-09-11: P1+P2+P3 deployadas, P4 cron agendado 8-22 ART, coordinación Chat C cerrada con REINTENTANDO + OpenAPI v1.3)
 
-**Status:** EN PROGRESO. Prioridad media-alta (cierra la última fisura de resiliencia del despacho — post P1-P4 de DEUDA 174 el débito ya es correcto, falta el auto-recovery del courier caído un rato). Money-crítico + concurrency-crítico: la P2 debe construirse con foco pleno y verificación de carrera antes de deployar.
+**Status:** **RESUELTA + EN PROD 2026-09-11.** Las 4 piezas + coordinación Chat C cerradas. Con esto + DEUDA 174 (débito), el circuito despacho+débito queda robusto e2e: un envío que falla por causa transitoria se reintenta solo (claim atómico anti-doble-despacho) y cobra al lograr (helper anti-doble-débito). Ver "Cierre en prod 2026-09-11" abajo.
+
+**Cierre en prod 2026-09-11:**
+- **P1** (campos `retryCount` + `ultimoReintento` + helper `esReintentable`) — deployada 2026-09-11 vía commit `eeb32f9`. Migración additive aplicada. Base inerte.
+- **P2** (`lib/envios/reintentar-envio.ts` con claim atómico + re-despacho + débito idempotente via helper P1 DEUDA 174 + estado REINTENTANDO transitorio) — deployada 2026-09-11 vía commit `c704a13`, doc verificada en `2eb723f`. **Prueba de carrera** (`scripts/test-reintento-carrera.mjs`): 6/6 aserciones OK; dos claims concurrentes producen exactamente 1 winner (count=1) + 1 loser (count=0); retryCount +1 (nunca +2); cero doble-débito. Anti-doble-despacho confirmado empíricamente.
+- **P3** (cron `app/api/cron/reintentar-despachos`) — deployada 2026-09-11 vía commit `7eeaefc`. Delegación pura a `reintentarUnEnvio` (P2); filtro transient conservador con `PATRONES_TRANSITORIOS` (`CourierTimeout`, timeout, ECONNRESET/REFUSED, ETIMEDOUT, fetch failed, NetworkError); batch cap 50; cap por envío `MAX_REINTENTOS=5`; auto-ticket implícito cuando `retryCount >= MAX` (envío queda `BLOQUEADO_PARCIAL` para operator).
+- **P4 — cron agendado en prod 2026-09-11**: crontab de root del server Linode (mismo donde vive `sweep-6m`, único wireado previamente), 2 entries por cruce medianoche UTC:
+  ```
+  */15 11-23 * * * /usr/local/bin/shipro-cron.sh reintentar-despachos
+  */15 0 * * *    /usr/local/bin/shipro-cron.sh reintentar-despachos
+  ```
+  Cubre 8-22 ART (ART = UTC-3, servidor en UTC). Reusa wrapper `/usr/local/bin/shipro-cron.sh` (patrón sweep-6m byte-exact). Log file: `/var/log/shipro/cron-reintentar-despachos.log`. **Prueba manual pre-schedule** (curl autenticado): `{"ok":true,"procesados":0,...}` limpio. **Verificado agendado** con `sudo crontab -l | grep reintentar-despachos`.
+- **Coordinación Chat C CERRADA**: plugin WooCommerce (`shipro-woocommerce` @ `d06667d`) reconoce `REINTENTANDO` con categoría ESPERA y mensaje "El envío se está reprocesando (reintentando el despacho al courier). Aguardá unos segundos..." — sin acción del comprador (diferencia clara con RETENIDO). Contrato **OpenAPI v1.3** publicado con el estado agregado a la lista canónica (evita repetir el problema histórico "Pendiente desconocido" — DEUDA 173).
+
+**Con esto, el CIRCUITO DESPACHO+DÉBITO ES ROBUSTO E2E:** un envío nace bloqueado por timeout → cron detecta transient (dentro de 15 min) → claim atómico → re-despacho → si OK, cobra al éxito con delta rama-aware; si falla, revierte a BLOQUEADO_PARCIAL para el próximo retry hasta agotar el cap; si el cap llega, queda manual. Política Nacho "reintentar hasta lograrlo → cobrar al éxito" cumplida al peso.
 
 **Origen del pendiente:** TODOs pre-existentes en el código:
 - `lib/envios/crear.ts:944`: *"El operador debe resolver la falla manualmente (Sub-fase 3 agregará reintento auto)."*

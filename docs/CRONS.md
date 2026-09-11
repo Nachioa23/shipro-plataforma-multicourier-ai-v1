@@ -16,22 +16,24 @@ Como la protección vive en el proxy, **no requiere ningún cambio adicional al 
 | `GET /api/cron/metricas-sla` | Lee envíos `ENTREGADO` de los últimos 90 días con fechas completas (colecta + entrega). Calcula promedio de horas en tránsito agrupando por `(courierId, provinciaDestino)`. Hace upsert en tabla `MetricaSLA`. | Una vez por día, **horario nocturno** (recomendado 02:00 ART). El comentario en código lo llama "Motor Nocturno de SLA". | < 5 segundos para volúmenes esperados. Idempotente (re-ejecución no rompe nada). |
 | `GET /api/cron/sincronizar-couriers` | Sincroniza catálogos de sucursales/servicios de couriers (Andreani, Mocis, futuros) contra sus APIs externas. Mantiene actualizada la red de puntos de retiro y servicios disponibles por courier. También accesible manualmente desde la UI admin en `/api/admin/couriers/[id]/sincronizar`. | Una vez por día, **horario low-traffic** (recomendado 03:00 ART). Catálogos no cambian frecuentemente — diario es suficiente. | < 30 segundos típico. Variable según cantidad de sucursales por courier (Andreani tiene ~500 sucursales activas). Idempotente (upsert por trackingExterno + cp). |
 | `GET /api/cron/sweep-6m` | Barrido mensual de etiquetas Rama A que cumplieron 6 meses sin conciliación del courier. Devuelve el flete estimado (`logisticaNetaFacturada × 1.21`) como `CREDITO_LOGISTICA_NO_FACTURADA`; el Fee se conserva (ya se facturó su mes). Idempotente: la segunda corrida excluye por `logisticaDevuelta=true`. Una `$transaction` por empresa (una empresa fallando no bloquea al resto). | Una vez por mes, **día 1 a 04:00 ART** (después del cierre de mes). | Variable según labels elegibles del mes. Típico < 30s para volúmenes chicos; puede subir con volumen. |
+| `GET /api/cron/reintentar-despachos` | Retry auto de envíos en BLOQUEADO_PARCIAL con causa transient (CourierTimeout, ECONNRESET/REFUSED, ETIMEDOUT, fetch failed, NetworkError). Delega a `reintentarUnEnvio` (`lib/envios/reintentar-envio.ts`, DEUDA 178 P2) que hace claim atómico (`updateMany` optimistic lock → estado `REINTENTANDO` transient) + re-despacho + débito idempotente via helper P1 DEUDA 174. Batch cap 50, cap por envío `MAX_REINTENTOS=5`. Money-safe: Rama A cobra chain al éxito; Rama B (Fee ya cobrado en creación DEUDA 174 P2) → delta=0. Envíos que llegan al cap quedan `BLOQUEADO_PARCIAL` para operator manual. | Cada **15 min** en horario operativo (8-22hs ART). | Variable según N candidatos × latencia courier. Batch 50 acotado ≈ 100s típico. |
 
-## 2b. Estado real de wiring en producción (pm.shipro.pro, 2026-07-30)
+## 2b. Estado real de wiring en producción (pm.shipro.pro, actualizado 2026-09-11)
 
-Hoy en producción **sólo `sweep-6m` está efectivamente wireado** en el crontab del server. Los otros tres endpoints existen y están protegidos por el proxy, pero **NO están en ningún crontab todavía** — son un TODO de deploy pendiente.
+Actualización 2026-09-11: se agrega `reintentar-despachos` (DEUDA 178 P4). Los otros tres endpoints (rastreo, metricas-sla, sincronizar-couriers) siguen sin wiring — TODO de deploy pendiente.
 
 | Endpoint | ¿Wireado en prod? |
 |---|---|
 | `GET /api/cron/sweep-6m` | ✅ SÍ, en root crontab: `0 7 1 * * /usr/local/bin/shipro-cron.sh sweep-6m` (día 1 mensual a 07:00 UTC = 04:00 ART). Test manual devolvió `http=200 {"ok":true,"sweptCount":0}`. |
+| `GET /api/cron/reintentar-despachos` | ✅ SÍ, en root crontab (2 entries por cruce medianoche UTC): `*/15 11-23 * * * /usr/local/bin/shipro-cron.sh reintentar-despachos` + `*/15 0 * * * /usr/local/bin/shipro-cron.sh reintentar-despachos` (8-22 ART = 11-23 UTC del día + 00 UTC del siguiente). Wireado 2026-09-11 post-deploy DEUDA 178 P2+P3 + coordinación cerrada con Chat C (plugin reconoce REINTENTANDO + OpenAPI v1.3). Prueba manual pre-schedule: `{"ok":true,"procesados":0,...}` limpio; verificado agendado con `sudo crontab -l`. |
 | `GET /api/cron/rastreo` | ❌ Endpoint existe, sin crontab entry. |
 | `GET /api/cron/metricas-sla` | ❌ Endpoint existe, sin crontab entry. |
 | `GET /api/cron/sincronizar-couriers` | ❌ Endpoint existe, sin crontab entry. |
 
-**Scaffolding mounteado en el server (2026-07-30)** — vive fuera del repo, en el filesystem del server:
+**Scaffolding mounteado en el server** — vive fuera del repo, en el filesystem del server:
 - `/usr/local/bin/shipro-cron.sh` — wrapper que hace curl con `Authorization: Bearer ${CRON_SECRET}`.
 - `/etc/shipro/cron.env` — define `CRON_SECRET` + `APP_URL`, permisos `chmod 600` root:root.
-- `/var/log/shipro/` — directorio de logs, un archivo por endpoint (`cron-sweep-6m.log` ya creado).
+- `/var/log/shipro/` — directorio de logs, un archivo por endpoint (`cron-sweep-6m.log` desde 2026-07-30; `cron-reintentar-despachos.log` desde 2026-09-11).
 
 ## 3. Configuración para deploy en Linode
 
@@ -88,6 +90,13 @@ APP_URL=https://shipro.tu-dominio.com
 
 # Sweep 6 meses: día 1 del mes a 04:00 ART (07:00 UTC)  ← WIREADO en prod (2026-07-30)
 0 7 1 * * /usr/local/bin/shipro-cron.sh sweep-6m
+
+# Reintento auto de despacho: cada 15 min en horario operativo 8-22 ART (= 11-01 UTC).
+# ART = UTC-3, servidor en UTC. La ventana cruza medianoche UTC (22 ART = 01 UTC del día
+# siguiente), y cron no soporta rangos que envuelven → se parte en 2 entries. Ver DEUDA 178
+# Sub-fase 3. ← WIREADO en prod (2026-09-11)
+*/15 11-23 * * * /usr/local/bin/shipro-cron.sh reintentar-despachos
+*/15 0 * * *    /usr/local/bin/shipro-cron.sh reintentar-despachos
 ```
 
 > **Nota de zona horaria:** si el server corre en UTC (default Linode), `02:00 ART` = `05:00 UTC`. Si configuraste el server en `America/Argentina/Buenos_Aires`, usar `0 2 * * *` directo.
@@ -97,7 +106,7 @@ APP_URL=https://shipro.tu-dominio.com
 ```sh
 sudo mkdir -p /var/log/shipro
 sudo chown shipro-user:shipro-user /var/log/shipro
-sudo touch /var/log/shipro/cron-rastreo.log /var/log/shipro/cron-metricas-sla.log /var/log/shipro/cron-sweep-6m.log
+sudo touch /var/log/shipro/cron-rastreo.log /var/log/shipro/cron-metricas-sla.log /var/log/shipro/cron-sweep-6m.log /var/log/shipro/cron-reintentar-despachos.log
 ```
 
 (Reemplazar `shipro-user` por el usuario real que corre la app.)

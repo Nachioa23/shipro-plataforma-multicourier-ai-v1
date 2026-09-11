@@ -749,3 +749,84 @@ export async function enviarMailGenerico(
     return false;
   }
 }
+
+// ==============================================================
+// MAIL 12: ENVÍO DEL PLUGIN WOOCOMMERCE (DEUDA 150 Pieza 3)
+// Mirror de enviarMailSetupApiKey. Le manda al cliente el link
+// de descarga del .zip del release + (si está seteada) la guía
+// de instalación. Si urlGuia está vacío, el mail se manda igual
+// con una nota — la guía viaja aparte.
+// ==============================================================
+export async function enviarMailPlugin(
+  emailDestino: string,
+  nombreEmpresaOUsuario: string,
+  urlDescargaZip: string,
+  urlGuia: string,
+) {
+  try {
+    const hayGuia = typeof urlGuia === "string" && urlGuia.trim().length > 0;
+    const mailOptions = {
+      from: `"Shipro Onboarding" <${process.env.SMTP_USER}>`,
+      to: emailDestino,
+      subject: `📦 Shipro: Descargá el plugin para WooCommerce`,
+      html: `
+        <style>${fontImport}</style>
+        <div style="font-family: Arial, sans-serif; color: #333; max-w: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eaeaea; border-radius: 10px;">
+          <h2 style="color: #233b6b;">¡Hola, ${nombreEmpresaOUsuario}! 👋</h2>
+          <p>Desde <strong>Shipro</strong> te compartimos el <strong>plugin oficial para WooCommerce</strong>, para que puedas cotizar y despachar tus envíos desde tu tienda con nuestra plataforma.</p>
+
+          <div style="background-color: #f8fafc; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #3b82f6;">
+            <p style="margin: 0; color: #1f2937; font-weight: bold; margin-bottom: 10px;">Cómo instalarlo:</p>
+            <ol style="color: #4b5563; line-height: 1.6; margin: 0; padding-left: 20px;">
+              <li>Descargá el archivo <strong>.zip</strong> con el botón de abajo.</li>
+              <li>En tu WordPress, entrá a <strong>Plugins &gt; Añadir nuevo &gt; Subir plugin</strong> y elegí el .zip.</li>
+              <li>Activá <strong>Shipro para WooCommerce</strong> y andá a <strong>Ajustes &gt; Shipro</strong>.</li>
+              <li>Pegá tu <strong>API Key</strong> de Shipro (si no la tenés todavía, pedila desde el panel de Shipro).</li>
+            </ol>
+          </div>
+
+          <div style="text-align: center; margin: 35px 0;">
+            <a href="${urlDescargaZip}" target="_blank" style="background-color: #2563eb; color: #ffffff; padding: 14px 28px; text-decoration: none; font-weight: bold; border-radius: 6px; display: inline-block;">
+              Descargar plugin (.zip)
+            </a>
+          </div>
+
+          ${
+            hayGuia
+              ? `
+          <div style="text-align: center; margin: 20px 0 30px;">
+            <a href="${urlGuia}" target="_blank" style="color: #2563eb; text-decoration: underline; font-size: 13px;">
+              Ver la guía de instalación paso a paso
+            </a>
+          </div>
+          `
+              : `
+          <div style="background-color: #eff6ff; padding: 12px 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #3b82f6;">
+            <p style="margin: 0; font-size: 13px; color: #1e3a8a;">
+              <strong>Guía paso a paso:</strong> te la vamos a mandar por separado en las próximas horas. Con estos 4 pasos igual podés arrancar la instalación.
+            </p>
+          </div>
+          `
+          }
+
+          <div style="background-color: #fff7ed; padding: 12px 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #f59e0b;">
+            <p style="margin: 0; font-size: 13px; color: #9a3412;">
+              <strong>Necesitás tu API Key:</strong> si todavía no la generaste, pedila desde el panel de Shipro (vas a recibir otro mail con el link para generarla).
+            </p>
+          </div>
+
+          <p style="font-size: 12px; color: #9ca3af; text-align: center; margin-top: 30px;">
+            Si no esperabas este mail, ignoralo — el link es una descarga pública del release oficial.<br>
+            Cualquier duda, respondé este correo.
+          </p>
+          ${firmaShipro}
+        </div>
+      `,
+    };
+    await transporter.sendMail(mailOptions);
+    return true;
+  } catch (error) {
+    console.error("[Mailer] Error Mail Plugin:", error);
+    return false;
+  }
+}

@@ -55,6 +55,10 @@ export default function GestionClientes() {
   // el mail. Shipro NUNCA ve la key en plaintext (la genera el cliente en su página).
   const [enviandoLinkApiKey, setEnviandoLinkApiKey] = useState(false);
   const [mensajeLinkApiKey, setMensajeLinkApiKey] = useState<{ texto: string; tipo: 'ok' | 'error' } | null>(null);
+  // DEUDA 150 Pieza 3: verbo "mandar plugin" — por-conexión (una empresa puede
+  // tener más de una conexión WooCommerce, cada una con su estado UI).
+  const [enviandoPluginId, setEnviandoPluginId] = useState<number | null>(null);
+  const [mensajePlugin, setMensajePlugin] = useState<Record<number, { texto: string; tipo: 'ok' | 'error' }>>({});
 
   // DEUDA 150 Pieza 1: hub de conexiones per-empresa. Se carga al abrir el drawer
   // (via useEffect abajo). Muestra las Conexion rows + tiendas Tiendanube (read-only,
@@ -447,7 +451,7 @@ export default function GestionClientes() {
               <p className="text-xs font-bold text-blue-600 uppercase tracking-widest mb-1">Auditando Cliente</p>
               <h2 className="text-xl font-black text-gray-800">{clienteSeleccionado.nombre}</h2>
             </div>
-            <button onClick={() => {setClienteSeleccionado(null); setCreandoUsuario(false); setLinkMagicoUsuario(null); setMensajeLinkApiKey(null); setConexionesData(null); setErrorConexiones(null); setMensajeConexion(null);}} className="p-2 hover:bg-gray-200 rounded-full text-gray-500 transition-colors"><X className="w-6 h-6" /></button>
+            <button onClick={() => {setClienteSeleccionado(null); setCreandoUsuario(false); setLinkMagicoUsuario(null); setMensajeLinkApiKey(null); setConexionesData(null); setErrorConexiones(null); setMensajeConexion(null); setMensajePlugin({}); setEnviandoPluginId(null);}} className="p-2 hover:bg-gray-200 rounded-full text-gray-500 transition-colors"><X className="w-6 h-6" /></button>
           </div>
 
           <div className="flex-1 overflow-y-auto p-6 space-y-8">
@@ -562,17 +566,60 @@ export default function GestionClientes() {
                       <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500 mb-2">Conexiones registradas ({conexionesData.conexiones.length})</p>
                       <div className="space-y-2">
                         {conexionesData.conexiones.map((c: any) => (
-                          <div key={c.id} className="bg-white border border-gray-200 rounded-lg px-3 py-2 flex items-center gap-2 text-xs">
-                            <Plug className="w-4 h-4 text-indigo-500 shrink-0" />
-                            <div className="flex-1 min-w-0">
-                              <p className="font-bold text-gray-800">{c.plataforma}</p>
-                              <p className="text-[10px] text-gray-500">
-                                {c.mecanismo}{c.referenciaExterna ? ` · ref: ${c.referenciaExterna}` : ""}
-                              </p>
+                          <div key={c.id} className="bg-white border border-gray-200 rounded-lg px-3 py-2 text-xs">
+                            <div className="flex items-center gap-2">
+                              <Plug className="w-4 h-4 text-indigo-500 shrink-0" />
+                              <div className="flex-1 min-w-0">
+                                <p className="font-bold text-gray-800">{c.plataforma}</p>
+                                <p className="text-[10px] text-gray-500">
+                                  {c.mecanismo}{c.referenciaExterna ? ` · ref: ${c.referenciaExterna}` : ""}
+                                </p>
+                              </div>
+                              <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${c.estado === "ACTIVA" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : c.estado === "PENDIENTE" ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-gray-100 text-gray-600 border-gray-200"}`}>
+                                {c.estado}
+                              </span>
                             </div>
-                            <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${c.estado === "ACTIVA" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : c.estado === "PENDIENTE" ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-gray-100 text-gray-600 border-gray-200"}`}>
-                              {c.estado}
-                            </span>
+
+                            {/* DEUDA 150 Pieza 3: verbo "mandar plugin" — solo para conexiones WooCommerce.
+                                Reenviar es idempotente (link público al release del plugin). */}
+                            {c.plataforma === "WOOCOMMERCE" && (
+                              <div className="mt-2 pt-2 border-t border-gray-100">
+                                <button
+                                  onClick={async () => {
+                                    if (!clienteSeleccionado || enviandoPluginId !== null) return;
+                                    setEnviandoPluginId(c.id);
+                                    setMensajePlugin((m) => { const { [c.id]: _drop, ...rest } = m; return rest; });
+                                    try {
+                                      const res = await fetch(`/api/admin/empresas/${clienteSeleccionado.id}/enviar-plugin`, {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json" },
+                                      });
+                                      const data = await res.json().catch(() => ({}));
+                                      if (res.ok) {
+                                        const guiaTxt = data?.incluyeGuia ? " (con guía)" : " (guía por separado)";
+                                        setMensajePlugin((m) => ({ ...m, [c.id]: { texto: `Plugin enviado a ${data?.enviadoA ?? "el gerente del cliente"}${guiaTxt}.`, tipo: 'ok' } }));
+                                      } else {
+                                        setMensajePlugin((m) => ({ ...m, [c.id]: { texto: data?.error || `Error HTTP ${res.status}`, tipo: 'error' } }));
+                                      }
+                                    } catch {
+                                      setMensajePlugin((m) => ({ ...m, [c.id]: { texto: "Error de red. Reintentá.", tipo: 'error' } }));
+                                    } finally {
+                                      setEnviandoPluginId(null);
+                                    }
+                                  }}
+                                  disabled={enviandoPluginId !== null}
+                                  className="w-full flex items-center justify-center gap-2 px-3 py-1.5 text-[11px] font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-md disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                                >
+                                  {enviandoPluginId === c.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                                  {enviandoPluginId === c.id ? "Enviando…" : "Enviar plugin al cliente"}
+                                </button>
+                                {mensajePlugin[c.id] && (
+                                  <p className={`mt-2 text-[11px] font-medium px-2 py-1.5 rounded ${mensajePlugin[c.id].tipo === 'ok' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+                                    {mensajePlugin[c.id].texto}
+                                  </p>
+                                )}
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -794,7 +841,7 @@ export default function GestionClientes() {
         </div>
       </div>
       
-      {clienteSeleccionado && <div className="fixed inset-0 bg-slate-900/20 z-40" onClick={() => {setClienteSeleccionado(null); setCreandoUsuario(false); setLinkMagicoUsuario(null); setMensajeLinkApiKey(null); setConexionesData(null); setErrorConexiones(null); setMensajeConexion(null);}}></div>}
+      {clienteSeleccionado && <div className="fixed inset-0 bg-slate-900/20 z-40" onClick={() => {setClienteSeleccionado(null); setCreandoUsuario(false); setLinkMagicoUsuario(null); setMensajeLinkApiKey(null); setConexionesData(null); setErrorConexiones(null); setMensajeConexion(null); setMensajePlugin({}); setEnviandoPluginId(null);}}></div>}
     </div>
   );
 }

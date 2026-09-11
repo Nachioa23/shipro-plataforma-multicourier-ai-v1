@@ -160,32 +160,18 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
                     <Settings2 className="w-5 h-5 text-violet-600" /><span className="font-bold text-violet-800">Gestión de Couriers</span>
                   </Link>
 
-                  {/* DEUDA 170 Parte 2 Pieza 1 (2026-09-08): Consola de Tarifa — vista unificada per-courier (markup dueño + Shipro + SMO). */}
+                  {/* DEUDA 170 Parte 2 Pieza 1 (2026-09-08): Consola de Tarifa — vista unificada per-courier
+                      (markup dueño + Shipro + SMO). Reemplaza en el menú las 4 pantallas individuales
+                      (parametros-tarifa / smo / markup-courier / markup-dueno) removidas del sidebar el
+                      2026-09-11 — las rutas quedan reachable por deep-link + siguen escribiendo a los mismos
+                      modelos. `/admin-fee` sigue en el menú por sus flujos avanzados (mass-adjust, promos). */}
                   <Link href="/admin-consola-tarifa" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-slate-100 hover:text-slate-800 rounded-lg font-medium text-sm transition-all mt-2 bg-slate-50 border border-slate-200">
                     <Sliders className="w-5 h-5 text-slate-700" /><span className="font-bold text-slate-800">Consola de Tarifa</span>
                   </Link>
 
-                  {/* FASE 2 sub 2a: parámetros de tarifa (markup Shipro global con vigencias). */}
-                  <Link href="/admin-parametros-tarifa" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-blue-50 hover:text-blue-800 rounded-lg font-medium text-sm transition-all mt-2 bg-blue-50/50 border border-blue-100">
-                    <Percent className="w-5 h-5 text-blue-600" /><span className="font-bold text-blue-800">Parámetros de Tarifa</span>
-                  </Link>
-
-                  {/* FASE 2 sub 3: SMO por courier con vigencias (DEUDA 115). */}
-                  <Link href="/admin-smo" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-amber-50 hover:text-amber-800 rounded-lg font-medium text-sm transition-all mt-2 bg-amber-50/50 border border-amber-100">
-                    <Shield className="w-5 h-5 text-amber-600" /><span className="font-bold text-amber-800">SMO por Courier</span>
-                  </Link>
-
-                  {/* DEUDA 157 Paso 1: markup Shipro por courier (general, admin-only). */}
-                  <Link href="/admin-markup-courier" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-blue-50 hover:text-blue-800 rounded-lg font-medium text-sm transition-all mt-2 bg-blue-50/50 border border-blue-100">
-                    <Percent className="w-5 h-5 text-blue-600" /><span className="font-bold text-blue-800">Markup por Courier</span>
-                  </Link>
-
-                  {/* DEUDA 170 Pieza A: markup del DUEÑO de credenciales (CourierIntermediario, admin-only). */}
-                  <Link href="/admin-markup-dueno" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-purple-50 hover:text-purple-800 rounded-lg font-medium text-sm transition-all mt-2 bg-purple-50/50 border border-purple-100">
-                    <Handshake className="w-5 h-5 text-purple-600" /><span className="font-bold text-purple-800">Markup del Dueño</span>
-                  </Link>
-
-                  {/* FASE 2 sub 4 parte A: Fee por empresa con vigencias — plata en vivo, motivo obligatorio. */}
+                  {/* FASE 2 sub 4 parte A: Fee por empresa con vigencias — plata en vivo, motivo obligatorio.
+                      Se mantiene en el menú (además de estar linkeada desde la consola) por sus flujos
+                      avanzados: ajustes masivos, promos con vencimiento, historial completo. */}
                   <Link href="/admin-fee" className="flex items-center gap-3 px-3 py-2.5 text-gray-600 hover:bg-emerald-50 hover:text-emerald-800 rounded-lg font-medium text-sm transition-all mt-2 bg-emerald-50/50 border border-emerald-100">
                     <Receipt className="w-5 h-5 text-emerald-600" /><span className="font-bold text-emerald-800">Fee por Empresa</span>
                   </Link>

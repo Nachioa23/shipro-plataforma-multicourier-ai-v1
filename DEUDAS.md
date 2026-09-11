@@ -4480,3 +4480,143 @@ Observación crítica: las MISMAS credenciales de Moci's funcionan sin problema 
 **Origen:** verificación e2e de Pieza 2 de DEUDA 174 (Cliente Demo S.A. → Rama B → cargar credenciales Moci's que funcionan en Rama A → probar despacho). Al reproducir el escenario BLOQUEADO_PARCIAL para verificar que la Pieza 2 cobraba el Fee correctamente, apareció este bug secundario. La política de débito Pieza 2 funcionó bien (cobró el Fee del PARCIAL); el bug de credenciales es aparte y merece su propia investigación.
 
 ---
+
+## DEUDA 178 — Reintento automático de despacho para BLOQUEADO_PARCIAL transitorio (registrada 2026-09-10, P1 base HECHA + diseño de concurrencia LISTO, P2-P4 pendientes money+concurrencia)
+
+**Status:** EN PROGRESO. Prioridad media-alta (cierra la última fisura de resiliencia del despacho — post P1-P4 de DEUDA 174 el débito ya es correcto, falta el auto-recovery del courier caído un rato). Money-crítico + concurrency-crítico: la P2 debe construirse con foco pleno y verificación de carrera antes de deployar.
+
+**Origen del pendiente:** TODOs pre-existentes en el código:
+- `lib/envios/crear.ts:944`: *"El operador debe resolver la falla manualmente (Sub-fase 3 agregará reintento auto)."*
+- `lib/envios/dispatch.ts:551-560`: *"TODO DEUDA 29 Sub-fase 3: error handling diferenciado. Hoy: cualquier error → BLOQUEADO_PARCIAL. Sub-fase 3: distinguir transitorio (retry con backoff) / validación / (…). Sub-fase 3: procesar-bloqueados-parcial similar al patrón saldo/depósito (DEUDA 16)."*
+- Modelo Nacho refinado en el cierre de DEUDA 174: *"timeout/conexión → se resuelve con REINTENTO — obra aparte"*.
+
+**Problema:** hoy cualquier BLOQUEADO_PARCIAL (por `CourierTimeout`, courier caído, tramo huérfano) queda **para resolución manual del operador** — no hay retry automático. Un courier caído 5 minutos deja los envíos de ese lapso en limbo hasta intervención humana. Con DEUDA 174 P1-P4 la política de débito ya maneja correctamente el estado terminal ("cancel del envío nunca despachado cobra Fee only"), pero la política declarada Nacho es "reintentar hasta lograrlo → cobrar al éxito" — hoy solo se cumple la primera mitad (queda en PARCIAL) sin el retry.
+
+### Pieza 1 — Base segura (inventario) — HECHA local 2026-09-10 (commit `eeb32f9`)
+
+3 archivos, 3 fields aditivos + 1 helper puro. **Cero ejecución, cero money, cero concurrencia.**
+
+- **Schema aditivo** (`prisma/schema.prisma` + migración `20260911012837_reintento_campos`): agrega a `Envio`:
+  ```
+  retryCount      Int       @default(0)   // Sub-fase 3 Pieza 1
+  ultimoReintento DateTime?               // Sub-fase 3 Pieza 1
+  ```
+  Migración additive pura (2 `ADD COLUMN`, cero DROP/ALTER). Rows históricos heredan `retryCount=0` + `ultimoReintento=null` automáticamente.
+- **Helper `lib/envios/reintentable.ts`** (nuevo, ~150 líneas, funciones puras):
+  - `MAX_REINTENTOS = 5` — cap tunable.
+  - `PATRONES_TRANSITORIOS: RegExp[]` — 7 regex case-insensitive (`couriertimeout`, `\btimeout\b`, `econnrefused`, `etimedout`, `econnreset`, `fetch failed`, `networkerror`). Whitelist conservador; cualquier otro error → skip.
+  - `esFalloTransitorio(errorTramo: string | null): boolean` — matcheo puro sobre el string.
+  - `esReintentable({estadoActual, retryCount, errorTramo}): boolean` — los 3 criterios (BLOQUEADO_PARCIAL + rc<MAX + transient match).
+  - `filtroReintentablesPrisma()` — Prisma `where` para el pre-filter Prisma-side (`estadoActual: "BLOQUEADO_PARCIAL"` + `retryCount: { lt: MAX_REINTENTOS }`).
+- **Verificación:** `tsc --noEmit` clean; test unitario 7/7 OK (matriz de casos: timeout+rc<max=true, timeout+rc=max=false, credenciales incompletas=false, estado ≠ PARCIAL=false, errorTramo=null=false, ETIMEDOUT=true, HTTP 400=false); sanity contra BD local (5 BLOQUEADO_PARCIAL existentes: 4 con "Falló la autenticación con Andreani" + 1 con "CredencialesPropiasIncompletas" → todos `esReintentable=false` correctamente, ninguno matchea whitelist transient).
+
+### Diseño de concurrencia LISTO 2026-09-10 (recon completo previo a P2)
+
+**Fisura actual del sistema (mapeada):**
+- **Doble despacho**: los handlers existentes (`procesar-bloqueados-*.ts`) filtran por `estadoActual` en el `findMany`, pero **NO tienen `SELECT FOR UPDATE`, `pg_advisory_lock`, ni `updateMany` como claim atómico**. Dos runs simultáneos ven los mismos envíos antes de que el 1ro commit-ee → potencial doble dispatch (dos etiquetas courier reales = dos paquetes físicos).
+- **Retry vs cancel**: `cancelar/route.ts:34` solo verifica `estadoActual !== "CANCELADO"` (previene doble-cancel). NO protege contra "cancelar mid-dispatch". Si el retry está dispatch-eando y el operator cancela: el update final del retry (`estadoActual: "Pendiente"`) puede sobrescribir el `CANCELADO` que puso el cancel → envío queda en Pendiente con etiqueta courier real + política financiera ya aplicó refund.
+- **`Envio.idempotencyKey`** existe (schema:754 + `@@unique([empresaId, idempotencyKey])`) pero protege **creación** desde el POST /api/envios — no protege dispatch al courier.
+- **Adapters no usan `external_reference: envio.id`** al llamar al courier (TODOs pendientes en `dispatch.ts:339, 529`). Sin esto, un retry solapado puede generar 2 tracking numbers reales del courier.
+
+**Solución diseñada — CLAIM ATÓMICO (patrón optimistic-lock via Prisma `updateMany`):**
+
+```
+// Pre-dispatch: CLAIM
+const claim = await prisma.envio.updateMany({
+  where: {
+    id: envio.id,
+    estadoActual: "BLOQUEADO_PARCIAL",           // aún en el estado esperado
+    retryCount: { lt: MAX_REINTENTOS },          // aún bajo el cap
+    OR: [{ ultimoReintento: null }, { ultimoReintento: { lt: cooldownExpira } }],
+  },
+  data: {
+    estadoActual: "REINTENTANDO",                // ← estado nuevo transient (schema touch en P2)
+    retryCount: { increment: 1 },
+    ultimoReintento: new Date(),
+  },
+});
+if (claim.count === 0) continue;  // otro run/estado ganó, o cap alcanzado, o cooldown activo
+// A partir de acá SOMOS DUEÑOS del retry para esta ronda.
+```
+
+Postgres serializa el UPDATE atómicamente: **solo un run gana** (count=1), los otros ven count=0 y skipear. Doble dispatch imposible por diseño.
+
+**Retry-vs-cancel resuelto por el estado transient**: una vez en `REINTENTANDO`, `cancelar/route.ts` NO lo puede pisar (agregarán check `if estadoActual === "REINTENTANDO" reject con mensaje "envío en reintento, esperá"`). Cancel concurrente en la ventana de ~seg-min entre claim y dispatch queda rechazado; operator vuelve a intentar después. Ventana chica + comportamiento predecible.
+
+**Money-safety durante la carrera**: el helper `debitoAplicadoEnvio` (P1 DEUDA 174) es idempotente por naturaleza — cualquier orden de commits converge al neto correcto. `creditoAplicadoEnvio` (P4 DEUDA 174) idem para refunds. La política Nacho ("Fee only cuando no hay etiqueta courier" / "chain - Fee refund cuando sí") se cumple bajo cualquier interleaving. La aritmética delta protege por construcción — el ledger es la fuente de verdad y no puede desincronizarse consigo mismo.
+
+**Crons existentes de referencia**:
+- `sweep-6m` usa flag `logisticaDevuelta=true` como idempotencia por-envío (misma fisura conceptual, mitigada por "1x/mes crontab").
+- `rastreo` ordena por `fechaUltimoRastreo` sin lock (best-effort tolerance a doble-polleo).
+- El retry cron necesita más rigor que ambos por dos razones: (a) ejecuta cada 15 min (ventana mayor de colisión), (b) el efecto colateral es dispatch al courier (irreversible, plata + logística real).
+
+### Pieza 2 — Handler retry con claim atómico + re-despacho + débito al éxito (PENDIENTE)
+
+**Archivo nuevo**: `lib/envios/procesar-bloqueados-parcial.ts`. Molde de `procesar-bloqueados-credencial.ts`.
+
+**Flujo por envío candidato:**
+1. **Pre-filter Prisma**: `findMany` con `filtroReintentablesPrisma()` + include último `EventoTracking` con `estado="BLOQUEADO_PARCIAL"`.
+2. **Post-filter en memoria**: extraer `errorTramo` del `observacion` del último evento + aplicar `esReintentable({...})`. Ambigüedad de la fuente del error text: hoy vive solo en `EventoTracking.observacion` — considerar en una sub-pieza si conviene agregar `Envio.errorTramoUltimo: String?` para query estructural (no crítico para P2, pero limpio).
+3. **Claim atómico**: `updateMany` como arriba. Si `count === 0`, skip.
+4. **Reconstruir params dispatch** desde `envio.finanzas` + `envio.destino` + `envio.deposito` + medidas.
+5. **Cargar credencial** + `esRamaB`.
+6. **Chequeo saldo** — Rama A el chain, Rama B el Fee (via helper P1 delta). Si insuficiente → sub-transición a `BLOQUEADO_SALDO` (patrón handlers).
+7. **`despacharCourier(...)`**.
+8. **Si `dispatchResult.tracking`**: tx atomic → `updateMany where estadoActual="REINTENTANDO"` a `Pendiente` + trackingNumber + etiquetaUrl + tramos + debit rama-aware (helper P1) + `eventoTracking`. Si el commit `count === 0` (algo cambió el estado durante dispatch, edge extremo): auto-ticket + NO debit + log.
+9. **Si `dispatchResult.tracking === null`**: `updateMany where estadoActual="REINTENTANDO"` de vuelta a `BLOQUEADO_PARCIAL` + `eventoTracking` con "retry N failed". El retryCount ya se incrementó en el claim.
+
+**Schema touch en P2** (aditivo, no destructivo): agregar `"REINTENTANDO"` a la lista canónica de estados en la doc + eventual centralización (DEUDA 173). No requiere nuevo enum Prisma (estados son String libre hoy). Cambio real: sumar 1 estado más al vocabulario.
+
+**Money-safety**: helper `debitoAplicadoEnvio` (P1 DEUDA 174) garantiza no doble-débito. Rama A: yaAplicado=0 al retry success → debita chain full. Rama B: yaAplicado=feeConIva (P2 DEUDA 174 cobró al crear) → delta=0 → no re-charge. Idempotencia bajo cualquier interleaving.
+
+**Tamaño**: ~250 líneas nuevo archivo. **Riesgo**: MEDIO — money+concurrencia. Requiere verificación explícita.
+
+### Pieza 3 — Cron endpoint + límite de intentos + rendirse (PENDIENTE)
+
+**Archivo nuevo**: `app/api/cron/procesar-parcial/route.ts`. Molde de `cron/rastreo/route.ts`.
+
+**Flujo**: auth via `CRON_SECRET` (proxy.ts) → itera empresas con envíos BLOQUEADO_PARCIAL activos → llama `procesarEnviosBloqueadosPorTramoFallido(empresaId)` (P2) → envíos con `retryCount >= MAX_REINTENTOS` que no destrabaron → auto-crear `TicketSoporte` tipo `RETRY_EXHAUSTED` (reusa patrón cron rastreo) → un solo ticket por envío (dedup).
+
+**Estado terminal**: no requiere estado nuevo. `BLOQUEADO_PARCIAL` con `retryCount >= MAX_REINTENTOS` funciona como "terminal por cap" — el cron lo skip (`filtroReintentablesPrisma` incluye `retryCount: { lt: MAX }`). Envío queda para resolución manual, con auto-ticket como señal.
+
+**Tamaño**: ~80 líneas nuevo. **Riesgo**: bajo (orquesta P2).
+
+### Pieza 4 — Wiring del cron en server + docs (PENDIENTE)
+
+Agregar entry al crontab Linode (frecuencia sugerida: cada 15 min en horario operativo 8-22 ART) + actualizar `docs/CRONS.md` con el nuevo endpoint + tabla de wiring. Sin cambio de código productivo, solo config + doc.
+
+**Tamaño**: mínimo. **Riesgo**: cero funcional; riesgo de olvido en el deploy (mismo patrón que otros crons no wireados hoy — DEUDA 60, rastreo, metricas-sla).
+
+### Sub-pieza opcional — Idempotency courier-side (recomendada, money-adjacent)
+
+Agregar `external_reference: envio.id.toString()` en los 6 adapters (Andreani, Mocis, Intralog, HopEnvios, OCA, CorreoArgentino). Cierra el gap "doble-dispatch al courier" si por algún edge muy raro (2 claims logran count=1 secuencialmente en la misma ventana) dos runs alcanzan el courier con el mismo envío. Los TODOs de `dispatch.ts:339, 529` la declararon. Verificación por-courier obligatoria (algunos couriers pueden interpretar `external_reference` como uniqueness key con colisión → 409). **No bloquea P2 pero refuerza la garantía end-to-end.**
+
+### ⚠️ Requisitos ANTES de construir P2 (por qué se difiere)
+
+**No es fatiga — son 2 requisitos duros por el riesgo money+concurrencia:**
+
+1. **VERIFICACIÓN DE CONCURRENCIA**. La P2 no se verifica con una prueba lineal ("crear envío → forzar timeout → reintentar → mirar movimiento"). Su riesgo (doble dispatch → 2 paquetes físicos reales; colisión con cancelación) **solo aparece bajo condiciones de carrera**. Necesita una estrategia de verificación de concurrencia antes de confiar en ella:
+   - **Test de carrera sintético**: spawnear 2 (o N) invocaciones simultáneas de `procesarEnviosBloqueadosPorTramoFallido(empresaId)` sobre el mismo envío. Verificar en el ledger + BD que solo hubo 1 dispatch (1 tramo persistido, 1 tracking real, 1 DEBITO_ENVIO). Repetir para retry+cancel simultáneos.
+   - **Herramienta**: `Promise.all([...])` de N calls + snapshot de estado post — comparar contra el esperado (uno solo ganó el claim).
+   - **Sin este test verde, la P2 no se merge-a a main**. Riesgo demasiado alto de una regresión latente que solo aparezca bajo carga real (courier caído + muchos envíos + retries paralelos).
+
+2. **COORDINACIÓN CHAT C**. El estado nuevo `REINTENTANDO` debe registrarse en la lista canónica de estados que Chat C (plugin WooCommerce) consume — hoy hay un swich sobre `estadoActual` que traduce a labels legibles. Sin registrarlo, el plugin caería en `default: "status desconocido"` (mismo problema histórico con `Pendiente` capitalización, DEUDA 173). **Avisar a Chat C ANTES de deployar P2** para que el plugin agregue el case. Sin esto, envíos en REINTENTANDO se ven en el dashboard del cliente WooCommerce como estado ilegible → confusión + soporte tickets espurios.
+
+### Piezas listas para consumo cuando P2 arranque
+
+- Base P1 (fields + helper) ya está local en `main` — cualquier cron puede consumir `esReintentable` y `filtroReintentablesPrisma()` sin cambios adicionales.
+- Helpers `debitoAplicadoEnvio` (P1 DEUDA 174) y `creditoAplicadoEnvio` (P4 DEUDA 174) ya en `main` — cubren idempotencia money al 100% bajo cualquier interleaving.
+- Patrón de handlers `procesar-bloqueados-*.ts` (P2 DEUDA 174) — usan helper P1, tienen la maquinaria de destrabe rama-aware. La P2 de este retry mirror-ea `procesar-bloqueados-credencial.ts` con el add del claim atómico.
+
+### Relación
+
+- [[DEUDA 174]] (Política de Débito Unificada — P1-P4 cerradas): los helpers `debitoAplicadoEnvio` + `creditoAplicadoEnvio` que P2 de este retry usará. La política del débito ya está consistente; el retry solo agrega el trigger.
+- [[DEUDA 173]] (estados de envío String libre): agregar `REINTENTANDO` al vocabulario canónico. Coordinación cross-chat con Chat C.
+- [[DEUDA 29]] Sub-fase 3 (declarada pendiente hace tiempo en `crear.ts:944` + `dispatch.ts:551-560`): esta obra ES la Sub-fase 3.
+- [[DEUDA 60]] (cron NPS pendiente de wiring): mismo patrón operativo — código listo pero sin entry en crontab del server.
+
+**Prioridad:** media-alta. No bloquea deploy de DEUDA 174 P1-P4 (esas cierran el circuito débito+refund solo; retry es el complemento de resiliencia de dispatch). Construir con foco pleno cuando corresponda + verificación de carrera + coordinación Chat C.
+
+**Origen:** cadena de recons Chat A 2026-09-10 post-cierre DEUDA 174 (P5 diferida al confirmar que "culpa Shipro" es raro + no auto-distinguible; la mayoría de los casos "no cobrar por falla" se resuelven con retry para timeout/conexión). El retry es el que faltaba para cerrar el circuito. Diseño de concurrencia mapeado en el mismo recon.
+
+---

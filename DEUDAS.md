@@ -3488,7 +3488,7 @@ Hoy la única forma de dar de alta o cambiar un intermediario es SQL directo o m
 
 ---
 
-## DEUDA 170 — Consola de Tarifa Unificada Shipro-only: 5 variables (markup dueño + markup Shipro global/courier + SMO + Fee + IVA) en una pantalla (registrada 2026-09-07, RECATEGORIZADA 2026-09-07 ESTRATÉGICA — 2 partes: P1 media-alta + P2 alta; **P1 COMPLETA EN PROD 2026-09-08 vía Camino 2**; **P2 COMPLETA + VERIFICADA LOCAL 2026-09-09 — pend. deploy**)
+## DEUDA 170 — Consola de Tarifa Unificada Shipro-only: 5 variables (markup dueño + markup Shipro global/courier + SMO + Fee + IVA) en una pantalla (registrada 2026-09-07, **CERRADA DEL TODO 2026-09-11**: P1+P2 en prod + verificadas; menú limpio commit `281e4cd` local — pend. deploy chico; 4 pantallas viejas ocultas del sidebar, rutas vivas de red — su jubilación queda en [[DEUDA 179]])
 
 **Status:** REGISTRADA + SPLIT en 2 partes con prioridades distintas (recategorización Nacho 2026-09-07 — la versión inicial la clasificó como "UX/refactor prioridad baja"; **ese framing era incorrecto**: la tarifa es la palanca comercial más sensible del negocio). Absorbe [[DEUDA 155]] (UI del markup del dueño/intermediario) — **cerrada** por la Parte 1. **Parte 1 COMPLETA EN PROD 2026-09-08** vía Camino 2 (migración al patrón MarkupCourier con modelo per-courier keyed por dispatching — ver "Cierre obra Camino 2" al final de Parte 1). Parte 2 (consola unificada con las 5 variables) sigue pendiente.
 
@@ -4686,5 +4686,42 @@ Agregar `external_reference: envio.id.toString()` en los 6 adapters (Andreani, M
 **Prioridad:** media-alta. No bloquea deploy de DEUDA 174 P1-P4 (esas cierran el circuito débito+refund solo; retry es el complemento de resiliencia de dispatch). Construir con foco pleno cuando corresponda + verificación de carrera + coordinación Chat C.
 
 **Origen:** cadena de recons Chat A 2026-09-10 post-cierre DEUDA 174 (P5 diferida al confirmar que "culpa Shipro" es raro + no auto-distinguible; la mayoría de los casos "no cobrar por falla" se resuelven con retry para timeout/conexión). El retry es el que faltaba para cerrar el circuito. Diseño de concurrencia mapeado en el mismo recon.
+
+---
+
+## DEUDA 179 — Borrar las 4 pantallas viejas de tarifa (hoy ocultas del menú, rutas vivas) — cuando la consola esté probada en prod (registrada 2026-09-11, scope chico, prioridad baja)
+
+**Status:** ABIERTA. Prioridad **baja** — no molesta ocultas del menú, es prolijidad. Se aborda cuando la Consola de Tarifa (DEUDA 170 P2) demuestre en prod (semanas de uso con clientes reales) que cubre todo lo que hacían las 4 pantallas viejas.
+
+**Contexto:** el 2026-09-11 (commit `281e4cd` local, pend. deploy) se removió del sidebar las 4 pantallas individuales que la Consola de Tarifa reemplaza:
+- `/admin-markup-dueno` (markup del intermediario per courier).
+- `/admin-markup-courier` (markup Shipro per courier con toggle HEREDA/PROPIO).
+- `/admin-smo` (SMO per courier con vigencias).
+- `/admin-parametros-tarifa` (markup Shipro global con vigencias).
+
+**Estado actual:** las 4 rutas + sus `page.tsx` + APIs asociadas **SIGUEN VIVAS** (deep-link accesible por URL directa). Es una red de seguridad consciente (decisión Nacho 2026-09-11 en dos tiempos):
+1. **Paso 1 (hecho):** ocultar del menú. La consola es el único acceso desde el sidebar; el que sabe la URL puede seguir usando la pantalla individual si detecta algo que falta en la consola. **Reversible trivial** (volver a agregar el `<Link>` en `layout.tsx`).
+2. **Paso 2 (esta deuda):** borrar las 4 rutas cuando la consola esté probada en prod.
+
+**Cuándo borrar:** después de semanas de uso real (clientes reales operando via la Consola), sin reportes de "falta X funcionalidad de la pantalla vieja". Ahí:
+- `rm -rf` los 4 directorios `app/(dashboard)/admin-markup-{dueno,courier,smo}` + `admin-parametros-tarifa`.
+- Grep exhaustivo de las 4 APIs asociadas (`app/api/admin/markup-dueno`, `app/api/admin/markup-courier`, `app/api/admin/smo-courier`, `app/api/admin/markup-shipro` — nombres exactos por-recon): si NADIE más las usa (la consola escribe via `app/api/admin/consola-tarifa/*`), borrarlas también. **Verificación previa obligatoria**: `grep -rn` desde `app/`, `components/`, `lib/`, tests — cualquier import o call queda en flag antes de la eliminación.
+- Verificar que la consola escribe a los MISMOS modelos Prisma (`MarkupCourier`, `SmoCourier`, `MarkupIntermediarioCourier`, `MarkupShiproVigencia`, `OperacionFee`) — si sí (comentario `admin-consola-tarifa/page.tsx:2204` confirma *"escribe a los mismos modelos (fuente única)"*), la lógica de negocio sobrevive intacta.
+- Los modelos + tabla NO se tocan (siguen siendo la fuente de verdad).
+
+**Follow-up menor (sub-tarea):** [app/(dashboard)/clientes/page.tsx:671, 674](app/(dashboard)/clientes/page.tsx#L671) tiene texto informativo en el wizard de alta cliente:
+```
+<strong>Markup de Shipro:</strong> se configura en <code>/admin-markup-courier</code>
+<strong>Markup del dueño de credenciales:</strong> se configura en <code>/admin-markup-dueno</code>
+```
+Son `<code>` (no `<Link>` — no rompen, es texto informativo). **Apuntan a pantallas ahora ocultas del menú**. Actualizar el copy a `<code>/admin-consola-tarifa</code>` cuando se toque esa pantalla, o cuando se ejecute la eliminación de las 4 pantallas viejas — lo que ocurra primero. Cero urgencia, cero riesgo, solo consistencia UX.
+
+**Scope de borrado:** chico. 4 directorios `page.tsx` (típicamente 400-800 líneas cada uno) + 4 API routes (200-500 líneas cada uno) + eventuales imports huérfanos (los helpers de Prisma sobreviven). Cero migración de schema.
+
+**Riesgo:** BAJO tras un período de estabilización. La red de seguridad (rutas vivas post-hide-from-menu) permite recuperación instantánea si algún operador reporta un gap durante ese período. Al borrar, la reversibilidad se pierde — por eso el "dos tiempos".
+
+**Relación:** [[DEUDA 170]] (Consola de Tarifa — su cierre completo depende parcialmente del hide-del-menú de esta deuda; la eliminación es la limpieza final). [[DEUDA 157]] (markup Shipro por courier — pantalla original que la consola absorbe). [[DEUDA 115]] (SMO per courier). [[DEUDA 173]] (estados de envío String libre — sin relación pero mismo espíritu de "consolidar la fuente de verdad").
+
+**Origen:** decisión Nacho 2026-09-11 al cerrar la Consola de Tarifa (DEUDA 170 P2) + verificar que las 5 variables + preview live funcionan en prod. La consola es reciente — merece semanas de exposición antes de tirar la red.
 
 ---

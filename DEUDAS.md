@@ -4497,7 +4497,7 @@ Observación crítica: las MISMAS credenciales de Moci's funcionan sin problema 
 
 ---
 
-## DEUDA 178 — Reintento automático de despacho para BLOQUEADO_PARCIAL transitorio (registrada 2026-09-10, P1 base HECHA + diseño de concurrencia LISTO, P2-P4 pendientes money+concurrencia)
+## DEUDA 178 — Reintento automático de despacho para BLOQUEADO_PARCIAL transitorio (registrada 2026-09-10, P1 base EN PROD 2026-09-11 inerte + P2 + P3 HECHAS + VERIFICADAS LOCAL 2026-09-11 anti-doble-despacho confirmado; P4 wiring PENDIENTE — va último tras deploy y coordinación Chat C)
 
 **Status:** EN PROGRESO. Prioridad media-alta (cierra la última fisura de resiliencia del despacho — post P1-P4 de DEUDA 174 el débito ya es correcto, falta el auto-recovery del courier caído un rato). Money-crítico + concurrency-crítico: la P2 debe construirse con foco pleno y verificación de carrera antes de deployar.
 
@@ -4566,42 +4566,80 @@ Postgres serializa el UPDATE atómicamente: **solo un run gana** (count=1), los 
 - `rastreo` ordena por `fechaUltimoRastreo` sin lock (best-effort tolerance a doble-polleo).
 - El retry cron necesita más rigor que ambos por dos razones: (a) ejecuta cada 15 min (ventana mayor de colisión), (b) el efecto colateral es dispatch al courier (irreversible, plata + logística real).
 
-### Pieza 2 — Handler retry con claim atómico + re-despacho + débito al éxito (PENDIENTE)
+### Pieza 2 — Handler retry con claim atómico + re-despacho + débito al éxito ✅ HECHA + VERIFICADA LOCAL 2026-09-11 (commit `c704a13`)
 
-**Archivo nuevo**: `lib/envios/procesar-bloqueados-parcial.ts`. Molde de `procesar-bloqueados-credencial.ts`.
+**Archivo nuevo**: `lib/envios/reintentar-envio.ts` (~370 líneas). Función `reintentarUnEnvio(envioId): Promise<ReintentoResult>`.
 
-**Flujo por envío candidato:**
-1. **Pre-filter Prisma**: `findMany` con `filtroReintentablesPrisma()` + include último `EventoTracking` con `estado="BLOQUEADO_PARCIAL"`.
-2. **Post-filter en memoria**: extraer `errorTramo` del `observacion` del último evento + aplicar `esReintentable({...})`. Ambigüedad de la fuente del error text: hoy vive solo en `EventoTracking.observacion` — considerar en una sub-pieza si conviene agregar `Envio.errorTramoUltimo: String?` para query estructural (no crítico para P2, pero limpio).
-3. **Claim atómico**: `updateMany` como arriba. Si `count === 0`, skip.
-4. **Reconstruir params dispatch** desde `envio.finanzas` + `envio.destino` + `envio.deposito` + medidas.
-5. **Cargar credencial** + `esRamaB`.
-6. **Chequeo saldo** — Rama A el chain, Rama B el Fee (via helper P1 delta). Si insuficiente → sub-transición a `BLOQUEADO_SALDO` (patrón handlers).
-7. **`despacharCourier(...)`**.
-8. **Si `dispatchResult.tracking`**: tx atomic → `updateMany where estadoActual="REINTENTANDO"` a `Pendiente` + trackingNumber + etiquetaUrl + tramos + debit rama-aware (helper P1) + `eventoTracking`. Si el commit `count === 0` (algo cambió el estado durante dispatch, edge extremo): auto-ticket + NO debit + log.
-9. **Si `dispatchResult.tracking === null`**: `updateMany where estadoActual="REINTENTANDO"` de vuelta a `BLOQUEADO_PARCIAL` + `eventoTracking` con "retry N failed". El retryCount ya se incrementó en el claim.
+**Garantías críticas verificadas:**
 
-**Schema touch en P2** (aditivo, no destructivo): agregar `"REINTENTANDO"` a la lista canónica de estados en la doc + eventual centralización (DEUDA 173). No requiere nuevo enum Prisma (estados son String libre hoy). Cambio real: sumar 1 estado más al vocabulario.
+1. **CLAIM ATÓMICO** (anti-doble-despacho): un solo `updateMany` con `where { id, estadoActual: "BLOQUEADO_PARCIAL", retryCount: { lt: MAX_REINTENTOS } }` a `estadoActual: "REINTENTANDO"` + `retryCount++` + `ultimoReintento`. Postgres serializa el UPDATE → solo un caller puede transicionar (count===1); los demás ven count===0 y abortan **antes** del dispatch. Read-then-write NO se usa.
 
-**Money-safety**: helper `debitoAplicadoEnvio` (P1 DEUDA 174) garantiza no doble-débito. Rama A: yaAplicado=0 al retry success → debita chain full. Rama B: yaAplicado=feeConIva (P2 DEUDA 174 cobró al crear) → delta=0 → no re-charge. Idempotencia bajo cualquier interleaving.
+2. **DÉBITO IDEMPOTENTE** al éxito: cobra `delta = tarifaFullCotizada − debitoAplicadoEnvio` via helper P1 DEUDA 174. Rama A never-labelled → yaAplicado=0 → cobra chain full. Rama B (Fee ya cobrado P2 DEUDA 174) → delta=0 → skip. Idempotente ante cualquier interleaving.
 
-**Tamaño**: ~250 líneas nuevo archivo. **Riesgo**: MEDIO — money+concurrencia. Requiere verificación explícita.
+3. **REINTENTANDO TRANSIENT**: nunca queda stuck. `revertirClaim` (updateMany where estadoActual="REINTENTANDO" → BLOQUEADO_PARCIAL) cubre: exception antes del dispatch, dispatch failed (tracking null), edge cases pre-commit. **ÚNICA excepción**: dispatch OK + commit failed (race concurrent cancel raro) → NO revierte (evitaría doble dispatch al courier) + auto-EventoTracking crítico para operator manual.
 
-### Pieza 3 — Cron endpoint + límite de intentos + rendirse (PENDIENTE)
+4. **Commit post-dispatch atómico**: `updateMany where estadoActual="REINTENTANDO"` a Pendiente + tracking + etiquetaUrl. Si count===0 → aborta la tx sin debit + sin state overwrite.
 
-**Archivo nuevo**: `app/api/cron/procesar-parcial/route.ts`. Molde de `cron/rastreo/route.ts`.
+**Verificación money+concurrency** (`scripts/test-reintento-carrera.mjs`, ejecutado 2026-09-11): 2 llamadas concurrentes vía `Promise.all([reintentarUnEnvio(id), reintentarUnEnvio(id)])` sobre el mismo envío. **6/6 aserciones OK**:
+- Exactly ONE claim ganó (count===1). ✅
+- Exactly ONE claim perdió (count===0). ✅
+- Total count === 1 (nunca 2). ✅
+- retryCount incrementado por EXACTAMENTE 1 (no 2). ✅
+- estadoActual === REINTENTANDO (ganador transicionó). ✅
+- Cero MovimientoFinanciero nuevo por el claim aislado. ✅
 
-**Flujo**: auth via `CRON_SECRET` (proxy.ts) → itera empresas con envíos BLOQUEADO_PARCIAL activos → llama `procesarEnviosBloqueadosPorTramoFallido(empresaId)` (P2) → envíos con `retryCount >= MAX_REINTENTOS` que no destrabaron → auto-crear `TicketSoporte` tipo `RETRY_EXHAUSTED` (reusa patrón cron rastreo) → un solo ticket por envío (dedup).
+Output real: `[RACE] Duración: 17ms. Result 1: count=0. Result 2: count=1`. Cleanup automático (envío restaurado a estado original post-test).
 
-**Estado terminal**: no requiere estado nuevo. `BLOQUEADO_PARCIAL` con `retryCount >= MAX_REINTENTOS` funciona como "terminal por cap" — el cron lo skip (`filtroReintentablesPrisma` incluye `retryCount: { lt: MAX }`). Envío queda para resolución manual, con auto-ticket como señal.
+**Schema touch en P2**: **NO**. `estadoActual` es String libre — REINTENTANDO se agrega al vocabulario sin migración. Coordinado con Chat C (plugin WooCommerce ya tiene rama REINTENTANDO en `render_meta_box` + `procesar_respuesta_ok`, categoría ESPERA, mensaje "se está reprocesando solo, sin acción del comprador", uncommitted hasta validación e2e).
 
-**Tamaño**: ~80 líneas nuevo. **Riesgo**: bajo (orquesta P2).
+### Pieza 3 — Cron endpoint que delega a reintentarUnEnvio ✅ HECHA + VERIFICADA LOCAL 2026-09-11 (commit `7eeaefc`)
 
-### Pieza 4 — Wiring del cron en server + docs (PENDIENTE)
+**Archivo nuevo**: `app/api/cron/reintentar-despachos/route.ts` (~135 líneas). GET handler que:
+
+1. Auth pura delegación a `proxy.ts:111-112` (`Authorization: Bearer ${CRON_SECRET}` para todo `/api/cron/*`).
+2. **Query candidatos**: `prisma.envio.findMany({ where: filtroReintentablesPrisma(), include: eventos último BLOQUEADO_PARCIAL, orderBy: ultimoReintento asc nulls first, take: 50 })`. Batch cap `LOTE_MAXIMO = 50`.
+3. **Filter in-memory**: `esReintentable({estadoActual, retryCount, errorTramo})` — el filtro transient-vs-permanent que Prisma no puede hacer en SQL portable.
+4. **Rendidos contador**: `prisma.envio.count({ where: { estadoActual: "BLOQUEADO_PARCIAL", retryCount: { gte: MAX_REINTENTOS } } })` — informativo, no dispara side effects.
+5. **Iteración serial** con try/catch por envío: `for (const c of candidatos) { await reintentarUnEnvio(c.id) }`. Una excepción no aborta el batch.
+6. **Response**: `{ ok, procesados, claimed, despachados, fallidos, rendidos, errores, loteMaximo, maxReintentos, detalles }` — logging/monitoring.
+
+**Delegación pura confirmada**: grep sobre el archivo muestra que el único uso money-critical es `await reintentarUnEnvio(c.id)` en L100. **Cero reimplementación de claim / dispatch / debit** — todo delegado a P2 (race-verified).
+
+**Verificación local** (sanity script transitorio, replicaba el driver del cron con `PrismaClient` fresh para esquivar el bug del dev server con Prisma client cacheado):
+- **Escenario A** (BD tal cual): 5 envíos matchean `filtroReintentablesPrisma` pero **0 pasan** el filtro transient (todos con errores permanent — "Falló la autenticación con Andreani" x4 + "CredencialesPropiasIncompletas" x1). Filter conservador funcionando ✅.
+- **Escenario B** (inyectando evento sintético `"CourierTimeout: Andreani no respondió en 8000ms"` sobre envío 2): **1 candidato pasa el filtro** → cron llamaría `reintentarUnEnvio(2)` como se espera. Cleanup post-run (evento eliminado, retryCount restaurado).
+
+**Nota operativa**: la invocación HTTP directa al endpoint (`curl -H "Authorization: Bearer <CRON_SECRET>" http://localhost:3000/api/cron/reintentar-despachos`) falla en dev por un cache stale del Prisma client en turbopack — código está correcto (tsc clean), requiere restart del dev server para pickup. En prod, deploy carrying la migración + `prisma generate` post-deploy resuelve esto naturalmente.
+
+### Pieza 4 — Wiring del cron en el server + docs — PENDIENTE (ÚLTIMA)
 
 Agregar entry al crontab Linode (frecuencia sugerida: cada 15 min en horario operativo 8-22 ART) + actualizar `docs/CRONS.md` con el nuevo endpoint + tabla de wiring. Sin cambio de código productivo, solo config + doc.
 
+**Va ÚLTIMA por diseño**. Antes de P4, el cron endpoint existe pero NO está agendado → cero ejecución en vivo → deploy inerte de P2+P3 → cero riesgo money+concurrency en prod hasta que Chat C valide REINTENTANDO end-to-end. **P4 recién se hace después del deploy + validación Chat C** (ver "Secuencia de deploy" abajo).
+
 **Tamaño**: mínimo. **Riesgo**: cero funcional; riesgo de olvido en el deploy (mismo patrón que otros crons no wireados hoy — DEUDA 60, rastreo, metricas-sla).
+
+### CRON_SECRET + trigger mechanism (confirmado 2026-09-11)
+
+- **Secret**: `.env.local:43` (`CRON_SECRET`, 64-hex). En prod: `/etc/shipro/cron.env` (chmod 600 root:root).
+- **Auth**: `proxy.ts:111-112` valida `Authorization: Bearer ${CRON_SECRET}` para todo `/api/cron/*`. Handler no re-verifica.
+- **Trigger**: **NO** vercel cron, **NO** node-cron in-process. **OS crontab del server Linode** con wrapper `/usr/local/bin/shipro-cron.sh` que hace `curl -H "Authorization: Bearer $CRON_SECRET" $APP_URL/api/cron/<endpoint>`. Patrón consolidado en `docs/CRONS.md`.
+- **Estado wiring hoy**: solo `sweep-6m` está wireado (`0 7 1 * *`). El resto (`rastreo`, `metricas-sla`, `sincronizar-couriers`, `nps-empresa`) tienen endpoints en prod pero **NO están en el crontab**. `reintentar-despachos` (P3) también quedará sin wiring hasta P4.
+
+### SECUENCIA DE DEPLOY (ORDEN OBLIGATORIO — no cambiar)
+
+Money+concurrency-critical requiere disciplina:
+
+1. **Deploy P2 + P3 a prod**: `git pull` → `prisma generate` (schema unchanged — P1 base ya en prod desde 2026-09-11) → `rm -rf .next && npm run build` → `pm2 restart` (o systemctl). El cron endpoint queda accesible en `/api/cron/reintentar-despachos` **pero NO está agendado** → nadie lo hittea → **cero ejecución en vivo** → P2 + P3 inertes hasta P4.
+
+2. **Coordinación con Chat C**: avisar que REINTENTANDO ya puede llegar como estado de un envío. Chat C:
+   - Mergea + deploya la rama REINTENTANDO del plugin WooCommerce (hoy uncommitted, preparada 2026-09-11).
+   - Actualiza el contrato OpenAPI a **v1.3** agregando REINTENTANDO a la lista canónica de estados (evita repetir el problema histórico "Pendiente" desconocido — DEUDA 173).
+   - Valida e2e: forzar un envío a REINTENTANDO manual (SQL directo) → verificar que el plugin muestra "reintentando despacho — en curso" con el mensaje correcto, no "status desconocido".
+
+3. **P4 — recién ahora se wirea el cron** en el crontab del server (entry cada 15 min 8-22 ART) + actualizar `docs/CRONS.md`. **A partir de esta pieza el reintento corre en vivo** — los envíos BLOQUEADO_PARCIAL con causa transient se retryean solos.
+
+**NUNCA P4 antes del deploy P2+P3 + validación Chat C**. Wirear el cron sin que el plugin sepa REINTENTANDO expone a los comercios a un estado desconocido durante la ventana de retry (segundos-minutos).
 
 ### Sub-pieza opcional — Idempotency courier-side (recomendada, money-adjacent)
 

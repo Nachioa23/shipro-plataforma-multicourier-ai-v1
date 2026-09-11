@@ -781,7 +781,7 @@ export async function enviarMailPlugin(
               <li>Descargá el archivo <strong>.zip</strong> con el botón de abajo.</li>
               <li>En tu WordPress, entrá a <strong>Plugins &gt; Añadir nuevo &gt; Subir plugin</strong> y elegí el .zip.</li>
               <li>Activá <strong>Shipro para WooCommerce</strong> y andá a <strong>Ajustes &gt; Shipro</strong>.</li>
-              <li>Pegá tu <strong>API Key</strong> de Shipro (si no la tenés todavía, pedila desde el panel de Shipro).</li>
+              <li>Pegá tu <strong>API Key</strong> de Shipro (si no la tenés, mirá el aviso de abajo — te llega por separado).</li>
             </ol>
           </div>
 
@@ -811,7 +811,7 @@ export async function enviarMailPlugin(
 
           <div style="background-color: #fff7ed; padding: 12px 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #f59e0b;">
             <p style="margin: 0; font-size: 13px; color: #9a3412;">
-              <strong>Necesitás tu API Key:</strong> si todavía no la generaste, pedila desde el panel de Shipro (vas a recibir otro mail con el link para generarla).
+              <strong>Necesitás tu API Key para conectar el plugin.</strong> Te la enviamos por separado: vas a recibir un mail aparte con un link seguro (válido 7 días, un solo uso) para generarla. La API Key se muestra una única vez, así que copiala y guardala apenas la generes.
             </p>
           </div>
 

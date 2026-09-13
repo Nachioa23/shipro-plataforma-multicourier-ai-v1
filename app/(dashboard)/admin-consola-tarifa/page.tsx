@@ -780,10 +780,13 @@ function SectionPreview({
     usaCredencialesPropias: false,
     propietarioTipo: "COURIER",
     tarifaIncluyeIva: false,
-    // MEJORA B: defaults híbridos editables (1 kg + CABA típico). cpOrigen
-    // vacío → cotizador auto-usa el depósito predeterminado de la empresa.
+    // MEJORA B (alineado 2026-09-13): defaults híbridos editables — MISMO
+    // default de cpOrigen que cotizador-rapido/page.tsx:17 ("1050") para
+    // que el request al motor sea idéntico al del caller que funciona. NO
+    // dejar vacío (aunque cotizar caiga a depósito predeterminado, algunas
+    // empresas fallan por ese camino — el caller working siempre manda un CP).
     pesoKg: "1",
-    cpOrigen: "",
+    cpOrigen: "1050",
     cpDestino: "1425",
   });
   // MEJORA B: estado del botón "traer tarifa real".
@@ -878,9 +881,10 @@ function SectionPreview({
       inputs.courierId == null ||
       inputs.empresaId == null ||
       !inputs.pesoKg ||
+      !inputs.cpOrigen ||
       !inputs.cpDestino
     ) {
-      setErrorCotizarTarifa("Completá courier, empresa, peso y CP destino.");
+      setErrorCotizarTarifa("Completá courier, empresa, peso, CP origen y CP destino.");
       return;
     }
     const peso = parseFloat(inputs.pesoKg);
@@ -896,11 +900,13 @@ function SectionPreview({
     setCotizandoTarifa(true);
     setErrorCotizarTarifa(null);
     try {
-      // Body igual al de cotizador-rapido/page.tsx:57-67. cpOrigen opcional
-      // (vacío → cotizador usa el depósito predeterminado de la empresa).
+      // Body alineado byte-a-byte con cotizador-rapido/page.tsx:57-67 (el
+      // caller working). cpOrigen SIEMPRE presente — cotizador-rapido nunca
+      // lo omite (default state "1050", editable). Eliminamos el path
+      // condicional del botón — la única diferencia con el caller working.
       const body: any = {
+        cpOrigen: inputs.cpOrigen,
         cpDestino: inputs.cpDestino,
-        filtroEmpresa: String(inputs.empresaId),
         paquetes: [
           {
             pesoKg: peso,
@@ -911,10 +917,8 @@ function SectionPreview({
             requiereSeguro: false,
           },
         ],
+        filtroEmpresa: String(inputs.empresaId),
       };
-      if (inputs.cpOrigen.trim().length > 0) {
-        body.cpOrigen = inputs.cpOrigen.trim();
-      }
       const res = await fetch("/api/cotizar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1189,7 +1193,7 @@ function SectionPreview({
                   "w-full border-2 border-gray-200 rounded-lg px-2 py-1.5 text-sm font-bold text-gray-800 outline-none focus:border-[#233b6b] " +
                   focusRing
                 }
-                placeholder="(depósito predet.)"
+                placeholder="1050"
               />
             </div>
             <div>
@@ -1235,7 +1239,7 @@ function SectionPreview({
             </div>
           </div>
           <p className="text-[10px] text-indigo-800/80 italic">
-            Cotiza en vivo vía <code className="bg-white/60 px-1 rounded">/api/cotizar</code> con la empresa + courier elegidos y setea el neto sin IVA. Si el CP origen queda vacío, usa el depósito predeterminado de la empresa.
+            Cotiza en vivo vía <code className="bg-white/60 px-1 rounded">/api/cotizar</code> con la empresa + courier elegidos y setea el neto sin IVA. Mismo request que la Cotización Rápida (CP origen requerido).
           </p>
           {errorCotizarTarifa && (
             <p className="mt-2 text-[11px] font-bold text-rose-800 bg-rose-50 border border-rose-200 rounded px-2 py-1.5">

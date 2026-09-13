@@ -85,21 +85,27 @@ export async function POST(request: Request) {
       );
     }
 
-    const usaCredencialesPropias: boolean =
-      body?.usaCredencialesPropias === true;
     const tarifaIncluyeIva: boolean = body?.tarifaIncluyeIva === true;
 
-    // propietarioTipo default "COURIER" — el caso donde markup del dueño aplica.
-    // Si el operador quiere previsualizar Shipro-owned o CLIENTE, toggle.
-    const propietarioTipoInput =
-      typeof body?.propietarioTipo === "string"
+    // MEJORA A (2026-09-13): los toggles del body son OVERRIDES opcionales.
+    // Si vienen → modo exploratorio (usar). Si NO vienen → usar la
+    // CredencialCourier REAL de la empresa+courier (resuelta más abajo,
+    // después de validar que courier y empresa existen).
+    // Diferenciamos "no provisto" (null) de "provisto false" — no se puede
+    // con `=== true` directo, hay que chequear undefined primero.
+    const overrideUsaCredencialesPropias: boolean | null =
+      body?.usaCredencialesPropias !== undefined
+        ? body.usaCredencialesPropias === true
+        : null;
+    const overridePropietarioTipoRaw =
+      body?.propietarioTipo !== undefined && typeof body?.propietarioTipo === "string"
         ? (body.propietarioTipo as PropietarioTipoBody)
-        : "COURIER";
-    const propietarioTipo: PropietarioTipoBody = PROPIETARIO_TIPOS_VALIDOS.has(
-      propietarioTipoInput
-    )
-      ? propietarioTipoInput
-      : "COURIER";
+        : null;
+    const overridePropietarioTipo: PropietarioTipoBody | null =
+      overridePropietarioTipoRaw !== null &&
+      PROPIETARIO_TIPOS_VALIDOS.has(overridePropietarioTipoRaw)
+        ? overridePropietarioTipoRaw
+        : null;
 
     // Verificar que courier + empresa existen (evita queries en resolvers para
     // ids inválidos → 404 explícito).
@@ -125,6 +131,45 @@ export async function POST(request: Request) {
         { status: 404 }
       );
     }
+
+    // ---- MEJORA A: leer la CredencialCourier REAL de la empresa+courier ----
+    // Mismo lookup canónico que usa `crear.ts:396-398` (usa el @@unique
+    // ([empresaId, nombreCourier]) del schema). Read-only, sin side effects.
+    // Si la empresa no tiene credencial para ese courier → sinCredencial=true
+    // + fallback a defaults neutros (Rama A + COURIER) para no ocultar el
+    // preview (la consola es exploratoria — el operador puede querer ver la
+    // cascada "en abstracto" incluso sin credencial configurada aún).
+    const credencial = await prisma.credencialCourier.findUnique({
+      where: {
+        empresaId_nombreCourier: { empresaId, nombreCourier: courier.nombre },
+      },
+      select: {
+        usaCredencialesPropias: true,
+        propietarioTipo: true,
+        propietarioCourierId: true,
+        activo: true,
+      },
+    });
+    const sinCredencial = credencial === null;
+    const credencialInactiva = credencial !== null && !credencial.activo;
+
+    // Valores REALES de la credencial (fallback neutral si no existe).
+    const usaCredencialesPropiasReal: boolean =
+      credencial?.usaCredencialesPropias ?? false;
+    const propietarioTipoReal: PropietarioTipoBody =
+      (credencial?.propietarioTipo as PropietarioTipoBody | null) ?? "COURIER";
+
+    // Resolución final: override del body si vino, si no lo real.
+    const usaCredencialesPropias: boolean =
+      overrideUsaCredencialesPropias !== null
+        ? overrideUsaCredencialesPropias
+        : usaCredencialesPropiasReal;
+    const propietarioTipo: PropietarioTipoBody =
+      overridePropietarioTipo !== null
+        ? overridePropietarioTipo
+        : propietarioTipoReal;
+    const usandoOverride: boolean =
+      overrideUsaCredencialesPropias !== null || overridePropietarioTipo !== null;
 
     // ---- Resolvers en paralelo (mirror exacto de cotizador.ts:530-544) ----
     const [shiproPct, smoNetoRaw, intermPct, feeResult] = await Promise.all([
@@ -175,6 +220,23 @@ export async function POST(request: Request) {
         usaCredencialesPropias,
         propietarioTipo,
         tarifaIncluyeIva,
+      },
+      // MEJORA A (2026-09-13): aditivo. Refleja la CredencialCourier real
+      // que el motor de plata usaría para esta empresa+courier + señala si
+      // el preview está usando un override del body.
+      credencial: {
+        real:
+          credencial === null
+            ? null
+            : {
+                usaCredencialesPropias: credencial.usaCredencialesPropias,
+                propietarioTipo: credencial.propietarioTipo,
+                propietarioCourierId: credencial.propietarioCourierId,
+                activo: credencial.activo,
+              },
+        sinCredencial,
+        credencialInactiva,
+        usandoOverride,
       },
       config: {
         ajusteTarifaPorcentaje: shiproPct,

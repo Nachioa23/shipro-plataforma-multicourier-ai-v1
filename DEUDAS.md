@@ -4733,3 +4733,49 @@ Son `<code>` (no `<Link>` — no rompen, es texto informativo). **Apuntan a pant
 **Origen:** decisión Nacho 2026-09-11 al cerrar la Consola de Tarifa (DEUDA 170 P2) + verificar que las 5 variables + preview live funcionan en prod. La consola es reciente — merece semanas de exposición antes de tirar la red.
 
 ---
+
+## DEUDA 180 — Mercado Envíos Flex (MEF): integración con Mercado Libre (registrada 2026-09-13, lidera Chat D, scope grande, prioridad a definir con Nacho + Chat D)
+
+**Qué es:** integración de Shipro con **Mercado Envíos Flex** — el canal logístico de Mercado Libre para que los sellers ML despachen usando su propia red (o los couriers integrados por Shipro) en vez del courier del sistema Envíos Flex propio de ML. Nuevo canal de ventas para Shipro (paralelo a Tiendanube y WooCommerce). **Alto valor de negocio** — ML es el mayor marketplace de la región y Flex es su rail logístico para sellers medianos/grandes.
+
+**Liderazgo:** **Chat D** lleva la obra completa (roadmap de 5 fases). **Chat A (núcleo)** ejecuta las piezas de su territorio (schema, cotizador, `crear`, `dispatch`) **cuando la obra lo requiera** y dentro del plan de Chat D. **Cross-chat obligatorio** — Chat A NO arranca nada por su cuenta; espera turno según el plan de Chat D. La obra completa está fuera del alcance solitario de este chat.
+
+**Fases (per Chat D, resumen — el detalle vive en su propio doc):**
+
+1. **Fase 1 — Data model + OAuth ML** (Chat A hace step 1 del schema; steps siguientes coordinados).
+2. **Fase 2 — Callback OAuth + persistencia de la cuenta ML** (mixto — el callback vive en `app/api/`, Chat D lo pide cuando esté listo).
+3. **Fase 3 — Webhooks Flex + staging de notificaciones** (backend ingesta — probable Chat A).
+4. **Fase 4 — Adapter Mercado Envíos Flex** (**Chat B territory** — adapters en `lib/couriers/*`; Chat A NO toca).
+5. **Fase 5 — Integración con `crear`/`cotizador`/`dispatch` + UI hub** (mixto Chat A + Chat B + Chat D).
+
+**Fase 1 Step 1 (núcleo — Chat A, cuando arranque)**: **3 tablas aditivas** al schema Prisma, mirror byte-exact del patrón Tiendanube:
+
+- **`CuentaMercadoLibre`** — mirror de `TiendaTiendanube`. Guarda tokens ML por empresa: `accessTokenEncrypted` (AES-256-GCM via `SECRET_ENCRYPTION_KEY`) + `refreshTokenEncrypted` (single-use, se rota en cada refresh) + `sellerId` (id del seller ML) + `expiraAt` + `updatedAt`. Relación `empresaId → Empresa`. `@@unique([empresaId, sellerId])` (una empresa puede tener múltiples cuentas ML sub-sellers).
+- **`TokenVinculacionMercadoLibre`** — mirror de `TokenVinculacionTiendanube`. OAuth state para el install flow: `token` (192-bit base64url) + `empresaId` + `expira` (7d) + `usadoEn` (nullable, single-use).
+- **`NotificacionFlex`** — staging de webhooks ML (Flex notifica cambios de shipment por webhook). Campos mínimos: `id`, `sellerId`, `resourceId` (id del envío ML), `topic` (shipments/orders/etc), `payloadJson`, `procesada Boolean @default(false)`, `procesadaEn DateTime?`, `createdAt`. **Idempotency key a definir en el step de recon** — ML manda un `_id` en el webhook body que sirve, pero hay que confirmar en la doc ML.
+
+**Migración**: `additive-only` — 3 `CREATE TABLE` + índices + FKs. **Cero `ALTER`, cero `DROP`**. `npx prisma migrate dev --create-only --name mef_fase1_data_model` para inspección antes de aplicar. **Deploy a prod gateado manual por Nacho** (patrón standard).
+
+**Enums pre-existentes** (a confirmar en el recon de Fase 1 step 1):
+- `PlataformaConexion.MERCADOLIBRE` (verificar en `prisma/schema.prisma:PlataformaConexion` — probable que exista por [[DEUDA 150]]).
+- `MecanismoConexion.OAUTH` (verificar — ya usado por Tiendanube).
+- Si alguno falta: agregar en la misma migración (aditivo, valores nuevos no rompen).
+
+**Próximo paso concreto para Chat A**: **nada por ahora** — esperar el go de Nacho + Chat D. Cuando arranque:
+1. Recon read-only: leer `prisma/schema.prisma` completo — `TiendaTiendanube` + `TokenVinculacionTiendanube` (patrón a espejar), enums (`PlataformaConexion`, `MecanismoConexion`, agregar si faltan), convenciones de encryption (mismo `SECRET_ENCRYPTION_KEY` y helpers `lib/crypto/*` que usa Tiendanube).
+2. Diseño de las 3 tablas + índices (revisar con Chat D).
+3. Migración `--create-only` inspeccionada + aplicada local + `prisma generate` (código sin uses aún — schema-only en la primera pieza).
+4. Docs de la Fase 1 step 1 en DEUDAS.md + coordinación con Chat D para el siguiente step (OAuth flow).
+
+**Los steps 2-5** los coordina Chat D — Chat A responde a pedidos concretos, no arranca solo.
+
+**Prioridad**: **a definir con Nacho + Chat D**. Alto valor de negocio, pero obra grande — merece su propio momento con foco. No compite con obras chicas en curso.
+
+**Relaciones**:
+- **[[DEUDA 150]]** (hub de conexiones) — MEF suma `Conexion(plataforma=MERCADOLIBRE, mecanismo=OAUTH)` cuando complete el install; una pieza de UI en el hub para "Conectar Mercado Libre" será parte de Fase 2 o Fase 5.
+- **Patrón Tiendanube** — el twin del que MEF espeja: `TiendaTiendanube` + `TokenVinculacionTiendanube` + callback OAuth + upsert best-effort de `Conexion` en el callback ([[DEUDA 150]] Pieza 2). Reusar convenciones (encryption, single-use tokens, idempotency, staging tables) — no reinventar.
+- **Chat B territory** (Fase 4, adapter): `lib/couriers/*` — Chat A no toca; coordinación cross-chat cuando llegue esa fase.
+
+**Origen**: mensaje de Nacho 2026-09-13 — registra el trabajo como debt para no perderlo como mensaje suelto; Chat D lidera; Chat A hace las piezas de su territorio cuando corresponda.
+
+---

@@ -153,6 +153,12 @@ type PreviewInputs = {
   usaCredencialesPropias: boolean;
   propietarioTipo: "COURIER" | "SHIPRO" | "CLIENTE";
   tarifaIncluyeIva: boolean;
+  // MEJORA B (2026-09-13): campos para el botón "traer tarifa real".
+  // Se mandan a /api/cotizar (cpOrigen vacío → cotizador auto-usa el
+  // depósito predeterminado de la empresa; ver lib/cotizador.ts:300-308).
+  pesoKg: string;
+  cpOrigen: string;
+  cpDestino: string;
 };
 
 type PreviewResponse = {
@@ -774,7 +780,16 @@ function SectionPreview({
     usaCredencialesPropias: false,
     propietarioTipo: "COURIER",
     tarifaIncluyeIva: false,
+    // MEJORA B: defaults híbridos editables (1 kg + CABA típico). cpOrigen
+    // vacío → cotizador auto-usa el depósito predeterminado de la empresa.
+    pesoKg: "1",
+    cpOrigen: "",
+    cpDestino: "1425",
   });
+  // MEJORA B: estado del botón "traer tarifa real".
+  const [cotizandoTarifa, setCotizandoTarifa] = useState(false);
+  const [errorCotizarTarifa, setErrorCotizarTarifa] = useState<string | null>(null);
+  const [tarifaTraidaAt, setTarifaTraidaAt] = useState<number | null>(null);
   const [avanzadoOpen, setAvanzadoOpen] = useState(false);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [cargando, setCargando] = useState(false);
@@ -850,6 +865,125 @@ function SectionPreview({
     fetchPreview();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reloadKey]);
+
+  // MEJORA B (2026-09-13): botón "traer tarifa real". Cotiza vía /api/cotizar
+  // (mismo endpoint que usa cotizador-rapido — cero pricing logic nuevo) con
+  // la MISMA empresa + courier del preview → filtra la opción del courier
+  // seleccionado → extrae desglose.secoNeto (neto normalizado sin IVA, el
+  // número que aplicarMarkup espera como entrada de la cascada) → autocompleta
+  // secoNetoSample. Consistente con Mejora A: la CredencialCourier real que
+  // Mejora A leyó es la que el cotizador va a usar para producir esta tarifa.
+  const traerTarifaReal = useCallback(async () => {
+    if (
+      inputs.courierId == null ||
+      inputs.empresaId == null ||
+      !inputs.pesoKg ||
+      !inputs.cpDestino
+    ) {
+      setErrorCotizarTarifa("Completá courier, empresa, peso y CP destino.");
+      return;
+    }
+    const peso = parseFloat(inputs.pesoKg);
+    if (!Number.isFinite(peso) || peso <= 0) {
+      setErrorCotizarTarifa("Peso inválido (debe ser un número > 0).");
+      return;
+    }
+    const courierElegido = filas.find((f) => f.courier.id === inputs.courierId);
+    if (!courierElegido) {
+      setErrorCotizarTarifa("Courier no encontrado.");
+      return;
+    }
+    setCotizandoTarifa(true);
+    setErrorCotizarTarifa(null);
+    try {
+      // Body igual al de cotizador-rapido/page.tsx:57-67. cpOrigen opcional
+      // (vacío → cotizador usa el depósito predeterminado de la empresa).
+      const body: any = {
+        cpDestino: inputs.cpDestino,
+        filtroEmpresa: String(inputs.empresaId),
+        paquetes: [
+          {
+            pesoKg: peso,
+            largoCm: 20,
+            anchoCm: 15,
+            altoCm: 10,
+            valorDeclarado: 0,
+            requiereSeguro: false,
+          },
+        ],
+      };
+      if (inputs.cpOrigen.trim().length > 0) {
+        body.cpOrigen = inputs.cpOrigen.trim();
+      }
+      const res = await fetch("/api/cotizar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (data?.code === "DEPOSITO_REQUERIDO") {
+          setErrorCotizarTarifa(
+            "La empresa no tiene depósito predeterminado activo. Configurá uno en /configuracion/depositos o tipeá un CP origen a mano.",
+          );
+        } else if (data?.code === "EMPRESA_REQUERIDA") {
+          setErrorCotizarTarifa(data?.error || "Empresa requerida.");
+        } else {
+          setErrorCotizarTarifa(data?.error || `Error HTTP ${res.status} al cotizar.`);
+        }
+        return;
+      }
+      const opciones = [
+        ...((data?.domicilio as any[]) || []),
+        ...((data?.sucursal as any[]) || []),
+      ];
+      // Match por nombre canónico (misma normalización que el resolver de
+      // courier del cotizador). Se descartan los fallback de rescate (DEUDA
+      // 129) — no reflejan una tarifa real del courier.
+      const match = opciones.find(
+        (o) => o?.courier === courierElegido.courier.nombre && !o?.esFallback,
+      );
+      if (!match) {
+        const fallbackMismoCourier = opciones.find(
+          (o) => o?.courier === courierElegido.courier.nombre,
+        );
+        if (fallbackMismoCourier) {
+          setErrorCotizarTarifa(
+            `${courierElegido.courier.nombre} devolvió una tarifa de rescate (fallback), no una cotización real. Revisá la credencial o los datos del envío.`,
+          );
+        } else {
+          setErrorCotizarTarifa(
+            `${courierElegido.courier.nombre} no cotizó para este caso (CP/peso/dims). Revisá la credencial o probá otros valores.`,
+          );
+        }
+        return;
+      }
+      // Prefiere desglose.secoNeto (neto normalizado sin IVA — el número que
+      // el motor consume como entrada de la cascada). Fallback a
+      // costoCourierNativo (raw del courier, puede incluir IVA en algunos).
+      const secoStr =
+        match?.desglose?.secoNeto != null
+          ? String(match.desglose.secoNeto)
+          : match?.costoCourierNativo != null
+          ? String(match.costoCourierNativo)
+          : null;
+      if (secoStr === null) {
+        setErrorCotizarTarifa(
+          `Cotización de ${courierElegido.courier.nombre} sin costo courier explícito (unexpected). Reportar.`,
+        );
+        return;
+      }
+      // Al usar desglose.secoNeto (neto), tarifaIncluyeIva DEBE quedar false
+      // para que el preview no divida otra vez por 1.21. Coerce silencioso —
+      // el operador puede togglear después si explora un caso distinto.
+      setInputs((s) => ({ ...s, secoNetoSample: secoStr, tarifaIncluyeIva: false }));
+      setTarifaTraidaAt(Date.now());
+    } catch {
+      setErrorCotizarTarifa("Error de red al cotizar.");
+    } finally {
+      setCotizandoTarifa(false);
+    }
+  }, [inputs.courierId, inputs.empresaId, inputs.pesoKg, inputs.cpDestino, inputs.cpOrigen, filas]);
 
   const currentCourier = filas.find((f) => f.courier.id === inputs.courierId);
   const currentEmpresa = fees.find((f) => f.empresa.id === inputs.empresaId);
@@ -997,6 +1131,117 @@ function SectionPreview({
               </div>
             </div>
           </div>
+        </div>
+
+        {/* MEJORA B (2026-09-13): Traer tarifa real del courier via /api/cotizar.
+            Autocompleta el secoNetoSample con el neto normalizado. Consistente
+            con Mejora A (mismo empresaId + courier). */}
+        <div className="mt-3 rounded-lg border-2 border-indigo-100 bg-indigo-50/40 p-3">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-[11px] font-black uppercase tracking-wider text-indigo-900">
+              Traer tarifa real del courier
+            </p>
+            {tarifaTraidaAt && (
+              <span className="text-[9px] font-bold text-indigo-700 bg-white/60 px-1.5 py-0.5 rounded border border-indigo-200">
+                autocompletado
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
+            <div>
+              <label
+                htmlFor="preview-peso"
+                className="text-[10px] font-black text-gray-700 uppercase tracking-wider block mb-1"
+              >
+                Peso (kg)
+              </label>
+              <input
+                id="preview-peso"
+                type="number"
+                min="0"
+                step="0.1"
+                value={inputs.pesoKg}
+                onChange={(e) =>
+                  setInputs((s) => ({ ...s, pesoKg: e.target.value }))
+                }
+                className={
+                  "w-full border-2 border-gray-200 rounded-lg px-2 py-1.5 text-sm font-bold text-gray-800 outline-none focus:border-[#233b6b] " +
+                  focusRing
+                }
+                placeholder="1"
+              />
+            </div>
+            <div>
+              <label
+                htmlFor="preview-cp-origen"
+                className="text-[10px] font-black text-gray-700 uppercase tracking-wider block mb-1"
+              >
+                CP origen
+              </label>
+              <input
+                id="preview-cp-origen"
+                type="text"
+                value={inputs.cpOrigen}
+                onChange={(e) =>
+                  setInputs((s) => ({ ...s, cpOrigen: e.target.value }))
+                }
+                className={
+                  "w-full border-2 border-gray-200 rounded-lg px-2 py-1.5 text-sm font-bold text-gray-800 outline-none focus:border-[#233b6b] " +
+                  focusRing
+                }
+                placeholder="(depósito predet.)"
+              />
+            </div>
+            <div>
+              <label
+                htmlFor="preview-cp-destino"
+                className="text-[10px] font-black text-gray-700 uppercase tracking-wider block mb-1"
+              >
+                CP destino
+              </label>
+              <input
+                id="preview-cp-destino"
+                type="text"
+                value={inputs.cpDestino}
+                onChange={(e) =>
+                  setInputs((s) => ({ ...s, cpDestino: e.target.value }))
+                }
+                className={
+                  "w-full border-2 border-gray-200 rounded-lg px-2 py-1.5 text-sm font-bold text-gray-800 outline-none focus:border-[#233b6b] " +
+                  focusRing
+                }
+                placeholder="1425"
+              />
+            </div>
+            <div className="flex items-end">
+              <button
+                type="button"
+                onClick={traerTarifaReal}
+                disabled={cotizandoTarifa || inputs.courierId == null || inputs.empresaId == null}
+                className={
+                  "w-full inline-flex items-center justify-center gap-1 px-3 py-1.5 text-xs font-black text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-colors " +
+                  focusRing
+                }
+              >
+                {cotizandoTarifa ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none" />
+                ) : null}
+                {cotizandoTarifa
+                  ? "Cotizando…"
+                  : currentCourier
+                  ? `Traer tarifa de ${currentCourier.courier.nombre}`
+                  : "Traer tarifa real"}
+              </button>
+            </div>
+          </div>
+          <p className="text-[10px] text-indigo-800/80 italic">
+            Cotiza en vivo vía <code className="bg-white/60 px-1 rounded">/api/cotizar</code> con la empresa + courier elegidos y setea el neto sin IVA. Si el CP origen queda vacío, usa el depósito predeterminado de la empresa.
+          </p>
+          {errorCotizarTarifa && (
+            <p className="mt-2 text-[11px] font-bold text-rose-800 bg-rose-50 border border-rose-200 rounded px-2 py-1.5">
+              {errorCotizarTarifa}
+            </p>
+          )}
         </div>
 
         {/* Advanced options */}

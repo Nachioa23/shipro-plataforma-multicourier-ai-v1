@@ -153,9 +153,10 @@ type PreviewInputs = {
   usaCredencialesPropias: boolean;
   propietarioTipo: "COURIER" | "SHIPRO" | "CLIENTE";
   tarifaIncluyeIva: boolean;
-  // MEJORA B (2026-09-13): campos para el botón "traer tarifa real".
-  // Se mandan a /api/cotizar (cpOrigen vacío → cotizador auto-usa el
-  // depósito predeterminado de la empresa; ver lib/cotizador.ts:300-308).
+  // MEJORA B (rewired 2026-09-13): campos para el botón "traer tarifa real".
+  // Se mandan al endpoint read-only tarifa-referencia como filtros opcionales
+  // (fallback progresivo si no hay match exacto). Todos pueden quedar vacíos
+  // — el endpoint devuelve la última tarifa registrada del courier igual.
   pesoKg: string;
   cpOrigen: string;
   cpDestino: string;
@@ -869,27 +870,25 @@ function SectionPreview({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reloadKey]);
 
-  // MEJORA B (2026-09-13): botón "traer tarifa real". Cotiza vía /api/cotizar
-  // (mismo endpoint que usa cotizador-rapido — cero pricing logic nuevo) con
-  // la MISMA empresa + courier del preview → filtra la opción del courier
-  // seleccionado → extrae desglose.secoNeto (neto normalizado sin IVA, el
-  // número que aplicarMarkup espera como entrada de la cascada) → autocompleta
-  // secoNetoSample. Consistente con Mejora A: la CredencialCourier real que
-  // Mejora A leyó es la que el cotizador va a usar para producir esta tarifa.
+  // MEJORA B (rewired 2026-09-13): "traer tarifa real" ya NO llama a
+  // /api/cotizar (arrastraba credenciales, Mocis roto, case mismatch).
+  // Ahora lee la última tarifa BASE RAW registrada del courier desde
+  // HistoricoCotizaciones (via el endpoint read-only `tarifa-referencia`).
+  // Cero credenciales, cero couriers en vivo, cero cotizador, puro DB read.
+  //
+  // La tarifa se persiste en cada cotización real exitosa
+  // (cotizador.guardarHistorico L400-424 upsert por
+  // courier+cpOrigen+cpDestino+pesoKg+modalidad). El endpoint hace fallback
+  // progresivo si el match exacto no existe (afloja peso, luego origen, y
+  // por último devuelve la última tarifa del courier).
+  //
+  // Consistente con Mejora A: la referencia se toma para el MISMO courier
+  // del preview (empresaId no interviene — la tarifa base del courier es
+  // independiente de la empresa; los markups per-empresa los aplica la
+  // cascada del preview endpoint).
   const traerTarifaReal = useCallback(async () => {
-    if (
-      inputs.courierId == null ||
-      inputs.empresaId == null ||
-      !inputs.pesoKg ||
-      !inputs.cpOrigen ||
-      !inputs.cpDestino
-    ) {
-      setErrorCotizarTarifa("Completá courier, empresa, peso, CP origen y CP destino.");
-      return;
-    }
-    const peso = parseFloat(inputs.pesoKg);
-    if (!Number.isFinite(peso) || peso <= 0) {
-      setErrorCotizarTarifa("Peso inválido (debe ser un número > 0).");
+    if (inputs.courierId == null) {
+      setErrorCotizarTarifa("Elegí un courier antes de traer la tarifa.");
       return;
     }
     const courierElegido = filas.find((f) => f.courier.id === inputs.courierId);
@@ -897,97 +896,56 @@ function SectionPreview({
       setErrorCotizarTarifa("Courier no encontrado.");
       return;
     }
+    // peso/CP son OPCIONALES aquí — mejoran la precisión del match (el
+    // endpoint hace fallback progresivo). No bloqueamos si el operador los
+    // dejó vacíos: la última tarifa del courier alcanza como referencia.
+    const pesoNumOrNull = inputs.pesoKg ? Math.floor(parseFloat(inputs.pesoKg)) : null;
     setCotizandoTarifa(true);
     setErrorCotizarTarifa(null);
     try {
-      // Body alineado byte-a-byte con cotizador-rapido/page.tsx:57-67 (el
-      // caller working). cpOrigen SIEMPRE presente — cotizador-rapido nunca
-      // lo omite (default state "1050", editable). Eliminamos el path
-      // condicional del botón — la única diferencia con el caller working.
-      const body: any = {
-        cpOrigen: inputs.cpOrigen,
-        cpDestino: inputs.cpDestino,
-        paquetes: [
-          {
-            pesoKg: peso,
-            largoCm: 20,
-            anchoCm: 15,
-            altoCm: 10,
-            valorDeclarado: 0,
-            requiereSeguro: false,
-          },
-        ],
-        filtroEmpresa: String(inputs.empresaId),
-      };
-      const res = await fetch("/api/cotizar", {
+      const body: any = { courierId: inputs.courierId };
+      if (inputs.cpOrigen.trim().length > 0) body.cpOrigen = inputs.cpOrigen.trim();
+      if (inputs.cpDestino.trim().length > 0) body.cpDestino = inputs.cpDestino.trim();
+      if (pesoNumOrNull != null && Number.isFinite(pesoNumOrNull) && pesoNumOrNull > 0) {
+        body.pesoKg = pesoNumOrNull;
+      }
+      const res = await fetch("/api/admin/consola-tarifa/tarifa-referencia", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        if (data?.code === "DEPOSITO_REQUERIDO") {
-          setErrorCotizarTarifa(
-            "La empresa no tiene depósito predeterminado activo. Configurá uno en /configuracion/depositos o tipeá un CP origen a mano.",
-          );
-        } else if (data?.code === "EMPRESA_REQUERIDA") {
-          setErrorCotizarTarifa(data?.error || "Empresa requerida.");
-        } else {
-          setErrorCotizarTarifa(data?.error || `Error HTTP ${res.status} al cotizar.`);
-        }
-        return;
-      }
-      const opciones = [
-        ...((data?.domicilio as any[]) || []),
-        ...((data?.sucursal as any[]) || []),
-      ];
-      // Match por nombre canónico (misma normalización que el resolver de
-      // courier del cotizador). Se descartan los fallback de rescate (DEUDA
-      // 129) — no reflejan una tarifa real del courier.
-      const match = opciones.find(
-        (o) => o?.courier === courierElegido.courier.nombre && !o?.esFallback,
-      );
-      if (!match) {
-        const fallbackMismoCourier = opciones.find(
-          (o) => o?.courier === courierElegido.courier.nombre,
-        );
-        if (fallbackMismoCourier) {
-          setErrorCotizarTarifa(
-            `${courierElegido.courier.nombre} devolvió una tarifa de rescate (fallback), no una cotización real. Revisá la credencial o los datos del envío.`,
-          );
-        } else {
-          setErrorCotizarTarifa(
-            `${courierElegido.courier.nombre} no cotizó para este caso (CP/peso/dims). Revisá la credencial o probá otros valores.`,
-          );
-        }
-        return;
-      }
-      // Prefiere desglose.secoNeto (neto normalizado sin IVA — el número que
-      // el motor consume como entrada de la cascada). Fallback a
-      // costoCourierNativo (raw del courier, puede incluir IVA en algunos).
-      const secoStr =
-        match?.desglose?.secoNeto != null
-          ? String(match.desglose.secoNeto)
-          : match?.costoCourierNativo != null
-          ? String(match.costoCourierNativo)
-          : null;
-      if (secoStr === null) {
         setErrorCotizarTarifa(
-          `Cotización de ${courierElegido.courier.nombre} sin costo courier explícito (unexpected). Reportar.`,
+          data?.error || `Error HTTP ${res.status} al leer la tarifa de referencia.`,
         );
         return;
       }
-      // Al usar desglose.secoNeto (neto), tarifaIncluyeIva DEBE quedar false
-      // para que el preview no divida otra vez por 1.21. Coerce silencioso —
-      // el operador puede togglear después si explora un caso distinto.
-      setInputs((s) => ({ ...s, secoNetoSample: secoStr, tarifaIncluyeIva: false }));
+      if (data?.sinDato) {
+        setErrorCotizarTarifa(
+          `Todavía no hay una tarifa registrada de ${courierElegido.courier.nombre} — se registra al cotizar o crear un envío con ese courier.`,
+        );
+        return;
+      }
+      const tarifaStr =
+        typeof data?.tarifaBase === "string" ? data.tarifaBase : null;
+      if (!tarifaStr) {
+        setErrorCotizarTarifa(
+          `Respuesta sin tarifaBase (unexpected). Reportar.`,
+        );
+        return;
+      }
+      // La tarifa base ya es NETO sin IVA (los 6 adapters activos declaran
+      // tarifaApiIncluyeIva=false). Coerce tarifaIncluyeIva=false para que
+      // la cascada del preview no divida otra vez por 1.21.
+      setInputs((s) => ({ ...s, secoNetoSample: tarifaStr, tarifaIncluyeIva: false }));
       setTarifaTraidaAt(Date.now());
     } catch {
-      setErrorCotizarTarifa("Error de red al cotizar.");
+      setErrorCotizarTarifa("Error de red al leer la tarifa de referencia.");
     } finally {
       setCotizandoTarifa(false);
     }
-  }, [inputs.courierId, inputs.empresaId, inputs.pesoKg, inputs.cpDestino, inputs.cpOrigen, filas]);
+  }, [inputs.courierId, inputs.pesoKg, inputs.cpDestino, inputs.cpOrigen, filas]);
 
   const currentCourier = filas.find((f) => f.courier.id === inputs.courierId);
   const currentEmpresa = fees.find((f) => f.empresa.id === inputs.empresaId);
@@ -1137,9 +1095,9 @@ function SectionPreview({
           </div>
         </div>
 
-        {/* MEJORA B (2026-09-13): Traer tarifa real del courier via /api/cotizar.
-            Autocompleta el secoNetoSample con el neto normalizado. Consistente
-            con Mejora A (mismo empresaId + courier). */}
+        {/* MEJORA B (rewired 2026-09-13): Traer tarifa BASE registrada del
+            courier — lee de HistoricoCotizaciones (endpoint tarifa-referencia),
+            NO cotiza en vivo. Autocompleta el secoNetoSample con el neto raw. */}
         <div className="mt-3 rounded-lg border-2 border-indigo-100 bg-indigo-50/40 p-3">
           <div className="flex items-center justify-between mb-2">
             <p className="text-[11px] font-black uppercase tracking-wider text-indigo-900">
@@ -1239,7 +1197,7 @@ function SectionPreview({
             </div>
           </div>
           <p className="text-[10px] text-indigo-800/80 italic">
-            Cotiza en vivo vía <code className="bg-white/60 px-1 rounded">/api/cotizar</code> con la empresa + courier elegidos y setea el neto sin IVA. Mismo request que la Cotización Rápida (CP origen requerido).
+            Lee la última tarifa base registrada del courier desde el histórico (se persiste cada vez que alguien cotiza real con ese courier). Sin credenciales, sin cotización en vivo. Peso + CP son opcionales — afinan el match; si están vacíos, devuelve la última tarifa del courier.
           </p>
           {errorCotizarTarifa && (
             <p className="mt-2 text-[11px] font-bold text-rose-800 bg-rose-50 border border-rose-200 rounded px-2 py-1.5">

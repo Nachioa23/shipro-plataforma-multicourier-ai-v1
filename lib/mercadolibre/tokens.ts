@@ -40,8 +40,23 @@
 import prisma from "@/lib/prisma";
 import { encryptSecret, decryptSecret } from "@/lib/utils/secret-crypto";
 
-const ML_API_BASE = "https://api.mercadolibre.com";
+export const ML_API_BASE = "https://api.mercadolibre.com";
 const OAUTH_TOKEN_PATH = "/oauth/token";
+
+// MEF Fase 1 step 3 (2026-09-14) — endpoint de AUTORIZACIÓN de ML (donde el
+// browser del seller da consentimiento). Host DISTINTO al de la API server-
+// to-server (api.mercadolibre.com) — es país-específico. Confirmado con Chat D
+// + docs oficiales de ML para Argentina (MLA).
+//
+// Multi-country futuro: hoy hardcodeamos AR; cuando Shipro opere en MX/BR/CO,
+// sacar esto a env var (MERCADOLIBRE_AUTHORIZE_URL) con fail-fast getter
+// mirror de getMercadoLibreClientId. Registrado como follow-up.
+export const ML_AUTHORIZE_URL = "https://auth.mercadolibre.com.ar/authorization";
+
+// Path relativo del callback OAuth. Se compone con getAppUrlOrThrow() para
+// armar el redirect_uri completo. Byte-a-byte compartido entre install-link
+// (query param) y callback (endpoint que corre) — ML requiere match exacto.
+export const ML_OAUTH_CALLBACK_PATH = "/api/mercadolibre/oauth/callback";
 
 // Margen para refrescar antes de que el token expire realmente. 10 min cubre
 // clock skew + latencia de red + procesamiento downstream.

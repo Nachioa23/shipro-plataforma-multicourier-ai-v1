@@ -4734,7 +4734,7 @@ Son `<code>` (no `<Link>` — no rompen, es texto informativo). **Apuntan a pant
 
 ---
 
-## DEUDA 180 — Mercado Envíos Flex (MEF): integración con Mercado Libre (registrada 2026-09-13, lidera Chat D, scope grande, prioridad a definir con Nacho + Chat D)
+## DEUDA 180 — Mercado Envíos Flex (MEF): integración con Mercado Libre (registrada 2026-09-13, lidera Chat D, scope grande, **Fase 1 steps 1+2 HECHOS local 2026-09-14** commits `b53426d`+`18d33c3`; **step 3 (rutas OAuth) FRENADO** esperando el endpoint de autorización de ML; ningún deploy prod aún, gated manual)
 
 **Qué es:** integración de Shipro con **Mercado Envíos Flex** — el canal logístico de Mercado Libre para que los sellers ML despachen usando su propia red (o los couriers integrados por Shipro) en vez del courier del sistema Envíos Flex propio de ML. Nuevo canal de ventas para Shipro (paralelo a Tiendanube y WooCommerce). **Alto valor de negocio** — ML es el mayor marketplace de la región y Flex es su rail logístico para sellers medianos/grandes.
 
@@ -4761,13 +4761,32 @@ Son `<code>` (no `<Link>` — no rompen, es texto informativo). **Apuntan a pant
 - `MecanismoConexion.OAUTH` (verificar — ya usado por Tiendanube).
 - Si alguno falta: agregar en la misma migración (aditivo, valores nuevos no rompen).
 
-**Próximo paso concreto para Chat A**: **nada por ahora** — esperar el go de Nacho + Chat D. Cuando arranque:
-1. Recon read-only: leer `prisma/schema.prisma` completo — `TiendaTiendanube` + `TokenVinculacionTiendanube` (patrón a espejar), enums (`PlataformaConexion`, `MecanismoConexion`, agregar si faltan), convenciones de encryption (mismo `SECRET_ENCRYPTION_KEY` y helpers `lib/crypto/*` que usa Tiendanube).
-2. Diseño de las 3 tablas + índices (revisar con Chat D).
-3. Migración `--create-only` inspeccionada + aplicada local + `prisma generate` (código sin uses aún — schema-only en la primera pieza).
-4. Docs de la Fase 1 step 1 en DEUDAS.md + coordinación con Chat D para el siguiente step (OAuth flow).
+**Avance 2026-09-14 (Chat A):**
 
-**Los steps 2-5** los coordina Chat D — Chat A responde a pedidos concretos, no arranca solo.
+- **Step 1 — modelo de datos ✅ HECHO local (commit `b53426d`).** 3 tablas aditivas creadas en `prisma/schema.prisma` + migración `20260913235719_mef_modelo_datos` inspeccionada byte-a-byte (SOLO `CREATE TABLE` + índices + FKs; cero `DROP`, cero destructive `ALTER` sobre tablas existentes) + aplicada local + `prisma generate` OK + tsc 0. Tablas:
+  - `CuentaMercadoLibre` — `empresaId Int @unique` (1—1 v1, LOCKED por Chat D), `mlUserId Int @unique` (natural key para resolver empresaId desde webhook body.user_id), `accessToken`/`refreshToken String?` (encriptados via `encryptSecret` — mismo helper que `TiendaTiendanube.accessToken`), `tokenExpiraEn`, `nickname/scope String?`, `estado String @default("activa")`, timestamps, `@@index([empresaId])` + `@@index([estado])`.
+  - `TokenVinculacionMercadoLibre` — mirror byte-a-byte de `TokenVinculacionTiendanube` (`token @unique`, `expira`, `usadoEn?`, `@@index([empresaId])`).
+  - `NotificacionFlex` — staging read-only de webhooks Flex. **Dedup key LOCKED: `notificacionId String @unique`** = el `body._id` que ML asigna por evento (retries reenvían mismo `_id` → INSERT rechaza P2002 → handler devuelve 200 idempotente; eventos distintos del mismo shipment traen `_id` nuevo → pasan). Además: `mlUserId Int`, `topic/resource String`, `shipmentId String?`, `attempts/sent/received?`, `payloadRaw Json`, `estado String @default("recibida")`, `empresaId Int?` FK opcional con `onDelete: SetNull`, `@@index([shipmentId])` + `@@index([estado])`.
+  - **Enums pre-existentes** confirmados en el recon: `PlataformaConexion.MERCADOLIBRE` (schema.prisma:392) + `MecanismoConexion.OAUTH` (schema.prisma:404) ya estaban por [[DEUDA 150]]. **Cero `ALTER TYPE` necesario**.
+  - **Deploy prod**: gated manual por Nacho + Chat D. Aditivo, reversible (drop tables) si se necesitara.
+
+- **Step 2 — librería de tokens ML ✅ HECHO local (commit `18d33c3`).** 2 archivos nuevos bajo `lib/mercadolibre/` (dir nueva, cero archivos existentes tocados):
+  - `lib/mercadolibre/tokens.ts` — exports públicos: `exchangeCodeForToken(code, redirectUri)` (intercambio inicial, puro fetch sin persist — el callback de step 3 upsertea) + `getMercadoLibreAccessToken(empresaId, opts?)` (lazy refresh: cache 6h con margin 10min → si vencido, refresca vía `POST /oauth/token grant_type=refresh_token`). **2 garantías críticas confirmadas**:
+    - **PERSIST-BEFORE-RETURN**: `prisma.cuentaMercadoLibre.update` con NUEVO access + NUEVO refresh + nuevo `tokenExpiraEn` corre ANTES del `return`. Si `update` falla, throw se propaga — nunca retornamos un access cuyo refresh rotado no se salvó. Prisma envuelve el update en su tx implícita (single-row atomic).
+    - **SINGLE-FLIGHT LOCK**: `Map<empresaId, Promise<string>>` module-level. Callers concurrentes para la misma empresa await el mismo promise (evita quemar 2 veces el refresh single-use). Cleared en `finally { inFlightRefreshes.delete(empresaId) }` — settle exitoso Y fallido, así un refresh fallido no wedgea el lock. Mirror del pattern class-level de adapters (Intralog `tokenPromise` L53-90) adaptado a multi-tenant.
+    - **`invalid_grant` handling**: sin retry loop. Setea `estado="expirada"` (best-effort) + throw claro "requiere re-autorización del seller".
+  - `lib/mercadolibre/client.ts` — `mlFetch(empresaId, path, init?)`: fetch autenticado con Authorization Bearer + retry-1 on 401 (force refresh via `opts.force=true` + reintento único). Sin loop de reintentos.
+  - **Env vars pendientes ANTES de usar la lib**: `MERCADOLIBRE_CLIENT_ID` + `MERCADOLIBRE_CLIENT_SECRET` — fail-fast getters mirror de `getAppUrlOrThrow`. Setear en `.env.local` (dev) + env del server (prod, gated). Sin ellos, la lib throwea con mensaje claro.
+
+- **Step 3 — rutas OAuth (install-link + callback) 🚧 FRENADO 2026-09-14.** El recon confirmó que la lib del step 2 declara solo el **endpoint de TOKEN** (`api.mercadolibre.com/oauth/token`, server-to-server) pero **NO el endpoint de AUTORIZACIÓN** (el host país-específico donde el navegador del seller consiente la app — ej. `auth.mercadolibre.com.ar/authorization` para AR, `.mx` para MX, etc.). Chat D marcó STOP explícito ("no inventes el dominio"). **Pendiente**: confirmar con Chat D + Gemini Notebook contra docs ML:
+  - URL de autorización exacta para Argentina (host + path).
+  - Params exactos del query: `response_type=code`, `client_id`, `redirect_uri` (`${APP_URL}/api/mercadolibre/oauth/callback`), `state` (el token de vinculación), y **el formato del `scope`** (con `offline_access` para habilitar refresh — pero confirmar en docs si scope se pasa en el authorize o si viene por default con la app).
+  - Multi-country vs Argentina fija: si Shipro opera solo AR, URL fija en constante; si multi-country, env var `MERCADOLIBRE_AUTHORIZE_URL` con fail-fast getter.
+  - Recon del step 3 ya mapeó el resto de la obra (**cero incógnitas pendientes salvo esa URL**): install-link mirror de `app/api/tiendanube/install/link/route.ts` (75 líneas, gate `admin_shipro`+token 192-bit+`TokenVinculacionMercadoLibre.create`+URL builder), callback mirror simplificado de `app/api/tiendanube/oauth/callback/route.ts` (~150 líneas estimadas, sin carrier/webhooks — esos son Fase 3): validar state → `exchangeCodeForToken` → **cross-install guard por `mlUserId`** (findUnique `CuentaMercadoLibre` → 409 + AuditoriaConfiguracion + mail alerta si `empresaId` distinta) → `$transaction([cuentaMercadoLibre.upsert, tokenVinculacionMercadoLibre.update(usadoEn)])` atómico → best-effort `Conexion.upsert({plataforma:"MERCADOLIBRE", mecanismo:"OAUTH", estado:"ACTIVA", referenciaExterna: String(mlUserId)})`. Todo el andamiaje listo (models + libs + enums + helpers `encryptSecret`/`getAppUrlOrThrow`); solo falta la URL del authorize para arrancar.
+
+**Steps 4-5 (webhook receiver + adapter)** — territorio a coordinar con Chat D, después del step 3.
+
+**Estado global**: steps 1+2 en local (additive, gated prod). Step 3 esperando el endpoint de autorización. **Ningún deploy a prod de MEF todavía.**
 
 **Prioridad**: **a definir con Nacho + Chat D**. Alto valor de negocio, pero obra grande — merece su propio momento con foco. No compite con obras chicas en curso.
 

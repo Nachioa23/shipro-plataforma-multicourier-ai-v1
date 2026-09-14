@@ -56,6 +56,9 @@ model Empresa {
   tokensVinculacionTiendanube TokenVinculacionTiendanube[] // Tokens de un solo uso para el link de instalación OAuth (Momento 1)
   conexiones          Conexion[] // DEUDA 150 Pieza 1: hub de conexiones per (empresa, plataforma).
   tokensSetupApiKey   TokenSetupApiKey[] // DEUDA 150 Pieza 2: tokens de un solo uso para el link de setup de la API Key.
+  cuentaMercadoLibre  CuentaMercadoLibre? // DEUDA 180 (MEF Fase 1): cuenta ML del cliente (1 por empresa en v1; @unique en la FK).
+  tokensVinculacionMercadoLibre TokenVinculacionMercadoLibre[] // MEF Fase 1: tokens de un solo uso para el link OAuth de Mercado Libre.
+  notificacionesFlex  NotificacionFlex[] // MEF Fase 1 (staging): webhooks de ML Flex resueltos por empresaId (nullable — el link es best-effort).
 
   // DEUDA 29: si true, el cliente puede usar credenciales Shipro (Modelo A) al activar
   // couriers. Inmutabilidad direccional: gerente_cliente puede ir A→B (obtener
@@ -1879,6 +1882,178 @@ model TokenVinculacionTiendanube {
   createdAt DateTime @default(now())
 
   @@index([empresaId])
+}
+
+// =============================================================================
+// DEUDA 180 (MEF Fase 1 step 1, 2026-09-13) — Mercado Envíos Flex: modelo de datos
+// =============================================================================
+// Fundación para la integración con Mercado Envíos Flex (canal ML). 3 tablas
+// aditivas que espejan el patrón Tiendanube (TiendaTiendanube + TokenVinculacion
+// Tiendanube), moldeadas byte-a-byte contra sus twins salvo por las decisiones
+// LOCKED por Nacho + Chat D:
+//   - CuentaMercadoLibre: 1 por empresa en v1 (empresaId @unique). ML deja
+//     tokens con TTL corto (~6h) — refreshToken se rota single-use en cada
+//     refresh. Ambos tokens ENCRIPTADOS via `lib/utils/secret-crypto.encryptSecret`
+//     (mismo mecanismo que TiendaTiendanube.accessToken).
+//   - TokenVinculacionMercadoLibre: mirror exacto de TokenVinculacionTiendanube.
+//   - NotificacionFlex: staging read-only de webhooks ML. NO ejecuta acciones —
+//     solo recibe + persiste. Dedup por `notificacionId String @unique` (body._id
+//     de ML — retries del mismo evento traen mismo id → INSERT rechaza P2002 →
+//     idempotente). Eventos distintos del mismo shipment traen ids nuevos → pasan.
+//
+// Chat D lidera MEF completo. Chat A ejecuta las piezas de núcleo (schema hoy,
+// resto coordinado). Aplicación en prod queda GATEADA manual por Nacho.
+// =============================================================================
+
+model CuentaMercadoLibre {
+  id Int @id @default(autoincrement())
+
+  // 1—1 con Empresa en v1: una cuenta ML por empresa (decisión LOCKED Chat D).
+  // Si en el futuro se necesita multi-cuenta, se relaja el @unique.
+  empresaId Int     @unique
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  // mlUserId (seller_id que ML devuelve en el OAuth callback y en los webhooks).
+  // @unique: un seller ML pertenece a UNA sola cuenta en Shipro. Es el pivot para
+  // resolver empresaId desde el body.user_id de un webhook Flex sin joins.
+  // Chat D LOCKED: Int (ver nota en la propuesta MEF si se necesita BigInt).
+  mlUserId Int @unique
+
+  // OAuth tokens permanentes de ML. Nacen NULL (el flujo OAuth aún no existe;
+  // Fase 2 los completa). Cuando existan, se guardan ENCRIPTADOS con
+  // `encryptSecret` — nunca en plaintext. La utilidad ya existe (lib/utils/
+  // secret-crypto.ts, mismo helper que TiendaTiendanube.accessToken usa).
+  //
+  // refreshToken: single-use (ML lo rota en cada refresh) → se pisa acá con
+  // el nuevo cada vez. tokenExpiraEn: TTL corto (típico 6h) — pivot para saber
+  // cuándo refrescar antes de una llamada.
+  accessToken   String?
+  refreshToken  String?
+  tokenExpiraEn DateTime?
+
+  // Metadata best-effort del seller (GET /users/{id} post-OAuth). Nullable — si
+  // la llamada falla la instalación queda vinculada igual.
+  nickname String?
+  scope    String? // scopes concedidos (coma-separados)
+
+  // Lifecycle: "activa" | "revocada" | "expirada" (String libre, mismo estilo
+  // que TiendaTiendanube.estado). Los webhooks/refresh lo actualizan.
+  estado String @default("activa")
+
+  vinculadaEn    DateTime  @default(now())
+  desvinculadaEn DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([empresaId])
+  @@index([estado])
+}
+
+// =============================================================================
+// TokenVinculacionMercadoLibre — mirror byte-a-byte de TokenVinculacionTiendanube
+// =============================================================================
+// Token de un solo uso del install-link de ML (Momento 1 del OAuth). El
+// operador Shipro lo genera para una empresa, viaja en el parámetro `state`
+// del OAuth, y el callback lo valida (existe + no expiró + no se usó) para
+// saber a qué empresa vincular la nueva CuentaMercadoLibre. Tabla APARTE de
+// CuentaMercadoLibre porque el token nace ANTES de que exista la cuenta (no
+// hay mlUserId todavía).
+model TokenVinculacionMercadoLibre {
+  id Int @id @default(autoincrement())
+
+  empresaId Int
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  // Token aleatorio en el `state` del OAuth de ML. Se genera cuando el operador
+  // Shipro crea el link de instalación para una empresa (antes de que exista
+  // CuentaMercadoLibre/mlUserId). El callback lo valida: existe + no expiró
+  // (expira) + no se usó (usadoEn == null). @unique para lookup O(1) en el
+  // callback. Mismo patrón que TokenVinculacionTiendanube (randomBytes+base64url).
+  token String @unique
+
+  // Vencimiento del link de instalación (~7 días, mismo default que el twin
+  // Tiendanube). Un link vencido no vincula (defensa si se filtra).
+  expira DateTime
+
+  // Single-use: NULL hasta que el callback lo consume; entonces se setea al
+  // timestamp de uso. Un token ya usado no vincula de nuevo.
+  usadoEn DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([empresaId])
+}
+
+// =============================================================================
+// NotificacionFlex — staging read-only de webhooks de Mercado Envíos Flex
+// =============================================================================
+// Recibe + persiste las notificaciones de ML Flex. NO ejecuta acciones (eso es
+// Fase 3 — otro worker consume esta tabla). Todo webhook llega acá primero,
+// autenticado + almacenado con su payload crudo para audit + reprocess.
+//
+// DEDUP: `notificacionId String @unique` = el body._id que ML asigna a cada
+// notificación (estable, único por evento). Retries del mismo evento reenvían
+// el mismo _id → INSERT rechaza con P2002 (Prisma unique violation) → handler
+// devuelve 200 idempotente. Eventos legítimos distintos (mismo shipment, otro
+// cambio de estado) traen _id nuevo → INSERT succeed. Semántica exacta de
+// idempotencia — sin ambigüedad temporal ni collisions con actualizaciones
+// sucesivas del mismo shipment.
+//
+// LOCKED Chat D: los tipos primitivos (Int, no BigInt para mlUserId; String
+// para topic/resource/estado libres; DateTime para timestamps ML).
+model NotificacionFlex {
+  id Int @id @default(autoincrement())
+
+  // ML notification id — el body._id que ML asigna. STABLE per-event → @unique
+  // dedupa retries. LOCKED por Chat D como idempotency key.
+  notificacionId String @unique
+
+  // user_id del seller que emite el webhook. Denormalizado — no es una FK
+  // formal a CuentaMercadoLibre porque el webhook puede llegar antes de que
+  // hayamos vinculado la cuenta (edge case: seller instala y el primer webhook
+  // se dispara antes del OAuth callback). El worker de Fase 3 hace el join
+  // manual: CuentaMercadoLibre.findUnique({ where: { mlUserId } }).
+  mlUserId Int
+
+  // Topic del evento (ej. "shipments", "flex-handshakes", "orders_v2"). String
+  // libre — el catálogo lo maneja ML y crece con el tiempo.
+  topic String
+
+  // resource: URL relativa que ML manda ("/shipments/12345"). Persistimos cruda.
+  resource String
+
+  // shipmentId extraído del resource cuando topic="shipments" (regex simple sobre
+  // resource al insertar). Sirve para join rápido con envíos + índice O(1).
+  // Nullable para topics no-shipment (ej. handshakes, orders).
+  shipmentId String?
+
+  // FK opcional a Empresa — el handler resuelve empresaId a partir de mlUserId
+  // (via CuentaMercadoLibre) cuando puede. SetNull para preservar audit si la
+  // empresa se elimina.
+  empresaId Int?
+  empresa   Empresa? @relation(fields: [empresaId], references: [id], onDelete: SetNull)
+
+  // Timestamps de ML — útiles para orden + debug.
+  attempts Int?
+  sent     DateTime?
+  received DateTime?
+
+  // Payload crudo — auditable si algo se rompe (compresión/limpieza queda futura).
+  payloadRaw Json
+
+  // Lifecycle del procesamiento interno de Shipro (no del envío ML):
+  // "recibida" (staged, no procesada aún) | "procesada" (worker actuó) |
+  // "descartada" (irrelevante, sin acción) | "error" (worker falló, reintentar).
+  estado String @default("recibida")
+
+  recibidaEn  DateTime  @default(now())
+  procesadaEn DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([shipmentId])
+  @@index([estado])
 }
 
 // =============================================================================

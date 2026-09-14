@@ -22,6 +22,7 @@ const PUBLIC_API_EXACT = [
   "/api/tiendanube/labels/cancel",   // Labels callback /cancel de Tiendanube — self-auth via DB lookup del labelId, sin HMAC (DEUDA 104).
   "/api/tiendanube/labels/admin-link", // Admin Link Tiendanube — el merchant llega redirect desde el admin (DEUDA 144 Momento 3).
   "/api/empresa/api-key/via-token", // DEUDA 150 Pieza 2 — setup de API Key vía link tokenizado (auth via token single-use en body/query, no sesión).
+  "/api/mercadolibre/webhooks",  // MEF Fase 1 step 4 — receiver de webhooks ML (self-auth via HMAC x-signature con manifest data.id + x-request-id + ts, DEUDA 180).
 ];
 const API_KEY_EXACT = [
   "/api/checkouts",

@@ -4807,6 +4807,23 @@ Son `<code>` (no `<Link>` — no rompen, es texto informativo). **Apuntan a pant
 
 **Estado global**: **Fase 1 (núcleo, Chat A) COMPLETA localmente** — 6 commits (`b53426d` schema + `18d33c3` tokens lib + `6ea745b` OAuth routes + `cbc96da` página éxito + `cf49e93` webhook receiver + `e0634e7` fix callback público). tsc 0 en todos. Todo additive: cero cambios en Envio/cotizador/crear/dispatch, cero schema drift más allá de las 3 tablas MEF aditivas. **Ningún deploy prod de MEF todavía** — sigue gated manual por Nacho + Chat D.
 
+**⚠️ COORDINACIÓN CENTRALIZADA EN CHAT D (decisión Nacho 2026-09-15):** MEF es obra estratégica grande — se coordina **end-to-end desde el Chat D** (dueño de MEF), subdividida en fases/roadmap por Chat D. **Chat A (núcleo) NO arranca piezas de MEF por su cuenta**; construye SOLO las piezas de núcleo que el Chat D le pida, dentro del plan del Chat D. Se evita dispersión en una obra que tiene que funcionar perfecto (canal ML es alto valor de negocio + no tolera errores de integración).
+
+- **Consecuencia práctica**: los siguientes ítems los **dirige Chat D**, no Chat A por su cuenta:
+  - La prueba OAuth local end-to-end (validar el flow install-link → consent → callback → persistencia).
+  - El botón "Conectar Mercado Libre" en el hub `/clientes` (UI que dispara `POST /api/mercadolibre/install/link`; hoy sin UI, dispared via DevTools console).
+  - La definición de **QUÉ DATOS captura Shipro del cliente ML** (operativos del courier + los propios de ML: coordenadas GPS, CP, zonas Flex, estados de shipment/handshake, etc.).
+  - El diseño del worker de Fase 3 (consumir `NotificacionFlex` + enriquecer + accionar).
+  - Cualquier pieza de UI del hub relacionada con ML.
+- **Chat A los construye cuando el Chat D los especifique** dentro de su roadmap. NO se arrancan desde Chat A.
+- **Estado de Chat A actual**: Fase 1 completa local (6 commits, tsc 0, additive, gated prod). **A LA ESPERA** de los próximos pedidos de núcleo del Chat D.
+
+**Notas de producto (punteros — territorio Chat D):** dejadas acá solo para que no se pierdan; son diseño de MEF, se resuelven en el Chat D, no acá:
+- **Segmentación de distribución Flex por zonas/couriers**: uno global vs. por zona (ML divide en ~4 zonas por localidad/CP); decisión de arquitectura de Chat D.
+- **Flujo de tramos confirmado**: pickup + entrega con la app MEF, cross-docking con TMS del courier.
+- **Pregunta abierta**: la etiqueta que emite ML ¿declara zona/courier, o se necesita un sticker complementario? Gemini lo estaba resolviendo en su research paralelo.
+- **Qué datos capturar del cliente ML** (formato de captura, campos custom vs. reusar `Conexion`/`CuentaMercadoLibre`/nuevas tablas): diseño Chat D.
+
 **Prioridad**: **a definir con Nacho + Chat D**. Alto valor de negocio, pero obra grande — merece su propio momento con foco. No compite con obras chicas en curso.
 
 **Relaciones**:

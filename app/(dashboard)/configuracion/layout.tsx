@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Settings, Truck, Warehouse, Network, Eye } from "lucide-react";
+import { Settings, Truck, Warehouse, Network, Eye, Plug } from "lucide-react";
 import { ConfiguracionProvider, useConfiguracion } from "./ConfiguracionContext";
 
 interface TabDef {
@@ -21,6 +21,7 @@ function ConfiguracionShell({ children }: { children: React.ReactNode }) {
     { id: 'transportes', label: 'Transportes', href: '/configuracion/transportes', icon: Truck, visible: !esOperadorCliente },
     { id: 'depositos', label: 'Depósitos', href: '/configuracion/depositos', icon: Warehouse, visible: true },
     { id: 'ruteo', label: 'Ruteo', href: '/configuracion/ruteo', icon: Network, visible: !esOperadorCliente },
+    { id: 'conexiones', label: 'Conexiones', href: '/configuracion/conexiones', icon: Plug, visible: true },
   ].filter(t => t.visible);
 
   return (

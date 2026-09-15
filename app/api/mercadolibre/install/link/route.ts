@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server";
-import { randomBytes } from "crypto";
 import prisma from "@/lib/prisma";
-import { getAppUrlOrThrow } from "@/lib/utils/app-url";
-import { ML_AUTHORIZE_URL, ML_OAUTH_CALLBACK_PATH } from "@/lib/mercadolibre/tokens";
+import { crearInstallLinkMercadoLibre } from "@/lib/mercadolibre/install-link";
 
 // MEF Fase 1 step 3 — Momento 1 (Instalación OAuth): genera el link de
 // instalación para Mercado Libre. Mirror byte-a-byte del twin Tiendanube
@@ -64,47 +62,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Empresa inactiva" }, { status: 409 });
     }
 
-    // Env guard fail-fast: sin CLIENT_ID no podemos armar una URL de authorize
-    // válida (ML rechaza el consent con client_id inválido).
-    const clientId = process.env.MERCADOLIBRE_CLIENT_ID;
-    if (!clientId) {
-      return NextResponse.json(
-        {
-          error:
-            "MERCADOLIBRE_CLIENT_ID no configurada en el servidor. Setearla antes de generar el link.",
-        },
-        { status: 500 },
-      );
-    }
-
-    // APP_URL fail-fast: sin ella el redirect_uri queda inválido y el consent
-    // se rompe. getAppUrlOrThrow tira error claro.
-    const appUrl = getAppUrlOrThrow();
-
-    // Token de vinculación: 192 bits, base64url (32 chars URL-safe). Expira
-    // en 7 días — mismo default que el twin Tiendanube (diseño DEUDA 144).
-    const token = randomBytes(24).toString("base64url");
-    const expira = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
-    await prisma.tokenVinculacionMercadoLibre.create({
-      data: { empresaId, token, expira },
-    });
-
-    // Redirect URI: byte-idéntico entre install-link y callback. ML matchea el
-    // redirect_uri del authorize con el redirect_uri del intercambio del code
-    // como control de seguridad — cualquier diferencia rompe el flow.
-    const redirectUri = `${appUrl}${ML_OAUTH_CALLBACK_PATH}`;
-
-    // Armar la URL de authorize. URLSearchParams garantiza URL-encoding
-    // correcto (espacios en scope, caracteres especiales en redirect_uri, etc).
-    const params = new URLSearchParams({
-      response_type: "code",
-      client_id: clientId,
-      redirect_uri: redirectUri,
-      state: token,
-      scope: "offline_access read write",
-    });
-    const url = `${ML_AUTHORIZE_URL}?${params.toString()}`;
+    // Core: token + URL de authorize. Delegado al helper compartido con
+    // el endpoint self-service `/api/empresa/mercadolibre/connect`. El gate
+    // operador de arriba queda intacto — el helper NO valida auth, solo hace
+    // el core (env guards + token + URL).
+    const { url, expira } = await crearInstallLinkMercadoLibre(empresaId);
 
     // NO devolvemos el token suelto — ya viaja dentro de la url. El operador
     // copia la url (o la manda por mail en piezas posteriores).

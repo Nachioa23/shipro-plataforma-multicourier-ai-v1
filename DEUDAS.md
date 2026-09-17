@@ -4734,7 +4734,7 @@ Son `<code>` (no `<Link>` — no rompen, es texto informativo). **Apuntan a pant
 
 ---
 
-## DEUDA 180 — Mercado Envíos Flex (MEF): integración con Mercado Libre (registrada 2026-09-13, lidera Chat D, scope grande, **Fase 1 (núcleo) EN PROD 2026-09-15** — steps 1+2+3+4 deployados + verificados, commits `b53426d`+`18d33c3`+`6ea745b`+`cbc96da`+`cf49e93`+`e0634e7`; **botón autoservicio "Conectar ML" HECHO + VERIFICADO local 2026-09-15** commit `e8021c8` — pend. deploy gated para prueba OAuth e2e en prod; fases 2-5 las dirige Chat D)
+## DEUDA 180 — Mercado Envíos Flex (MEF): integración con Mercado Libre (registrada 2026-09-13, lidera Chat D, scope grande, **Fase 1 (núcleo) COMPLETA + VERIFICADA e2e EN PROD 2026-09-17** — modelo + tokens + OAuth routes + webhook receiver + botón autoservicio + fix BigInt, commits `b53426d`+`18d33c3`+`6ea745b`+`cbc96da`+`cf49e93`+`e0634e7`+`e8021c8`+`b77faa1`; prueba OAuth e2e PASÓ con test user MLA real; fases 2-5 las dirige Chat D)
 
 **Qué es:** integración de Shipro con **Mercado Envíos Flex** — el canal logístico de Mercado Libre para que los sellers ML despachen usando su propia red (o los couriers integrados por Shipro) en vez del courier del sistema Envíos Flex propio de ML. Nuevo canal de ventas para Shipro (paralelo a Tiendanube y WooCommerce). **Alto valor de negocio** — ML es el mayor marketplace de la región y Flex es su rail logístico para sellers medianos/grandes.
 
@@ -4823,14 +4823,38 @@ Son `<code>` (no `<Link>` — no rompen, es texto informativo). **Apuntan a pant
 
 **Verificación local**: el botón arma correctamente la URL de authorize (`https://auth.mercadolibre.com.ar/authorization?response_type=code&client_id=<env>&redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fapi%2Fmercadolibre%2Foauth%2Fcallback&state=<32-char>&scope=offline_access+read+write`). tsc 0. Cero cambios en Envio/cotizador/crear/dispatch/schema/OAuth-callback/webhook-receiver. El OAuth completo end-to-end se prueba en PROD (donde el redirect URI de prod está registrado en el portal ML — localhost va a rechazar salvo que se registre también el localhost URI en el portal).
 
+**Fix mlUserId Int → BigInt ✅ DEPLOYADO + VERIFICADO en prod 2026-09-17 (commit `b77faa1`).** Bug detectado durante la prueba OAuth e2e: el log de prod tiró `"Unable to fit integer value '3686169320' into an INT4"` al intentar persistir el test user MLA (id 3.686.169.320 > max INT4 = 2.147.483.647). Los `user_id` de ML son de 10 dígitos → no entran en `Int` (INT4 = 32-bit signed). El step-1 recon lockeó `Int` (comentario en `schema.prisma:2007`: "LOCKED Chat D: los tipos primitivos (Int, no BigInt para mlUserId ...)"); la realidad venció al lock inicial. Fix en 3 frentes cubiertos + verificados por grep:
+
+- **Frente 1 — WRITES** (`BigInt(userId)` al persistir): `callback:200` upsert `mlUserId: mlUserIdBig`; `webhooks:125` NotificacionFlex.create `mlUserId: mlUserIdBig`.
+- **Frente 2 — READS / LOOKUPS** (`BigInt(userId)` en TODOS los `where:{mlUserId}` — flag crítico de Chat D): `callback:120` cross-install guard; `callback:187` upsert lookup; **`webhooks:112` seller-resolution del webhook** — el 3er-bug silencioso que Chat D flageó: sin este `BigInt()` en el LOOKUP, TODA notificación de seller real caería como `estado="huerfana"` (empresaId null) invisiblemente hasta el primer Flex real. Cubierto.
+- **Frente 3 — JSON serialization** (`Number(bigint)` donde mlUserId cruza `JSON.stringify` / `NextResponse.json`): `conexion:64` `mlUserId: Number(cuenta.mlUserId)`. Sin este cast, el endpoint tira `TypeError: Do not know how to serialize a BigInt` apenas hay UNA cuenta conectada. Cubierto.
+- **Migración `20260917135915_mef_mluserid_bigint`**: 2× `ALTER TABLE ... ALTER COLUMN "mlUserId" SET DATA TYPE BIGINT`. Cero DROP, cero destructive. Aplicada sobre tablas vacías (0 filas), widening in-place, `@unique` de `CuentaMercadoLibre.mlUserId` preservado por Postgres. Instantáneo, lossless.
+- **Deploy prod 2026-09-17**: `git pull` → `prisma migrate deploy` (aplica la migración) → `prisma generate` → clean rebuild (`rm -rf .next && npm run build`) → `pm2 restart shipro #86` (sin `--update-env`, cero env vars nuevas).
+- **Comentario stale revertido** en `schema.prisma`: el `"LOCKED Chat D: Int no BigInt"` fue reemplazado en ambos modelos por una nota que explica el fix y el motivo (realidad de los IDs de ML) para memoria histórica.
+
+**Prueba OAuth e2e ✅ PASÓ EN PROD 2026-09-17 (post-fix BigInt).** Flow completo verificado con test user MLA real:
+
+- **Cliente autenticado** (rol `gerente_cliente`) navega a `/configuracion/conexiones` → ve card "Mercado Libre / No conectada" con botón.
+- **Click "Conectar Mercado Libre"** → POST a `/api/empresa/mercadolibre/connect` (`empresaId = token.empresaId`, JWT firmado, NUNCA del body) → helper `crearInstallLinkMercadoLibre` genera token + arma URL de authorize → `window.location.href = url`.
+- **Redirect a `https://auth.mercadolibre.com.ar/authorization?...&scope=offline_access+read+write`** → login con test user MLA (id 3.686.169.320) → autoriza consent.
+- **ML redirect a `https://pm.shipro.pro/api/mercadolibre/oauth/callback?code=X&state=<token>`** → callback valida state → `exchangeCodeForToken` → cross-install guard OK (empresa nueva) → **$transaction atómico**: upsert `CuentaMercadoLibre` (con `mlUserId: BigInt(3686169320)` — el número grande que antes rompía ahora entra limpio en BIGINT) + burn del token.
+- **Verificado en `CuentaMercadoLibre`**:
+  - `mlUserId = 3686169320` (BigInt OK, cabe en INT8 sin drama).
+  - `estado = "activa"`.
+  - `accessToken` + `refreshToken` = strings ciphertext formato `<hex>:<hex>:<hex>` (AES-256-GCM via `encryptSecret`). Verificable a ojo: NO empiezan con `APP_USR-...` (plaintext ML) → encriptados como diseñado.
+  - `nickname` poblado (best-effort GET `/users/me` funcionó).
+  - `tokenExpiraEn` ≈ 6h en el futuro.
+- **`TokenVinculacionMercadoLibre`**: fila del token con `usadoEn = <timestamp del callback>` (quemado atómicamente).
+- **`Conexion`**: fila `{plataforma:"MERCADOLIBRE", mecanismo:"OAUTH", estado:"ACTIVA", referenciaExterna:"3686169320"}` (best-effort upsert del hub).
+- **Browser termina en `/mercadolibre/instalado?mlUserId=3686169320&nickname=<nick>`** → página de éxito verde "¡Cuenta de Mercado Libre conectada!".
+- **De vuelta a `/configuracion/conexiones`** → card verde "Mercado Libre / Conectada · Seller: @nickname".
+
+**MEF Fase 1 (núcleo, Chat A) COMPLETA + VERIFICADA e2e EN PROD**: modelo (3 tablas) + tokens lib (single-flight + persist-before-return) + rutas OAuth (install-link operator + callback + página éxito) + webhook receiver staging + botón autoservicio cliente-facing + fix BigInt. El OAuth end-to-end desde la UI del cliente valida el sistema completo. Todos los mecanismos críticos probados con data real: encryption reversible, cross-install guard (no ejercitado — cuenta nueva pura), token burn atómico, single-use del state, seller-resolution del webhook (pendiente ejercicio real).
+
 **Pendiente (dirige Chat D — no lo arranca Chat A por su cuenta, per la coordinación centralizada 2026-09-15)**:
-- **Deploy gated a prod del botón autoservicio**: 6 archivos additive, sin migración, sin schema drift, cero riesgo money. Deploy es normal (`git pull + npm run build + pm2 restart`).
-- **Prueba OAuth e2e en prod** (post-deploy del botón): 
-  - **Prerequisito EXTERNO** (todavía no confirmado, gatilla el test): que el portal de developers de ML tenga registrada la Redirect URI de prod exacta `https://pm.shipro.pro/api/mercadolibre/oauth/callback` (byte-a-byte, incluido el `https://`). Sin esto, ML rechaza con `redirect_uri mismatch` en el consent screen.
-  - **Test user ML**: Nacho ya lo tiene creado.
-  - **Test flow**: cliente logea → `/configuracion/conexiones` → click "Conectar Mercado Libre" → redirect a ML → autoriza con el test user → callback vincula → verificar `CuentaMercadoLibre` con `estado="activa"`, `mlUserId`, `nickname`, tokens encriptados formato `<hex>:<hex>:<hex>`.
-- **Webhook e2e**: queda para cuando haya un envío Flex real (receiver ya escuchando en prod).
-- **Fases 2-5 + specs de núcleo dentro de esas fases**: territorio Chat D. Chat A construye piezas de núcleo bajo pedido de Chat D con spec funcional concreto.
+- **Webhook e2e**: queda para cuando haya un envío Flex real que gatille un webhook desde ML. El receiver ya está escuchando en prod (`/api/mercadolibre/webhooks`, público via `PUBLIC_API_EXACT`) con dedup idempotente por `notificacionId @unique` y seller-resolution BigInt-safe.
+- **Fases 2-5** (routing/zonas Flex, generación de etiqueta, ingesta de eventos de shipment, excepciones operativas): territorio Chat D. Chat A construye piezas de núcleo bajo pedido de Chat D con spec funcional concreto.
+- **Follow-up menor no bloqueante**: `enviarMailAlertaCruceMercadoLibre` helper en `lib/mailer.ts` (mirror del twin Tiendanube L667). Hoy el cross-install guard hace `AuditoriaConfiguracion.create` + `console.error` — visibilidad OK, mail es solo cortesía adicional. Se agrega cuando se toque `lib/mailer.ts` en otro contexto.
 
 **⚠️ COORDINACIÓN CENTRALIZADA EN CHAT D (decisión Nacho 2026-09-15):** MEF es obra estratégica grande — se coordina **end-to-end desde el Chat D** (dueño de MEF), subdividida en fases/roadmap por Chat D. **Chat A (núcleo) NO arranca piezas de MEF por su cuenta**; construye SOLO las piezas de núcleo que el Chat D le pida, dentro del plan del Chat D. Se evita dispersión en una obra que tiene que funcionar perfecto (canal ML es alto valor de negocio + no tolera errores de integración).
 

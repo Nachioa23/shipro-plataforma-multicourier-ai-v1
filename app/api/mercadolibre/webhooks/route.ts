@@ -74,8 +74,19 @@ export async function POST(request: Request) {
     if (!notificacionMlId || !topic || !resource || !Number.isInteger(mlUserId)) {
       // Firma válida pero payload incompleto — anomaly. 400 (ML no debería
       // retriar; el body está mal formado y retriar no lo arregla).
+      // Nota: el guard Number.isInteger corre ANTES de BigInt(mlUserId) —
+      // BigInt() tira si el input no es un integer válido.
       return new NextResponse("Missing required fields", { status: 400 });
     }
+
+    // BigInt(mlUserId): schema mlUserId es BigInt (fix 2026-09-17). Se usa
+    // tanto para el LOOKUP (resolver empresaId) como para la ESCRITURA en
+    // NotificacionFlex. Chat D flag: sin este BigInt() en el LOOKUP, TODA
+    // notificación de un seller real caería como "huerfana" (empresaId null)
+    // porque `where: { mlUserId: <number> }` sobre columna BigInt no
+    // matchearía nunca → 3er bug silencioso invisible hasta que llegue el
+    // primer envío Flex real.
+    const mlUserIdBig = BigInt(mlUserId);
 
     // 5. shipmentId: extraer del resource si topic incluye shipments. ML
     // manda resource como "/shipments/12345" para topic="shipments".
@@ -98,7 +109,7 @@ export async function POST(request: Request) {
     // "huerfana", devolver 200 igual (no queremos que ML retry a un seller
     // que no gestionamos).
     const cuenta = await prisma.cuentaMercadoLibre.findUnique({
-      where: { mlUserId },
+      where: { mlUserId: mlUserIdBig },
       select: { empresaId: true },
     });
     const empresaId = cuenta?.empresaId ?? null;
@@ -111,7 +122,7 @@ export async function POST(request: Request) {
       await prisma.notificacionFlex.create({
         data: {
           notificacionId: notificacionMlId,
-          mlUserId,
+          mlUserId: mlUserIdBig,
           topic,
           resource,
           shipmentId,

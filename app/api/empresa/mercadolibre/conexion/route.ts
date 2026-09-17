@@ -53,9 +53,15 @@ export async function GET(request: NextRequest) {
     });
   }
 
+  // Number(cuenta.mlUserId): Prisma devuelve bigint (schema BigInt, fix
+  // 2026-09-17), y NextResponse.json → JSON.stringify TIRA con bigint
+  // ("Do not know how to serialize a BigInt"). Los ML user_id caben safely
+  // en JS Number (< 2^53), así que Number() es reversible + type-safe para
+  // el cliente. Sin este cast, el endpoint devuelve 500 apenas hay UNA cuenta
+  // conectada — bug crítico silencioso post-migration.
   return NextResponse.json({
     conectada: true,
-    mlUserId: cuenta.mlUserId,
+    mlUserId: Number(cuenta.mlUserId),
     nickname: cuenta.nickname,
     estado: cuenta.estado,
     tokenExpiraEn: cuenta.tokenExpiraEn,

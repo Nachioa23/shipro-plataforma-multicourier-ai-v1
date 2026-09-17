@@ -1916,8 +1916,12 @@ model CuentaMercadoLibre {
   // mlUserId (seller_id que ML devuelve en el OAuth callback y en los webhooks).
   // @unique: un seller ML pertenece a UNA sola cuenta en Shipro. Es el pivot para
   // resolver empresaId desde el body.user_id de un webhook Flex sin joins.
-  // Chat D LOCKED: Int (ver nota en la propuesta MEF si se necesita BigInt).
-  mlUserId Int @unique
+  // BigInt (fix 2026-09-17): el step-1 recon lockeó Int pero la realidad lo
+  // sobrepasó — los user_id reales de ML exceden INT4 (test user 3.686.169.320
+  // > 2.147.483.647). Confirmado por el log de prod "Unable to fit integer
+  // value '3686169320' into an INT4". Migración ALTER COLUMN TYPE BIGINT
+  // aplicada sobre tabla vacía (widening in-place, preserva @unique).
+  mlUserId BigInt @unique
 
   // OAuth tokens permanentes de ML. Nacen NULL (el flujo OAuth aún no existe;
   // Fase 2 los completa). Cuando existan, se guardan ENCRIPTADOS con
@@ -2000,8 +2004,10 @@ model TokenVinculacionMercadoLibre {
 // idempotencia — sin ambigüedad temporal ni collisions con actualizaciones
 // sucesivas del mismo shipment.
 //
-// LOCKED Chat D: los tipos primitivos (Int, no BigInt para mlUserId; String
-// para topic/resource/estado libres; DateTime para timestamps ML).
+// Chat D confirmó (fix 2026-09-17): mlUserId es BigInt (los user_id de ML
+// exceden INT4 — el step-1 lock inicial "Int no BigInt" fue erróneo,
+// revertido en el mismo commit del fix). String para topic/resource/estado
+// libres; DateTime para timestamps ML.
 model NotificacionFlex {
   id Int @id @default(autoincrement())
 
@@ -2014,7 +2020,10 @@ model NotificacionFlex {
   // hayamos vinculado la cuenta (edge case: seller instala y el primer webhook
   // se dispara antes del OAuth callback). El worker de Fase 3 hace el join
   // manual: CuentaMercadoLibre.findUnique({ where: { mlUserId } }).
-  mlUserId Int
+  // BigInt (fix 2026-09-17): mismo motivo que CuentaMercadoLibre.mlUserId —
+  // los IDs reales de ML superan INT4. Debe matchear ese tipo para que los
+  // joins/lookups funcionen sin conversión implícita.
+  mlUserId BigInt
 
   // Topic del evento (ej. "shipments", "flex-handshakes", "orders_v2"). String
   // libre — el catálogo lo maneja ML y crece con el tiempo.

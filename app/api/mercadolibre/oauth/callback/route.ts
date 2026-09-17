@@ -111,8 +111,13 @@ export async function GET(request: Request) {
     }
 
     // 4. ¿La cuenta ML ya existe? Decide entre crear / reinstalar / rechazar cruce.
+    // BigInt(userId): schema mlUserId es BigInt (fix 2026-09-17). userId viene
+    // de la ML response como number JS regular (3.6B < 2^53, safe); Prisma
+    // exige bigint en el where. Chat D flag: sin este BigInt() en el LOOKUP
+    // (no solo en la escritura), el cross-install guard nunca matchearía
+    // seller reales — 3er bug latente.
     const cuentaExistente = await prisma.cuentaMercadoLibre.findUnique({
-      where: { mlUserId: userId },
+      where: { mlUserId: BigInt(userId) },
     });
 
     // CRUCE: el seller ya pertenece a OTRA empresa. Rechazar, registrar en
@@ -173,9 +178,13 @@ export async function GET(request: Request) {
     const refreshTokenEnc = encryptSecret(refreshToken);
     const tokenExpiraEn = new Date(Date.now() + expiresIn * 1000);
 
+    // BigInt(userId): schema mlUserId es BigInt (fix 2026-09-17). Aplica al
+    // `where.mlUserId` (lookup) y al `create.mlUserId` (escritura). userId JS
+    // number regular; Prisma exige bigint en la columna BigInt.
+    const mlUserIdBig = BigInt(userId);
     await prisma.$transaction([
       prisma.cuentaMercadoLibre.upsert({
-        where: { mlUserId: userId },
+        where: { mlUserId: mlUserIdBig },
         update: {
           empresaId,
           accessToken: accessTokenEnc,
@@ -188,7 +197,7 @@ export async function GET(request: Request) {
         },
         create: {
           empresaId,
-          mlUserId: userId,
+          mlUserId: mlUserIdBig,
           accessToken: accessTokenEnc,
           refreshToken: refreshTokenEnc,
           tokenExpiraEn,

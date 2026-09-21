@@ -54,6 +54,58 @@ export const ESTADOS_COURIER = {
 export type EstadoCourierKey = keyof typeof ESTADOS_COURIER;
 export type EstadoCourier = typeof ESTADOS_COURIER[EstadoCourierKey];
 
+// ====================================================
+// CATÁLOGO 3 — ESTADO NOTIFICACION FLEX (staging de webhooks ML)
+// ====================================================
+// Estados del ciclo de vida de una fila en NotificacionFlex — el staging
+// table de webhooks Mercado Envíos Flex ([[DEUDA 180]] MEF Fase 1).
+//
+// Distinto plano de los otros dos catálogos: NO es estado de envío (Envio)
+// ni estado courier (ETIQUETA_CREADA/etc). Es el estado del PROCESAMIENTO
+// interno de la notificación entrante desde ML.
+//
+// Se centraliza acá (mismo archivo que ESTADOS_INTERNOS/COURIER) siguiendo
+// [[DEUDA 173]] (centralización de literales de estado); el receiver
+// (app/api/mercadolibre/webhooks/route.ts) importa las keys de este catálogo
+// en vez de hardcodear strings.
+//
+// Semántica:
+//   recibida                   — persistida inicial; seller resuelto por
+//                                CuentaMercadoLibre.mlUserId. Aún no
+//                                clasificada por el GET al shipment.
+//   valido                     — GET autenticado /shipments/{id} → 200. El
+//                                shipment existe en la cuenta del seller
+//                                → notificación auténtica de ML.
+//   huerfana                   — seller mlUserId NO existe en
+//                                CuentaMercadoLibre. Persistimos igual con
+//                                empresaId=null para audit (webhook de un
+//                                seller que no gestionamos).
+//   get_fallido_reintentable   — GET al shipment falló por network / 5xx /
+//                                timeout. Transitorio; Fase 3 worker retry.
+//   get_shipment_no_existe     — GET al shipment → 404. Suele ser race
+//                                condition (webhook llega ANTES de que ML
+//                                termine de crear el shipment) — reintentable
+//                                por Fase 3 worker, NO tratar como spoof.
+//                                El lock anti-spoof es el GET en sí (que un
+//                                atacante no puede fabricar).
+export const ESTADOS_NOTIFICACION_FLEX = {
+  recibida: { key: "recibida", display: "Recibida (sin verificar aún)" },
+  valido: { key: "valido", display: "Válido — GET al shipment OK" },
+  huerfana: { key: "huerfana", display: "Huérfana — seller no gestionado" },
+  get_fallido_reintentable: { key: "get_fallido_reintentable", display: "GET falló (reintentable)" },
+  get_shipment_no_existe: { key: "get_shipment_no_existe", display: "Shipment no existe todavía (reintentable — race con ML)" },
+} as const;
+
+export type EstadoNotificacionFlexKey = keyof typeof ESTADOS_NOTIFICACION_FLEX;
+export type EstadoNotificacionFlex = typeof ESTADOS_NOTIFICACION_FLEX[EstadoNotificacionFlexKey];
+
+// Estados de NotificacionFlex que pueden reintentarse por el worker de
+// Fase 3 (todavía no accionamos downstream; falta info para clasificar).
+export const ESTADOS_NOTIFICACION_FLEX_REINTENTABLES: EstadoNotificacionFlexKey[] = [
+  "get_fallido_reintentable",
+  "get_shipment_no_existe",
+];
+
 // Subconjunto de estados courier que NO son terminales.
 // Un envío puede seguir avanzando hacia ENTREGADO desde estos.
 export const ESTADOS_COURIER_EN_CICLO: EstadoCourierKey[] = [

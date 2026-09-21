@@ -4734,7 +4734,7 @@ Son `<code>` (no `<Link>` — no rompen, es texto informativo). **Apuntan a pant
 
 ---
 
-## DEUDA 180 — Mercado Envíos Flex (MEF): integración con Mercado Libre (registrada 2026-09-13, lidera Chat D, scope grande, **Fase 1 (núcleo) EN PROD PERO NO CERRADA 2026-09-21** — modelo + tokens + OAuth routes + webhook receiver + botón autoservicio + fix BigInt, commits `b53426d`+`18d33c3`+`6ea745b`+`cbc96da`+`cf49e93`+`e0634e7`+`e8021c8`+`b77faa1`; prueba OAuth e2e PASÓ con test user MLA real; **🚨 HALLAZGO DE SEGURIDAD 2026-09-21**: el receiver valida por `x-signature` HMAC — que es de **Mercado PAGO**, NO del marketplace ML (que autentica por IP + HTTPS + GET autenticado del recurso); el receiver actual rechazaría con 401 los webhooks reales de ML. Prueba A concluida SIN captura de webhook real (agotados los caminos del sandbox); arreglo del receiver diseñado, PENDIENTE construir + política de Chat D. Fase 1 sigue NO cerrada hasta que el receiver acepte el primer webhook REAL de ML — se valida con el primer cliente real. Fases 2-5 las dirige Chat D)
+## DEUDA 180 — Mercado Envíos Flex (MEF): integración con Mercado Libre (registrada 2026-09-13, lidera Chat D, scope grande, **Fase 1 (núcleo) EN PROD 2026-09-21** — modelo + tokens + OAuth routes + webhook receiver + botón autoservicio + fix BigInt + fix seguridad receiver (IP+GET autenticado, no x-signature), commits `b53426d`+`18d33c3`+`6ea745b`+`cbc96da`+`cf49e93`+`e0634e7`+`e8021c8`+`b77faa1`+`eccfa3f`+`f45209a`; OAuth e2e PASÓ con test user MLA real; receiver arreglado + capture endpoint borrado; **PENDIENTE validación** con primer webhook real de ML (venta real) — hasta ese hito no dar Fase 1 100% cerrada; **DEUDA nginx real-IP** registrada como prerequisito de `ML_WEBHOOK_IP_ENFORCE=true`. Fases 2-5 las dirige Chat D)
 
 **Qué es:** integración de Shipro con **Mercado Envíos Flex** — el canal logístico de Mercado Libre para que los sellers ML despachen usando su propia red (o los couriers integrados por Shipro) en vez del courier del sistema Envíos Flex propio de ML. Nuevo canal de ventas para Shipro (paralelo a Tiendanube y WooCommerce). **Alto valor de negocio** — ML es el mayor marketplace de la región y Flex es su rail logístico para sellers medianos/grandes.
 
@@ -4876,18 +4876,38 @@ Son `<code>` (no `<Link>` — no rompen, es texto informativo). **Apuntan a pant
   5. **Logueo rico de los primeros webhooks reales** (headers + IP + body completo — el mismo shape que hoy hace `webhookscapture`). El primer cliente real dará la captura que el sandbox no pudo, y ese log alimenta la actualización de `MERCADOLIBRE_WEBHOOK_IPS` en env.
   6. **Follow-up**: wire de `GET /missed_feeds` como red de recuperación async (si un webhook se perdió por outage/bug, ML tiene el historial recuperable). No incluir en el arreglo inicial — pieza posterior.
 
-- **DECISIÓN DE POLÍTICA PENDIENTE (Chat D)**:
-  1. **Fail-open vs enforce** desde día 1: recomiendo fail-open con `IP_ENFORCE=false` inicialmente (registro log de IPs no reconocidas — Nacho ajusta la allowlist en env cuando aparezcan nuevas); a `true` después de estabilizar.
-  2. **El GET a ML** ¿es requerido (bloquea el ack 200 si no puede validar) o best-effort (log + persiste sospechosa para review)? Recomiendo best-effort inicialmente (ack rápido a ML — dentro del SLA de 22s — y Fase 3 worker re-verifica async antes de accionar downstream).
-  3. **`MERCADOLIBRE_WEBHOOK_IPS`** ¿precargada en `.env` con la lista de la doc ML, o vacía + Nacho la carga cuando arme el commit? Recomiendo precargarla con las IPs actuales de la doc para acortar el shakedown.
+- **Arreglo del receiver ✅ CONSTRUIDO + PENDIENTE DEPLOY 2026-09-21 (commits `eccfa3f` fix + `f45209a` guard honestidad):**
+  - **Removido**: 401 hard reject por `x-signature` ausente/inválida (era la puerta que rechazaría webhooks reales de ML). La firma HMAC queda como verify opcional log-only si el header viene.
+  - **Nuevo helper** `lib/mercadolibre/webhook-ip.ts` (117 líneas): `extractClientIp(request)` (`x-forwarded-for[0]` → fallback `x-real-ip`, sin `true-client-ip` que no aparece en el capture); `getMlWebhookIps()` (env `ML_WEBHOOK_IPS` override, default 14 IPs precargadas de la doc oficial ML); `isMlWebhookIpEnforced()` con warn ruidoso si `ML_WEBHOOK_IP_ENFORCE=true` (guard honestidad — ver DEUDA nginx real-IP abajo).
+  - **IP allowlist fail-open-loud** en el receiver: si la IP no matchea, log warn + procesa igual (a menos que enforce=true, que retorna 401). Default `enforce=false` — SIEMPRE procesa.
+  - **CANDADO REAL** (post-persist, no gatea): GET autenticado `/shipments/{id}` con header `x-format-new: true` (requerido por ML per Chat D). Clasifica `estado`:
+    - 200 → `estado="valido"` (shipment existe en la cuenta del seller = auténtico).
+    - 404 → `estado="get_shipment_no_existe"` (race con ML, reintentable — NO spoof).
+    - error/5xx → `estado="get_fallido_reintentable"` (Fase 3 worker retry).
+    - GET failure NO revierte persist ni 200; solo clasifica.
+  - **Never discard**: SIEMPRE persistimos (dedup por `notificacionId @unique`) + return 200 dentro del SLA de ML (22s). Estado EVOLUCIONA (no fijo al insert). Un aviso perdido = un cambio de estado de envío perdido — política LOCKED.
+  - **5 estados centralizados** en `lib/utils/estados.ts` bajo el nuevo `ESTADOS_NOTIFICACION_FLEX` (recibida / valido / huerfana / get_fallido_reintentable / get_shipment_no_existe) — cross-ref [[DEUDA 173]] centralización de literales. `estado` sigue siendo `String @default("recibida")` en Prisma (free String, cero migración).
+  - **Rich logging** `[ml-webhook-recv]` con headers completos + IP + notificacionMlId + topic + estadoInicial → alimenta el hardening de la allowlist cuando aparezca el primer webhook real.
+  - **Env vars nuevos** en `/var/www/shipro/.env` (opcionales; defaults sanos si no se setean):
+    - `ML_WEBHOOK_IPS` = override comma-separated. Default: 14 IPs precargadas.
+    - `ML_WEBHOOK_IP_ENFORCE` = "true" gatea 401 en no-match. Default: `false` = fail-open-loud.
 
-- **LIMPIEZA PENDIENTE post-arreglo del receiver**:
-  - Borrar `app/api/mercadolibre/webhookscapture/route.ts` (repo + deploy prod).
-  - Remover la línea `"/api/mercadolibre/webhookscapture"` de `PUBLIC_API_EXACT` en `proxy.ts`.
-  - Restaurar la URL real `/api/mercadolibre/webhooks` en el DevCenter de ML.
+- **🚨 DEUDA nginx real-IP (registrada 2026-09-21, prerequisito de `ML_WEBHOOK_IP_ENFORCE=true`):** para poder activar el enforce del IP allowlist con seguridad real, nginx en pm.shipro.pro debe configurarse con:
+  - `set_real_ip_from <rango-CIDR-Akamai>;` para cada rango de edge nodes Akamai (lista canónica en el portal Akamai).
+  - `real_ip_header X-Forwarded-For;` para que nginx re-escriba `$remote_addr` con el primer IP de la chain que provino de Akamai + descarte los que puso el cliente.
+  - **Estado actual**: nginx SOLO tiene `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for` (aditivo sin validar origen) → `x-forwarded-for` es **CLIENTE-SPOOFEABLE** → un atacante puede setear el header con una IP de la allowlist y el receiver lo aceptaría. **Enforce=true en ese estado da FALSA SEGURIDAD**.
+  - **Mitigación actual**: los locks reales del receiver son (a) seller resolution vía `CuentaMercadoLibre.findUnique` y (b) GET autenticado del shipment — ninguno depende de IP. La IP allowlist es solo defense-in-depth + audit forense.
+  - **Trigger de esta deuda**: si en algún momento se quiere subir `ML_WEBHOOK_IP_ENFORCE=true` en prod para reforzar (ej. reducir spam de webhooks fabricados a `NotificacionFlex`), completar esta deuda ANTES. El código ya tiene un `console.warn` que grita si se sube enforce sin verificar nginx (guard honestidad, commit `f45209a`).
+  - **Scope**: config de nginx en el server (fuera del repo), ~10-15 líneas en el bloque `location` del vhost `pm.shipro.pro`. Coordinar con Chat D + operativa del server.
+
+- **Cleanup post-arreglo del receiver ✅ HECHO local 2026-09-21 (commit del cleanup)**:
+  - `app/api/mercadolibre/webhookscapture/route.ts` **borrado** (git rm).
+  - Línea `"/api/mercadolibre/webhookscapture"` **removida** de `PUBLIC_API_EXACT` en `proxy.ts`.
+  - Comentario del `/api/mercadolibre/webhooks` (receiver real) actualizado con la nueva política.
+  - **Restaurar la URL real** `https://pm.shipro.pro/api/mercadolibre/webhooks` en el DevCenter de ML — **pendiente Nacho post-deploy** (paso operativo, no de código).
   - Item de test ML `MLA2104360157` sigue publicado (inofensivo, Chat D lo maneja).
 
-- **Estado Fase 1**: **NO cerrada**. El arreglo del receiver es prerequisito. El handshake con webhook REAL de ML se valida con el primer cliente real (o vía la doc de testing de Mercado Envíos si aporta un camino). Todos los demás mecanismos (OAuth, tokens, encryption, BigInt read/write, botón autoservicio, dedup + persist idempotente, seller resolution) están validados y operativos en prod.
+- **Estado Fase 1**: **EN PROD tras el deploy del arreglo** (pending push por Nacho). Pendiente validación e2e con **primer webhook REAL de ML** (venta real de cliente real o vía doc de testing de Mercado Envíos). Todos los demás mecanismos (OAuth, tokens, encryption, BigInt read/write, botón autoservicio, dedup + persist idempotente, seller resolution, GET autenticado por lock B) están validados y operativos en prod.
 - **Fases 2-5** (routing/zonas Flex, generación de etiqueta, ingesta de eventos de shipment, excepciones operativas): territorio Chat D. Chat A construye piezas de núcleo bajo pedido de Chat D con spec funcional concreto.
 - **Follow-up menor no bloqueante**: `enviarMailAlertaCruceMercadoLibre` helper en `lib/mailer.ts` (mirror del twin Tiendanube L667). Hoy el cross-install guard hace `AuditoriaConfiguracion.create` + `console.error` — visibilidad OK, mail es solo cortesía adicional. Se agrega cuando se toque `lib/mailer.ts` en otro contexto.
 

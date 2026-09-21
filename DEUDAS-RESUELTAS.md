@@ -1333,3 +1333,48 @@ No tocados en `ef00894` por scope estricto — solo route de admin-couriers. Reg
 
 ---
 
+## DEUDA 180 — Mercado Envíos Flex (MEF) Fase 1 núcleo (RESUELTA 2026-09-21 — en prod + validada) — pendiente conocido: RATIFICAR handshake con webhook real de ML
+
+Registrada 2026-09-13. Lideró Chat D. Chat A (núcleo) construyó la Fase 1 completa entre 2026-09-14 y 2026-09-21. Fases 2-5 (routing por zonas, generación de etiqueta, ingesta de eventos de shipment, excepciones operativas) siguen bajo Chat D, fuera del alcance de esta resolución.
+
+**Lo construido — MEF Fase 1 (núcleo), 10 commits en prod**:
+
+- **Modelo de datos** (`b53426d` + fix `b77faa1`): 3 tablas aditivas — `CuentaMercadoLibre` (1—1 con Empresa, tokens encriptados AES-256-GCM), `TokenVinculacionMercadoLibre` (OAuth state single-use, mirror del twin Tiendanube), `NotificacionFlex` (staging idempotente de webhooks, dedup por `notificacionId @unique`). `mlUserId BigInt` post-fix — los `user_id` de ML son de 10 dígitos, no entran en INT4; el step-1 lockeó Int por error, la realidad venció al lock, migración `ALTER COLUMN TYPE BIGINT` aditiva-lossless sobre tablas vacías.
+- **Librería de tokens ML** (`18d33c3`): `lib/mercadolibre/tokens.ts` — `exchangeCodeForToken` + `getMercadoLibreAccessToken(empresaId, {force?})` con **refresh lazy + single-flight lock + persist-before-return** (previene brick por concurrent refresh del `refresh_token` single-use). `lib/mercadolibre/client.ts` — `mlFetch(empresaId, path, init?)` con retry-1 on 401.
+- **Rutas OAuth**:
+  - `POST /api/mercadolibre/install/link` operator (`6ea745b`) — helper compartido `crearInstallLinkMercadoLibre` para el core.
+  - `GET /api/mercadolibre/oauth/callback` público (`6ea745b`) — cross-install guard por `mlUserId`, `$transaction` atómico upsert `CuentaMercadoLibre` (tokens encriptados) + burn del token de vinculación, best-effort `Conexion` upsert. Callback en `PUBLIC_API_EXACT` del proxy (`e0634e7` cerró gap del step 3).
+  - Página éxito `/mercadolibre/instalado` (`cbc96da`) mirror del twin Tiendanube.
+  - **Botón autoservicio "Conectar Mercado Libre"** en `/configuracion/conexiones` (`e8021c8`, primer flujo self-service del sistema): endpoint session-scoped `POST /api/empresa/mercadolibre/connect` con **security invariant** — `empresaId` sale EXCLUSIVAMENTE de `token.empresaId` (JWT firmado NextAuth), NUNCA del body. Un cliente conecta SU PROPIA cuenta ML.
+- **Receiver de webhooks** `POST /api/mercadolibre/webhooks` (`cf49e93` + fix seguridad `eccfa3f` + guard `f45209a`) — CORREGIDO tras el HALLAZGO CRÍTICO 2026-09-21:
+  - **Descubierto**: el receiver original validaba por `x-signature` HMAC, pero esa firma es de **Mercado PAGO** — el marketplace ML (topics: shipments/questions/items) **NO firma sus webhooks**. Autentica por: IP de origen (14 IPs publicadas que cambian) + HTTPS + validación server-side vía GET autenticado del recurso. El receiver original rechazaría 401 los webhooks reales de ML — hallazgo destapado por la insistencia de Nacho en el e2e real, ANTES de que hubiera clientes ML productivos afectados.
+  - **Nuevo diseño** (política Chat D): SIEMPRE persistir (dedup por `notificacionId`); NUNCA descartar un aviso; `estado` EVOLUCIONA (`recibida` → `valido`/`huerfana`/`get_fallido_reintentable`/`get_shipment_no_existe`), centralizados en `lib/utils/estados.ts` bajo `ESTADOS_NOTIFICACION_FLEX` (5 estados, cross-ref [[DEUDA 173]]).
+  - **Locks reales**: (a) seller resolution vía `CuentaMercadoLibre.findUnique({where:{mlUserId: BigInt(x)}})` — huérfana si no matchea; (b) GET autenticado `/shipments/{id}` con `x-format-new: true` (requerido por ML per Chat D) — un webhook falso no puede fabricar un shipment que exista en la cuenta del seller. GET post-persist, no gatea el 200; 200 → `valido`, 404 → `get_shipment_no_existe` (race con ML, reintentable — NO spoof), error/5xx → `get_fallido_reintentable`.
+  - **IP allowlist** en `lib/mercadolibre/webhook-ip.ts` — **fail-open-but-loud**: 14 IPs precargadas (default), env `ML_WEBHOOK_IPS` override, flag `ML_WEBHOOK_IP_ENFORCE=false` default (log si no matchea + procesa igual). **Guard de honestidad**: si `ENFORCE=true` sin verificar nginx `set_real_ip_from`, warn ruidoso porque `x-forwarded-for` sería cliente-spoofeable y daría falsa seguridad.
+  - **Rich logging** `[ml-webhook-recv]` con headers completos + IP + notificacionMlId + topic + estadoInicial — alimenta el hardening de la allowlist cuando aparezca el primer webhook real.
+
+**Validaciones e2e en prod**:
+- **OAuth e2e VALIDADO 2026-09-17**: test user MLA real (mlUserId=3.686.169.320) conectado end-to-end desde el botón autoservicio → callback → `CuentaMercadoLibre` con `estado="activa"`, tokens ciphertext AES-256-GCM (formato `hex:hex:hex`, no plaintext ML), `nickname` best-effort OK, `Conexion` upserted. El fix BigInt validado con el ID grande real.
+- **Receiver arreglado VALIDADO 2026-09-21**: POST sin `x-signature` → 200 (antes hubiera dado 401); IP fail-open confirmada en el log ruidoso; dedup por `notificacionId @unique` idempotente; capture endpoint throwaway borrado post-diagnóstico.
+
+**PENDIENTE CONOCIDO (explícito — NO cerrar como 100%)**: la **RATIFICACIÓN del handshake con un webhook REAL de ML** no se pudo hacer en sandbox — se agotaron los caminos:
+- Guardar la URL de notificaciones en el DevCenter NO dispara ping (la doc de 2015 que sugería un ping en el `save` no aplica al panel actual).
+- La publicación de prueba del test user quedó en cuarentena PolicyAgent → no se pudo gatillar preguntas/compras que emitieran webhooks reales.
+- `GET /missed_feeds` devuelve `{"messages":null}` → ML nunca intentó emitir ninguna notificación.
+- El simulador oficial de webhooks es de **Mercado Pago**, no del marketplace — no cubre topics de shipments/questions/items.
+
+**Se ratifica con el primer envío Flex REAL de cliente real** — el logueo rico `[ml-webhook-recv]` captura IP + headers + body reales para confirmar que el diseño matchea. **Adicionalmente (decisión Nacho 2026-09-21)**: documentar el caso y **escalarlo al SOPORTE DE DESARROLLADORES DE ML** para pedir el método oficial de testing de webhooks del marketplace en entorno de prueba — no depender solo del primer cliente real como banco de pruebas.
+
+**Cross-refs a DEUDAs pendientes**:
+- **DEUDA nginx real-IP** (registrada 2026-09-21 en DEUDAS.md bajo DEUDA 180): configurar nginx en pm.shipro.pro con `set_real_ip_from <rangos-Akamai-CIDR>` + `real_ip_header X-Forwarded-For`. Prerequisito para poder subir `ML_WEBHOOK_IP_ENFORCE=true` con seguridad real — hoy la IP es spoofeable y por eso el receiver arranca en fail-open. La IP allowlist es defensa secundaria; los locks reales son seller resolution + GET autenticado.
+- **DEUDA 173** (centralización de literales de estado): los 5 nuevos estados de `NotificacionFlex` se centralizaron en `lib/utils/estados.ts` como `ESTADOS_NOTIFICACION_FLEX` siguiendo la disciplina que esa deuda pide.
+- **Follow-up menor no bloqueante**: `enviarMailAlertaCruceMercadoLibre` helper en `lib/mailer.ts` (mirror del twin Tiendanube). Hoy el cross-install guard hace `AuditoriaConfiguracion.create` + `console.error` — visibilidad OK, mail es solo cortesía adicional. Se agrega cuando se toque `lib/mailer.ts`.
+
+**Fases 2-5** (routing por zonas Flex, generación de etiqueta, ingesta de eventos de shipment, excepciones operativas) — territorio Chat D. Chat A construye piezas de núcleo bajo pedido de Chat D con spec funcional concreto.
+
+**Commits de Fase 1 en prod** (10 hashes): `b53426d` (modelo) + `18d33c3` (tokens lib) + `6ea745b` (OAuth routes) + `cbc96da` (página éxito) + `cf49e93` (webhook receiver) + `e0634e7` (proxy fix callback) + `e8021c8` (botón autoservicio) + `b77faa1` (fix BigInt) + `eccfa3f` (fix receiver security) + `f45209a` (guard honestidad enforce).
+
+**Relación**: [[DEUDA 150]] (hub de conexiones — MEF suma `Conexion(plataforma=MERCADOLIBRE, mecanismo=OAUTH)` via callback), [[DEUDA 173]] (centralización de literales), DEUDA nginx real-IP (registrada bajo DEUDA 180 en DEUDAS.md).
+
+---
+

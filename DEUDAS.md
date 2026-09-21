@@ -4734,7 +4734,7 @@ Son `<code>` (no `<Link>` — no rompen, es texto informativo). **Apuntan a pant
 
 ---
 
-## DEUDA 180 — Mercado Envíos Flex (MEF): integración con Mercado Libre (registrada 2026-09-13, lidera Chat D, scope grande, **Fase 1 (núcleo) EN PROD 2026-09-21** — modelo + tokens + OAuth routes + webhook receiver + botón autoservicio + fix BigInt + fix seguridad receiver (IP+GET autenticado, no x-signature), commits `b53426d`+`18d33c3`+`6ea745b`+`cbc96da`+`cf49e93`+`e0634e7`+`e8021c8`+`b77faa1`+`eccfa3f`+`f45209a`; OAuth e2e PASÓ con test user MLA real; receiver arreglado + capture endpoint borrado; **PENDIENTE validación** con primer webhook real de ML (venta real) — hasta ese hito no dar Fase 1 100% cerrada; **DEUDA nginx real-IP** registrada como prerequisito de `ML_WEBHOOK_IP_ENFORCE=true`. Fases 2-5 las dirige Chat D)
+## DEUDA 180 — Mercado Envíos Flex (MEF): integración con Mercado Libre (registrada 2026-09-13, lidera Chat D, **Fase 1 núcleo RESUELTA 2026-09-21 → ver DEUDAS-RESUELTAS.md**; pendiente conocido: RATIFICAR handshake con webhook REAL de ML —sandbox agotado, se ratifica con el primer envío Flex real + escalación a soporte de developers ML—; **DEUDA nginx real-IP** registrada abajo como prerequisito de `ML_WEBHOOK_IP_ENFORCE=true`. Fases 2-5 las dirige Chat D)
 
 **Qué es:** integración de Shipro con **Mercado Envíos Flex** — el canal logístico de Mercado Libre para que los sellers ML despachen usando su propia red (o los couriers integrados por Shipro) en vez del courier del sistema Envíos Flex propio de ML. Nuevo canal de ventas para Shipro (paralelo a Tiendanube y WooCommerce). **Alto valor de negocio** — ML es el mayor marketplace de la región y Flex es su rail logístico para sellers medianos/grandes.
 

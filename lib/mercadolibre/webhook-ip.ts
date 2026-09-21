@@ -62,11 +62,45 @@ function getMlWebhookIps(): Set<string> {
 /**
  * Enforce flag. Default false (fail-open + log ruidoso).
  *   ML_WEBHOOK_IP_ENFORCE=true → 401 si la IP no está en allowlist.
- * Recomendado: false durante shakedown (Nacho ve logs y actualiza IPs cuando
- * aparezcan nuevas de ML); a true después de estabilizar.
+ *
+ * ⚠️ TODO SEGURIDAD-HONESTIDAD (2026-09-21): antes de subir enforce=true en
+ * prod, CONFIRMAR que nginx tiene configurado:
+ *   - `set_real_ip_from <rango-Akamai>;`  para cada rango CIDR de Akamai
+ *     (los edge nodes que reciben el request público antes de proxy-pasarlo
+ *     a Next). La lista canónica de rangos Akamai vive en su portal.
+ *   - `real_ip_header X-Forwarded-For;`  para que nginx re-escriba el
+ *     $remote_addr con el primer IP de la chain que provino de Akamai (y
+ *     descarte los que puso el cliente).
+ *
+ * SIN esa config de nginx, `x-forwarded-for` es CLIENTE-CONTROLABLE: cualquier
+ * atacante puede setear el header con una IP de la allowlist y el receiver
+ * lo aceptaría como legítimo. Enforce=true en ese estado da FALSA SEGURIDAD.
+ *
+ * Los LOCKS REALES del receiver son:
+ *   1. Seller resolution — CuentaMercadoLibre.findUnique by mlUserId BigInt.
+ *   2. GET autenticado /shipments/{id} con x-format-new — un atacante no puede
+ *      fabricar un shipment que existe en la cuenta ML del seller.
+ * La IP allowlist es defense-in-depth, NO el lock hard. No confiar en enforce
+ * hasta que nginx esté verificado.
+ *
+ * Recomendado: enforce=false (default) durante todo shakedown; a true SOLO
+ * después de: (a) confirmar la config de nginx, (b) estabilizar la allowlist
+ * con datos de webhooks reales, (c) monitorear logs "IP no matchea" durante
+ * ~2 semanas para ver que no aparezcan IPs legítimas de ML fuera de la lista.
  */
 function isMlWebhookIpEnforced(): boolean {
-  return process.env.ML_WEBHOOK_IP_ENFORCE === "true";
+  const enforced = process.env.ML_WEBHOOK_IP_ENFORCE === "true";
+  if (enforced) {
+    // Warn ruidoso cada vez que enforce=true rechaza — costo de log mínimo,
+    // asegura visibilidad si el flag se subió antes de verificar nginx.
+    // Es aceptable warn por request (no over-engineer con once-only
+    // bootstrap): pocos rechazos esperados en operación normal, y el warn
+    // solo aparece en el path del 401, no en el fail-open común.
+    console.warn(
+      "[ml-webhook-ip] ⚠️ ENFORCE=true pero la confiabilidad de x-forwarded-for NO está confirmada (nginx set_real_ip_from). Si la IP es spoofeable, enforce da FALSA seguridad. Verificar nginx antes de confiar.",
+    );
+  }
+  return enforced;
 }
 
 /**

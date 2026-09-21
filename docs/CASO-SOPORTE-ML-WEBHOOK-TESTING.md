@@ -52,6 +52,11 @@ Validar en un **entorno de PRUEBA** que un webhook **GENUINO** originado por ML 
 - Encontramos el simulador "Enviar prueba" en la sección de Notificaciones, pero **corresponde a Mercado PAGO** (dominio de webhooks distinto, topic `payments`, formato de firma HMAC diferente).
 - No encontramos una herramienta equivalente para los topics del marketplace (`shipments`, `questions`, `items`).
 
+### 3.7 La doc de Mercado Envíos Developers tampoco cubre este caso
+- Revisamos también https://developers.mercadoenvios.com/general/testing.
+- Su **"Test Suite"** (imagen Docker `mercadolibre/carrier-integration-tests`) es exclusiva para **TRANSPORTISTAS/couriers** que validan sus APIs de red logística — es un banco de pruebas para que los operadores logísticos autotesteen sus endpoints de nodo-de-red antes de integrar con ML Envíos.
+- **NO es un simulador de webhooks para apps de marketplace/vendedores.** No aplica a nuestro caso (somos una plataforma logística multicourier que consume webhooks de ML del lado del seller, no un courier proveedor de red).
+
 ## 4. Preguntas concretas al soporte
 
 ### a. Método oficial de testing de webhooks del marketplace
@@ -103,6 +108,8 @@ La lista que estamos usando actualmente (basada en documentación pública que e
 ## 5. Cierre
 
 Nuestro receiver está listo y desplegado desde hace semanas. Todos los mecanismos internos (OAuth, persistencia, resolución de seller, GET autenticado del shipment) están probados. **La única pieza que nos falta ratificar es que un webhook GENUINO de ML matchea nuestro parsing en el mundo real** — y no queremos que esa validación dependa de la primera venta real de un cliente productivo.
+
+Antes de escribir este caso agotamos la documentación pública que encontramos: la documentación general de developers de ML, la documentación de Mercado Envíos Developers (incluido su Test Suite, que como aclaramos en 3.7 es para couriers, no para apps de marketplace) y el DevCenter (secciones de Notificaciones + tools + guías). Por eso escalamos al soporte de developers directamente.
 
 **Un método oficial de testing de webhooks del marketplace nos permitiría validar la integración end-to-end antes de exponer clientes reales al canal.** Agradecemos mucho la orientación.
 

@@ -4939,7 +4939,7 @@ Son `<code>` (no `<Link>` — no rompen, es texto informativo). **Apuntan a pant
 
 ---
 
-**Avance MEF Fase 2.1 — modelo + sync de zonas Flex del vendedor ✅ HECHO local 2026-09-22** (Chat A, pedido por Chat D). Aditivo puro. Diseño confirmado por Chat D: mirror byte-a-byte del patrón `SucursalCourier ↔ SucursalCourierCp` (child + grand-child con FK `Cascade`, `@@unique([parentId, key])`, `@@index([codigoPostal])`). Sin tocar `Envio`/`cotizador`/`crear`/`dispatch`/shipping schema — sólo zonas de la CUENTA ML.
+**Avance MEF Fase 2.1 — modelo + sync de zonas Flex del vendedor ✅ EN PROD 2026-09-22** (commit `74ba154`, Chat A, pedido por Chat D). Aditivo puro. Diseño confirmado por Chat D: mirror byte-a-byte del patrón `SucursalCourier ↔ SucursalCourierCp` (child + grand-child con FK `Cascade`, `@@unique([parentId, key])`, `@@index([codigoPostal])`). Sin tocar `Envio`/`cotizador`/`crear`/`dispatch`/shipping schema — sólo zonas de la CUENTA ML.
 
 - **Migración `20260922180920_mef_zonas_flex`** (aditiva pura, sin destructive ops):
   - **2 CREATE TABLE**: `CuentaMercadoLibreZona` (child de `CuentaMercadoLibre` — `zoneIdMl String`, `nombre`, `enabled`, timestamps; `@@unique([cuentaMercadoLibreId, zoneIdMl])` + `@@index([cuentaMercadoLibreId])`; back-relation `codigosPostales`) + `CuentaMercadoLibreZonaCp` (grand-child — `codigoPostal String`, `@@unique([zonaId, codigoPostal])` + `@@index([codigoPostal])`).
@@ -4962,5 +4962,43 @@ Son `<code>` (no `<Link>` — no rompen, es texto informativo). **Apuntan a pant
 - NO tratar el cron como "corriendo" en cálculos de frescura de datos hasta que la deuda esté cerrada.
 
 **Deploy prod (gated manual por Nacho + Chat D)**: `git pull` + `npx prisma migrate deploy` (aplica la migración additive) + `npm run build` (nuevos routes) + `pm2 restart shipro --update-env`. Aditivo, reversible (drop 2 tablas + drop 3 columnas si se necesitara). Cero riesgo money.
+
+**Verificado en prod 2026-09-22**: cron corrió, guard `sinFlex` actuó con el test seller (cuenta ML conectada pero sin Flex configurado en el portal ML) — payload de `/users/{id}/shipping_preferences` sin `services.self_service` → helper retornó `{ ok: true, sinFlex: true }` sin tocar zonas ni flags. Empty-read guard (PRECISION 1b) validado con data real.
+
+---
+
+**Avance MEF Fase 2.2 — config Couriers Flex (asignación courier↔zona) ✅ EN PROD 2026-09-22** (commit `f4af5c7`, Chat A, pedido por Chat D). Aditivo puro. Pantalla self-service en `/configuracion` donde el cliente asigna 1 courier de su cartera a cada zona Flex de su cuenta ML — exclusiva (una zona = un courier; reasignar reemplaza). Sin tocar `Envio`/`cotizador`/`crear`/`dispatch`, sin tocar el sync Fase 2.1, cero money.
+
+- **Migración `20260922191751_mef_asignacion_courier_zona`** (aditiva pura, sin destructive ops):
+  - **1 CREATE TABLE `AsignacionCourierZonaFlex`**: `id`, `empresaId Int` FK Empresa `ON DELETE CASCADE`, `zoneIdMl String` (pivot LÓGICO al zone_id de ML — NO FK a `CuentaMercadoLibreZona`), `courierId Int` FK Courier `ON DELETE RESTRICT` (protege borrado accidental de un Courier con asignaciones vivas), `createdAt`/`updatedAt`.
+  - **`@@unique([empresaId, zoneIdMl])`** — exclusividad 1 zona = 1 courier. Reasignar = `upsert` idempotente sobre esa key.
+  - **3 CREATE INDEX**: `courierId`, `empresaId`, y el unique compuesto (empresaId, zoneIdMl).
+  - **Cero DROP, cero destructive ALTER**. Inspeccionado byte-a-byte antes del apply local.
+- **DECISIÓN ARQUITECTÓNICA CRÍTICA — anclado por `zoneIdMl`, NO por FK a la zona (Chat D LOCKED)**: el sync Fase 2.1 hace `delete+recreate` atómico de `CuentaMercadoLibreZona` en cada refresh (correctitud, no perf). Si esta tabla tuviera FK con `onDelete Cascade` a `CuentaMercadoLibreZona.id`, cada refresh borraría todas las asignaciones del cliente — bug UX crítico cortado en diseño. El link es lógico por `zoneIdMl` (el id estable que emite ML) + `empresaId`. La asignación **SOBREVIVE al delete+recreate del sync**. Consecuencia: asignaciones latentes — si una zona desaparece de ML, la asignación queda pero el GET la filtra out (no está entre zonas vigentes); si la zona revive con el mismo `zoneIdMl`, la asignación vuelve a estar activa sin reconfiguración. Purge manual queda como follow-up si aparece drift.
+- **`app/api/empresa/mercadolibre/couriers-flex/route.ts`** (nuevo, GET + PUT, ~230 líneas):
+  - **GET**: session-scoped (`getToken` + `token.empresaId !== null` + gate rol `["gerente_cliente","operador_cliente"]`). Devuelve `{ cuentaConectada, flexConfigurado, zonas: [{ id, zoneIdMl, nombre, enabled, asignacion: {courierId, courierNombre}|null }], couriersDisponibles: [{ id, nombre }] }`. Join lógico `AsignacionCourierZonaFlex.zoneIdMl` contra las zonas vigentes (Map O(1)). `couriersDisponibles` = intersección `CredencialCourier(empresaId, activo=true) ∩ Courier(activo=true)` — reusa la fuente de verdad de "couriers del cliente" (mismo criterio que `/api/configuracion/couriers`).
+  - **PUT**: body `{ zoneIdMl, courierId }`. **Defense-in-depth (a)**: el `zoneIdMl` debe pertenecer a la cuenta ML de ESTA empresa (`findFirst { cuentaMercadoLibreId: cuenta.id, zoneIdMl }`) — 404 genérico si no matchea (defensa vs zoneIdMl de otra empresa). **Defense-in-depth (b)**: el `courierId` debe estar activo globalmente Y existir en `CredencialCourier(empresaId, nombreCourier)` activo — el cliente no puede asignar un courier fuera de su cartera. `upsert` sobre `@@unique([empresaId, zoneIdMl])`.
+  - `empresaId` SIEMPRE del JWT firmado, NUNCA del body — mismo invariante que `/api/empresa/mercadolibre/connect` de Fase 1.
+- **`app/(dashboard)/configuracion/couriers-flex/page.tsx`** (nuevo, ~245 líneas): mirror del twin `conexiones/page.tsx`. Grilla por zona con dropdown per row. Estados color mapeados según diseño de Chat D:
+  - `enabled=true` + asignada → **VERDE** (badge emerald "Asignada").
+  - `enabled=true` + sin asignar → **ROJO** (badge rose "Acción requerida" + select con borde rojo).
+  - `enabled=false` → **GRIS** (badge gray "Inactiva en ML", dropdown deshabilitado).
+  - Empty states: sin cuenta ML conectada → banner amber "Conectala primero en Conexiones"; sin zonas sincronizadas → banner neutro "Todavía no hay zonas Flex sincronizadas"; sin couriers activos → banner amber "Activá primero al menos un courier en Transportes".
+- **`app/(dashboard)/configuracion/layout.tsx`** (+1 línea): entry `{ id: 'couriers-flex', label: 'Couriers Flex', href: '/configuracion/couriers-flex', icon: Truck, visible: !esOperadorCliente }` — mismo gate que Transportes/Ruteo (operador_cliente no ve la pestaña).
+- **Sync Fase 2.1 UNTOUCHED**: `git diff --name-only` NO incluye `lib/mercadolibre/sync-zonas.ts`; grep del sync buscando `AsignacionCourierZonaFlex` → 0 matches. Zero cross-contamination — el sync no sabe que esta tabla existe.
+- tsc 0. `git diff --name-only`: `prisma/schema.prisma`, `prisma/migrations/20260922191751_mef_asignacion_courier_zona/migration.sql`, `app/api/empresa/mercadolibre/couriers-flex/route.ts`, `app/(dashboard)/configuracion/couriers-flex/page.tsx`, `app/(dashboard)/configuracion/layout.tsx`. **Cero cambios en `Envio`/`cotizador`/`crear`/`dispatch`/sync-zonas.ts**.
+
+**Verificado en prod 2026-09-22**: la pestaña "Couriers Flex" carga desde `/configuracion` para el cliente autenticado; muestra "Todavía no hay zonas Flex sincronizadas" (el test seller no tiene Flex configurado en el portal ML, así que Fase 2.1 no trajo zonas). Cadena de estados vacíos operativa; endpoints responden 200; sesión + gate de rol funcionan.
+
+---
+
+**Pendiente Fase 2 — el ruteo (Fase 2.3 y subsiguientes)**: usar `AsignacionCourierZonaFlex` para elegir el courier de cada envío Flex entrante. Requiere el mapeo `CP → zoneIdMl` (que hoy NO tiene precedente en el schema — Fase 2.3 lo inventa) + integración con el receiver del webhook Flex + `crearEnvio`. Chat D lidera el diseño. Piezas conocidas:
+- `resolverZonaFlexDesdeCP(empresaId, cp)`: nuevo helper en `lib/mercadolibre/*` que lookup `CuentaMercadoLibreZonaCp.codigoPostal` → `zonaId` → `CuentaMercadoLibreZona.zoneIdMl` (todo filtrado por `empresaId` de la cuenta activa). Luego `AsignacionCourierZonaFlex.findUnique({ empresaId_zoneIdMl })` para elegir el courier.
+- Trigger point: probablemente en `after()` del receiver `/api/mercadolibre/webhooks/route.ts` post-clasificación `valido` (mismo patrón que Tiendanube labels/generate).
+- Fallback: qué hacer cuando el CP no matchea ninguna zona del cliente o la zona no tiene courier asignado (roja "acción requerida" en la UI). Diseño Chat D.
+
+**Bug "el sync borra las asignaciones" — CORTADO EN DISEÑO**: el `zoneIdMl` pivot + ausencia de FK a `CuentaMercadoLibreZona` garantiza que las asignaciones persisten frente a cualquier refresh del sync Fase 2.1. Un vendedor que edita nombre/CPs de una zona en ML NO pierde su asignación local; sólo re-crear la zona con un `zone_id` distinto rompería el vínculo (comportamiento correcto — es efectivamente una zona nueva).
+
+**⚠️ DEUDA de deploy sigue abierta**: el cron `mef-sincronizar-zonas` (Fase 2.1) sigue **SIN wireado en el crontab del server** — bucket de los 4 crons no-wireados (`rastreo`, `metricas-sla`, `sincronizar-couriers`, `mef-sincronizar-zonas`). Mientras tanto, invocable manual con `curl -H "Authorization: Bearer $CRON_SECRET" https://pm.shipro.pro/api/cron/mef-sincronizar-zonas`. NO tratar el cron como "corriendo" en cálculos de frescura hasta cerrar la deuda.
 
 ---

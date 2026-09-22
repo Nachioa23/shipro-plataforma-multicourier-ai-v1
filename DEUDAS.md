@@ -4938,3 +4938,29 @@ Son `<code>` (no `<Link>` — no rompen, es texto informativo). **Apuntan a pant
 **Origen**: mensaje de Nacho 2026-09-13 — registra el trabajo como debt para no perderlo como mensaje suelto; Chat D lidera; Chat A hace las piezas de su territorio cuando corresponda.
 
 ---
+
+**Avance MEF Fase 2.1 — modelo + sync de zonas Flex del vendedor ✅ HECHO local 2026-09-22** (Chat A, pedido por Chat D). Aditivo puro. Diseño confirmado por Chat D: mirror byte-a-byte del patrón `SucursalCourier ↔ SucursalCourierCp` (child + grand-child con FK `Cascade`, `@@unique([parentId, key])`, `@@index([codigoPostal])`). Sin tocar `Envio`/`cotizador`/`crear`/`dispatch`/shipping schema — sólo zonas de la CUENTA ML.
+
+- **Migración `20260922180920_mef_zonas_flex`** (aditiva pura, sin destructive ops):
+  - **2 CREATE TABLE**: `CuentaMercadoLibreZona` (child de `CuentaMercadoLibre` — `zoneIdMl String`, `nombre`, `enabled`, timestamps; `@@unique([cuentaMercadoLibreId, zoneIdMl])` + `@@index([cuentaMercadoLibreId])`; back-relation `codigosPostales`) + `CuentaMercadoLibreZonaCp` (grand-child — `codigoPostal String`, `@@unique([zonaId, codigoPostal])` + `@@index([codigoPostal])`).
+  - **3 ADD COLUMN nullable/defaulted en `CuentaMercadoLibre`**: `flexConfigurado Boolean @default(false)` (distingue "vendedor sin Flex" de "lectura vacía transitoria"), `flexCutOffTime String?`, `flexDailyCapacity Int?`. Scalars per-cuenta, no per-zona — Chat D LOCKED.
+  - **2 ADD FOREIGN KEY `ON DELETE CASCADE`**: `Zona → CuentaMercadoLibre.id` + `ZonaCp → Zona.id`. La cascada doble hace idempotente el delete+recreate del sync (borrar la zona borra sus CPs).
+  - **Cero `DROP`, cero destructive `ALTER`** — inspeccionado byte-a-byte antes del apply local.
+- **`lib/mercadolibre/sync-zonas.ts`** (nuevo, ~220 líneas): `sincronizarZonasFlex(empresaId)` + `sincronizarZonasFlexTodasLasCuentas()`. **2 PRECISIONS críticas de Chat D**:
+  - **PRECISION 1 — ATOMICIDAD (correctitud, no perf)**: el delete+recreate de UNA cuenta corre DENTRO de un solo `prisma.$transaction(async (tx) => { deleteMany + create loop + update scalars })`. Desde afuera (Fase 2.3 resolviendo `cp → zona` en el receiver de webhooks Flex) NUNCA se ve el estado intermedio "cuenta con cero zonas". Si un webhook cae justo ahí, la lectura ve las zonas viejas O las nuevas — nunca el vacío.
+  - **PRECISION 1b — EMPTY-READ GUARD**: si `services.self_service` está AUSENTE en el payload de ML (vendedor sin Flex, deshabilitó el servicio, o refresh transitorio con shape reducido) → NO se borran las zonas existentes ni se toca `flexConfigurado`. Se logea `[mef-zonas] empresaId=X sin services.self_service — no se tocan zonas existentes (empty-read guard)` y se retorna `{ ok: true, sinFlex: true }`. Nunca zero-outear un snapshot bueno por una lectura vacía.
+  - Batch (`sincronizarZonasFlexTodasLasCuentas`): `findMany` cuentas `estado="activa"` → `Promise.allSettled` per empresa. Una falla por cuenta NO aborta el batch (mismo espíritu que `sincronizarTodosLosCouriers`).
+  - Uso de primitivos Fase 1: `mlFetch(empresaId, "/users/${mlUserId}/shipping_preferences")` — el token del seller lo resuelve `getMercadoLibreAccessToken` con refresh lazy + single-flight lock + 401-retry. Cero código de auth nuevo.
+- **`app/api/cron/mef-sincronizar-zonas/route.ts`** (nuevo, mirror byte-a-byte de `sincronizar-couriers`): handler mínimo, `dynamic = "force-dynamic"`, delega a `sincronizarZonasFlexTodasLasCuentas`. Auth via `proxy.ts` kind="cron" (chequea `Authorization: Bearer $CRON_SECRET`) — sin auth propio.
+- tsc 0. `git diff --name-only`: `prisma/schema.prisma`, `prisma/migrations/20260922180920_mef_zonas_flex/migration.sql`, `lib/mercadolibre/sync-zonas.ts`, `app/api/cron/mef-sincronizar-zonas/route.ts`, `DEUDAS.md`. **Cero cambios en `Envio`/`cotizador`/`crear`/`dispatch`/shipping schema**.
+
+**⚠️ DEUDA de deploy — cron wiring del `mef-sincronizar-zonas` pendiente (PRECISION 2)**: el endpoint existe pero **NO está wireado en el crontab del server**. Cae en el mismo bucket que los 3 crons ya conocidos como no-wireados (`rastreo`, `metricas-sla`, `sincronizar-couriers` — ver `docs/CRONS.md` §2b). Mientras tanto:
+
+- El refresh es **invocable manualmente** via `curl -H "Authorization: Bearer $CRON_SECRET" https://pm.shipro.pro/api/cron/mef-sincronizar-zonas` (una vez la migración esté en prod).
+- Frecuencia razonable cuando se wire-e: diario o cada 6h (las zonas cambian sólo cuando el vendedor edita en el portal ML — no hay webhook Shipro-ward para eso).
+- Cuando se atienda el batch de crons no-wireados, agregar 1 línea al crontab: `0 4 * * * /usr/local/bin/shipro-cron.sh mef-sincronizar-zonas` (o cadencia final que decida Chat D). El wrapper `shipro-cron.sh` toma el nombre de endpoint como `$1` — no necesita edición.
+- NO tratar el cron como "corriendo" en cálculos de frescura de datos hasta que la deuda esté cerrada.
+
+**Deploy prod (gated manual por Nacho + Chat D)**: `git pull` + `npx prisma migrate deploy` (aplica la migración additive) + `npm run build` (nuevos routes) + `pm2 restart shipro --update-env`. Aditivo, reversible (drop 2 tablas + drop 3 columnas si se necesitara). Cero riesgo money.
+
+---

@@ -1947,11 +1947,85 @@ model CuentaMercadoLibre {
   vinculadaEn    DateTime  @default(now())
   desvinculadaEn DateTime?
 
+  // ============================================================================
+  // MEF Fase 2.1 (2026-09-22) — Config Flex del vendedor (self_service).
+  // Fuente: GET /users/{mlUserId}/shipping_preferences → services.self_service.
+  // Se refresca vía cron/manual (lib/mercadolibre/sync-zonas.ts) — el vendedor
+  // los edita en el portal ML.
+  //
+  // flexConfigurado: distingue "vendedor sin Flex" de "lectura vacía transitoria".
+  // Nace false; se pone true SÓLO cuando el sync ve services.self_service presente.
+  // Si un sync futuro lee un payload SIN self_service (vendedor deshabilitó Flex
+  // o refresh transitorio), NO se borran las zonas — se mantiene el último snapshot
+  // conocido y el operador decide (ver PRECISION 1b en sync-zonas.ts).
+  //
+  // Scalars per-cuenta (no per-zona) — Chat D LOCKED.
+  // ============================================================================
+  flexConfigurado   Boolean @default(false)
+  flexCutOffTime    String? // hora local de corte declarada por el vendedor (ej. "14:00")
+  flexDailyCapacity Int?    // capacidad diaria declarada de envíos Flex
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Back-relation MEF Fase 2.1 — zonas Flex del vendedor. Espejo del patrón
+  // SucursalCourier ↔ SucursalCourierCp (padre + child con FK cascade).
+  zonasFlex CuentaMercadoLibreZona[]
+
   @@index([empresaId])
   @@index([estado])
+}
+
+// =============================================================================
+// CuentaMercadoLibreZona — zonas Flex declaradas por el vendedor. [[DEUDA 180]] MEF Fase 2.1
+// =============================================================================
+// Espejo del patrón SucursalCourier ↔ SucursalCourierCp: la zona es entidad
+// intermedia (child de la cuenta ML, padre de los CPs). Se llena/refresca desde
+// GET /users/{mlUserId}/shipping_preferences → services.self_service.zones[]
+// vía lib/mercadolibre/sync-zonas.ts. Delete+recreate ATÓMICO por cuenta
+// (dentro de $transaction) — Fase 2.3 nunca ve el estado intermedio "cuenta sin
+// zonas" (correctitud, no perf — ver PRECISION 1 en el sync).
+//
+// zoneIdMl: id de la zona que emite ML (estable por zona dentro de la cuenta).
+// enabled: la zona puede existir pero estar deshabilitada por el vendedor.
+// =============================================================================
+model CuentaMercadoLibreZona {
+  id                   Int                @id @default(autoincrement())
+  cuentaMercadoLibreId Int
+  cuenta               CuentaMercadoLibre @relation(fields: [cuentaMercadoLibreId], references: [id], onDelete: Cascade)
+
+  zoneIdMl String  // ML zone_id (estable per zona dentro de la cuenta)
+  nombre   String
+  enabled  Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  codigosPostales CuentaMercadoLibreZonaCp[]
+
+  @@unique([cuentaMercadoLibreId, zoneIdMl])
+  @@index([cuentaMercadoLibreId])
+}
+
+// =============================================================================
+// CuentaMercadoLibreZonaCp — CPs cubiertos por una zona Flex. [[DEUDA 180]] MEF Fase 2.1
+// =============================================================================
+// Mirror byte-a-byte de SucursalCourierCp: grand-child con FK cascade sobre la
+// zona. @@index([codigoPostal]) prepara el lookup `cp → zona` de Fase 2.3.
+// Los CPs viven como filas (NO Json) porque son key de lookup queryable —
+// misma convención que columnas indexables del schema (ver comentario en
+// SucursalCourier: "Capacidades operativas (columnas indexables, NO JSON)").
+// =============================================================================
+model CuentaMercadoLibreZonaCp {
+  id           Int                    @id @default(autoincrement())
+  zonaId       Int
+  zona         CuentaMercadoLibreZona @relation(fields: [zonaId], references: [id], onDelete: Cascade)
+  codigoPostal String
+  createdAt    DateTime               @default(now())
+
+  @@unique([zonaId, codigoPostal])
+  @@index([zonaId])
+  @@index([codigoPostal])
 }
 
 // =============================================================================

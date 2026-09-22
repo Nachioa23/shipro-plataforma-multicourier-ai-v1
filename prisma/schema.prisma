@@ -103,6 +103,8 @@ model Empresa {
   auditoriasConfiguracion AuditoriaConfiguracion[]
   // DEUDA 10 (D-10-5): fees por operacion Modelo B de esta empresa.
   operacionFees           OperacionFee[]
+  // MEF Fase 2.2 — asignaciones courier↔zona Flex (una por (empresa, zoneIdMl)).
+  asignacionesCourierZonaFlex AsignacionCourierZonaFlex[]
 }
 
 // ==========================================
@@ -307,6 +309,8 @@ model Courier {
 
   // DEUDA 19: audit log de cambios sensibles per-courier (credencialesJson, tipoCuenta, etc).
   auditoriasConfiguracion AuditoriaConfiguracion[]
+  // MEF Fase 2.2 — asignaciones courier↔zona Flex donde este courier fue elegido.
+  asignacionesCourierZonaFlex AsignacionCourierZonaFlex[]
 }
 
 // ==========================================
@@ -2026,6 +2030,54 @@ model CuentaMercadoLibreZonaCp {
   @@unique([zonaId, codigoPostal])
   @@index([zonaId])
   @@index([codigoPostal])
+}
+
+// =============================================================================
+// AsignacionCourierZonaFlex — courier asignado por el cliente a una zona Flex. [[DEUDA 180]] MEF Fase 2.2
+// =============================================================================
+// El cliente elige QUÉ courier de su cartera (CredencialCourier activo) va a
+// operar cada zona Flex que ML declara para su cuenta. Exclusiva: 1 zona = 1
+// courier a la vez; reasignar reemplaza (upsert sobre @@unique).
+//
+// DECISIÓN ARQUITECTÓNICA CRÍTICA — LINK POR zoneIdMl (NO FK a la zona):
+// El sync Fase 2.1 (lib/mercadolibre/sync-zonas.ts) hace delete+recreate atómico
+// de las filas CuentaMercadoLibreZona en cada refresh. Si esta tabla tuviera FK
+// con onDelete Cascade a CuentaMercadoLibreZona.id, cada refresh borraría todas
+// las asignaciones del cliente — desastre UX. El link acá es LÓGICO por
+// zoneIdMl (el id que emite ML, estable entre refreshes) + empresaId. La
+// asignación sobrevive al delete+recreate; se re-vincula naturalmente cuando la
+// zona reaparece con el mismo zoneIdMl.
+//
+// Consecuencia — asignaciones latentes: si una zona desaparece de ML (vendedor
+// la eliminó), su asignación queda huérfana pero NO se borra automáticamente.
+// La UI la oculta (no está entre las zonas actuales) pero si la zona revive con
+// el mismo zoneIdMl, la asignación vuelve a estar activa sin re-configuración.
+// Purge manual (o cron de housekeeping) queda como follow-up si aparece drift.
+//
+// Sin FK a CuentaMercadoLibreZona = el sync no tiene que saber que esta tabla
+// existe. Zero cross-contamination con Fase 2.1.
+// =============================================================================
+model AsignacionCourierZonaFlex {
+  id        Int @id @default(autoincrement())
+
+  empresaId Int
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  // ML stable zone id — pivot lógico con CuentaMercadoLibreZona.zoneIdMl. NO FK
+  // (a propósito — ver comentario arriba). El GET del endpoint filtra las
+  // asignaciones latentes joineando manualmente contra las zonas vigentes.
+  zoneIdMl String
+
+  courierId Int
+  courier   Courier @relation(fields: [courierId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Exclusividad: una fila por (empresa, zona ML). Reasignar = upsert on this key.
+  @@unique([empresaId, zoneIdMl])
+  @@index([courierId])
+  @@index([empresaId])
 }
 
 // =============================================================================

@@ -22,6 +22,7 @@ function ConfiguracionShell({ children }: { children: React.ReactNode }) {
     { id: 'depositos', label: 'Depósitos', href: '/configuracion/depositos', icon: Warehouse, visible: true },
     { id: 'ruteo', label: 'Ruteo', href: '/configuracion/ruteo', icon: Network, visible: !esOperadorCliente },
     { id: 'conexiones', label: 'Conexiones', href: '/configuracion/conexiones', icon: Plug, visible: true },
+    { id: 'couriers-flex', label: 'Couriers Flex', href: '/configuracion/couriers-flex', icon: Truck, visible: !esOperadorCliente },
   ].filter(t => t.visible);
 
   return (

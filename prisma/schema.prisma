@@ -105,6 +105,8 @@ model Empresa {
   operacionFees           OperacionFee[]
   // MEF Fase 2.2 — asignaciones courier↔zona Flex (una por (empresa, zoneIdMl)).
   asignacionesCourierZonaFlex AsignacionCourierZonaFlex[]
+  // MEF Fase 2.3 retrofit — shipments Flex persistidos por el receiver.
+  shipmentsFlex               ShipmentFlex[]
 }
 
 // ==========================================
@@ -2189,6 +2191,57 @@ model NotificacionFlex {
 
   @@index([shipmentId])
   @@index([estado])
+}
+
+// =============================================================================
+// ShipmentFlex — persistencia del body del shipment ML. [[DEUDA 180]] MEF Fase 2.3 / retrofit Fase 1
+// =============================================================================
+// El receiver de webhooks Fase 1 hace GET /shipments/{id} (x-format-new:true)
+// para clasificar el estado (valido / get_shipment_no_existe / get_fallido_
+// reintentable) pero DESCARTABA el body. Retrofit Chat D (2026-09-22): en el
+// path "valido" ahora ADEMÁS persistimos el body acá — Fase 2.3 lee cpDestino
+// para rutear (CP→zona→courier), Fase 3 lee address/geo/weight para crearEnvio,
+// Fase 4 leerá estadoShipment + payloadRaw completo para la state machine.
+//
+// UPSERT POR shipmentId @unique — idempotente: un retry del webhook (o de la
+// Fase 3 re-fetch) no duplica; refleja siempre el último snapshot.
+//
+// BEST-EFFORT en el receiver: si el upsert falla, se logea + se sigue — nunca
+// se rompe el 200 al ML (la clasificación + persistencia de NotificacionFlex
+// van por su carril intacto). Fase 3 puede re-GET-earlo si hace falta.
+//
+// cpDestino: extracción defensiva de `receiver_address.zip_code` (o field
+// equivalente confirmado por doc ML). Nullable — si el shape ML cambia o el
+// path no matchea, se persiste el shipment igual y se logea el miss.
+//
+// payloadRaw Json: body completo — audit + fuente para Fase 3/4 sin re-GET.
+// =============================================================================
+model ShipmentFlex {
+  id Int @id @default(autoincrement())
+
+  // Business key: ML shipment id. @unique → upsert idempotente.
+  shipmentId String @unique
+
+  // Vínculo empresa + seller ML — mismo patrón que NotificacionFlex.
+  empresaId Int?
+  empresa   Empresa? @relation(fields: [empresaId], references: [id], onDelete: SetNull)
+  mlUserId  BigInt
+
+  // Extracción hot-path para 2.3 (CP → zona → courier). Nullable (defensivo).
+  cpDestino String?
+
+  // Estado ML del shipment (status del payload — para Fase 4 state machine).
+  estadoShipment String?
+
+  // Body completo del GET /shipments/{id} — audit + Fase 3/4.
+  payloadRaw Json
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([empresaId])
+  @@index([cpDestino])
+  @@index([mlUserId])
 }
 
 // =============================================================================

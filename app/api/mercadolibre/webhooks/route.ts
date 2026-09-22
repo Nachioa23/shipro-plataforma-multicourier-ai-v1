@@ -51,29 +51,91 @@ export const runtime = "nodejs";
 
 type EstadoFlex = EstadoNotificacionFlexKey;
 
+// Retrofit 2026-09-22 (Chat D) — clasificarShipment ahora ADEMÁS devuelve el
+// body cuando res.ok, para que el caller pueda persistir ShipmentFlex sin
+// re-hacer el GET. La lógica de clasificación (200/404/otros) queda intacta;
+// solo se lee res.json() en el path 200. Si el JSON parse falla, body=null y
+// el estado sigue "valido" (persistencia downstream best-effort skipeará).
 async function clasificarShipment(
   empresaId: number,
   shipmentId: string,
-): Promise<EstadoFlex> {
+): Promise<{ estado: EstadoFlex; body: any | null }> {
   // GET autenticado con x-format-new: true (REQUIRED por ML per Chat D — sin
   // este header, ML devuelve shape legacy pobre para el endpoint moderno).
   try {
     const res = await mlFetch(empresaId, `/shipments/${shipmentId}`, {
       headers: { "x-format-new": "true" },
     });
-    if (res.ok) return "valido";
-    if (res.status === 404) return "get_shipment_no_existe";
+    if (res.ok) {
+      const body = await res.json().catch(() => null);
+      return { estado: "valido", body };
+    }
+    if (res.status === 404) return { estado: "get_shipment_no_existe", body: null };
     // 401/403/5xx u otros → reintentable transitorio.
     console.warn(
       `[ml-webhook-recv] GET /shipments/${shipmentId} → HTTP ${res.status} — clasificado get_fallido_reintentable`,
     );
-    return "get_fallido_reintentable";
+    return { estado: "get_fallido_reintentable", body: null };
   } catch (e) {
     console.warn(
       `[ml-webhook-recv] GET /shipments/${shipmentId} threw:`,
       e instanceof Error ? e.message : String(e).slice(0, 200),
     );
-    return "get_fallido_reintentable";
+    return { estado: "get_fallido_reintentable", body: null };
+  }
+}
+
+// Retrofit 2026-09-22 — best-effort persist del shipment body. NUNCA propaga
+// error (el 200 al ML NO depende de esto). El shipmentId es business key con
+// @unique en la tabla → upsert idempotente ante retries.
+async function persistirShipmentFlexBestEffort(params: {
+  shipmentId: string;
+  empresaId: number;
+  mlUserIdBig: bigint;
+  body: any;
+}): Promise<void> {
+  try {
+    const { shipmentId, empresaId, mlUserIdBig, body } = params;
+    // Extracción defensiva del CP — Chat D confirmó receiver_address.zip_code
+    // como field probable; si el shape ML difiere, cpDestino queda null + log.
+    const cpRaw = body?.receiver_address?.zip_code;
+    const cpDestino =
+      typeof cpRaw === "string" || typeof cpRaw === "number"
+        ? String(cpRaw).trim() || null
+        : null;
+    if (cpDestino === null) {
+      console.warn(
+        `[ml-webhook-recv] shipmentId=${shipmentId} sin receiver_address.zip_code — cpDestino=null (Fase 2.3 tendrá que fallback)`,
+      );
+    }
+    const estadoShipment =
+      typeof body?.status === "string" ? body.status : null;
+
+    await prisma.shipmentFlex.upsert({
+      where: { shipmentId },
+      create: {
+        shipmentId,
+        empresaId,
+        mlUserId: mlUserIdBig,
+        cpDestino,
+        estadoShipment,
+        payloadRaw: body,
+      },
+      update: {
+        empresaId,
+        mlUserId: mlUserIdBig,
+        cpDestino,
+        estadoShipment,
+        payloadRaw: body,
+      },
+    });
+  } catch (e) {
+    // Best-effort: log + continuar. Fase 3 worker puede re-GET el shipment
+    // si hace falta. El 200 al ML NUNCA depende de este persist.
+    console.warn(
+      "[ml-webhook-recv] persistShipmentFlex falló (best-effort — 200 sigue):",
+      e instanceof Error ? e.message : String(e).slice(0, 300),
+    );
   }
 }
 
@@ -229,7 +291,8 @@ export async function POST(request: Request) {
       topic.startsWith("shipments") &&
       filaCreada
     ) {
-      const estadoClasificado = await clasificarShipment(empresaId, shipmentId);
+      const { estado: estadoClasificado, body: shipmentBody } =
+        await clasificarShipment(empresaId, shipmentId);
       // Si sigue "recibida", no update-eamos (evita write innecesaria).
       if (estadoClasificado !== "recibida") {
         try {
@@ -245,6 +308,19 @@ export async function POST(request: Request) {
             e instanceof Error ? e.message : String(e).slice(0, 200),
           );
         }
+      }
+
+      // Retrofit 2026-09-22 (Chat D) — path "valido" ADEMÁS persiste el body
+      // en ShipmentFlex (upsert por shipmentId @unique). Best-effort: nunca
+      // falla el 200 ni la clasificación. Fase 2.3 leerá cpDestino; Fase 3/4
+      // leerán payloadRaw / estadoShipment.
+      if (estadoClasificado === "valido" && shipmentBody) {
+        await persistirShipmentFlexBestEffort({
+          shipmentId,
+          empresaId,
+          mlUserIdBig,
+          body: shipmentBody,
+        });
       }
     }
 

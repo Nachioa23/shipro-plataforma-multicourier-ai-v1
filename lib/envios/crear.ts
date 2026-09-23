@@ -83,6 +83,14 @@ export interface CrearEnvioInput {
   tiendanubeFulfillmentOrderId?: string | null;
   tiendanubeOrderId?: string | null;
 
+  // [[DEUDA 180]] MEF Fase 2.3.c — vínculo directo al shipment ML. Los persiste
+  // el worker Flex (lib/mercadolibre/crear-envio-flex.ts) para trazabilidad +
+  // idempotencia (guard early-out por mercadolibreShipmentId antes de crearEnvio).
+  // Opcionales: sólo el flujo MEF los manda; el resto los deja undefined.
+  // ⚠️ MONEY-SAFE: SOLO plumbing. NO tocan rama/SMO/montoDebito/cotización.
+  mercadolibreShipmentId?: string | null;
+  mercadolibreOrderId?: string | null;
+
   // DEUDA 128: clave de idempotencia. La produce el plugin (Idempotency-Key header),
   // se persiste en Envio.idempotencyKey. El check de duplicados vive en la ruta
   // (POST /api/envios); acá sólo se almacena. Null → creación sin clave (dashboard
@@ -112,6 +120,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
     calle: calleRaw, altura: alturaRaw, piso, dpto, dni, email, telefono, localidad, modalidad,
     valorDeclarado, costoEnvio, costoProveedor, numeroOrden,
     tiendanubeStoreId, tiendanubeFulfillmentOrderId, tiendanubeOrderId,
+    mercadolibreShipmentId, mercadolibreOrderId,
     idempotencyKey,
     tipoOrigen, sucursalOrigenId, sucursalDestinoId
   } = input;
@@ -993,6 +1002,9 @@ export async function crearEnvio(input: CrearEnvioInput) {
         tiendanubeStoreId: tiendanubeStoreId ?? null,
         tiendanubeFulfillmentOrderId: tiendanubeFulfillmentOrderId ?? null,
         tiendanubeOrderId: tiendanubeOrderId ?? null,
+        // [[DEUDA 180]] MEF Fase 2.3.c — persist del vínculo ML.
+        mercadolibreShipmentId: mercadolibreShipmentId ?? null,
+        mercadolibreOrderId: mercadolibreOrderId ?? null,
         // DEUDA 128: persistir la clave del plugin para que la ruta pueda
         // detectar reintentos y devolver la etiqueta existente sin re-crear.
         idempotencyKey: idempotencyKey ?? null,

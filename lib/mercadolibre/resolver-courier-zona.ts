@@ -54,13 +54,25 @@ export type ResolucionCourierZonaFlex =
     }
   | { ok: false; motivo: "input_invalido" }
   | { ok: false; motivo: "sin_cuenta_ml" }
+  // sin_zonas_flex — la cuenta ML NO tiene zonas activas configuradas (el
+  // vendedor no seteó Flex en el portal ML, o deshabilitó todas). Distinto
+  // de cp_no_matchea (donde SÍ hay zonas activas pero ninguna cubre el CP).
+  // Habilitado por Chat D para que 2.3.c pueda dar UX diferenciado ("configurá
+  // Flex primero" vs "este CP está fuera de tu cobertura").
+  | { ok: false; motivo: "sin_zonas_flex" }
   | { ok: false; motivo: "cp_no_matchea" }
   | {
       ok: false;
       motivo: "zona_sin_courier";
       zoneIdMl: string;
       zonaNombre: string;
-    };
+    }
+  // anomalo — GN garantiza que CPs son disjuntos entre zonas ACTIVAS de una
+  // cuenta. Si aparece >1 match acá, algo anda mal (drift entre ML y nuestro
+  // sync, o contrato ML cambió). Fail-fast: NO ruteamos determinístico — se
+  // reporta el caso y el caller crea un envío BLOQUEADO "flex_anomalo" para
+  // que quede visible. Política Chat D 2026-09-23: nunca elegir a ciegas.
+  | { ok: false; motivo: "anomalo"; zoneIds: string[] };
 
 /**
  * Resuelve el courier que despacha un envío Flex dado el CP de destino + la
@@ -98,7 +110,18 @@ export async function resolverCourierPorCpFlex(
     return { ok: false, motivo: "sin_cuenta_ml" };
   }
 
-  // 3. Buscar la zona ACTIVA (enabled=true) que cubre el CP. El filtro sobre
+  // 3. Pre-check sin_zonas_flex: ¿la cuenta tiene alguna zona ACTIVA? Si no,
+  //    la variante es sin_zonas_flex (el vendedor no configuró Flex, o
+  //    deshabilitó todas). Distinto de cp_no_matchea (hay zonas activas pero
+  //    ninguna cubre el CP). Chat D pidió separar para UX diferenciado.
+  const totalZonasActivas = await prisma.cuentaMercadoLibreZona.count({
+    where: { cuentaMercadoLibreId: cuenta.id, enabled: true },
+  });
+  if (totalZonasActivas === 0) {
+    return { ok: false, motivo: "sin_zonas_flex" };
+  }
+
+  // 4. Buscar la zona ACTIVA (enabled=true) que cubre el CP. El filtro sobre
   //    `zona.enabled=true` va DENTRO del where — nunca matcheamos contra una
   //    zona desactivada aunque tenga el CP en su lista. GN garantiza 0 o 1
   //    match entre zonas activas.
@@ -125,23 +148,20 @@ export async function resolverCourierPorCpFlex(
     return { ok: false, motivo: "cp_no_matchea" };
   }
 
-  // 4. Defense-in-depth: GN afirma que zonas activas tienen CPs disjuntos —
-  //    NUNCA debería haber >1 match acá. Si aparece, hay un drift entre lo
-  //    que ML garantiza y lo que sincronizamos (bug de sync o cambio del
-  //    contrato ML). Logueamos + elegimos determinísticamente por zoneIdMl
-  //    (lexicográfico) para no silenciar el caso.
-  let elegida: { zoneIdMl: string; nombre: string };
-  if (matches.length === 1) {
-    elegida = matches[0].zona;
-  } else {
-    const orden = [...matches]
-      .map((m) => m.zona)
-      .sort((a, b) => a.zoneIdMl.localeCompare(b.zoneIdMl));
-    elegida = orden[0];
-    console.warn(
-      `[resolverCourierPorCpFlex] ⚠️ CP ${cp} matcheó ${matches.length} zonas activas para empresaId=${empresaId} (GN garantiza disjuntos entre activas) — elijo determinístico zoneIdMl=${elegida.zoneIdMl}; drift a investigar.`,
+  // 5. Defense-in-depth: GN afirma que zonas activas tienen CPs disjuntos —
+  //    NUNCA debería haber >1 match acá. Política Chat D 2026-09-23:
+  //    FAIL-FAST si aparece — NO elegir determinístico + warn (política vieja
+  //    del 2026-09-22 que enmascaraba el problema). El caller debe crear un
+  //    envío BLOQUEADO con causa "flex_anomalo" para que el drift quede
+  //    visible + accionable, no ruteado silenciosamente al azar.
+  if (matches.length > 1) {
+    const zoneIds = matches.map((m) => m.zona.zoneIdMl);
+    console.error(
+      `[resolverCourierPorCpFlex] 🚨 CP ${cp} matcheó ${matches.length} zonas activas para empresaId=${empresaId} (GN garantiza disjuntos entre activas) — FAIL-FAST, no ruteo. zoneIds=${JSON.stringify(zoneIds)}`,
     );
+    return { ok: false, motivo: "anomalo", zoneIds };
   }
+  const elegida = matches[0].zona;
 
   // 5. Lookup de la asignación por el @@unique (empresaId, zoneIdMl). Sin
   //    asignación = "acción requerida" — el cliente ve la zona en rojo en la

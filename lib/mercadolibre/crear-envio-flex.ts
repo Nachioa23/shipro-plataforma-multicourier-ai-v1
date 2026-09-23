@@ -1,31 +1,33 @@
 // ============================================================================
-// MEF Fase 2.3.c (2026-09-23) — Creador de envíos Flex desde una NotificacionFlex
-// en estado "valido". [[DEUDA 180]]
+// MEF Fase 2.3.c (2026-09-23) — Worker que rutea NotificacionFlex "valido" o
+// "accion_requerida" a Envío real via crearEnvio. [[DEUDA 180]]
 //
-// Consume NotificacionFlex.estado="valido" (que trae shipmentId + empresaId
-// resueltos por el receiver Fase 1) + su ShipmentFlex asociado (que trae el
-// payload del GET /shipments/{id} persistido en el retrofit). Rutea con el
-// helper puro resolverCourierPorCpFlex (Fase 2.3.a) y llama crearEnvio con
-// el molde Tiendanube: after()-style — worker separado, best-effort per fila.
+// RESTRUCTURE Chat D 2026-09-23 (money-critical review):
+//   Una venta Flex NO RUTEABLE NO se convierte en Envío. Queda en el BUZÓN
+//   NotificacionFlex con estado="accion_requerida" + causaFlex=<causa
+//   específica>. El worker re-escanea "accion_requerida" en cada corrida: si
+//   el vendedor destraba la causa (agrega zona, asigna courier, etc.), la
+//   próxima corrida rutea + crea el Envío + pasa a "procesada".
 //
-// 🔒 SIN TRATAMIENTO ESPECIAL DE PLATA. Nacho+Chat D 2026-09-23: Flex NO tiene
-// SMO exento, NO Rama B guard, NO flag canal-aware. Pasa por el motor de precio
-// EXACTAMENTE como cualquier envío — la rama la decide CredencialCourier del
-// par (empresa, courier asignado en Fase 2.2). Ver DEUDAS.md nota "SMO exento
-// en Flex — premisa REVISADA".
+//   Envíos SÓLO se crean vía crearEnvio con un courier REAL en `Courier`. No
+//   hay envíos placeholder ni con causa Flex — grep-verifiable: cero uso del
+//   API de creación directa de envío en este archivo (el único create de
+//   Envío pasa por crearEnvio, que es el motor único).
 //
-// NEVER LOSE THE SALE: cada variante del resolver deja rastro en la BD:
-//   - ok                     → crearEnvio (motor cobra según rama del courier).
-//   - cp_no_matchea          → Envío BLOQUEADO flex_fuera_cobertura.
-//   - zona_sin_courier       → Envío BLOQUEADO flex_zona_sin_courier.
-//   - sin_zonas_flex         → Envío BLOQUEADO flex_sin_config.
-//   - anomalo                → Envío BLOQUEADO flex_anomalo (FAIL-FAST, no ruteamos).
-//   - cpDestino null         → Envío BLOQUEADO flex_cp_no_extraido.
-//   - datos payload faltantes → Envío BLOQUEADO flex_datos_incompletos.
-//   - sin_cuenta_ml / input_invalido → skip + log (no debería llegar acá; el
-//     receiver Fase 1 ya persiste "huerfana" si no hay cuenta).
+// 🔒 SIN TRATAMIENTO ESPECIAL DE PLATA. Flex NO tiene SMO exento, NO Rama B
+// guard, NO flag canal-aware. El motor (crearEnvio → cotizador) cobra según
+// rama de CredencialCourier(empresaId, courierAsignado) — como cualquier envío.
 //
-// IDEMPOTENCIA (2 CAPAS):
+// NEVER LOSE THE SALE:
+//   - ok + datos completos → crearEnvio (real courier, motor cobra por rama).
+//   - resolver !ok (cp_no_matchea/zona_sin_courier/sin_zonas_flex/anomalo)
+//     → notif estado="accion_requerida" + causaFlex=<mapeo>.
+//   - cpDestino null → notif "accion_requerida" + causaFlex="flex_cp_no_extraido".
+//   - datos payload incompletos (sin destinatario o peso) → notif
+//     "accion_requerida" + causaFlex="flex_datos_incompletos".
+//   - sin_cuenta_ml / input_invalido → skip + log (no debería llegar).
+//
+// IDEMPOTENCIA (2 CAPAS, sólo happy path):
 //   1. Guard early-out: findFirst por Envio.mercadolibreShipmentId (@@index)
 //      ANTES de llamar crearEnvio — evita entrar al débito si ya existe.
 //   2. crearEnvio recibe idempotencyKey="mef-${shipmentId}" — la BD tiene
@@ -35,25 +37,26 @@
 import prisma from "@/lib/prisma";
 import { crearEnvio, type CrearEnvioInput } from "@/lib/envios/crear";
 import { resolverCourierPorCpFlex } from "@/lib/mercadolibre/resolver-courier-zona";
-import { ESTADOS_BLOQUEO_FLEX } from "@/lib/utils/estados";
+import { ESTADOS_BLOQUEO_FLEX, type CausaNotificacionFlexKey } from "@/lib/utils/estados";
 
-// ----------------------------------------------------------------------------
-// Nombre del courier canónico para MEF. Requiere que el Courier row exista en
-// BD (dado de alta por admin_shipro) + CredencialCourier(empresaId, este nombre)
-// activo (config del vendedor en /configuracion/transportes). Sin cualquiera
-// de los dos, crearEnvio hará su gate normal (CourierAusente / BLOQUEADO_CREDENCIAL).
-// El resolver Fase 2.3.a devuelve el nombre canónico via AsignacionCourierZonaFlex.
-// ----------------------------------------------------------------------------
-
-export type ResultadoCrearEnvioFlex =
+export type ResultadoProcesarNotificacionFlex =
   | { ok: true; envioId: number; motivo: "creado" | "ya_existia" }
-  | { ok: true; envioId: number; motivo: "bloqueado"; causa: string }
+  | { ok: true; motivo: "accion_requerida"; causa: CausaNotificacionFlexKey }
   | { ok: false; motivo: "skipped"; causa: string }
   | { ok: false; motivo: "error"; causa: string };
 
-// Nombres del "shape ML" que el receiver persistió en ShipmentFlex.payloadRaw.
-// Extracción defensiva — el shape puede variar según ML; si falta un campo
-// crítico, bloqueamos con flex_datos_incompletos en lugar de crashear.
+// Estados de NotificacionFlex que el worker Flex procesa. Incluye "valido"
+// (nuevas notifs) + "accion_requerida" (notifs previamente bloqueadas — se
+// re-escanean cada corrida por si el vendedor destrabó la causa).
+export const ESTADOS_NOTIF_A_PROCESAR: readonly string[] = [
+  "valido",
+  "accion_requerida",
+];
+
+// ----------------------------------------------------------------------------
+// Extracción defensiva del payload ML (shape variable).
+// ----------------------------------------------------------------------------
+
 interface ReceiverAddressLike {
   receiver_name?: unknown;
   address_line?: unknown;
@@ -81,99 +84,69 @@ function nombreFrom(v: unknown): string | null {
 }
 
 // ============================================================================
-// Crea un Envío BLOQUEADO con causa Flex-específica. Reserva el `mef-${shipmentId}`
-// como idempotencyKey igual que el path feliz, para que un retry del worker
-// vea el envío ya existente (guard capa 1) y no lo re-cree como duplicado.
+// Marca la NotificacionFlex como "accion_requerida" + causaFlex=<causa>. El
+// vendedor la ve en el buzón; cuando destraba la causa, la próxima corrida
+// del worker la re-escanea.
 // ============================================================================
-async function crearEnvioBloqueadoFlex(params: {
-  empresaId: number;
-  shipmentId: string;
-  mlOrderId: string | null;
-  causa: keyof typeof ESTADOS_BLOQUEO_FLEX;
-  contexto: Record<string, unknown>;
-}): Promise<number> {
-  const { empresaId, shipmentId, mlOrderId, causa, contexto } = params;
-  // El shape del Envío BLOQUEADO Flex es intencionalmente mínimo: la venta
-  // ya ocurrió del lado del comprador ML; el vendedor necesita visibilidad
-  // en el dashboard Shipro con la causa clara. Los datos de destinatario/
-  // dirección/dims quedan defaulteados a strings vacíos/1 porque el motor de
-  // creación es rama-agnóstico y NO gasta dinero en un envío BLOQUEADO_*
-  // (crear.ts salta el débito cuando estadoInicialEnvio es BLOQUEADO_).
-  //
-  // Sin embargo, crearEnvio requiere ciertos campos (empresaId, nombreCourier,
-  // cpDestino, pesoReal, destinatarioNombre) — si NO pasan gates internos,
-  // throw. Para bloqueos Flex "sin CP" o "sin destinatario", esos gates fallan.
-  // Por eso NO llamamos a crearEnvio en estos casos: creamos el Envío
-  // directamente por Prisma con todo defaulteado + estadoActual=causa.
-  //
-  // Trade-off: menor reuso, pero evita re-entrar al motor de creación para
-  // shipments incompletos. La visibilidad es igual (aparece en la bandeja
-  // BLOQUEADO con causa clara) y NADA se cobra (sin FinanzasEnvio.tarifa).
-  const causaKey = ESTADOS_BLOQUEO_FLEX[causa].key;
-  // Idempotency guard: si otro run ya creó el envío para este shipment,
-  // devolvemos el existente. Findfirst por (empresaId, idempotencyKey) uses
-  // el índice compuesto @@unique.
-  const idempotencyKey = `mef-${shipmentId}`;
-  const existente = await prisma.envio.findFirst({
-    where: { empresaId, idempotencyKey },
-    select: { id: true },
-  });
-  if (existente) return existente.id;
-
-  // Necesitamos alguna Direccion.id como destino (schema Envio.destinoId es
-  // required-through-relation en el path del create; verificamos en el schema).
-  // Envio.destinoId es Int? nullable → PUEDE quedar null en un bloqueo. Buena.
-  const trackingNumber = `SHP-BLOQ-${Math.floor(Math.random() * 900000 + 100000)}`;
-  const envio = await prisma.envio.create({
+async function marcarAccionRequerida(
+  notifId: number,
+  causa: CausaNotificacionFlexKey,
+  contexto: Record<string, unknown>,
+): Promise<void> {
+  await prisma.notificacionFlex.update({
+    where: { id: notifId },
     data: {
-      trackingNumber,
-      empresa: { connect: { id: empresaId } },
-      // Courier placeholder: el motor requiere courierId NOT NULL. Elegimos
-      // el primer courier activo de BD como placeholder — el envío BLOQUEADO
-      // no ejecuta despacho ni débito, es un carril de visibilidad. Si NO
-      // existe ningún courier activo, throwea (edge caso config Shipro).
-      courier: {
-        connect: {
-          id: (
-            await prisma.courier.findFirstOrThrow({
-              where: { activo: true },
-              select: { id: true },
-              orderBy: { id: "asc" },
-            })
-          ).id,
-        },
-      },
-      pesoReal: 1,
-      estadoActual: causaKey,
-      idempotencyKey,
-      mercadolibreShipmentId: shipmentId,
-      mercadolibreOrderId: mlOrderId,
+      estado: "accion_requerida",
+      causaFlex: ESTADOS_BLOQUEO_FLEX[causa].key,
     },
-    select: { id: true },
   });
   console.warn(
-    `[crear-envio-flex] Envío BLOQUEADO ${causaKey} envioId=${envio.id} shipmentId=${shipmentId} empresaId=${empresaId}`,
+    `[crear-envio-flex] notif ${notifId} → accion_requerida (${ESTADOS_BLOQUEO_FLEX[causa].key})`,
     contexto,
   );
-  return envio.id;
 }
 
 // ============================================================================
-// Path feliz: llama crearEnvio con el molde Tiendanube (idempotencyKey +
-// vínculo ML + permitirBloqueoPorDeposito=true). El motor decide rama por
-// CredencialCourier(empresaId, nombreCourier).
+// Marca la NotificacionFlex como "procesada" — feliz path + guard idempotente.
+// Además limpia causaFlex (una notif que estaba en accion_requerida y ahora
+// se destrabó no debe conservar su causa vieja).
 // ============================================================================
-async function crearEnvioFlexHappyPath(params: {
+async function marcarProcesada(notifId: number): Promise<void> {
+  try {
+    await prisma.notificacionFlex.update({
+      where: { id: notifId },
+      data: {
+        estado: "procesada",
+        causaFlex: null,
+        procesadaEn: new Date(),
+      },
+    });
+  } catch (e) {
+    console.warn(
+      `[crear-envio-flex] no pude marcar notif=${notifId} como procesada:`,
+      e instanceof Error ? e.message : String(e).slice(0, 200),
+    );
+  }
+}
+
+// ============================================================================
+// Path feliz: llama crearEnvio con courier REAL. El motor decide rama por
+// CredencialCourier(empresaId, nombreCourier). CERO tratamiento especial
+// de plata acá.
+// ============================================================================
+async function llamarCrearEnvioFlex(params: {
   empresaId: number;
   shipmentId: string;
   mlOrderId: string | null;
   cpDestino: string;
   nombreCourier: string;
   payload: any;
-}): Promise<{ envioId: number; motivo: "creado" | "bloqueado"; causa?: string }> {
+}): Promise<
+  | { ok: true; envioId: number }
+  | { ok: false; causaDatos: CausaNotificacionFlexKey; contexto: Record<string, unknown> }
+> {
   const { empresaId, shipmentId, mlOrderId, cpDestino, nombreCourier, payload } = params;
 
-  // Extracción defensiva de fields del payload.
   const receiver: ReceiverAddressLike | undefined =
     payload?.receiver_address && typeof payload.receiver_address === "object"
       ? (payload.receiver_address as ReceiverAddressLike)
@@ -188,9 +161,8 @@ async function crearEnvioFlexHappyPath(params: {
   const localidad = nombreFrom(receiver?.city);
   const provincia = nombreFrom(receiver?.state);
 
-  // Peso: preferir shipping_option.declared_weight (gramos) → kg.
-  // Fallback: sum de shipping_items[].weight (gramos) → kg.
-  // Sin datos: block flex_datos_incompletos.
+  // Peso: preferir shipping_option.declared_weight (gramos) → kg. Fallback:
+  // sum de shipping_items[].weight (gramos) → kg.
   let pesoKg: number | null = null;
   const declaredG = Number(payload?.shipping_option?.declared_weight);
   if (Number.isFinite(declaredG) && declaredG > 0) {
@@ -203,20 +175,16 @@ async function crearEnvioFlexHappyPath(params: {
     if (suma > 0) pesoKg = suma / 1000;
   }
 
-  // Guardrail: sin destinatario o sin peso el envío no puede crearse. Aviso
-  // temprano vs esperar que crear.ts throw.
+  // Sin destinatario o sin peso → no puede rutearse. Notif accion_requerida.
   if (!destinatarioNombre || pesoKg === null || pesoKg <= 0) {
-    const envioId = await crearEnvioBloqueadoFlex({
-      empresaId,
-      shipmentId,
-      mlOrderId,
-      causa: "flex_datos_incompletos",
+    return {
+      ok: false,
+      causaDatos: "flex_datos_incompletos",
       contexto: {
         tieneDestinatarioNombre: !!destinatarioNombre,
         tienePeso: pesoKg !== null && pesoKg > 0,
       },
-    });
-    return { envioId, motivo: "bloqueado", causa: "flex_datos_incompletos" };
+    };
   }
 
   const input: CrearEnvioInput = {
@@ -232,12 +200,12 @@ async function crearEnvioFlexHappyPath(params: {
     provinciaDestino: provincia ?? undefined,
     numeroOrden: mlOrderId ?? undefined,
     idempotencyKey: `mef-${shipmentId}`,
-    // Vínculo directo Envio ↔ shipment ML (mirror Tiendanube).
     mercadolibreShipmentId: shipmentId,
     mercadolibreOrderId: mlOrderId,
     // E-commerce contract: si falta depósito/credencial/operatividad/saldo,
-    // el envío nace BLOQUEADO_* con SHP-* (no rompe la venta ML) y se destraba
-    // solo cuando la causa se resuelve (procesarEnviosBloqueados*).
+    // el motor bloquea con su estado BLOQUEADO_* legacy y SHP-* tracking
+    // (procesarEnviosBloqueados* lo destraba). Ese es un Envío REAL con
+    // courier REAL, no un placeholder.
     permitirBloqueoPorDeposito: true,
   };
 
@@ -248,15 +216,16 @@ async function crearEnvioFlexHappyPath(params: {
       `crearEnvio no devolvió envio.id — shipmentId=${shipmentId}`,
     );
   }
-  return { envioId, motivo: "creado" };
+  return { ok: true, envioId };
 }
 
 // ============================================================================
-// Procesa UNA NotificacionFlex en estado "valido". Idempotente + best-effort.
+// Procesa UNA NotificacionFlex en estado "valido" o "accion_requerida".
+// Idempotente + best-effort.
 // ============================================================================
 export async function procesarNotificacionFlex(
   notificacionId: number,
-): Promise<ResultadoCrearEnvioFlex> {
+): Promise<ResultadoProcesarNotificacionFlex> {
   const notif = await prisma.notificacionFlex.findUnique({
     where: { id: notificacionId },
     select: {
@@ -270,11 +239,11 @@ export async function procesarNotificacionFlex(
   if (!notif) {
     return { ok: false, motivo: "skipped", causa: "notificacion no encontrada" };
   }
-  if (notif.estado !== "valido") {
+  if (!ESTADOS_NOTIF_A_PROCESAR.includes(notif.estado)) {
     return {
       ok: false,
       motivo: "skipped",
-      causa: `estado ${notif.estado} != valido`,
+      causa: `estado ${notif.estado} no procesable`,
     };
   }
   if (!notif.shipmentId || notif.empresaId === null) {
@@ -288,7 +257,9 @@ export async function procesarNotificacionFlex(
   const empresaId = notif.empresaId;
 
   // CAPA 1 idempotencia: guard early-out por Envio.mercadolibreShipmentId
-  // (evita entrar al motor de creación si ya existe).
+  // (evita entrar al motor si ya existe). Cubre el caso donde la corrida
+  // anterior creó el Envío pero falló al marcar procesada — el próximo
+  // scan lo detecta y transiciona a procesada limpio.
   const yaCreado = await prisma.envio.findFirst({
     where: { empresaId, mercadolibreShipmentId: shipmentId },
     select: { id: true },
@@ -313,76 +284,59 @@ export async function procesarNotificacionFlex(
       ? stringOrNull((shipment.payloadRaw as any)?.order_id)
       : null;
 
-  // cpDestino null → flex_cp_no_extraido. Nunca ruteamos sin CP.
+  // cpDestino null → accion_requerida flex_cp_no_extraido.
   if (!shipment || !shipment.cpDestino) {
-    const envioId = await crearEnvioBloqueadoFlex({
-      empresaId,
-      shipmentId,
-      mlOrderId,
-      causa: "flex_cp_no_extraido",
-      contexto: { shipmentPersistido: !!shipment },
+    await marcarAccionRequerida(notif.id, "flex_cp_no_extraido", {
+      shipmentPersistido: !!shipment,
     });
-    await marcarProcesada(notif.id);
-    return { ok: true, envioId, motivo: "bloqueado", causa: "flex_cp_no_extraido" };
+    return { ok: true, motivo: "accion_requerida", causa: "flex_cp_no_extraido" };
   }
 
-  // Resolver 2.3.a — variantes de bloqueo dedicadas.
+  // Resolver 2.3.a — variantes.
   const resolucion = await resolverCourierPorCpFlex(empresaId, shipment.cpDestino);
   if (!resolucion.ok) {
-    let causa: keyof typeof ESTADOS_BLOQUEO_FLEX | null = null;
-    let contexto: Record<string, unknown> = { motivo: resolucion.motivo };
     switch (resolucion.motivo) {
       case "cp_no_matchea":
-        causa = "flex_fuera_cobertura";
-        break;
+        await marcarAccionRequerida(notif.id, "flex_fuera_cobertura", {
+          motivo: resolucion.motivo,
+        });
+        return { ok: true, motivo: "accion_requerida", causa: "flex_fuera_cobertura" };
       case "zona_sin_courier":
-        causa = "flex_zona_sin_courier";
-        contexto = {
-          ...contexto,
+        await marcarAccionRequerida(notif.id, "flex_zona_sin_courier", {
+          motivo: resolucion.motivo,
           zoneIdMl: resolucion.zoneIdMl,
           zonaNombre: resolucion.zonaNombre,
-        };
-        break;
+        });
+        return { ok: true, motivo: "accion_requerida", causa: "flex_zona_sin_courier" };
       case "sin_zonas_flex":
-        causa = "flex_sin_config";
-        break;
+        await marcarAccionRequerida(notif.id, "flex_sin_config", {
+          motivo: resolucion.motivo,
+        });
+        return { ok: true, motivo: "accion_requerida", causa: "flex_sin_config" };
       case "anomalo":
-        causa = "flex_anomalo";
-        contexto = { ...contexto, zoneIds: resolucion.zoneIds };
-        break;
+        await marcarAccionRequerida(notif.id, "flex_anomalo", {
+          motivo: resolucion.motivo,
+          zoneIds: resolucion.zoneIds,
+        });
+        return { ok: true, motivo: "accion_requerida", causa: "flex_anomalo" };
       case "sin_cuenta_ml":
       case "input_invalido":
-        // No debería llegar acá — receiver Fase 1 filtra estas antes. Skip + log.
+        // No debería llegar acá — receiver Fase 1 filtra estas antes. Skip + log,
+        // NO transición: dejamos la notif en su estado actual para que se investigue.
         console.warn(
-          `[crear-envio-flex] Motivo inesperado en 'valido' notif=${notif.id}: ${resolucion.motivo}`,
+          `[crear-envio-flex] Motivo inesperado en '${notif.estado}' notif=${notif.id}: ${resolucion.motivo}`,
         );
-        await marcarProcesada(notif.id);
         return {
           ok: false,
           motivo: "skipped",
           causa: `motivo inesperado: ${resolucion.motivo}`,
         };
     }
-    if (causa === null) {
-      // Type-guard defensivo — no debería ejecutarse.
-      return { ok: false, motivo: "error", causa: `motivo no manejado: ${resolucion.motivo}` };
-    }
-    const envioId = await crearEnvioBloqueadoFlex({
-      empresaId,
-      shipmentId,
-      mlOrderId,
-      causa,
-      contexto,
-    });
-    await marcarProcesada(notif.id);
-    return { ok: true, envioId, motivo: "bloqueado", causa: ESTADOS_BLOQUEO_FLEX[causa].key };
   }
 
-  // Path feliz: llamar crearEnvio. El motor cobra según rama de
-  // CredencialCourier(empresaId, resolucion.courierNombre). CERO
-  // tratamiento especial de plata acá.
+  // Path feliz: llamar crearEnvio con courier REAL. El motor cobra según rama.
   try {
-    const result = await crearEnvioFlexHappyPath({
+    const result = await llamarCrearEnvioFlex({
       empresaId,
       shipmentId,
       mlOrderId,
@@ -390,22 +344,23 @@ export async function procesarNotificacionFlex(
       nombreCourier: resolucion.courierNombre,
       payload: shipment.payloadRaw,
     });
-    await marcarProcesada(notif.id);
-    if (result.motivo === "creado") {
-      return { ok: true, envioId: result.envioId, motivo: "creado" };
+    if (!result.ok) {
+      // Datos incompletos del payload → notif accion_requerida (NO envío).
+      await marcarAccionRequerida(notif.id, result.causaDatos, result.contexto);
+      return { ok: true, motivo: "accion_requerida", causa: result.causaDatos };
     }
-    return {
-      ok: true,
-      envioId: result.envioId,
-      motivo: "bloqueado",
-      causa: result.causa ?? "unknown",
-    };
+    await marcarProcesada(notif.id);
+    return { ok: true, envioId: result.envioId, motivo: "creado" };
   } catch (e) {
     console.error(
       `[crear-envio-flex] crearEnvio falló para shipmentId=${shipmentId}:`,
       e instanceof Error ? e.message : String(e).slice(0, 300),
     );
-    // No marcamos procesada — el worker reintentará en la próxima corrida.
+    // No marcamos accion_requerida ni procesada — worker reintentará en la
+    // próxima corrida. Errores transient (BD down, cotizador timeout, etc.)
+    // se autorresuelven; errores estables (courier missing, credencial ausente)
+    // los captura el motor con sus BLOQUEADO_* legacy y crea el Envío igual
+    // (no llega a este catch en ese caso).
     return {
       ok: false,
       motivo: "error",
@@ -415,29 +370,17 @@ export async function procesarNotificacionFlex(
 }
 
 // ============================================================================
-// Marca la NotificacionFlex como procesada. Reusa el estado "procesada" que
-// ya define NotificacionFlex.estado ("recibida" | "procesada" | "descartada" |
-// "error" | "huerfana" | los 5 EstadoNotificacionFlex del catálogo).
-// Best-effort: si falla, el worker reintentará y el guard idempotente evita
-// el double-create.
-// ============================================================================
-async function marcarProcesada(id: number): Promise<void> {
-  try {
-    await prisma.notificacionFlex.update({
-      where: { id },
-      data: { estado: "procesada", procesadaEn: new Date() },
-    });
-  } catch (e) {
-    console.warn(
-      `[crear-envio-flex] no pude marcar notif=${id} como procesada:`,
-      e instanceof Error ? e.message : String(e).slice(0, 200),
-    );
-  }
-}
-
-// ============================================================================
 // Batch — mirror byte-a-byte del sync-zonas: findMany + Promise.allSettled.
-// Una fila fallida NO aborta el batch.
+// Una fila fallida NO aborta el batch. Escanea AMBOS estados: "valido" (nuevas)
+// y "accion_requerida" (re-scan por si el vendedor destrabó la causa).
+//
+// TERMINACIÓN DEL LOOP:
+//   - Notif ruteable → estado="procesada", causaFlex=null → NO se re-escanea.
+//   - Notif no ruteable → estado="accion_requerida", causaFlex=<causa> → se
+//     re-escanea en la próxima corrida, pero si la causa no cambió, el
+//     resolver devuelve el mismo motivo y la marcamos en el mismo estado —
+//     idempotente + no acumula filas nuevas ni consume plata.
+//   - Notif con error transient → sin cambio de estado → reintento próximo run.
 // ============================================================================
 
 export async function procesarNotificacionesFlexPendientes(
@@ -445,13 +388,13 @@ export async function procesarNotificacionesFlexPendientes(
 ): Promise<{
   procesadas: number;
   creadas: number;
-  bloqueadas: number;
+  accionRequerida: number;
   yaExistian: number;
   errores: number;
   skipped: number;
 }> {
   const pendientes = await prisma.notificacionFlex.findMany({
-    where: { estado: "valido" },
+    where: { estado: { in: [...ESTADOS_NOTIF_A_PROCESAR] } },
     select: { id: true },
     orderBy: { id: "asc" },
     take: limit,
@@ -462,7 +405,7 @@ export async function procesarNotificacionesFlexPendientes(
   );
 
   let creadas = 0,
-    bloqueadas = 0,
+    accionRequerida = 0,
     yaExistian = 0,
     errores = 0,
     skipped = 0;
@@ -475,7 +418,7 @@ export async function procesarNotificacionesFlexPendientes(
     if (v.ok) {
       if (v.motivo === "creado") creadas++;
       else if (v.motivo === "ya_existia") yaExistian++;
-      else if (v.motivo === "bloqueado") bloqueadas++;
+      else if (v.motivo === "accion_requerida") accionRequerida++;
     } else {
       if (v.motivo === "skipped") skipped++;
       else errores++;
@@ -485,7 +428,7 @@ export async function procesarNotificacionesFlexPendientes(
   return {
     procesadas: pendientes.length,
     creadas,
-    bloqueadas,
+    accionRequerida,
     yaExistian,
     errores,
     skipped,

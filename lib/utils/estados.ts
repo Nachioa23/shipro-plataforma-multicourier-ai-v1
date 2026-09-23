@@ -107,38 +107,42 @@ export const ESTADOS_NOTIFICACION_FLEX_REINTENTABLES: EstadoNotificacionFlexKey[
 ];
 
 // ====================================================
-// CATÁLOGO 4 — ESTADOS DE BLOQUEO ESPECÍFICOS DE FLEX (MEF Fase 2.3.c, 2026-09-23)
+// CATÁLOGO 4 — CAUSAS DE NOTIFICACIÓN FLEX NO RUTEABLE (MEF Fase 2.3.c, 2026-09-23)
 // ====================================================
-// Estados de bloqueo dedicados que crea el worker Flex ([[DEUDA 180]] Fase 2.3.c)
-// cuando el envío no se puede rutear a un courier real por causas ML-upstream.
-// Distintos de los BLOQUEADO_* legacy (BLOQUEADO_DEPOSITO, BLOQUEADO_CREDENCIAL,
-// BLOQUEADO_OPERATIVIDAD, BLOQUEADO_SALDO, BLOQUEADO_PARCIAL, BLOQUEADO_DATOS_PAQUETE)
-// porque estos no se destraban con config del cliente Shipro — se destraban con
-// acción del vendedor en el portal ML (armar zonas, asignar CPs) o con re-fetch
-// del shipment ML (cuando el shape faltaba).
+// [[DEUDA 173]] centralización de literales.
 //
-// Se centralizan acá (mismo archivo que ESTADOS_INTERNOS/COURIER/NOTIFICACION_FLEX)
-// siguiendo [[DEUDA 173]] (centralización de literales de estado); el worker Flex
-// (lib/mercadolibre/crear-envio-flex.ts) importa las keys de este catálogo en vez
-// de hardcodear strings.
+// **Estas son CAUSAS DE NotificacionFlex, no estados de Envío.** Restructure
+// Chat D 2026-09-23: una venta Flex NO ruteable NO se convierte en Envío. Se
+// queda en el buzón `NotificacionFlex` con `estado="accion_requerida"` +
+// `causaFlex=<key>` para que el vendedor la vea + destrabe (agregar zona,
+// asignar courier, etc.); cuando destraba, la próxima corrida del worker Flex
+// la re-escanea y (si ahora es ruteable) crea el Envío real con crearEnvio.
+//
+// Los envíos SÓLO se crean vía crearEnvio con un courier REAL en `Courier`. No
+// hay envíos "placeholder" ni con causa Flex — ese carril fue rechazado por
+// Chat D en la revisión money-critical.
+//
+// El worker Flex (lib/mercadolibre/crear-envio-flex.ts) escribe estas keys en
+// NotificacionFlex.causaFlex. La UI del buzón (futura) mostrará el display.
 //
 // Semántica:
 //   flex_fuera_cobertura     — la cuenta ML tiene zonas activas pero NINGUNA
 //                              cubre el CP destino del shipment (resolver
-//                              motivo="cp_no_matchea"). Cliente puede editar
-//                              zonas en el portal ML para agregar cobertura.
+//                              motivo="cp_no_matchea"). Se destraba cuando el
+//                              vendedor agrega el CP a una zona en el portal ML.
 //   flex_zona_sin_courier    — el CP matcheó una zona activa PERO el cliente
 //                              no le asignó courier en /configuracion/couriers-flex
-//                              (resolver motivo="zona_sin_courier"). Se
-//                              destraba asignando courier en la pantalla 2.2.
+//                              (resolver motivo="zona_sin_courier"). Se destraba
+//                              asignando courier en la pantalla Fase 2.2.
 //   flex_sin_config          — la cuenta ML tiene CERO zonas activas (vendedor
-//                              no configuró Flex en el portal ML, o
-//                              deshabilitó todas). Resolver motivo="sin_zonas_flex".
+//                              no configuró Flex en el portal ML, o deshabilitó
+//                              todas). Resolver motivo="sin_zonas_flex".
 //   flex_cp_no_extraido      — el receiver Fase 1 no pudo extraer
 //                              receiver_address.zip_code del payload del
 //                              shipment (shape ML diferente al esperado).
 //                              cpDestino=null en ShipmentFlex → sin CP no se
-//                              puede rutear.
+//                              puede rutear. Se destraba con re-fetch del
+//                              shipment (Fase 3 refresh + shape ML).
 //   flex_anomalo             — resolver motivo="anomalo": >1 zona activa
 //                              matcheó el mismo CP (GN dice imposible; drift
 //                              a investigar). Fail-fast: NO ruteamos silenciosa.
@@ -155,8 +159,8 @@ export const ESTADOS_BLOQUEO_FLEX = {
   flex_datos_incompletos: { key: "flex_datos_incompletos", display: "Datos incompletos en el shipment ML" },
 } as const;
 
-export type EstadoBloqueoFlexKey = keyof typeof ESTADOS_BLOQUEO_FLEX;
-export type EstadoBloqueoFlex = typeof ESTADOS_BLOQUEO_FLEX[EstadoBloqueoFlexKey];
+export type CausaNotificacionFlexKey = keyof typeof ESTADOS_BLOQUEO_FLEX;
+export type CausaNotificacionFlex = typeof ESTADOS_BLOQUEO_FLEX[CausaNotificacionFlexKey];
 
 // Subconjunto de estados courier que NO son terminales.
 // Un envío puede seguir avanzando hacia ENTREGADO desde estos.

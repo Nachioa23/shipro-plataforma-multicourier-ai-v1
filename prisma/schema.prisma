@@ -2197,9 +2197,27 @@ model NotificacionFlex {
   payloadRaw Json
 
   // Lifecycle del procesamiento interno de Shipro (no del envío ML):
-  // "recibida" (staged, no procesada aún) | "procesada" (worker actuó) |
-  // "descartada" (irrelevante, sin acción) | "error" (worker falló, reintentar).
+  // "recibida" (staged, no procesada aún) | "valido" (GET al shipment OK,
+  // listo para rutear) | "accion_requerida" (worker Flex intentó rutear pero
+  // la notificación NO puede convertirse en Envío por causa ML-upstream —
+  // ver causaFlex) | "procesada" (worker actuó → Envío real creado) |
+  // "descartada" (irrelevante, sin acción) | "error" (worker falló,
+  // reintentar) | "huerfana" (seller no gestionado) |
+  // "get_fallido_reintentable" / "get_shipment_no_existe" (Fase 3 reintenta).
   estado String @default("recibida")
+
+  // [[DEUDA 180]] MEF Fase 2.3.c refactor (2026-09-23, Chat D): causa
+  // específica cuando estado="accion_requerida". La venta Flex NO se convierte
+  // en Envío hasta que sea ruteable — se queda en el buzón NotificacionFlex
+  // con su causa. El worker re-escanea "accion_requerida" en cada corrida:
+  // si el vendedor destraba la causa (agrega zona, asigna courier, etc.), la
+  // próxima corrida rutea + crea el Envío + pasa a "procesada".
+  //
+  // Valores canónicos (ver lib/utils/estados.ts ESTADOS_BLOQUEO_FLEX):
+  //   flex_fuera_cobertura, flex_zona_sin_courier, flex_sin_config,
+  //   flex_cp_no_extraido, flex_anomalo, flex_datos_incompletos.
+  // Nullable: solo poblado cuando estado="accion_requerida".
+  causaFlex String?
 
   recibidaEn  DateTime  @default(now())
   procesadaEn DateTime?

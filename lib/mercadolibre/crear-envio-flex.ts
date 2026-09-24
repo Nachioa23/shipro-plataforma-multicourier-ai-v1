@@ -37,7 +37,11 @@
 import prisma from "@/lib/prisma";
 import { crearEnvio, type CrearEnvioInput } from "@/lib/envios/crear";
 import { resolverCourierPorCpFlex } from "@/lib/mercadolibre/resolver-courier-zona";
-import { ESTADOS_BLOQUEO_FLEX, type CausaNotificacionFlexKey } from "@/lib/utils/estados";
+import {
+  ESTADOS_BLOQUEO_FLEX,
+  esCausaReescaneable,
+  type CausaNotificacionFlexKey,
+} from "@/lib/utils/estados";
 
 export type ResultadoProcesarNotificacionFlex =
   | { ok: true; envioId: number; motivo: "creado" | "ya_existia" }
@@ -84,24 +88,31 @@ function nombreFrom(v: unknown): string | null {
 }
 
 // ============================================================================
-// Marca la NotificacionFlex como "accion_requerida" + causaFlex=<causa>. El
-// vendedor la ve en el buzón; cuando destraba la causa, la próxima corrida
-// del worker la re-escanea.
+// Marca la NotificacionFlex con el estado que corresponda según la causa:
+//   - causa RE-ESCANEABLE  → estado="accion_requerida"           (worker la lifta)
+//   - causa ESTANCADA      → estado="accion_requerida_estancada" (worker NO la lifta)
+//
+// Anti-starvation (fix 2026-09-24): las estancadas se sacan del filtro del
+// worker (ESTADOS_NOTIF_A_PROCESAR) → no ocupan slots del batch cada corrida.
+// El set canónico vive en lib/utils/estados.ts (esCausaReescaneable).
 // ============================================================================
 async function marcarAccionRequerida(
   notifId: number,
   causa: CausaNotificacionFlexKey,
   contexto: Record<string, unknown>,
 ): Promise<void> {
+  const estadoTarget = esCausaReescaneable(causa)
+    ? "accion_requerida"
+    : "accion_requerida_estancada";
   await prisma.notificacionFlex.update({
     where: { id: notifId },
     data: {
-      estado: "accion_requerida",
+      estado: estadoTarget,
       causaFlex: ESTADOS_BLOQUEO_FLEX[causa].key,
     },
   });
   console.warn(
-    `[crear-envio-flex] notif ${notifId} → accion_requerida (${ESTADOS_BLOQUEO_FLEX[causa].key})`,
+    `[crear-envio-flex] notif ${notifId} → ${estadoTarget} (${ESTADOS_BLOQUEO_FLEX[causa].key})`,
     contexto,
   );
 }
@@ -371,15 +382,20 @@ export async function procesarNotificacionFlex(
 
 // ============================================================================
 // Batch — mirror byte-a-byte del sync-zonas: findMany + Promise.allSettled.
-// Una fila fallida NO aborta el batch. Escanea AMBOS estados: "valido" (nuevas)
-// y "accion_requerida" (re-scan por si el vendedor destrabó la causa).
+// Una fila fallida NO aborta el batch. Escanea SOLO estados re-procesables:
+// "valido" (nuevas) y "accion_requerida" (re-scan por si el vendedor destrabó
+// una causa RE-ESCANEABLE — zona_sin_courier/sin_config/cp_no_extraido/
+// datos_incompletos). Las estancadas viven en "accion_requerida_estancada" y
+// NO entran al batch (anti-starvation, fix 2026-09-24).
 //
 // TERMINACIÓN DEL LOOP:
 //   - Notif ruteable → estado="procesada", causaFlex=null → NO se re-escanea.
-//   - Notif no ruteable → estado="accion_requerida", causaFlex=<causa> → se
-//     re-escanea en la próxima corrida, pero si la causa no cambió, el
-//     resolver devuelve el mismo motivo y la marcamos en el mismo estado —
-//     idempotente + no acumula filas nuevas ni consume plata.
+//   - Notif con causa RE-ESCANEABLE → estado="accion_requerida" → se re-escanea
+//     próxima corrida; si la causa persiste, transición idempotente (mismo
+//     estado + misma causa). Cuando el vendedor destraba o Chat A arregla el
+//     extractor de payload, la corrida siguiente rutea + pasa a "procesada".
+//   - Notif con causa ESTANCADA → estado="accion_requerida_estancada" → NO se
+//     re-escanea. Requiere intervención manual (botón admin / investigación).
 //   - Notif con error transient → sin cambio de estado → reintento próximo run.
 // ============================================================================
 

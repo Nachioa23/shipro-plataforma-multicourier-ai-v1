@@ -162,6 +162,57 @@ export const ESTADOS_BLOQUEO_FLEX = {
 export type CausaNotificacionFlexKey = keyof typeof ESTADOS_BLOQUEO_FLEX;
 export type CausaNotificacionFlex = typeof ESTADOS_BLOQUEO_FLEX[CausaNotificacionFlexKey];
 
+// ====================================================
+// SUB-CATÁLOGO — CAUSAS RE-ESCANEABLES vs ESTANCADAS (MEF Fase 2.3.c fix, 2026-09-24)
+// ====================================================
+// [[DEUDA 173]] centralización.
+//
+// CRITERIO Chat D: "se destraba con una acción ESPERABLE" (config del
+// vendedor en pantalla 2.2 / portal ML, O fix nuestro del extractor de
+// payload ML). Si sí → RE-ESCANEABLE (el worker las lifta cada corrida;
+// cuando la acción llega, la próxima corrida rutea). Si no → ESTANCADA
+// (el worker NO las lifta; requiere intervención manual — botón admin,
+// investigación, o fix Chat D).
+//
+// Anti-starvation: el worker escanea SOLO estado="accion_requerida" +
+// "valido" (ver ESTADOS_NOTIF_A_PROCESAR en crear-envio-flex.ts). Las
+// estancadas viven en estado="accion_requerida_estancada" y NO entran al
+// batch → nunca ocupan slots del `take=100` frente a notifs nuevas.
+export const CAUSAS_REESCANEABLES: ReadonlySet<CausaNotificacionFlexKey> = new Set([
+  // Se destraban con config del vendedor:
+  "flex_zona_sin_courier", // Vendedor asigna courier en /configuracion/couriers-flex (Fase 2.2).
+  "flex_sin_config",        // Vendedor configura Flex en portal ML + sync 2.1 trae zonas.
+  // Se destraban con fix NUESTRO del extractor de payload ML (shape pending):
+  // ⚠️ IMPORTANTE: son RE-ESCANEABLES porque el shape del receiver_address /
+  // shipping_items ML está sujeto a ajuste con webhooks reales. Cuando
+  // ajustemos el extractor (crear-envio-flex.ts extractión defensiva o el
+  // receiver retrofit), la próxima corrida re-evalúa el ShipmentFlex.
+  // payloadRaw (no cambió, seguimos leyendo lo mismo) — CON el extractor
+  // corregido — y las rutea. Moverlas a ESTANCADAS las mataría justo cuando
+  // arreglemos el shape.
+  "flex_cp_no_extraido",
+  "flex_datos_incompletos",
+] as const);
+
+export const CAUSAS_ESTANCADAS: ReadonlySet<CausaNotificacionFlexKey> = new Set([
+  // Drift ML — "imposible" per GN (>1 zona activa matchea el mismo CP).
+  // Requiere investigación manual antes de re-processar; auto-lift enmascara.
+  "flex_anomalo",
+  // CP legítimamente fuera de la cobertura del vendedor. Config estable —
+  // no se destraba solo. Nacho pending final call; queda ESTANCADA por default
+  // (si Nacho decide re-escaneable, mover al set de arriba — cero migración).
+  "flex_fuera_cobertura",
+] as const);
+
+/**
+ * Helper canónico. `true` si la causa se destraba con acción esperable →
+ * worker la lifta cada corrida (estado="accion_requerida"). `false` si
+ * requiere intervención manual → worker NO la lifta (estado="accion_requerida_estancada").
+ */
+export function esCausaReescaneable(causa: CausaNotificacionFlexKey): boolean {
+  return CAUSAS_REESCANEABLES.has(causa);
+}
+
 // Subconjunto de estados courier que NO son terminales.
 // Un envío puede seguir avanzando hacia ENTREGADO desde estos.
 export const ESTADOS_COURIER_EN_CICLO: EstadoCourierKey[] = [

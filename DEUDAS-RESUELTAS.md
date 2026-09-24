@@ -1389,3 +1389,76 @@ Registrada 2026-09-13. Lideró Chat D. Chat A (núcleo) construyó la Fase 1 com
 
 ---
 
+## DEUDA 180 — Mercado Envíos Flex (MEF) Fase 2 (ruteo por zonas) (RESUELTA 2026-09-24 — en prod + verificada, 3 pendientes conocidos explícitos)
+
+**Contexto**: Chat A núcleo bajo dirección Chat D. Fase 2 completa el ruteo del canal ML Flex: leer las zonas del vendedor, dejarle asignar un courier por zona, resolver el courier al recibir un shipment real y crear el Envío por el motor unico (`crearEnvio`) sin tratamiento especial de plata.
+
+**Lo construido — MEF Fase 2 (ruteo, Chat A núcleo bajo dirección Chat D), 6 commits en prod, TODO aditivo, motor de precios NUNCA tocado (grep `lib/cotizador.ts` vacío en todos los deploys)**:
+
+- **Fase 2.1 — Zonas Flex del vendedor** (commit `74ba154`, 2026-09-22):
+  - Modelo: `CuentaMercadoLibreZona` + `CuentaMercadoLibreZonaCp` (espejo byte-a-byte del patrón `SucursalCourier ↔ SucursalCourierCp`: child + grand-child con FK `Cascade`, `@@unique([parentId, key])`, `@@index([codigoPostal])`). + 3 ADD COLUMN aditivas en `CuentaMercadoLibre` (`flexConfigurado Boolean @default(false)`, `flexCutOffTime String?`, `flexDailyCapacity Int?`). Migración `20260922180920_mef_zonas_flex`.
+  - Sync: `lib/mercadolibre/sync-zonas.ts` — `sincronizarZonasFlex(empresaId)` + batch `sincronizarZonasFlexTodasLasCuentas()`. **PRECISION 1 atomicidad**: delete+recreate de una cuenta corre DENTRO de un solo `prisma.$transaction` — Fase 2.3 nunca ve estado intermedio "cero zonas". **PRECISION 1b empty-read guard**: si `services.self_service` está AUSENTE del payload ML (vendedor sin Flex), NO se borran las zonas existentes ni se toca `flexConfigurado` — retorna `{ ok: true, sinFlex: true }` sin efectos. Nunca zero-outear snapshot bueno por lectura vacía.
+  - Cron: `app/api/cron/mef-sincronizar-zonas/route.ts` — mirror byte-a-byte de `sincronizar-couriers`, auth automático via proxy `CRON_SECRET`.
+
+- **Fase 2.2 — Config Couriers Flex (pantalla + persistencia)** (commit `f4af5c7`, 2026-09-22):
+  - Modelo: `AsignacionCourierZonaFlex` — **anclada por `zoneIdMl` (NO FK a la zona)** para que la asignación SOBREVIVA el delete+recreate del sync 2.1 (bug "el sync borra las asignaciones" cortado en diseño). `@@unique([empresaId, zoneIdMl])` = exclusividad (1 zona = 1 courier, reasignar reemplaza). `courierId Int` FK a `Courier` (convención dominante del schema). Migración `20260922191751_mef_asignacion_courier_zona`.
+  - Pantalla: `app/(dashboard)/configuracion/couriers-flex/page.tsx` — mirror del twin `conexiones` (self-service, session-scoped). Estados color: verde (asignada), rojo (acción requerida), gris (inactiva en ML).
+  - Endpoints: `GET/PUT /api/empresa/mercadolibre/couriers-flex` session-scoped (gate `gerente_cliente/operador_cliente`) + defense-in-depth (`zoneIdMl` debe pertenecer a la cuenta ML de esta empresa; `courierId` debe ser un `CredencialCourier` activo del cliente). `empresaId` SIEMPRE del JWT firmado, nunca del body.
+  - Selector courier: reusa la fuente de verdad `CredencialCourier(empresaId, activo=true) ∩ Courier(activo=true)`, patrón idéntico al del endpoint `/api/configuracion/couriers`.
+  - Entrada nueva en `tabs[]` de `configuracion/layout.tsx` (gate `!esOperadorCliente`).
+
+- **Retoque receiver Fase 1 — persiste el shipment del GET** (commit `bf8699f`, 2026-09-22):
+  - Modelo: `ShipmentFlex` — `shipmentId String @unique` (business key + idempotencia) + `empresaId FK SetNull` + `mlUserId BigInt` + `cpDestino String?` (extracción defensiva de `receiver_address.zip_code`) + `estadoShipment String?` + `payloadRaw Json` (body completo para Fase 3/4 sin re-GET). Migración `20260922200301_mef_shipment_flex`.
+  - Receiver retrofit: en el path `valido` del `clasificarShipment`, ahora lee `res.json()` y persiste `ShipmentFlex` via `upsert` best-effort (`try/catch` total; NUNCA rompe el 200 al ML ni la clasificación). Validación intacta (IP allowlist + x-signature-optional + dedup P2002 + 200-always UNTOUCHED, grep-proveniente 0 líneas modificadas).
+
+- **Fase 2.3.a — Resolver puro CP→zona→courier** (commit `e6c732b`, 2026-09-22, tweak Chat D 2026-09-23):
+  - `lib/mercadolibre/resolverCourierPorCpFlex(empresaId, cp)` — helper puro (cero side-effects, cero persistencia, cero money). Filtro `enabled=true` DENTRO del where (nunca matchea zonas desactivadas). Normalización simétrica al sync (`String(cp).trim()`). Variantes tipadas: `ok` / `input_invalido` / `sin_cuenta_ml` / `sin_zonas_flex` / `cp_no_matchea` / `zona_sin_courier` / `anomalo`. **FAIL-FAST si >1 zona activa matchea el mismo CP** (GN garantiza disjuntos entre activas; si aparecen, NO ruteamos silenciosa — variante `anomalo`).
+
+- **Fase 2.3.c — Worker que crea envíos Flex** (commits `85c83fa` + `93c2694` + `610fb21`, 2026-09-23/24):
+  - Ubicación: `lib/mercadolibre/crear-envio-flex.ts` + cron `app/api/cron/mef-procesar-notificaciones/route.ts`. Molde Tiendanube (labels/generate), **worker SEPARADO del receiver** (mismo bucket que `mef-sincronizar-zonas`).
+  - **🔒 SIN TRATAMIENTO ESPECIAL DE PLATA** (Chat D revisión money-critical): Flex pasa por `crearEnvio` como cualquier envío; el motor cobra según la rama del courier asignado en Fase 2.2 (`CredencialCourier.usaCredencialesPropias` → Rama A cascada completa / Rama B Fee-only). **CERO SMO exento, CERO guard Rama B, CERO flag canal-aware**. La premisa "SMO exento en Flex" del recon inicial fue **REVISADA/DESCARTADA** por Nacho+Chat D: cada variable (SMO, markup Shipro, markup fijo, intermediario, Fee) ya tiene su gate per-courier/per-empresa; el motor es rama-aware, no channel-aware.
+  - **Envío SOLO vía `crearEnvio` con courier REAL** (invariante hard, grep-proven: cero `prisma.envio.create` en el creator; cero `findFirstOrThrow`/`SHP-BLOQ`/placeholder courier). El segundo camino de creación fue removido en `93c2694`.
+  - **Vínculo directo Envio ↔ ML** (mirror byte-a-byte de Tiendanube): `Envio.mercadolibreShipmentId String?` + `Envio.mercadolibreOrderId String?` + `@@index([mercadolibreShipmentId])`. Migración `20260923183958_mef_envio_ml_link`. `OrdenExterna.mercadolibreShipmentId` queda como legacy scaffold sin uso (documentado en el schema — usar `OrdenExterna` rompería la simetría con el twin Tiendanube).
+  - **`crear.ts` = SOLO plumbing aditivo** (grep-proven, 3 hunks +12 líneas net): interface CrearEnvioInput agrega 2 fields opcionales + destructure + persist en `tx.envio.create.data`. Cero líneas tocan rama/SMO/montoDebito/cotización.
+  - **Idempotencia 2 capas**:
+    1. Guard early-out por `Envio.mercadolibreShipmentId` (índice dedicado) — evita entrar al motor si ya existe.
+    2. `crearEnvio` recibe `idempotencyKey="mef-${shipmentId}"` + red final `@@unique([empresaId, idempotencyKey])`.
+  - **Venta no ruteable NO crea Envío** (restructure `93c2694`): queda en `NotificacionFlex` con `estado="accion_requerida"` (o `"accion_requerida_estancada"` — ver anti-starvation abajo) + `causaFlex String?` (nueva columna, migración `20260923195742_mef_notif_causa_flex`). Cuando el vendedor destraba (asigna courier, configura Flex, arreglamos el extractor de payload ML), la próxima corrida del worker la rutea + crea el Envío + marca procesada. Estados de causa: `flex_fuera_cobertura` / `flex_zona_sin_courier` / `flex_sin_config` / `flex_cp_no_extraido` / `flex_anomalo` / `flex_datos_incompletos` (catálogo `ESTADOS_BLOQUEO_FLEX` en `lib/utils/estados.ts` cross-ref [[DEUDA 173]]).
+  - **Anti-starvation (fix `610fb21`, 2026-09-24)**: el worker escanea SOLO causas **RE-ESCANEABLES** (destrabables por acción esperable — vendedor configura o Chat A arregla el extractor de payload ML): `flex_zona_sin_courier` / `flex_sin_config` / `flex_cp_no_extraido` / `flex_datos_incompletos`. Las **ESTANCADAS** (`flex_anomalo` / `flex_fuera_cobertura`) van a `estado="accion_requerida_estancada"` que el worker NO levanta — requieren intervención manual, no ocupan slots del `take=100` cada corrida. Set canónico en 1 lugar: `CAUSAS_REESCANEABLES` + `CAUSAS_ESTANCADAS` en `lib/utils/estados.ts` + helper `esCausaReescaneable(causa)`.
+
+**Verificado en prod 2026-09-24**:
+- Migraciones aplicadas (5 en Fase 2): `mef_zonas_flex`, `mef_asignacion_courier_zona`, `mef_shipment_flex`, `mef_envio_ml_link`, `mef_notif_causa_flex`. Todas aditivas puras — cero DROP, cero destructive ALTER inspeccionados byte-a-byte antes de aplicar.
+- Smoke tests OK: cron `mef-sincronizar-zonas` corrió con el test seller → guard `sinFlex` disparó (vendedor sin Flex en portal ML) → NO tocó zonas ni flags — PRECISION 1b validada con data real. Cron `mef-procesar-notificaciones` → `{ok:true, resumen:{procesadas:0,...}}` con buzón vacío. Pantalla `/configuracion/couriers-flex` carga con banners honestos.
+- Motor de precios INTACTO: `git diff bc4ac02..HEAD -- lib/cotizador.ts` → vacío en todos los deploys de Fase 2. `crear.ts` diff = +12 líneas de plumbing puro, cero código toca pricing (grep buscando `rama|smoNeto|montoDebito|resolverSmoNeto|aplicarMarkup|cotizar\(|usaCredencialesPropias` → matches sólo en comments/docs).
+
+**Flujo end-to-end funcionante**:
+```
+Venta ML → webhook a /api/mercadolibre/webhooks
+  → receiver: HMAC-opcional + IP allowlist + dedup + persist NotificacionFlex
+  → GET /shipments/{id} → estado="valido" + persist ShipmentFlex (cpDestino + payloadRaw)
+Cron mef-procesar-notificaciones
+  → findMany where estado IN ["valido","accion_requerida"] + take 100
+  → resolverCourierPorCpFlex(empresaId, cpDestino)
+    ├─ ok → crearEnvio(input) ← ÚNICO camino de creación (motor cobra por rama)
+    │   → Envio con mercadolibreShipmentId + idempotencyKey="mef-${shipmentId}"
+    │   → notif "procesada"
+    └─ !ok → notif "accion_requerida" (re-escaneable) o "accion_requerida_estancada" (manual)
+       + causaFlex=<causa específica>
+```
+
+**PENDIENTES CONOCIDOS (explícitos, NO bloquean el cierre — se resuelven con datos reales)**:
+
+1. **Shape REAL del payload ML** — la extracción de `cpDestino` / dirección / peso (`receiver_address.zip_code`, `receiver_address.street_name`, `shipping_option.declared_weight`, `shipping_items[].dimensions.weight`, etc.) es DEFENSIVA con optional chaining porque el shape real ML no se confirmó con datos reales (el test seller nunca generó shipment real en Fase 1). Se ajustan los paths con el PRIMER ENVÍO REAL. Las notifs que caigan en `flex_cp_no_extraido` o `flex_datos_incompletos` quedan RE-ESCANEABLES (`estado="accion_requerida"`) esperando justo ese fix — cuando ajustemos el extractor, la próxima corrida del worker las rutea sola (el `ShipmentFlex.payloadRaw` sigue igual; la corrección vive en el reader).
+
+2. **Handshake del webhook REAL de ML (heredado de Fase 1)** — la firma/IP real de ML no se ratificó en sandbox (impracticable — ver Fase 1 en esta misma DEUDA). Se valida con el primer webhook real. El logueo rico `[ml-webhook-recv]` del receiver captura headers + IP + body en el primer contacto para forense.
+
+3. **Wiring de los crons en el crontab del server** — `mef-sincronizar-zonas` (Fase 2.1) + `mef-procesar-notificaciones` (Fase 2.3.c) siguen SIN wireados. Bucket de 5 crons no-wireados (`rastreo` + `metricas-sla` + `sincronizar-couriers` + los 2 MEF). Invocables manual con `curl -H "Authorization: Bearer $CRON_SECRET"` mientras tanto. NO tratar los crons como "corriendo" en cálculos de frescura hasta cerrar la deuda. Se atiende como batch de deploy — pieza operativa, no de código.
+
+**Fases 3+ (fuera del alcance de Fase 2, las dirige Chat D)**: enriquecimiento (webhooks siguientes de un shipment ya creado), tracking downstream, manejo de excepciones (reintento de `get_fallido_reintentable`/`get_shipment_no_existe`), generación/descarga de etiqueta ML (canal Flex emite etiqueta del lado ML — Shipro consume, no genera). Quedan como pendientes de roadmap Chat D, no como TODOs de Chat A.
+
+**Commits de Fase 2 en prod** (6 hashes): `74ba154` (2.1 zonas) + `f4af5c7` (2.2 config couriers-flex) + `bf8699f` (retoque receiver ShipmentFlex) + `e6c732b` (2.3.a resolver) + `85c83fa` (2.3.c creator + worker + Envio ML fields) + `93c2694` (2.3.c restructure a accion_requerida + causaFlex) + `610fb21` (2.3.c anti-starvation) — 6 features + 5 migraciones aditivas.
+
+**Relación**: [[DEUDA 150]] (hub de conexiones — la pantalla `/configuracion/couriers-flex` conviviría con la de conexiones), [[DEUDA 173]] (centralización de literales — nuevo catálogo `ESTADOS_BLOQUEO_FLEX` + set `CAUSAS_REESCANEABLES/ESTANCADAS`), Fase 1 MEF (RESUELTA arriba en esta misma DEUDA 180).
+
+---
+

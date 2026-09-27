@@ -5023,3 +5023,32 @@ Son `<code>` (no `<Link>` — no rompen, es texto informativo). **Apuntan a pant
 **⚠️ DEUDA de deploy sigue abierta**: los crons `mef-sincronizar-zonas` (Fase 2.1) y `mef-procesar-notificaciones` (Fase 2.3.c) siguen **SIN wireado en el crontab del server** — bucket de los 5 crons no-wireados (`rastreo`, `metricas-sla`, `sincronizar-couriers`, `mef-sincronizar-zonas`, `mef-procesar-notificaciones`). Mientras tanto, invocables manual con `curl -H "Authorization: Bearer $CRON_SECRET" https://pm.shipro.pro/api/cron/<endpoint>`. NO tratar los crons como "corriendo" en cálculos de frescura hasta cerrar la deuda.
 
 ---
+
+### DEUDA 180 sub-item — Validación end-to-end real de Flex (ABIERTA 2026-09-27, prioridad MEDIA)
+
+**Título**: Validación end-to-end real de Flex — cerrar los 3 pendientes conocidos de Fase 1+2 con datos productivos (webhook real + shape real del payload + circuito operativo Flex real).
+
+**Prioridad**: MEDIA. **NO bloquea el diseño** (Fases 1 y 2 están en prod y verificadas en la parte que no dependía de datos reales); **SÍ bloquea el USO productivo real de MEF** (primer envío MEF de un cliente productivo) + el **arranque de Fase 3** (enriquecimiento downstream + tracking + etiqueta necesitan un shipment real para diseñarse contra data verificable).
+
+**Dictamen consolidado (3 investigaciones independientes: research propia + investigaciones GN + Soporte ML)**: validar Flex de punta a punta con TEST USERS es **IMPOSIBLE**. Razones estructurales confirmadas — no son bugs de sandbox sino comportamiento by-design:
+
+- **(a) `seller_reputation.level_id=null` en test users** — todo test user nace con reputación en null y NO hay vía (API / Soporte / flag oculto / ventas sintéticas) para escalarla a "verde". Soporte respondió literal "el user no presenta bloqueos" pero el `level_id` siguió null tras el pedido. Sin reputación verde no se puede activar Flex.
+- **(b) Programa de Despegue exige depósito real** — la rampa oficial de ML para activar Flex sin reputación consolidada requiere un depósito de ~$45.000 ARS en garantía. No simulable en sandbox; requiere plata real.
+- **(c) App móvil de Flex rechaza test users** — la app (obligatoria para que el chofer escanee la colecta + marque entrega en el pipeline oficial de Flex) no acepta credenciales de test.
+
+**Pendiente de validar** (necesita cuenta de PRODUCCIÓN real con reputación verde + Flex activo):
+
+1. **Handshake del webhook REAL de ML** — firma/origen entrando de verdad al receiver. Heredado de Fase 1 (registrado en el header de DEUDA 180). El logueo rico `[ml-webhook-recv]` captura headers + IP + body en el primer contacto para forense.
+2. **Shape REAL del payload de `GET /shipments/{id}`** — hoy la extracción de `cpDestino` / dirección / peso (`receiver_address.zip_code`, `receiver_address.street_name`, `shipping_option.declared_weight`, `shipping_items[].dimensions.weight`, etc.) es DEFENSIVA con optional chaining. Con el primer envío real se ajustan los paths. Las notifs que caigan en `flex_cp_no_extraido`/`flex_datos_incompletos` quedan re-escaneables (`estado="accion_requerida"`) esperando justo ese fix — cuando ajustemos el extractor, la próxima corrida del worker las rutea sola (el `ShipmentFlex.payloadRaw` sigue igual; la corrección vive en el reader).
+3. **Circuito operativo Flex** — opt-in del ítem al canal Flex, escaneo con la app móvil (obligatoria), estados downstream `shipped`/`delivered`. **Nudo abierto de Fase 3**: la app no está disponible para integraciones ML — "las empresas de logística tendrán que adaptarse". Pista a investigar (registrada en `docs/BLUEPRINT-MEF-FLEX.md`): el **"código de autorización"** de `Configuración > Preferencias de venta` que un chofer ingresa cuando la colecta es fuera de la dirección del vendedor — posible vía para meter un courier tercero (Andreani/Mocis/etc) en el circuito Flex sin app. SIN RESOLVER; requiere entorno Flex real para diseñarlo.
+
+**Camino para saldarla** (cuando haya foco/tiempo o cliente real):
+
+- **Vía A — Cuenta propia de Shipro a reputación verde**: llevar la cuenta ML propia por el Programa de Despegue (con el depósito real ~$45k ARS) o con 10 ventas reales de bajo valor para consolidar reputación, luego activar Flex → **Testing in Production**: ítem de control de bajo valor, compra real con una 2ª cuenta, interceptar el webhook real para validar el handshake + capturar el shape del payload real, cancelar antes de que afecte métricas del vendedor (cancelaciones bajo 1% no afectan reputación). Costo: el depósito del Despegue + el tiempo de operar la cuenta hasta reputación verde. Ventaja: cuenta bajo nuestro control, ejecutable sin dependencia externa.
+- **Vía B — Cliente real con Flex ya activo**: un cliente real con reputación verde + Flex activo presta su cuenta para la validación e2e. Costo cero de plata pero requiere identificar y coordinar con un cliente real dispuesto. Ventaja: representativo del uso real que veremos en producción.
+
+**Estado**: ABIERTA. En espera de foco/recursos (Vía A) o de cliente productivo dispuesto (Vía B). Cross-ref: los 3 pendientes conocidos del header de DEUDA 180 (Fase 1/2) se saldan acá con la validación e2e real.
+
+**Documentación complementaria**: `docs/BLUEPRINT-MEF-FLEX.md` — sección "Aprendizajes de la API de ML (verificados)" registra el dictamen de imposibilidad de testing con test users + los aprendizajes verificados durante Fases 1/2 (webhook por IP no firma, candado GET autenticado, zonas/CP disjuntos, SMO por rama revisado, nudo app Flex Fase 3).
+
+---

@@ -5052,3 +5052,50 @@ Son `<code>` (no `<Link>` — no rompen, es texto informativo). **Apuntan a pant
 **Documentación complementaria**: `docs/BLUEPRINT-MEF-FLEX.md` — sección "Aprendizajes de la API de ML (verificados)" registra el dictamen de imposibilidad de testing con test users + los aprendizajes verificados durante Fases 1/2 (webhook por IP no firma, candado GET autenticado, zonas/CP disjuntos, SMO por rama revisado, nudo app Flex Fase 3).
 
 ---
+
+## DEUDA 181 — Vencimientos y cuenta corriente del POSTPAGO — ciclo de facturación con plazos de pago (ABIERTA 2026-09-29, prioridad MEDIA — obra de diseño+desarrollo, no un bug)
+
+**Contexto**: la NPMS **HOY NO contempla** vencimientos de facturas, plazos de pago, ni detección de "factura vencida impaga". Descubierto 2026-09 al diseñar el "colchón como comodín" ([[DEUDA 175]] + [[DEUDA 176]]). El saldo es un **balance corriente plano** — `Empresa.saldoActivo Decimal` scalar único + ledger `MovimientoFinanciero` append-only. **NO existe concepto de "período de facturación"** en el sentido de ciclo con cierre + vencimiento + cobranza matcheada:
+
+- `LiquidacionMensual.periodo String` (YYYY-MM) existe solo como **label de agrupación** para reportes/proformas — no dispara cutoff, no impone vencimiento.
+- `LiquidacionMensual.estado String @default("EMITIDA")` — declara los valores `EMITIDA` / `PAGADA` / `ANULADA` pero **PAGADA no está implementada** (comment L709: *"PAGADA la introducirá el flow de cobranza"* — sin implementar). Solo `EMITIDA` (default) y `ANULADA` (PASO 2b conciliación) tienen setters.
+- **Cero campos** `fechaVencimiento` / `fechaPago` / `diasVencimiento` en `LiquidacionMensual`, `Empresa`, ni en ningún modelo relacionado. Grep exhaustivo: los 4 hits de "vencimiento" en el schema son tokens de un solo uso (corrección de dirección, install OAuth, tokens single-use), NO facturas.
+- **Cero endpoint / cron / flow** para marcar una liquidación como `PAGADA`, registrar la fecha de cobro, o calcular días vencidos.
+- La recarga admin (`POST /api/admin/finanzas`) crea un `MovimientoFinanciero` genérico (`INGRESO_MANUAL`/`AJUSTE_ADMIN`) que **NO se vincula a una `LiquidacionMensual` específica** — POSTPAGO paga su factura del mes y es un aumento genérico de `saldoActivo`, no una transición de estado del invoice.
+
+**El problema (palabras de Nacho)**: entre que se factura el período anterior, empieza el período nuevo, y el cliente paga el período anterior, hay una **ventana temporal** que genera demoras y conflictos financieros. Hoy se **"ata con alambre"** poniendo un `limiteDescubierto` de ~2 facturaciones mensuales habituales (cubre la ventana entre emisión-cobro-nueva-emisión), pero **NO es la solución real** — es un parche. Consecuencias observables:
+- Un cliente POSTPAGO que se atrasa con la factura del mes anterior sigue operando contra el mismo colchón; no hay señal automática de "vencido y sin pagar".
+- No hay dashboard/reporte de cuenta corriente por antigüedad (aging 30/60/90).
+- La suspensión automática (`saldoActivo ≤ -limiteDescubierto × 1.5`, [[DEUDA 22]]) solo mira el saldo global, no la antigüedad de la deuda ni facturas puntuales impagas.
+- Cero visibilidad para el equipo de administración sobre "qué clientes tienen facturas vencidas hace X días".
+
+**La solución real (etapa 2 del modelo de crédito)**: ciclo de facturación completo con plazos de pago, integrado con el gate de saldo. Piezas mínimas del diseño (a completar por Nacho antes de código):
+
+- **Modelo Factura/Liquidacion con vencimiento**: agregar a `LiquidacionMensual` (o modelo hermano) los campos `fechaEmision DateTime`, `fechaVencimiento DateTime`, `fechaPago DateTime?`. `estado="PAGADA"` con setter real. Consideración: mantener `LiquidacionMensual` o crear `Factura` separado si la semántica (proforma interna vs. factura legal cobrable) diverge — decisión de diseño Nacho.
+- **Plazos de pago configurables por cliente**: `Empresa.diasVencimientoLiquidacion Int? @default(0)` (o similar) — condición comercial per-cliente ("30 días fecha factura", "45 días", "contado", "cuenta corriente sin plazo fijo"). Setter en onboarding + editor (misma zona que [[DEUDA 176]]).
+- **Flow de cobranza**: endpoint/UI para marcar `estado="PAGADA"` con `fechaPago`, opcionalmente vinculando al `MovimientoFinanciero` que registra el cobro. Considerar audit trail via `registrarCambioConfiguracion` (nuevo campo sensible `liquidacionEstadoPago` en el catálogo).
+- **Detección de vencidas**: helper puro `liquidacionesVencidasImpagasPorEmpresa(empresaId): { count, montoTotal, diasMasViejo }` — reusable en dashboard admin + gate.
+- **Gate de saldo condicionado al ciclo**: `crear.ts` gate BLOQUEADO_SALDO extendido para consultar liquidaciones vencidas antes de aceptar despacho. Reglas a decidir:
+  - **(a) Bloqueo blando**: si hay X liquidaciones vencidas > N días → `BLOQUEADO_CUENTA_VENCIDA` (nuevo estado) aunque el colchón aritméticamente alcance. Se destraba al pagar la factura.
+  - **(b) Bloqueo escalonado**: colchón efectivo = `limiteDescubierto - monto_vencido_impago`. La deuda vencida consume el margen; se restablece al pagar.
+  - **(c) Solo señal**: no bloquea automáticamente, pero dispara alerta al equipo admin y warning al cliente. Depende de política de Nacho.
+- **Dashboard cuenta corriente**: vista admin con aging 30/60/90 por cliente (fuera del scope de código si el diseño arranca por el modelo, pero es la superficie natural del feature completa).
+
+**Money-critical**: toca el gate de débito (`crear.ts` L867-875) + el flujo de facturación + persistencia del ciclo. Requiere migración schema + endpoints nuevos + lógica downstream + verificación empírica end-to-end. **No es 1 archivo aditivo**; es una obra chica-mediana con diseño previo obligatorio.
+
+**Relación con etapa 1 (mientras esta deuda esté abierta)**:
+- **[[DEUDA 175]]** (colchón PREPAGO inerte — resolverlo hace que ambos métodos usen colchón plano) y **[[DEUDA 176]]** (endpoint + UI para editar `limiteDescubierto` post-alta) son la **ETAPA 1** — la "red de emergencia" que da el colchón plano funcional en ambos métodos + la capacidad de subirlo/bajarlo cuando la ventana lo requiera. Es exactamente el "alambre" descrito (límite plano que cubre la ventana entre facturaciones), sin el ciclo fino.
+- **Esta DEUDA 181** es la **ETAPA 2** — reemplaza el alambre por un ciclo de facturación real con vencimientos, plazos y detección de morosidad. La etapa 1 sigue siendo útil incluso post-181 (el `limiteDescubierto` sigue existiendo como línea de crédito operativa; el ciclo de facturación lo afina).
+- **[[DEUDA 22]]** (suspensión automática por exceso de descubierto) — sigue vigente pero se complementa: hoy suspende por saldo global, con 181 podría suspender también por factura vencida > N días.
+- **[[DEUDA 78]]** (colchón de finde) — objetivo original del colchón; se resuelve con etapa 1 (bug 175). La etapa 2 no lo modifica, solo agrega el ciclo encima.
+
+**Estado**: ABIERTA. **Prioridad media**. Obra de **diseño+desarrollo** — requiere **diseño de producto de Nacho** antes de arrancar código (decidir modelo Factura vs LiquidacionMensual extendida, política de plazos, semántica del bloqueo por vencidas — opciones (a)/(b)/(c) arriba). Sin diseño no se puede scope-ear el trabajo con precisión. Hoy latente (prod = prueba); se activa cuando entren clientes POSTPAGO productivos con facturación mensual real.
+
+**Scope estimado (post-diseño)**:
+- Migración schema: 3-5 fields aditivos en `LiquidacionMensual` + 1 field aditivo en `Empresa`.
+- Endpoints: 1-2 para marcar PAGADA + editar plazo per-cliente (mirror del patrón `toggle_activo` con audit).
+- Lógica downstream: gate de `crear.ts` (según política de bloqueo elegida) + helper puro de vencidas + posiblemente actualizar `evaluarSuspension` de [[DEUDA 22]].
+- UI: sección "Cuenta corriente" en dashboard admin (aging por cliente) + campo "días vencimiento" en editor de cliente (misma zona que [[DEUDA 176]]).
+- Verificación empírica: ciclo completo (emitir → vencer → pagar → restablecer) con cliente de prueba.
+
+**Origen**: recon money-critical Chat A 2026-09-29 durante el diseño de "colchón como comodín" ([[DEUDA 175]] + [[DEUDA 176]] unificadas). Al revisar el modelo de saldo/facturación para diseñar cómo el colchón debería comportarse en POSTPAGO productivo, apareció el gap del ciclo: no existe fecha de vencimiento en el schema, no hay flow para marcar PAGADA, y el saldo es un balance plano sin período fino. Nacho identificó que el `limiteDescubierto` de ~2 facturaciones es "alambre" — el ciclo real es una obra separada. Registrado como deuda propia para no perder el gap.

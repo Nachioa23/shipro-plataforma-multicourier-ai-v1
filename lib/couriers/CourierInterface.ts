@@ -107,6 +107,25 @@ export interface ResultadoBulto {
 }
 
 // ==========================================================
+// 3.c RECOLECCIÓN — courier que actúa como recolector de OTRO entregador (aditivo)
+// ==========================================
+// Solo aplica a couriers que pueden actuar como RECOLECTOR de un entregador
+// DISTINTO (hoy: Mocis, Intralog). Los entregadores puros no lo implementan.
+// El resultado describe la modalidad con la que el recolector vincula el envío
+// del entregador ya despachado — tres variantes, tipadas por discriminated union.
+export type ResultadoRecoleccion =
+  | { modalidad: "tracking_adoptado"; trackingRecolector?: string }
+  | { modalidad: "etiqueta_recoleccion"; trackingRecolector: string; etiquetaBase64?: string; etiquetaUrl?: string }
+  | { modalidad: "etiqueta_propia"; trackingRecolector: string; etiquetaBase64?: string; etiquetaUrl?: string };
+
+export interface DatosEntregadorParaRecoleccion {
+  courierNombre: string;
+  tracking: string;
+  etiquetaUrl?: string | null;
+  bultos?: ResultadoBulto[];
+}
+
+// ==========================================================
 // 4. ESTRUCTURA DE UNA SUCURSAL (Para mostrar en el Checkout)
 // ==========================================
 export interface SucursalInfo {
@@ -171,4 +190,15 @@ export interface ICourierIntegrator {
   obtenerSucursales(cp: string): Promise<SucursalInfo[]>;
   cancelarEnvio(tracking: string): Promise<boolean>;
   solicitarRecoleccion?(fecha: Date, cantidadBultos: number, direccionOrigen: string): Promise<string>;
+
+  /**
+   * OPTIONAL. Only couriers that can act as RECOLECTOR of a DIFFERENT entregador
+   * implement this (today: Mocis, Intralog). Pure entregadores do NOT implement it.
+   * Receives the already-dispatched anchor (entregador) result and links/adopts the
+   * shipment according to the recolector's own modality.
+   */
+  vincularRecoleccion?(params: {
+    datosEnvio: DespachoParams;
+    entregador: DatosEntregadorParaRecoleccion;
+  }): Promise<ResultadoRecoleccion>;
 }

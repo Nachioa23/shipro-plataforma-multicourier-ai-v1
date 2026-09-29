@@ -115,7 +115,9 @@ export async function procesarEnviosBloqueados(empresaId: number): Promise<Proce
     }
 
     const tipoCuentaEfectivo = credencial.tipoCuenta || empresa.modalidadPago;
-    const saldoDisponible = tipoCuentaEfectivo === "PREPAGO" ? saldoSimulado : saldoSimulado.add(limite);
+    // DEUDA 175 fix (2026-09-29): colchón plano en AMBAS modalidades (ver crear.ts gate).
+    // POSTPAGO byte-idéntico (ya usaba saldo + límite); PREPAGO ahora también.
+    const saldoDisponible = saldoSimulado.add(limite);
 
     if (saldoDisponible.lt(monto)) {
       // Saldo no alcanza para este. Como vamos FIFO, los siguientes tampoco

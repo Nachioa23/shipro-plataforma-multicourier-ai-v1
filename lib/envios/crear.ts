@@ -858,20 +858,28 @@ export async function crearEnvio(input: CrearEnvioInput) {
   }
 
   // ==============================================================
-  // VALIDACIÓN DE SALDO POR tipoCuenta (DEUDA 16)
-  // Reusa `empresaConData` cargada arriba. La modalidad (PREPAGO/POSTPAGO)
-  // afecta SOLO el timing, no el monto (montoDebito autoritativo ya está
-  // rama-aware). Si no alcanza, NO se rebota la creación: el envío se crea
-  // con SHP-* + BLOQUEADO_SALDO y se destraba al recargar saldo.
+  // VALIDACIÓN DE SALDO (DEUDA 16 + DEUDA 175 fix 2026-09-29)
+  // Reusa `empresaConData` cargada arriba. Modelo de crédito ETAPA 1:
+  // el colchón (`limiteDescubierto`) funciona como adelanto plano en AMBAS
+  // modalidades (PREPAGO y POSTPAGO). La modalidad afecta el timing de la
+  // recarga (PREPAGO: se recarga antes; POSTPAGO: se cobra al cierre del
+  // período), pero el gate money-critical es idéntico — ambos aceptan
+  // hasta `saldo + limiteDescubierto ≥ montoDebito`.
+  //
+  // Antes (pre-175): PREPAGO ignoraba `limiteDescubierto` → bloqueaba en $0
+  // pese al MIN_DESCUBIERTO_PREPAGO=$50k asignado en onboarding (colchón
+  // "inerte" contradiciendo DEUDA 78). Post-175: PREPAGO usa el colchón
+  // como POSTPAGO. **POSTPAGO byte-idéntico** (la expresión de la vieja
+  // rama else `saldo + limite ≥ monto` es exactamente ésta).
+  //
+  // Opción 1 (Nacho): no hay recovery logic nuevo — el `saldoActivo`
+  // negativo lo absorbe la próxima recarga vía el ledger existente.
+  //
+  // Si no alcanza, NO se rebota la creación: el envío se crea con SHP-*
+  // + BLOQUEADO_SALDO y se destraba al recargar saldo.
   // ==============================================================
-  if (tipoCuentaEfectivo === "PREPAGO") {
-    if ((empresaConData.saldoActivo ?? new Prisma.Decimal(0)).lt(montoDebito)) {
-      bloqueadoPorSaldo = true;
-    }
-  } else { // POSTPAGO
-    if ((empresaConData.saldoActivo ?? new Prisma.Decimal(0)).add(empresaConData.limiteDescubierto ?? new Prisma.Decimal(0)).lt(montoDebito)) {
-      bloqueadoPorSaldo = true;
-    }
+  if ((empresaConData.saldoActivo ?? new Prisma.Decimal(0)).add(empresaConData.limiteDescubierto ?? new Prisma.Decimal(0)).lt(montoDebito)) {
+    bloqueadoPorSaldo = true;
   }
 
   // Prioridad de estados: DEPOSITO > CREDENCIAL > OPERATIVIDAD > SALDO.
@@ -1219,7 +1227,9 @@ export async function crearEnvio(input: CrearEnvioInput) {
     } else if (bloqueadoPorOperatividad) {
       await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_OPERATIVIDAD", observacion: `Par (depósito × courier) no operativo. Motivos: ${motivosOperatividad.join(", ")}. Detalle: ${detalleOperatividad.join("; ")}. Configurá el par en /configuracion/depositos.`, envioId: envioCreado.id } });
     } else if (bloqueadoPorSaldo) {
-      const saldoDisponible = (empresaData?.saldoActivo ?? new Prisma.Decimal(0)).add(tipoCuentaEfectivo === "POSTPAGO" ? (empresaData?.limiteDescubierto ?? new Prisma.Decimal(0)) : new Prisma.Decimal(0));
+      // DEUDA 175 fix: `disponible` = saldo + colchón (mismo criterio que el gate,
+      // aplicable a AMBAS modalidades — el colchón es adelanto plano en las dos).
+      const saldoDisponible = (empresaData?.saldoActivo ?? new Prisma.Decimal(0)).add(empresaData?.limiteDescubierto ?? new Prisma.Decimal(0));
       await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_SALDO", observacion: `Bloqueado por saldo insuficiente. Costo $${montoDebito.toFixed(2)}, disponible $${saldoDisponible.toFixed(2)} (${tipoCuentaEfectivo}). Se desbloqueará al recargar saldo.`, envioId: envioCreado.id } });
     } else if (falloPorPeaje) {
       await tx.eventoTracking.create({ data: { estado: "RETENIDO", observacion: `Retenido en Peaje: ${motivoRetencion}`, envioId: envioCreado.id } });

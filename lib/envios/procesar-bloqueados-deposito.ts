@@ -113,7 +113,9 @@ export async function procesarEnviosBloqueadosPorDeposito(empresaId: number): Pr
     // Validar saldo. Si no alcanza, transicionar a BLOQUEADO_SALDO (el envío
     // tendrá depositoId asignado por consistencia, pero queda esperando recarga).
     const tipoCuentaEfectivo = credencial.tipoCuenta || empresa.modalidadPago;
-    const saldoDisponible = tipoCuentaEfectivo === "PREPAGO" ? saldoSimulado : saldoSimulado.add(limite);
+    // DEUDA 175 fix (2026-09-29): colchón plano en AMBAS modalidades (ver crear.ts gate).
+    // POSTPAGO byte-idéntico (ya usaba saldo + límite); PREPAGO ahora también.
+    const saldoDisponible = saldoSimulado.add(limite);
 
     if (saldoDisponible.lt(monto)) {
       // Transición DEPOSITO → SALDO: poblar depositoId + origenId snapshot,

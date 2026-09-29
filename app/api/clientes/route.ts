@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import bcrypt from "bcryptjs";
 // IMPORTAMOS LA NUEVA FUNCIÓN DEL MAILER
 import { enviarMailBienvenida } from "@/lib/mailer";
@@ -231,6 +232,113 @@ export async function PUT(request: Request) {
         const empresa = await prisma.empresa.update({
           where: { id: empresaIdNum },
           data: { activo: body.activo }
+        });
+        return NextResponse.json(empresa);
+      } catch (error: any) {
+        if (error instanceof MotivoRequeridoError) {
+          return NextResponse.json(
+            { error: error.message, code: "MOTIVO_AUDITORIA_REQUERIDO" },
+            { status: 400 }
+          );
+        }
+        throw error;
+      }
+    }
+
+    if (body.accion === 'actualizar_credito') {
+      // DEUDA 176 (2026-09-29): editor post-onboarding de modalidadPago +
+      // limiteDescubierto. Ambos campos son sensibles en CAMPOS_AUDITABLES
+      // (motivo obligatorio). El helper `registrarCambioConfiguracion` es
+      // no-op si valorAnterior === valorNuevo (skip silencioso).
+      //
+      // Convención "PREPAGO ⟹ límite 0" RELAJADA post-DEUDA 175 (2026-09-29):
+      // el colchón funciona en PREPAGO igual que en POSTPAGO, así que un
+      // PREPAGO puede tener límite > 0 como buffer de emergencia (Nacho).
+      // Validación mínima:
+      //   - modalidadPago: si viene, debe ser PREPAGO o POSTPAGO literales.
+      //   - limiteDescubierto: si viene, debe ser número ≥ 0.
+      //   - modalidad FINAL POSTPAGO exige límite > 0 (mirror del onboarding L109-114).
+      const empresaIdNum = parseInt(body.empresaId);
+      if (!Number.isInteger(empresaIdNum) || empresaIdNum <= 0) {
+        return NextResponse.json({ error: "empresaId inválido" }, { status: 400 });
+      }
+
+      const empresaAntes = await prisma.empresa.findUnique({
+        where: { id: empresaIdNum },
+        select: { modalidadPago: true, limiteDescubierto: true },
+      });
+      if (!empresaAntes) {
+        return NextResponse.json({ error: "Empresa no encontrada" }, { status: 404 });
+      }
+
+      // Parse defensivo — sólo se actualiza el campo que llegó.
+      let modalidadNueva: string | null = null;
+      if (body.modalidadPago != null) {
+        if (body.modalidadPago !== "PREPAGO" && body.modalidadPago !== "POSTPAGO") {
+          return NextResponse.json(
+            { error: "modalidadPago debe ser PREPAGO o POSTPAGO" },
+            { status: 400 }
+          );
+        }
+        modalidadNueva = body.modalidadPago;
+      }
+      let limiteNuevo: number | null = null;
+      if (body.limiteDescubierto != null) {
+        const n = parseFloat(body.limiteDescubierto);
+        if (!Number.isFinite(n) || n < 0) {
+          return NextResponse.json(
+            { error: "limiteDescubierto debe ser número ≥ 0" },
+            { status: 400 }
+          );
+        }
+        limiteNuevo = n;
+      }
+
+      // Modalidad FINAL (nueva si vino, sino la actual).
+      const modalidadFinal = modalidadNueva ?? empresaAntes.modalidadPago;
+      // Límite FINAL (nuevo si vino, sino el actual — como número).
+      const limiteFinal = limiteNuevo != null
+        ? limiteNuevo
+        : parseFloat(empresaAntes.limiteDescubierto.toString());
+
+      if (modalidadFinal === "POSTPAGO" && limiteFinal <= 0) {
+        return NextResponse.json(
+          { error: "POSTPAGO requiere limite descubierto > 0" },
+          { status: 400 }
+        );
+      }
+
+      try {
+        // Audit BEFORE update (helper throw temprano si motivo missing sobre
+        // sensible). Registra sólo si el valor cambió (no-op idempotente).
+        if (modalidadNueva !== null) {
+          await registrarCambioConfiguracion({
+            request,
+            empresaId: empresaIdNum,
+            campo: "modalidadPago",
+            valorAnterior: empresaAntes.modalidadPago,
+            valorNuevo: modalidadNueva,
+            motivo: body.motivoAuditoria,
+          });
+        }
+        if (limiteNuevo !== null) {
+          await registrarCambioConfiguracion({
+            request,
+            empresaId: empresaIdNum,
+            campo: "limiteDescubierto",
+            valorAnterior: empresaAntes.limiteDescubierto.toString(),
+            valorNuevo: limiteNuevo.toString(),
+            motivo: body.motivoAuditoria,
+          });
+        }
+
+        const dataUpdate: { modalidadPago?: string; limiteDescubierto?: Prisma.Decimal } = {};
+        if (modalidadNueva !== null) dataUpdate.modalidadPago = modalidadNueva;
+        if (limiteNuevo !== null) dataUpdate.limiteDescubierto = new Prisma.Decimal(limiteNuevo);
+
+        const empresa = await prisma.empresa.update({
+          where: { id: empresaIdNum },
+          data: dataUpdate,
         });
         return NextResponse.json(empresa);
       } catch (error: any) {

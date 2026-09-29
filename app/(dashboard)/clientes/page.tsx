@@ -78,6 +78,17 @@ export default function GestionClientes() {
   const [registrandoConexion, setRegistrandoConexion] = useState(false);
   const [mensajeConexion, setMensajeConexion] = useState<{ texto: string; tipo: 'ok' | 'error' } | null>(null);
 
+  // DEUDA 176 (2026-09-29): editor post-onboarding de modalidadPago + limiteDescubierto.
+  // admin_shipro-only. Usa la rama actualizar_credito del PUT /api/clientes con audit
+  // formal (motivo obligatorio por ser campos sensibles en CAMPOS_AUDITABLES).
+  const [editarCredito, setEditarCredito] = useState(false);
+  const [modalidadEdit, setModalidadEdit] = useState<"PREPAGO" | "POSTPAGO">("PREPAGO");
+  const [limiteEdit, setLimiteEdit] = useState("");
+  const [motivoCredito, setMotivoCredito] = useState("");
+  const [guardandoCredito, setGuardandoCredito] = useState(false);
+  const [mensajeCredito, setMensajeCredito] = useState<{ texto: string; tipo: 'ok' | 'error' } | null>(null);
+
+  const esAdminShipro = session?.user?.rol === 'admin_shipro';
   const esEquipoShipro = session?.user?.rol === 'admin_shipro' || session?.user?.rol === 'operador_shipro';
 
   // DEUDA 150 Pieza 1: carga las conexiones del cliente seleccionado.
@@ -103,8 +114,68 @@ export default function GestionClientes() {
   useEffect(() => {
     if (clienteSeleccionado?.id) {
       cargarConexiones(clienteSeleccionado.id);
+      // DEUDA 176: reset del editor de crédito al abrir un cliente distinto.
+      setEditarCredito(false);
+      setMotivoCredito("");
+      setMensajeCredito(null);
+      setModalidadEdit(
+        clienteSeleccionado.modalidadPago === "POSTPAGO" ? "POSTPAGO" : "PREPAGO"
+      );
+      setLimiteEdit(String(clienteSeleccionado.limiteDescubierto ?? ""));
     }
   }, [clienteSeleccionado?.id]);
+
+  // DEUDA 176: guardar edición de modalidad + límite.
+  const guardarCredito = async () => {
+    if (!clienteSeleccionado || guardandoCredito) return;
+    if (!motivoCredito.trim()) {
+      setMensajeCredito({ texto: "El motivo es obligatorio (campos sensibles).", tipo: 'error' });
+      return;
+    }
+    const limiteNum = parseFloat(limiteEdit);
+    if (!Number.isFinite(limiteNum) || limiteNum < 0) {
+      setMensajeCredito({ texto: "Límite inválido (número ≥ 0).", tipo: 'error' });
+      return;
+    }
+    setGuardandoCredito(true);
+    setMensajeCredito(null);
+    try {
+      const res = await fetch("/api/clientes", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accion: "actualizar_credito",
+          empresaId: clienteSeleccionado.id,
+          modalidadPago: modalidadEdit,
+          limiteDescubierto: limiteNum,
+          motivoAuditoria: motivoCredito.trim(),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setMensajeCredito({ texto: data?.error || `Error HTTP ${res.status}`, tipo: 'error' });
+      } else {
+        // Refresca el estado local + la lista.
+        setClienteSeleccionado({
+          ...clienteSeleccionado,
+          modalidadPago: data.modalidadPago,
+          limiteDescubierto: data.limiteDescubierto,
+        });
+        setClientes(clientes.map((c: any) =>
+          c.id === clienteSeleccionado.id
+            ? { ...c, modalidadPago: data.modalidadPago, limiteDescubierto: data.limiteDescubierto }
+            : c
+        ));
+        setMensajeCredito({ texto: "Cambios guardados. Auditoría registrada.", tipo: 'ok' });
+        setMotivoCredito("");
+        setEditarCredito(false);
+      }
+    } catch {
+      setMensajeCredito({ texto: "Error de red. Reintentá.", tipo: 'error' });
+    } finally {
+      setGuardandoCredito(false);
+    }
+  };
 
   const fetchClientes = async () => {
     try {
@@ -722,6 +793,123 @@ export default function GestionClientes() {
                 </p>
               </div>
             </section>
+
+            {/* DEUDA 176 (2026-09-29): Configuración de crédito post-onboarding. admin_shipro-only. */}
+            {esAdminShipro && (
+              <section>
+                <div className="flex justify-between items-center border-b pb-2 mb-4">
+                  <h3 className="text-sm font-black text-gray-800 flex items-center gap-2">
+                    <Settings className="w-4 h-4 text-indigo-500" /> Configuración de crédito
+                  </h3>
+                  {!editarCredito && (
+                    <button
+                      onClick={() => setEditarCredito(true)}
+                      className="text-[10px] font-bold bg-[#233b6b] text-white px-3 py-1.5 rounded hover:bg-blue-900 transition-colors"
+                    >
+                      Editar
+                    </button>
+                  )}
+                </div>
+
+                {!editarCredito ? (
+                  <div className="bg-white border border-gray-200 rounded-xl p-4 text-xs text-gray-700 space-y-2">
+                    <p>
+                      <strong>Modalidad de pago:</strong>{' '}
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${clienteSeleccionado.modalidadPago === 'PREPAGO' ? 'bg-purple-50 text-purple-700 border-purple-200' : 'bg-orange-50 text-orange-700 border-orange-200'}`}>
+                        {clienteSeleccionado.modalidadPago}
+                      </span>
+                    </p>
+                    <p>
+                      <strong>Límite descubierto:</strong>{' '}
+                      <span className="font-mono">
+                        ${Number(clienteSeleccionado.limiteDescubierto ?? 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </p>
+                    <p className="text-[10px] text-gray-500 italic mt-2">
+                      El colchón funciona como adelanto plano en ambas modalidades — el saldo puede ir hasta <code>-límite</code>. Al recargar se absorbe el negativo (DEUDA 175).
+                    </p>
+                  </div>
+                ) : (
+                  <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 space-y-3">
+                    <div>
+                      <label className="block text-[11px] font-bold text-gray-700 mb-1">Modalidad de pago</label>
+                      <select
+                        value={modalidadEdit}
+                        onChange={(e) => setModalidadEdit(e.target.value as "PREPAGO" | "POSTPAGO")}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+                      >
+                        <option value="PREPAGO">PREPAGO</option>
+                        <option value="POSTPAGO">POSTPAGO</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-gray-700 mb-1">
+                        Límite descubierto (ARS){' '}
+                        {modalidadEdit === "POSTPAGO" && <span className="text-red-500">*</span>}
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={limiteEdit}
+                        onChange={(e) => setLimiteEdit(e.target.value)}
+                        placeholder={modalidadEdit === "POSTPAGO" ? "> 0 obligatorio" : "0 o más"}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+                      />
+                      <p className="text-[10px] text-gray-500 italic mt-1">
+                        {modalidadEdit === "POSTPAGO"
+                          ? "POSTPAGO requiere límite > 0."
+                          : "PREPAGO admite límite > 0 como colchón de emergencia (post-DEUDA 175)."}
+                      </p>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-gray-700 mb-1">
+                        Motivo del cambio <span className="text-red-500">*</span>
+                      </label>
+                      <textarea
+                        value={motivoCredito}
+                        onChange={(e) => setMotivoCredito(e.target.value)}
+                        placeholder="Ej. Aumento de línea acordado con el cliente 2026-09-29"
+                        rows={2}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+                      />
+                      <p className="text-[10px] text-gray-500 italic mt-1">
+                        Motivo obligatorio: los campos son sensibles y quedan en auditoría formal (quién/qué/cuándo/valores).
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={guardarCredito}
+                        disabled={guardandoCredito}
+                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2 text-xs font-bold text-white bg-[#233b6b] hover:bg-blue-900 rounded-md disabled:opacity-40 transition-colors"
+                      >
+                        {guardandoCredito ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                        {guardandoCredito ? "Guardando…" : "Guardar cambios"}
+                      </button>
+                      <button
+                        onClick={() => {
+                          setEditarCredito(false);
+                          setMotivoCredito("");
+                          setMensajeCredito(null);
+                          setModalidadEdit(
+                            clienteSeleccionado.modalidadPago === "POSTPAGO" ? "POSTPAGO" : "PREPAGO"
+                          );
+                          setLimiteEdit(String(clienteSeleccionado.limiteDescubierto ?? ""));
+                        }}
+                        className="px-4 py-2 text-xs font-bold text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 rounded-md transition-colors"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {mensajeCredito && (
+                  <p className={`mt-2 text-[11px] font-medium px-2 py-1.5 rounded ${mensajeCredito.tipo === 'ok' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+                    {mensajeCredito.texto}
+                  </p>
+                )}
+              </section>
+            )}
 
             <section>
               <div className="flex justify-between items-center border-b pb-2 mb-4">

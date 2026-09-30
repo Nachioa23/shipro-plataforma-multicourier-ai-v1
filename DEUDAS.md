@@ -5099,3 +5099,81 @@ Son `<code>` (no `<Link>` — no rompen, es texto informativo). **Apuntan a pant
 - Verificación empírica: ciclo completo (emitir → vencer → pagar → restablecer) con cliente de prueba.
 
 **Origen**: recon money-critical Chat A 2026-09-29 durante el diseño de "colchón como comodín" ([[DEUDA 175]] + [[DEUDA 176]] unificadas). Al revisar el modelo de saldo/facturación para diseñar cómo el colchón debería comportarse en POSTPAGO productivo, apareció el gap del ciclo: no existe fecha de vencimiento en el schema, no hay flow para marcar PAGADA, y el saldo es un balance plano sin período fino. Nacho identificó que el `limiteDescubierto` de ~2 facturaciones es "alambre" — el ciclo real es una obra separada. Registrado como deuda propia para no perder el gap.
+
+---
+
+## DEUDA 183 — Tope suave (aviso confirmable) al editar `limiteDescubierto` — guardarraíl anti-fat-finger (ABIERTA 2026-09-30, prioridad BAJA)
+
+**Contexto**: [[DEUDA 176]] (editor de `modalidadPago` + `limiteDescubierto` post-onboarding, en prod desde `e05abdf`) permite hoy **cualquier límite ≥ 0 sin techo**. Un admin_shipro editando la línea de crédito de un cliente podría poner un valor absurdo por error de tipeo (un cero de más — ej. tipear `10000000` en vez de `1000000`) sin que nada lo frene, y esa línea es money-adjacent (afecta el gate `bloqueadoPorSaldo` en `crear.ts` post-DEUDA 175 — cuánto puede adeudar el cliente antes de bloquear).
+
+Diferido explícitamente de la etapa 1 del modelo de crédito (DEUDA 175 + 176 en prod). El recon ya está hecho; queda por implementar.
+
+**Diseño (confirmado en el recon Chat A 2026-09-30, decisión Nacho)**:
+
+**Un AVISO confirmable, NO un bloqueo duro** — cuando el límite propuesto supera un umbral configurable, el endpoint pide confirmación explícita antes de commitear. Los umbrales van en **config editable sin deploy** — Nacho explícito: *"en 2 años esos valores van a ser irrisorios con la inflación, no hardcodearlos"*.
+
+- **Umbrales iniciales (parametrizables, no hardcoded)**:
+  - PREPAGO > $250.000
+  - POSTPAGO > $1.000.000
+
+- **Modelo de config nuevo** (mirror byte-a-byte de `MarkupShiproVigencia`):
+```
+model UmbralAvisoLimiteVigencia {
+  id              Int      @id @default(autoincrement())
+  umbralPrepago   Decimal  @db.Decimal(12, 2)
+  umbralPostpago  Decimal  @db.Decimal(12, 2)
+  activo          Boolean  @default(true)
+  vigenciaDesde   DateTime @default(now())
+  vigenciaHasta   DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  @@index([activo])
+}
+```
+Seed inicial: `{ umbralPrepago: 250000, umbralPostpago: 1000000, activo: true }`. Historial preservado por vigencia (patrón "cerrar + crear" en $transaction — nunca se pisa una fila).
+
+- **Endpoint admin** `/api/admin/umbrales-credito` (GET + POST): mirror de `/api/admin/markup-shipro/route.ts`. Gate `admin_shipro`, POST hace "cerrar + crear" en $transaction, historial en `historial`, valor vigente en `activa`.
+
+- **Pantalla admin** `/admin-umbrales-credito`: mirror de `/admin-parametros-tarifa`. Form con 2 inputs number (umbral PREPAGO / umbral POSTPAGO) + motivo + Save → POST → alert → reload. Sin deploy: admin_shipro edita desde acá cuando la inflación los desactualice.
+
+- **Flujo 2-step en el PUT `actualizar_credito` de DEUDA 176**:
+  1. Primer PUT (sin `confirmarLimiteAlto` en el body): endpoint lookup del umbral vigente por modalidad final → si `limite > umbral` **NO commitea**; retorna HTTP 200 (o 409, decisión final Nacho) con `{ requiresConfirmacion: true, umbral, limitePropuesto, warning: "El límite $X supera el umbral configurado $Y para modalidad Z. Confirmá para guardar." }`. La UI muestra modal de confirmación.
+  2. Segundo PUT (mismo body + `confirmarLimiteAlto: true`): endpoint skipea el check de umbral (el usuario ya lo aceptó explícitamente) → procede con audit + update.
+  3. La aceptación queda registrada en el propio `motivoAuditoria` obligatorio ("aprobado por X porque Y") — trail natural sin campo nuevo en el schema.
+
+**Consumo runtime del umbral** (en el PUT de 176): patrón espejo de `resolverSmoNeto` (lib/utils/resolvers-tarifa.ts):
+```
+const umbralRow = await prisma.umbralAvisoLimiteVigencia.findFirst({
+  where: {
+    activo: true,
+    vigenciaDesde: { lte: new Date() },
+    OR: [{ vigenciaHasta: null }, { vigenciaHasta: { gte: new Date() } }],
+  },
+  orderBy: { vigenciaDesde: "desc" },
+});
+```
+Fallback conservador si la tabla está vacía: constantes inline $250k/$1M + `console.warn` (mismo patrón que `resolverSmoNeto` devolviendo 0 con warn si no hay fila activa).
+
+**Universalidad**: si mañana se quieren más umbrales (por rol distinto, por segmento de cliente, etc.), el modelo se extiende con más columnas Decimal en la misma tabla sin cambiar el patrón. Hoy 2 alcanza.
+
+**Riesgo y prioridad**: **BAJA**.
+- Es **admin_shipro** — el editor 176 ya está gateado a rol crítico + auditado (motivo obligatorio, quién/qué/cuándo/valores queda en `AuditoriaConfiguracion`). El tope solo atrapa el fat-finger.
+- Hoy el editor 176 lo usa **solo Nacho** — con un solo admin cuidadoso, la probabilidad del error de tipeo es baja. El tope importa más cuando varios admins editen límites (a futuro, cuando Shipro tenga un equipo de finanzas operacional).
+- Money-adjacent pero NO money-critical (no cambia lógica del gate débito; solo un guardarraíl UI/UX antes de guardar).
+- Sub-pieza autocontenida — no bloquea nada, no depende de nada más allá de DEUDA 176 en prod.
+
+**Scope estimado (post-diseño ya hecho)**:
+- Migración: 1 CREATE TABLE aditivo + 1 seed row. Cero riesgo.
+- Código: ~90 líneas endpoint admin, ~200 líneas pantalla admin, ~20 líneas branch endpoint 176 (lookup + gate 2-step), ~40 líneas UI 176 (modal de confirmación).
+- Total: **~350 líneas + 1 migración + 1 pantalla**. Riesgo: bajo (config puro; no toca motor de precio, no toca dispatch, no cambia el gate débito).
+- Verificación empírica: 4 casos ({dentro umbral, fuera umbral con confirm, fuera umbral sin confirm rechaza, edit del umbral desde admin refresca en el próximo PUT sin restart}).
+
+**Relación**:
+- **[[DEUDA 176]]** (editor de límite en prod, DIRECTA — este trabajo es su hardening).
+- **[[DEUDA 175]]** (colchón plano en ambas modalidades — el umbral existe justamente porque post-175 el colchón sí cobra vida en PREPAGO también).
+- **[[DEUDA 181]]** (vencimientos POSTPAGO — etapa 2 del modelo de crédito, obra grande separada). DEUDA 183 es un guardarraíl UX de la etapa 1; 181 es la refactorización profunda del ciclo. Independientes; ambas van a coexistir.
+- **Patrón config**: mirror de `MarkupShiproVigencia` ([prisma/schema.prisma:1645](prisma/schema.prisma#L1645)) + `admin/markup-shipro/route.ts` + `admin-parametros-tarifa/page.tsx` + `docs/DISENO-MODELO-DATOS-CONFIG-VARIABLES.md §5.2`.
+
+**Estado**: ABIERTA, prioridad BAJA. Sub-pieza autocontenida del modelo de crédito post-etapa 1. Recon ya hecho — cuando haya foco/prioridad, la implementación es directa (~1-2 horas).
+
+**Origen**: recon Chat A 2026-09-30 durante el diseño de DEUDA 176 etapa 1. Al construir el editor genérico, Nacho identificó el hueco anti-fat-finger + la necesidad de que los umbrales sean editables sin deploy (inflación). Se defirió a su propia deuda para no engordar el commit de la 176 (etapa 1 quedó limpia con solo el editor sin techo). Registrado acá para no perder el gap.

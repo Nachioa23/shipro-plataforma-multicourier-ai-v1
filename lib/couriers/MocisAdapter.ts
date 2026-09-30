@@ -1,6 +1,14 @@
 import { ICourierIntegrator, CotizacionParams, DespachoParams, SucursalInfo, ResultadoBulto, ResultadoRecoleccion, DatosEntregadorParaRecoleccion } from './CourierInterface';
 import { normalizarParaComparacion } from './normalizar';
 
+// Config de vinculación de Moci's por entregador. Akeron expone un endpoint
+// por entregador y cada uno nombra su campo de trackings distinto — sumar un
+// entregador = agregar una entrada acá, sin tocar la lógica. Hoy solo Andreani
+// tiene endpoint real en Akeron; no inventamos otros hasta conocer su API.
+const VINCULACION_POR_ENTREGADOR: Record<string, { endpoint: string; campoTrackings: string }> = {
+  andreani: { endpoint: "/shipping/andreani/set_tracking_code", campoTrackings: "andreani_tracking_codes" },
+};
+
 // DEUDA 129: timeout de outbound fetch al courier + reclasificación de AbortError
 // como CourierTimeout (crear.ts lo mapea a HTTP 503 al caller de la API pública).
 // 8s queda por debajo del threshold del circuit breaker de Tiendanube (10s) y por
@@ -498,17 +506,19 @@ export class MocisAdapter implements ICourierIntegrator {
     const respuesta = await this.despachar(datosEnvio);
     const trackingRecolector = respuesta.tracking;
 
-    // Step 2: vincular con el entregador. Solo "andreani" soportado hoy (única
-    // combinación con endpoint en Akeron). Otros entregadores → skip + log +
-    // devolver la etiqueta del paso 1 igual (preserva best-effort semantics).
+    // Step 2: vincular con el entregador. Lookup en VINCULACION_POR_ENTREGADOR
+    // (data-driven) — sumar un entregador = agregar una entrada, sin tocar
+    // esta lógica. Entregador sin entrada → skip + log + devolver la etiqueta
+    // del paso 1 igual (preserva best-effort semantics).
     const entregadorSlug = normalizarParaComparacion(entregador.courierNombre);
-    if (entregadorSlug === "andreani") {
+    const cfg = VINCULACION_POR_ENTREGADOR[entregadorSlug];
+    if (cfg) {
       try {
         const token = await this.getToken();
         const bodyVinculacion = new URLSearchParams();
         bodyVinculacion.append("code", trackingRecolector);
-        bodyVinculacion.append("andreani_tracking_codes", `[${entregador.tracking}]`);
-        await fetch(`${this.API_URL}/shipping/andreani/set_tracking_code`, {
+        bodyVinculacion.append(cfg.campoTrackings, `[${entregador.tracking}]`);
+        await fetch(`${this.API_URL}${cfg.endpoint}`, {
           method: "POST",
           headers: {
             "Authorization": `Bearer ${token}`,
@@ -517,10 +527,7 @@ export class MocisAdapter implements ICourierIntegrator {
           body: bodyVinculacion.toString(),
         });
       } catch (errVinc: any) {
-        console.warn(
-          `[Moci's] vincularRecoleccion set_tracking_code falló (best-effort):`,
-          errVinc?.message || errVinc,
-        );
+        console.warn(`[Moci's] vincularRecoleccion set_tracking_code falló (best-effort):`, errVinc?.message || errVinc);
       }
     } else {
       console.log(

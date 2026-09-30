@@ -288,8 +288,25 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
 
   // ============================================================
   // CASO C — consolidador
-  // Tramo 1: recolector (Mocis u otro). Tramo 2: Last-Mile.
-  // Vinculación Mocis-Andreani al final (best-effort).
+  // MODELO Fase 3 (refactor 2026-09-30):
+  //   1) ANCLA primero — el entregador (motorMain) despacha PRIMERO. Si falla,
+  //      no hay envío (partial failure con misma señal que antes: tracking:null,
+  //      tramos:[], error humano → crear.ts lo mapea a BLOQUEADO_PARCIAL
+  //      reintentable, igual que hoy).
+  //   2) RECOLECTOR después vía capacidad genérica opcional
+  //      ICourierIntegrator.vincularRecoleccion (adapter-owned). Un fallo del
+  //      recolector NO bloquea la venta — el ancla ya tiene tracking + etiqueta
+  //      reales. Se logea y el envío sale sin tramo de recolección.
+  //
+  // Anterior (pre-Fase 3): despachaba recolector primero + entregador después
+  // + POST inline `set_tracking_code` hardcodeado a mocis→andreani. Ese fetch
+  // + gate hardcoded ahora vive DENTRO de MocisAdapter.vincularRecoleccion
+  // (commits 23cba30 + 9bf341e). Este archivo ya no habla con Akeron directo.
+  //
+  // El ordering temporal ancla→recolector es transparente para downstream:
+  // el snapshot persiste `orden: 1 tipo: "recoleccion"` + `orden: 2 tipo:
+  // "entrega"` como antes (lectura por tipo, no por orden temporal — ver
+  // lib/etiquetas/armar-etiqueta.ts:260).
   // ============================================================
   // === DEUDA 29 Sub-fase 6.D.6: decisión de consolidador (modelo único) ===
   // La modalidad de First-Mile se resuelve a nivel par (depósito x courier):
@@ -314,6 +331,8 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
     }
 
     // Lookup del courier recolector. Lectura, preserva pureza dispatch.ts ("no escribe BD").
+    // Se necesita en scope antes del ancla para armar el tramoRecoleccion con
+    // su id si el vincularRecoleccion tiene éxito más abajo.
     const courierRecolector = await prisma.courier.findUnique({
       where: { id: recolectorIdEfectivo },
     });
@@ -328,45 +347,7 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
 
     const recolectorNombreLimpio = normalizarParaComparacion(courierRecolector.nombre);
 
-    // ----- Tramo 1: recolector -----
-    let trackingRecolector: string | null = null;
-    let motorRecolector: any;
-
-    try {
-      const llavesRecolector = obtenerCredencialesShipro(recolectorNombreLimpio);
-      motorRecolector = CourierFactory.crear(recolectorNombreLimpio, llavesRecolector);
-
-      // TODO DEUDA 29 Sub-fase 3: pasar Envio.id como external_reference para idempotencia.
-      const paramsRecolector = { ...paramsDespacho, referencia: `RECOLECCION-${Date.now()}` };
-      const respuestaRecolector = await motorRecolector.despachar(paramsRecolector);
-      trackingRecolector = respuestaRecolector?.tracking || null;
-    } catch (errRec: any) {
-      console.warn(`[Shipro] Tramo 1 (${recolectorNombreLimpio}) falló:`, errRec?.message || errRec);
-      return {
-        tracking: null,
-        etiquetaUrl: null,
-        tramos: [],
-        error: `Tramo 1 (${courierRecolector.nombre}) falló: ${errRec?.message || "error desconocido"}`
-      };
-    }
-
-    if (!trackingRecolector) {
-      return {
-        tracking: null,
-        etiquetaUrl: null,
-        tramos: [],
-        error: `Tramo 1 (${courierRecolector.nombre}) no devolvió tracking`
-      };
-    }
-
-    const tramo1: TramoSnapshot = {
-      orden: 1,
-      courierId: courierRecolector.id,
-      tipo: "recoleccion",
-      trackingExterno: trackingRecolector,
-    };
-
-    // ----- Tramo 2: Last-Mile -----
+    // ----- ANCLA: entregador (motorMain) primero -----
     let trackingMain: string | null = null;
     let etiquetaUrlMain: string | null = null;
     let bultosMain: ResultadoBulto[] | undefined = undefined;
@@ -377,13 +358,14 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
       etiquetaUrlMain = respuestaMain?.etiquetaUrl || null;
       bultosMain = respuestaMain?.bultos;
     } catch (errMain: any) {
-      // PARTIAL FAILURE: tramo 1 OK, tramo 2 falla. Persistir tramo 1.
-      console.warn(`[Shipro] Tramo 2 (${courierMainNombreLimpio}) falló tras tramo 1 OK:`, errMain?.message || errMain);
+      // Ancla falla → sin envío. Mismo signal que hoy: tracking:null, tramos:[],
+      // error humano → crear.ts lo mapea a BLOQUEADO_PARCIAL reintentable.
+      console.warn(`[dispatch] CASO C ancla (${courierMainNombreLimpio}) falló:`, errMain?.message || errMain);
       return {
         tracking: null,
         etiquetaUrl: null,
-        tramos: [tramo1],
-        error: `Tramo 1 (${courierRecolector.nombre}) OK con tracking ${trackingRecolector}. Tramo 2 (${courierNombreCanonico}) falló: ${errMain?.message || "error desconocido"}`
+        tramos: [],
+        error: `Ancla ${courierNombreCanonico} falló: ${errMain?.message || "error desconocido"}`,
       };
     }
 
@@ -391,39 +373,12 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
       return {
         tracking: null,
         etiquetaUrl: null,
-        tramos: [tramo1],
-        error: `Tramo 1 (${courierRecolector.nombre}) OK con tracking ${trackingRecolector}. Tramo 2 (${courierNombreCanonico}) no devolvió tracking.`
+        tramos: [],
+        error: `Ancla ${courierNombreCanonico} no devolvió tracking.`,
       };
     }
 
-    // ----- Vinculación Mocis-Andreani (best-effort) -----
-    // Si recolector=Mocis Y main=Andreani, vincular trackingRecolector con
-    // trackingMain mediante la API de Mocis (set_tracking_code). Si falla,
-    // se loggea y el flujo sigue adelante.
-    //
-    // TODO refactor calidad post-MVP: mover set_tracking_code a MocisAdapter
-    // como parámetro opcional vincularConTrackingMain. Mantiene la lógica de
-    // vinculación dentro del adapter en lugar de orquestada desde dispatch.ts.
-    if (recolectorNombreLimpio === "mocis" && courierMainNombreLimpio === "andreani") {
-      try {
-        const tokenAdmin = await (motorRecolector as any).getToken();
-        const bodyVinculacion = new URLSearchParams();
-        bodyVinculacion.append("code", trackingRecolector);
-        bodyVinculacion.append("andreani_tracking_codes", `[${trackingMain}]`);
-        await fetch(`https://mocis.akeron.net/api/v1/shipping/andreani/set_tracking_code`, {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${tokenAdmin}`,
-            "Content-Type": "application/x-www-form-urlencoded"
-          },
-          body: bodyVinculacion.toString(),
-        });
-      } catch (errVinc: any) {
-        console.warn(`[Shipro] Vinculación Mocis-Andreani falló (best-effort):`, errVinc?.message || errVinc);
-      }
-    }
-
-    const tramo2: TramoSnapshot = {
+    const tramoEntrega: TramoSnapshot = {
       orden: 2,
       courierId: courierIdMain,
       tipo: "entrega",
@@ -431,10 +386,56 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
       sucursalDestinoId: input.sucursalDestinoId ?? null,
     };
 
+    // ----- RECOLECTOR: capacidad genérica best-effort -----
+    // vincularRecoleccion encapsula tanto la etiqueta propia como la vinculación
+    // al ancla (adapter-owned; ver MocisAdapter.vincularRecoleccion). Un fallo
+    // se logea y el envío sale con el ancla + sin tramo de recolección.
+    let trackingRecolector: string | null = null;
+    let tramoRecoleccion: TramoSnapshot | null = null;
+    try {
+      const llavesRecolector = obtenerCredencialesShipro(recolectorNombreLimpio);
+      const motorRecolector = CourierFactory.crear(recolectorNombreLimpio, llavesRecolector);
+      if (typeof motorRecolector.vincularRecoleccion === "function") {
+        // TODO DEUDA 29 Sub-fase 3: pasar Envio.id como external_reference para idempotencia.
+        const paramsRecolector = { ...paramsDespacho, referencia: `RECOLECCION-${Date.now()}` };
+        const resRec = await motorRecolector.vincularRecoleccion({
+          datosEnvio: paramsRecolector,
+          entregador: {
+            courierNombre: courierNombreCanonico,
+            tracking: trackingMain,
+            etiquetaUrl: etiquetaUrlMain ?? null,
+            bultos: bultosMain,
+          },
+        });
+        trackingRecolector = resRec.trackingRecolector ?? null;
+        if (trackingRecolector) {
+          tramoRecoleccion = {
+            orden: 1,
+            courierId: courierRecolector.id,
+            tipo: "recoleccion",
+            trackingExterno: trackingRecolector,
+          };
+        }
+      } else {
+        console.warn(
+          `[dispatch] CASO C: courier recolector "${courierRecolector.nombre}" no implementa vincularRecoleccion — envío sale sin tramo de recolección (ancla OK ${trackingMain}).`,
+        );
+      }
+    } catch (errRec: any) {
+      console.warn(
+        `[dispatch] CASO C: vincularRecoleccion falló (best-effort, ancla OK ${trackingMain}):`,
+        errRec?.message || errRec,
+      );
+    }
+
+    const tramos: TramoSnapshot[] = tramoRecoleccion
+      ? [tramoRecoleccion, tramoEntrega]
+      : [tramoEntrega];
+
     return {
       tracking: trackingMain,
       etiquetaUrl: etiquetaUrlMain,
-      tramos: [tramo1, tramo2],
+      tramos,
       bultos: bultosMain,
     };
   }

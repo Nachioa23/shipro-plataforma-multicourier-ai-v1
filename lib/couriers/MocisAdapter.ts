@@ -1,4 +1,5 @@
-import { ICourierIntegrator, CotizacionParams, DespachoParams, SucursalInfo, ResultadoBulto } from './CourierInterface';
+import { ICourierIntegrator, CotizacionParams, DespachoParams, SucursalInfo, ResultadoBulto, ResultadoRecoleccion, DatosEntregadorParaRecoleccion } from './CourierInterface';
+import { normalizarParaComparacion } from './normalizar';
 
 // DEUDA 129: timeout de outbound fetch al courier + reclasificación de AbortError
 // como CourierTimeout (crear.ts lo mapea a HTTP 503 al caller de la API pública).
@@ -461,6 +462,80 @@ export class MocisAdapter implements ICourierIntegrator {
 
     console.log(`✅ [Moci's] PDF crudo descargado directo.`);
     return bufferCrudo;
+  }
+
+  // ==========================================
+  // 5.b VINCULAR RECOLECCIÓN (recolector role) — ICourierIntegrator opcional
+  // ==========================================
+  // Encapsula el rol RECOLECTOR de Moci's cuando actúa como consolidador de OTRO
+  // entregador (last-mile). Modalidad Moci's = "etiqueta_propia": Moci's emite
+  // SU PROPIA etiqueta (POST /shipping/new vía `despachar()`) Y LUEGO vincula
+  // ese tracking al del entregador vía set_tracking_code (best-effort).
+  //
+  // ADITIVO — nada consume este método todavía. dispatch.ts:401-424 sigue
+  // teniendo la lógica inline (Tramo 1 despachar + POST set_tracking_code); el
+  // cutover a este método es una fase separada. Este commit solo prepara el
+  // contrato del adapter para el refactor.
+  //
+  // Reutilización explícita:
+  //   Step 1: `this.despachar(params.datosEnvio)` — MISMO call que hace
+  //           dispatch.ts:341 hoy (motorRecolector.despachar(paramsRecolector)).
+  //           Genera la etiqueta propia de Moci's como recolector.
+  //   Step 2: POST set_tracking_code — port literal de dispatch.ts:407-424.
+  //           Solo "andreani" es entregador soportado hoy (única combinación
+  //           inline existente); cualquier otro → skip + log + preserve
+  //           semantics (return la etiqueta del paso 1 igual).
+  //
+  // BEST-EFFORT: si el POST de vinculación falla, se logea y se sigue.
+  // NUNCA throw por link failure — el envío ya tiene su etiqueta útil (paso 1).
+  async vincularRecoleccion(params: {
+    datosEnvio: DespachoParams;
+    entregador: DatosEntregadorParaRecoleccion;
+  }): Promise<ResultadoRecoleccion> {
+    const { datosEnvio, entregador } = params;
+
+    // Step 1: etiqueta propia de Moci's (reusa despachar — mismo path que hoy).
+    const respuesta = await this.despachar(datosEnvio);
+    const trackingRecolector = respuesta.tracking;
+
+    // Step 2: vincular con el entregador. Solo "andreani" soportado hoy (única
+    // combinación con endpoint en Akeron). Otros entregadores → skip + log +
+    // devolver la etiqueta del paso 1 igual (preserva best-effort semantics).
+    const entregadorSlug = normalizarParaComparacion(entregador.courierNombre);
+    if (entregadorSlug === "andreani") {
+      try {
+        const token = await this.getToken();
+        const bodyVinculacion = new URLSearchParams();
+        bodyVinculacion.append("code", trackingRecolector);
+        bodyVinculacion.append("andreani_tracking_codes", `[${entregador.tracking}]`);
+        await fetch(`${this.API_URL}/shipping/andreani/set_tracking_code`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${token}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: bodyVinculacion.toString(),
+        });
+      } catch (errVinc: any) {
+        console.warn(
+          `[Moci's] vincularRecoleccion set_tracking_code falló (best-effort):`,
+          errVinc?.message || errVinc,
+        );
+      }
+    } else {
+      console.log(
+        `[Moci's] vincularRecoleccion: entregador "${entregador.courierNombre}" ` +
+        `(slug="${entregadorSlug}") no tiene endpoint de vinculación en Akeron — ` +
+        `se devuelve la etiqueta propia sin link.`,
+      );
+    }
+
+    return {
+      modalidad: "etiqueta_propia",
+      trackingRecolector,
+      etiquetaBase64: respuesta.etiquetaBase64,
+      etiquetaUrl: respuesta.etiquetaUrl,
+    };
   }
 
   // ==========================================

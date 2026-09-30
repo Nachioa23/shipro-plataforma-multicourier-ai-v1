@@ -1462,3 +1462,60 @@ Cron mef-procesar-notificaciones
 
 ---
 
+## DEUDA 182 — Tripleta de first-mile genérica: recolector / dueño de credenciales / entregador como roles independientes; el Núcleo resuelve por capacidad, sin hardcode (RESUELTA EN CÓDIGO 2026-09-30 — 4 commits locales; validación e2e mocis→andreani PENDIENTE deploy)
+
+**Status:** **RESUELTA EN CÓDIGO** (4 commits locales `04ccd26` → `2b03093`, sin push todavía). **Validación e2e mocis→andreani PENDIENTE de deploy** — sin sandbox real de Akeron para probar el link `set_tracking_code`; el primer envío productivo del combo mocis→andreani post-deploy es la validación real (facturable). Territorio: **Núcleo** (`lib/couriers/CourierInterface.ts` + `lib/couriers/MocisAdapter.ts` + `lib/envios/dispatch.ts`).
+
+**Qué resuelve:** el CASO C (consolidador) del despacho tenía el link `set_tracking_code` inline en `dispatch.ts` con `fetch` directo a `mocis.akeron.net`, `getToken()` casteado a `any`, y un gate hardcodeado `if (recolectorNombreLimpio === "mocis" && courierMainNombreLimpio === "andreani")`. Sumar cualquier otro recolector con lógica de link propia (Intralog / futuro) requería tocar el Núcleo y meter un branch por par. Post-DEUDA 182: el Núcleo llama a la capacidad opcional `ICourierIntegrator.vincularRecoleccion(...)` genérica; cada adapter que actúa como recolector implementa su modalidad (Mocis emite etiqueta propia + linkea; Intralog adoptará tracking cuando su backend habilite `tracking_transporte`; etc). Sumar un recolector nuevo = implementar la capacidad en su adapter, sin tocar `dispatch.ts`.
+
+**Política confirmada por Nacho:** el **entregador es el ANCLA** — siempre genera tracking + etiqueta reales; el recolector se suma de forma variable (adopta tracking / recibe etiqueta especial / emite etiqueta propia) y es **best-effort** — lo que falle en el rol recolector se resuelve en el camino, la venta nunca se pierde por eso.
+
+**Qué se hizo (4 commits):**
+
+- **`04ccd26` — contrato** (`lib/couriers/CourierInterface.ts`): método opcional `ICourierIntegrator.vincularRecoleccion(params: { datosEnvio, entregador }): Promise<ResultadoRecoleccion>` + tipo `ResultadoRecoleccion` como discriminated union con **3 modalidades**:
+  - `tracking_adoptado` (el recolector opera con el tracking del entregador — ej. Intralog cuando habilite `tracking_transporte`).
+  - `etiqueta_recoleccion` (el recolector emite una etiqueta especial de recolección — placeholder).
+  - `etiqueta_propia` (el recolector emite su propia etiqueta full — el modo actual de Mocis).
+  Aditivo (método opcional): ningún adapter existente rompe.
+
+- **`23cba30` — MocisAdapter encapsula su rol de recolector** (`lib/couriers/MocisAdapter.ts`): implementa `vincularRecoleccion` reusando `this.despachar()` para emitir la etiqueta propia (mismo POST `/shipping/new` que hace hoy) + hace el POST `set_tracking_code` in-class (sin `as any`, con `this.getToken()`). Best-effort: si el link falla, `console.warn` y sigue con la etiqueta propia. Retorna `{ modalidad: "etiqueta_propia", trackingRecolector, etiquetaBase64, etiquetaUrl }`. Aditivo: `dispatch.ts` no se toca en este commit.
+
+- **`9bf341e` — mapa entregador→endpoint** (`lib/couriers/MocisAdapter.ts`): reemplaza el `if (entregadorSlug === "andreani")` hardcodeado por un `VINCULACION_POR_ENTREGADOR: Record<string, { endpoint, campoTrackings }>` — sumar un entregador nuevo = agregar una entrada al mapa, sin tocar la lógica. **Comportamiento byte-idéntico** para `andreani` (misma URL, mismo body, mismo header).
+
+- **`2b03093` — dispatch.ts CASO C al modelo genérico** (`lib/envios/dispatch.ts`): reestructura el bloque `if (esConsolidadorEfectivo)`:
+  1. **ANCLA primero**: `motorMain.despachar(paramsDespacho)`. Si falla → `tracking: null, tramos: []` con error humano (mismo signal que antes; `crear.ts` lo mapea a `BLOQUEADO_PARCIAL` reintentable, igual que hoy).
+  2. **RECOLECTOR después** vía capacidad genérica: `if (typeof motorRecolector.vincularRecoleccion === "function") { ... }`, best-effort. Un fallo se logea; el envío sale con el ancla + sin `tramoRecoleccion`.
+  3. **Return byte-idéntico**: `{ tracking: trackingMain, etiquetaUrl: etiquetaUrlMain, tramos: [tramoRecoleccion, tramoEntrega] ?? [tramoEntrega], bultos: bultosMain }`.
+
+**Cambios de comportamiento (intencionales):**
+
+- **Orden temporal invertido**: ancla ANTES que recolector. Necesario porque el link (`set_tracking_code`) requiere el tracking del entregador para asociarlo.
+- **Fallo del recolector: ya NO bloquea**. Antes: BLOQUEADO_PARCIAL cuando el recolector tiraba error → operador atendía. Después: envío sale con el ancla + tramo de entrega, sin tramo de recolección, con `console.warn`. La venta se despacha; el operador puede resolver el recolector en el camino si aplica.
+- **Fallo del ancla: sigue bloqueando** (BLOQUEADO_PARCIAL reintentable via `procesar-bloqueados-*.ts` / `reintentar-envio.ts` — sin cambio).
+- **Verificado que ningún consumidor downstream depende del orden temporal**: `lib/etiquetas/armar-etiqueta.ts:260` filtra `envio.tramos` por `tipo="recoleccion"` (semántico), no por `orden` temporal. Cero regresión en la impresión de etiquetas con zócalo Frankenstein.
+
+**Eliminado del Núcleo (`dispatch.ts`):**
+
+- `fetch` inline a `https://mocis.akeron.net/api/v1/shipping/andreani/set_tracking_code`.
+- Gate hardcodeado `if (recolectorNombreLimpio === "mocis" && courierMainNombreLimpio === "andreani")`.
+- Cast `(motorRecolector as any).getToken()`.
+- Cierra el **TODO viejo** de `dispatch.ts:404-406` (*"TODO refactor calidad post-MVP: mover set_tracking_code a MocisAdapter"*).
+
+**Universalidad del modelo:** contrato preparado para **N recolectores / N dueños de credenciales / N entregadores** — los tres son roles independientes que pueden combinarse. Operativamente hoy sigue siendo **1 recolector por depósito** (`Deposito.courierRecolectorId` scalar); la ampliación a schema multi-recolector queda como [[DEUDA 167]] (obra separada — DEUDA 182 abre camino, no la implementa).
+
+**Nota sobre la etiqueta propia de Mocis:** antes del refactor, el `respuestaRecolector.etiquetaUrl` / `etiquetaBase64` se descartaban en `dispatch.ts`. Post-DEUDA 182, la modalidad `etiqueta_propia` de `vincularRecoleccion` los expone en el resultado (`ResultadoRecoleccion`) — todavía **no se persiste** (queda disponible por si se necesita imprimir la etiqueta Frankenstein Mocis a futuro; no hay caller hoy que lo consuma).
+
+**Deudas relacionadas que quedan ABIERTAS (no las cierra este trabajo):**
+
+- **[[DEUDA 167]]** — Multi-recolector Fase 2 (schema `Deposito.courierRecolectorId` scalar → tabla puente `(depositoId, courierEntregaId) → courierRecolectorId`). El sub-ítem *"mover set_tracking_code al adapter"* se resolvió con esta DEUDA 182; el resto de 167 (schema multi-recolector + UI + gate de activación) sigue abierto.
+- **Intralog como recolector** (parte de Fase 2 de Intralog): implementar `vincularRecoleccion` en el adapter Intralog con modalidad `tracking_adoptado`. **Pendiente de que el backend de Intralog (César) habilite `tracking_transporte`** — sin ese endpoint del lado Intralog, la modalidad no puede completarse. Cuando esté disponible: 1 método nuevo en `IntralogAdapter.ts`, cero cambios en Núcleo (contrato ya listo).
+- **Idempotencia CASO C** ([[DEUDA 29]] Sub-fase 3): pasar `Envio.id` como `external_reference` al recolector para que retries no acumulen trackings huérfanos. TODO sigue en `dispatch.ts` dentro del nuevo bloque `vincularRecoleccion` (línea del comentario preservada); resuelve la misma clase de problema que las Piezas 1-4 de DEUDA 29 ya cerradas para el débito.
+
+**Commits (4 hashes, en orden):** `04ccd26` (contrato) → `23cba30` (Mocis rol recolector) → `9bf341e` (mapa entregador→endpoint) → `2b03093` (dispatch.ts cutover). **Sin push** al momento del cierre — deploy gated a decisión de Nacho.
+
+**Relación:** [[DEUDA 167]] (multi-recolector — sub-ítem `set_tracking_code al adapter` cerrado acá), [[DEUDA 29]] Sub-fase 3 (idempotencia CASO C — sigue abierta), [[DEUDA 103]] (etiqueta madre/hija — la etiqueta propia de Mocis que ahora está disponible en el resultado alimentará el composer cuando aplique), Fase 2 de Intralog como recolector (sigue esperando `tracking_transporte` del lado de César).
+
+**Origen:** decisión de Nacho 2026-09-30 para preparar la integración de Intralog como recolector alternativo a Mocis sin ensuciar el Núcleo con branches por par recolector×entregador. El trabajo se hizo en 4 commits atómicos con revisión gated en cada paso (money-adjacent — `dispatch.ts` es el orquestador de las 5-6 llamadas HTTP al despacho real).
+
+---
+

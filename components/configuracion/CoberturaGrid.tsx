@@ -102,6 +102,17 @@ export default function CoberturaGrid({
     number | null
   >(initialRecolectorId ?? null);
 
+  // Re-sincroniza el estado interno cuando el padre actualiza initialRecolectorId
+  // asincrónicamente (el DepositoForm padre fetchea /courier-configs después del
+  // mount y hace setCourierRecolectorId). Sin este efecto, useState captura el
+  // valor inicial (null) y nunca lo actualiza — el display queda vacío aunque
+  // el padre tenga el id correcto. Setter idempotente: cuando el cambio viene
+  // del usuario, onRecolectorChange notifica al padre, el padre devuelve el
+  // mismo valor por prop, y este setState con el mismo número es no-op (no loop).
+  useEffect(() => {
+    setRecolectorSeleccionado(initialRecolectorId ?? null);
+  }, [initialRecolectorId]);
+
   useEffect(() => {
     let cancelado = false;
     (async () => {

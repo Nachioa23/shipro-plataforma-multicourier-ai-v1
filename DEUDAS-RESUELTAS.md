@@ -1519,3 +1519,46 @@ Cron mef-procesar-notificaciones
 
 ---
 
+## DEUDA 184 — Display del courier recolector en `CoberturaGrid` no se re-sincronizaba — selector vacío al reabrir la config del depósito (guardado nunca afectado) (RESUELTA EN CÓDIGO 2026-10-01 — commit `ecf919a`, en `origin/main`; PENDIENTE de deploy)
+
+**Status:** **RESUELTA EN CÓDIGO** (commit `ecf919a` en `origin/main`). **PENDIENTE de deploy** — fix UI puro, bajo riesgo, sin schema change. Territorio: UI (`components/configuracion/CoberturaGrid.tsx`).
+
+**Síntoma observado por Nacho (prod)**: en el depósito, al setear courier recolector (Moci's), guardar, salir, y reabrir la config, el selector del recolector aparecía **vacío**. PERO al crear un envío que requería consolidador el despacho **sí usaba Moci's** correctamente (corrió el CASO C real) → el valor **sí estaba en BD**. Bug de display puro.
+
+**Diagnóstico (recon Chat A 2026-10-01)**: el **SAVE siempre andaba** (`Deposito.courierRecolectorId` persistía vía `PUT /api/depositos/[id]` con cascada en `data: { courierRecolectorId: ... }`). Ambos GET backend (`/api/depositos/[id]` y `/api/depositos/[id]/courier-configs`) devolvían el campo correctamente. El `DepositoForm` padre lo leía vía `fetch /courier-configs` dentro de un `useEffect` async y hacía `setCourierRecolectorId(recolectorActual)`. **El bug estaba en el hijo `CoberturaGrid`**:
+
+```typescript
+const [recolectorSeleccionado, setRecolectorSeleccionado] = useState<
+  number | null
+>(initialRecolectorId ?? null);
+```
+
+El `useState` captura el prop `initialRecolectorId` **UNA sola vez al mount**. React behavior estándar: cambios posteriores en el prop no re-inicializan el state. Secuencia del bug:
+
+1. `DepositoForm` abre modal con `courierRecolectorId=null` (default inicial del `useState` del padre, antes del fetch).
+2. `CoberturaGrid` monta en el mismo tick → recibe `initialRecolectorId=null` → `recolectorSeleccionado=null` para siempre.
+3. Fetch async del padre resuelve con `recolectorActual=1234` → padre `setCourierRecolectorId(1234)` → re-renderiza.
+4. `CoberturaGrid` re-renderiza con nuevo prop `initialRecolectorId=1234`, pero su `useState` interno sigue en `null` (React ignora el nuevo prop para re-inicializar).
+5. UI del grid muestra `recolectorSeleccionado=null` → **selector vacío** aunque el padre tiene el valor correcto.
+6. Al guardar: `body.courierRecolectorId = courierRecolectorId` del PADRE (que SÍ está correcto, 1234) → **el PUT persiste bien**. El despacho usa el recolector real. Síntoma observado exacto.
+
+**Fix**: 1 `useEffect` que re-sincroniza el state interno con el prop cuando cambia:
+
+```typescript
+useEffect(() => {
+  setRecolectorSeleccionado(initialRecolectorId ?? null);
+}, [initialRecolectorId]);
+```
+
+**Idempotencia confirmada (sin loop)**: cuando el cambio viene del usuario (click en la grilla), el flujo es: `setRecolectorSeleccionado(nuevo)` + `onRecolectorChange?.(nuevo)` → padre `setCourierRecolectorId(nuevo)` → padre re-renderiza → prop `initialRecolectorId=nuevo` → el nuevo `useEffect` dispara `setRecolectorSeleccionado(nuevo)` pero `recolectorSeleccionado` **ya es `nuevo`** → React compara con `Object.is` → **no-op**, no re-render. Cero riesgo de loop.
+
+**Verificación**: tsc 0. Diff solo en `components/configuracion/CoberturaGrid.tsx` (+11/-0 — 1 nuevo `useEffect` + comentario explicativo). Cero cambio al `useEffect` existente de `couriers-elegibles` (L105), cero cambio a `onRecolectorChange`.
+
+**Relación:** detectado por Nacho **validando en prod la tripleta [[DEUDA 182]]** (first-mile genérica, pushed al main pero sin deploy todavía). Al setear/verificar el recolector del depósito como parte de la validación del CASO C refactoreado, apareció el bug de display preexistente — no introducido por 182, pero descubierto gracias a la validación de 182. Independiente de la lógica de dispatch; UI puro.
+
+**Scope:** chico (1 archivo, +11 líneas, cero schema, cero migración, cero backend). **Deploy:** incluir junto al próximo push de UI; no hay urgencia por sí sola porque el guardado nunca estuvo afectado — solo frustración de UX al operador que creía que no se había guardado.
+
+**Origen:** validación en prod post-DEUDA 182 (2026-10-01). Nacho identifica el síntoma + hipótesis correcta ("SAVE anda, READ/display al recargar no"). Recon Chat A confirma hipótesis byte-a-byte localizando el `useState` que captura prop solo en mount; fix de 1 línea en el hijo (no en el padre).
+
+---
+

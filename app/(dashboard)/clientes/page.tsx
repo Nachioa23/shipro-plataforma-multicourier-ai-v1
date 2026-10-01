@@ -786,10 +786,10 @@ export default function GestionClientes() {
               </h3>
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-800 font-medium space-y-2">
                 <p>
-                  <strong>Markup de Shipro:</strong> se configura en <code>/admin-markup-courier</code> (acceso exclusivo Shipro). El cliente NO configura ni ve el markup de Shipro.
+                  <strong>Markup de Shipro:</strong> se configura en <code>/admin-consola-tarifa</code> (acceso exclusivo Shipro). El cliente NO configura ni ve el markup de Shipro.
                 </p>
                 <p>
-                  <strong>Markup del dueño de credenciales (intermediario):</strong> se configura en <code>/admin-markup-dueno</code> (acceso exclusivo Shipro), per courier que despacha — 0% si las credenciales son de Shipro, valor &gt; 0 si un tercero presta sus credenciales. El cliente NO configura ni ve este markup.
+                  <strong>Markup del dueño de credenciales (intermediario):</strong> se configura en <code>/admin-consola-tarifa</code> (acceso exclusivo Shipro), per courier que despacha — 0% si las credenciales son de Shipro, valor &gt; 0 si un tercero presta sus credenciales. El cliente NO configura ni ve este markup.
                 </p>
               </div>
             </section>

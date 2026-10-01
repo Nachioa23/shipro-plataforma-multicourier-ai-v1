@@ -2408,7 +2408,7 @@ export default function ConsolaTarifaPage() {
               </table>
             </div>
             <div className="px-6 py-3 border-t border-gray-100 bg-slate-50/50 text-[11px] text-gray-600">
-              Cada guardado cierra la vigencia actual del courier y crea una nueva (asiento inverso). Nunca se pisa el valor anterior. Las pantallas individuales (Markup del Dueño, Markup por Courier, SMO por Courier) siguen operativas — la consola escribe a los mismos modelos (fuente única).
+              Cada guardado cierra la vigencia actual del courier y crea una nueva (asiento inverso). Nunca se pisa el valor anterior. Esta consola es la única UI de edición — las tres variables se escriben a los mismos modelos de siempre (fuente única).
             </div>
           </div>
         )}

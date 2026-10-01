@@ -442,6 +442,7 @@ export default function AccionesEnvio({ envioId, tracking, etiquetaUrl, estadoIn
                         <p className="text-sm font-bold text-gray-800">{datosFicha.envio.destinatario.nombre}</p>
                         <p className="text-xs text-gray-600 mt-1">{datosFicha.envio.destinatario.documento}</p>
                         <p className="text-xs text-gray-600">{datosFicha.envio.destinatario.telefono}</p>
+                        <p className="text-xs text-gray-600">{datosFicha.envio.destinatario.email}</p>
                       </div>
                       <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm col-span-2 sm:col-span-1">
                         <h4 className="text-[10px] uppercase font-black text-gray-400 flex items-center gap-2 mb-3"><MapPin className="w-3 h-3"/> Destino</h4>

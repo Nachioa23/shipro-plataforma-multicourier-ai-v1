@@ -3,9 +3,13 @@ import prisma from "@/lib/prisma";
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
+import { resolverContext } from "@/lib/auth-context";
 
 export async function POST(request: Request) {
   try {
+    const ctx = resolverContext(request);
+    if (ctx instanceof NextResponse) return ctx;
+
     const { tracking, forzarActualizacion } = await request.json();
 
     if (!tracking) return NextResponse.json({ error: "Falta el número de tracking" }, { status: 400 });
@@ -16,6 +20,12 @@ export async function POST(request: Request) {
     });
 
     if (!envio) return NextResponse.json({ error: "Envío no encontrado" }, { status: 404 });
+
+    // DEUDA 126: ownership gate. ctx.empresaId=null → Shipro Modo Dios (ve todo).
+    // Cliente: el envío debe pertenecer a su empresa, else 404 genérico (no enumeration).
+    if (ctx.empresaId !== null && envio.empresaId !== ctx.empresaId) {
+      return NextResponse.json({ error: "Envío no encontrado" }, { status: 404 });
+    }
 
     let mensaje = "Historial cargado";
     if (forzarActualizacion && envio.estadoActual !== "CANCELADO") {

@@ -1562,3 +1562,158 @@ useEffect(() => {
 
 ---
 
+## DEUDA 175 — Colchón PREPAGO inerte: el gate de creación bloquea en $0 sin usar el limiteDescubierto, contra la intención de DEUDA 78 (money-crítico, registrada 2026-09-10) (RESUELTA 2026-09-29 — commit `abb045e`, en prod via `c1f88a1`)
+
+**Status:** ABIERTA. Money-crítico. Prioridad media (hoy sin clientes reales no muerde; definir antes de onboardear PREPAGO reales, o antes de que un PREPAGO ya operativo dependa del colchón del finde). Sin backfill requerido (prod = data de prueba). Scope chico (el gate son 2 líneas) pero **decisión de negocio bloqueante** — apetito de riesgo de crédito de Shipro.
+
+**Intención declarada (DEUDA 78, verbatim):**
+
+> "Mitigacion actual (sin construir esto): limiteDescubierto calibrado para cubrir un fin de semana de operacion (Paso 5 onboarding) + aviso de saldo bajo (DEUDA 77). Con eso, **el cliente opera en descubierto durante el hueco y no pierde ventas**."
+
+Y en el onboarding ([app/api/clientes/route.ts:100-107](app/api/clientes/route.ts#L100-L107)):
+```
+// DEUDA 10 Paso 5a (D-10-ONBOARDING-DESCUBIERTO): descubierto minimo estandar
+// para PREPAGO ($50.000, colchon de fin de semana mientras se verifica la
+// recarga manual — ver DEUDA 78). POSTPAGO usa el valor que ingresa el admin.
+const MIN_DESCUBIERTO_PREPAGO = 50000;
+```
+
+A todo cliente PREPAGO se le asigna `limiteDescubierto = max(input, $50.000)` **con la promesa explícita de que puede seguir despachando durante el finde** mientras Shipro verifica manualmente su recarga (delay documentado: minutos a ~63 hs de viernes 20hs → lunes 9hs).
+
+**Código real ([crear.ts:857-864](lib/envios/crear.ts#L857-L864)):**
+```
+if (tipoCuentaEfectivo === "PREPAGO") {
+  if ((empresaConData.saldoActivo ?? new Prisma.Decimal(0)).lt(montoDebito)) {
+    bloqueadoPorSaldo = true;
+  }
+} else { // POSTPAGO
+  if ((empresaConData.saldoActivo ?? new Prisma.Decimal(0)).add(empresaConData.limiteDescubierto ?? new Prisma.Decimal(0)).lt(montoDebito)) {
+    bloqueadoPorSaldo = true;
+  }
+}
+```
+
+**PREPAGO bloquea con `saldoActivo < montoDebito` — sin sumar `limiteDescubierto`.** POSTPAGO sí lo suma. Asimetría silenciosa: el gate PREPAGO nunca activa el colchón, aunque el onboarding lo asignó específicamente para eso.
+
+**Consecuencia — el colchón PREPAGO es INERTE:**
+
+- **Al crear envío**: gate bloquea en $0, envío nace `BLOQUEADO_SALDO`, sin dispatch al courier, sin etiqueta imprimible.
+- **Al destrabar** ([procesar-bloqueados-credencial.ts:129-131](lib/envios/procesar-bloqueados-credencial.ts#L129-L131)): mismo patrón asimétrico, `saldoDisponible = saldoSimulado` para PREPAGO (sin colchón), `+ limite` para POSTPAGO.
+- **Suspensión** (`evaluarSuspension`, `-limiteDescubierto × 1.5`): un PREPAGO **nunca puede llegar a saldo negativo** vía operación normal (el gate lo bloquea antes), así que el umbral de suspensión es inalcanzable. El colchón nunca se toca por vía de operación.
+
+Efectivamente, el `MIN_DESCUBIERTO_PREPAGO = $50.000` es **valor huérfano en la BD**: asignado al onboarding, nunca consultado en ninguna decisión operativa. Es código muerto disfrazado de mitigación.
+
+**Escenario operativo real (weekend gap):**
+- Cliente PREPAGO transfiere viernes 20:00, admin_shipro verifica y acredita lunes 09:00.
+- Durante esas ~63 hs el cliente vende en su e-commerce.
+- **Comportamiento esperado (DEUDA 78)**: envíos despachan al courier con `saldoActivo` yendo negativo dentro del colchón ($0 → -$2k → -$5k). Comprador recibe tracking real. Lunes: recarga vuelve saldo a positivo.
+- **Comportamiento actual**: cada envío nace `BLOQUEADO_SALDO`, con SHP-* provisorio sin etiqueta courier real. El comprador ve un tracking Shipro sin movimiento por 63 hs. Lunes: `procesar-bloqueados.ts` batch-processes los envíos apilados. Interpretación amable: "la venta se registra pero se paraliza"; interpretación estricta: "el cliente no puede despachar el finde", contradiciendo lo prometido en el onboarding.
+
+**Veredicto — BUG (intención DEUDA 78 ≠ código):**
+
+Dos opciones de fix (decisión de negocio Nacho, apetito de riesgo):
+
+- **Opción (a) — ARREGLAR (implementar la intención):** el gate PREPAGO suma el colchón:
+  ```
+  if (tipoCuentaEfectivo === "PREPAGO") {
+    if ((empresaConData.saldoActivo ?? new Decimal(0)).add(empresaConData.limiteDescubierto ?? new Decimal(0)).lt(montoDebito)) {
+      bloqueadoPorSaldo = true;
+    }
+  }
+  ```
+  Igual que POSTPAGO. El PREPAGO despacha hasta $50.000 en descubierto durante el finde. Shipro presta ese margen — riesgo acotado por el propio colchón + la suspensión al 1.5×. El destrabe (`procesar-bloqueados-*.ts`) debe alinear el mismo cambio. **Money-critical**: cambia la política de dispatch PREPAGO; verificación empírica requerida en cada estado × rama.
+
+- **Opción (b) — DEJAR + LIMPIAR (código muerto):** aceptar que PREPAGO bloquea en $0 por diseño ("pagás antes de usar, estricto"). Remover `MIN_DESCUBIERTO_PREPAGO = 50000` del onboarding (`app/api/clientes/route.ts`), remover el comment de DEUDA 78 sobre "colchon de fin de semana", actualizar DEUDA 78 para clarificar que la mitigación es distinta (o inexistente). El campo `limiteDescubierto` sigue existiendo pero para PREPAGO es 0 por default; para POSTPAGO sigue como línea de crédito normal.
+
+**Sub-caso raro pero real**: un cliente que hoy sea POSTPAGO puede eventualmente pasar a PREPAGO (o al revés). La política debería definir qué ocurre con su `limiteDescubierto` en ese switch. No hay migración de modalidad implementada hoy — irrelevante por ahora.
+
+**Impacto para DEUDA 174 (Política de Débito Unificada):** el bug es **ortogonal** — DEUDA 174 se puede construir sobre el modelo colchón que ya funciona en POSTPAGO. PREPAGO en las 5 piezas queda con la asimetría heredada: el Fee al crear (Pieza 2 Rama B) se cobra sólo si `saldoActivo ≥ Fee`. Cuando el bug 175 se resuelva (opción a o b), 174 se recomporta consistente sin cambios adicionales.
+
+**Verificaciones sugeridas (para el fix si Nacho elige (a)):**
+1. PREPAGO con `saldoActivo=$0`, `limiteDescubierto=$50k`, `montoDebito=$2k` → envío nace `Pendiente`, dispatch OK, `MovimientoFinanciero DEBITO_ENVIO -$2k`, saldo = -$2k.
+2. Encadenar hasta cruzar `-$50k` cushion: envío nace `BLOQUEADO_SALDO`.
+3. Cruzar $-75k (1.5×): `evaluarSuspension` marca `Empresa.suspendida = true`.
+4. Recarga: `procesar-bloqueados.ts` destraba los pendientes, reactiva si aplica.
+
+**Scope:** chico (2 líneas en crear.ts + análogas en 4 handlers `procesar-bloqueados-*.ts` para simetría). **Prioridad:** media — hoy latente (prod = prueba), pero es la primera política real que cae encima cuando entre el primer cliente PREPAGO productivo.
+
+**Relación:** [[DEUDA 78]] (autoridad de intención — "colchón de finde"). [[DEUDA 22]] (suspensión — usa el colchón por umbral, inalcanzable en PREPAGO por este bug). [[DEUDA 16]] (BLOQUEADO_SALDO, el gate del que sale el bug). [[DEUDA 10]] Paso 5a (D-10-ONBOARDING-DESCUBIERTO, donde se asigna el $50k). [[DEUDA 174]] (política de débito unificada — ortogonal, no bloqueante).
+
+**Origen:** recon money-critical Chat A 2026-09-10 durante el diseño de Pieza 2 de DEUDA 174 (colchón + BLOQUEADO_SALDO Rama B). Al verificar cómo el gate PREPAGO interactúa con el colchón declarado en el onboarding, apareció la asimetría silenciosa. DEUDA 78 dio la evidencia autoritativa de que era bug de política, no diseño intencional.
+
+---
+
+## DEUDA 176 — Sin UI para editar `limiteDescubierto` post-alta: solo se configura al crear el cliente (registrada 2026-09-10, scope chico, prioridad baja) (RESUELTA 2026-09-29 — commit `e05abdf`, en prod via `c1f88a1`)
+
+**Status:** ABIERTA. Prioridad baja (no urgente sin clientes reales; útil para operaciones cuando los haya). Sin backfill (prod = prueba).
+
+**Problema:** `Empresa.limiteDescubierto` se setea **solo al crear el cliente** (`POST /api/clientes` L153 pasa el valor al `prisma.empresa.create`). El `PUT /api/clientes` sólo tiene dos ramas: `accion: "toggle_activo"` y `accion: "crear_usuario"`. **No hay rama para editar el colchón** post-alta. Tampoco hay endpoint dedicado ni UI en el dashboard (`app/(dashboard)/admin-empresas/` NOT FOUND; `admin/finanzas` sólo acredita saldos con recarga manual, no edita el colchón).
+
+**Consecuencia:** si un cliente crece y necesita más colchón (o menos, por gestión de riesgo), la única forma de modificarlo hoy es `UPDATE Empresa SET limiteDescubierto = X` directo en la BD. Igual que el gap histórico de la UI del markup del intermediario: el campo existe + funciona en el motor, pero sin superficie de admin editable = fricción de operaciones cuando el negocio quiera ajustar líneas de crédito por cliente.
+
+**Fix sugerido:**
+- **Opción A (mínima):** rama `accion: "actualizar_limite_descubierto"` en `PUT /api/clientes` con audit log via `registrarCambioConfiguracion` (patrón existente de `toggle_activo`, [app/api/clientes/route.ts:216-225](app/api/clientes/route.ts#L216-L225)). Body: `{ empresaId, limiteDescubiertoNuevo, motivoAuditoria }`. Gate rol: `admin_shipro` (defense-in-depth, mismo patrón).
+- **Opción B (integral):** sección "Límite descubierto" en un editor de cliente en el dashboard, con endpoint dedicado y validación (POSTPAGO > 0, PREPAGO ≥ MIN si sigue vigente después de resolver [[DEUDA 175]]).
+
+**Scope:** chico. Un branch en el PUT (10-20 líneas) + botón en la UI de admin (si se hace la opción B). Sin schema change (el campo existe). Sin migración de datos.
+
+**Prioridad:** baja hoy (prod = prueba, cero clientes reales). Se activa cuando entren clientes POSTPAGO productivos que necesiten ajustes de línea de crédito, o cuando se resuelva [[DEUDA 175]] y el colchón PREPAGO empiece a tener uso real (mismo campo, misma necesidad).
+
+**Relación:** [[DEUDA 175]] (bug colchón PREPAGO — misma zona del código; los dos amerintan el editor cuando el negocio operacionalice el colchón). [[DEUDA 22]] (suspensión usa el colchón — si el admin ajusta el colchón, los umbrales de suspensión/reactivación cambian automáticamente por multiplicador). [[DEUDA 10]] Paso 5a (D-10-ONBOARDING-DESCUBIERTO — donde el colchón nace).
+
+**Origen:** recon del modelo colchón Chat A 2026-09-10 durante el diseño de Pieza 2 de DEUDA 174. Verificar dónde se configura el `limiteDescubierto` reveló que la única superficie de edición es el POST del onboarding; el PUT es un gate rígido de dos acciones que no cubre este campo. Registrado como deuda separada, no bloquea DEUDA 174 ni DEUDA 175 pero es infra que las hará usables.
+
+---
+
+## DEUDA 126 — `/api/envios/rastreo-manual` sigue leakeando PII del comprador en su DTO (SEGURIDAD/PRIVACIDAD) (registrada 2026-08-03, scope chico, seguridad) (RESUELTA 2026-10-01 — commit `982524b`, en prod via `c1f88a1`)
+
+**Status:** ABIERTA. Descubierta durante el recon de DEUDA 106 pieza 1 (2026-08-03). `POST /api/envios/rastreo-manual` (`app/api/envios/rastreo-manual/route.ts`) es un endpoint `PUBLIC_API_EXACT` (`proxy.ts:11`) que hand-picka un DTO — a diferencia de la vieja versión de buscar, este ya NO devuelve `saldoActivo/limiteDescubierto/apiKeyHash/cuit/direccionFiscal*` (bien). PERO **sí devuelve el bloque completo de destinatario con PII**: `documento` (DNI), `email`, `telefono`, `direccionStr`, `localidad`, `cp` (`route.ts:68-76`). Cualquiera con un tracking (que no es secreto — viaja por mail, en la etiqueta) puede leer el DNI/email/teléfono del comprador de ese envío. Misma clase de leak que DEUDA 106 pieza 1 en un endpoint distinto.
+
+**Alcance del fix (chico):**
+- Trim del bloque `destinatario` del DTO: quitar `documento`, `email`, `telefono`. Mantener sólo lo que la UI de rastreo público realmente necesita (nombre para saludo + localidad para contexto — la dirección completa NO es necesaria en la vista de rastreo).
+- Considerar aplicar el mismo `verificarAccesoEnvio` que ahora vive en buscar. Complicación: `rastreo-manual` está en `PUBLIC_API_EXACT` (no en `DUAL_EXACT`), y su único caller runtime es `components/AccionesEnvio.tsx:80` (dashboard, session-gated en la práctica). Opciones: (a) migrar a `DUAL_EXACT` + gate ownership (cierra el path anónimo); (b) mantener público pero sólo trimmear PII (deja el endpoint como una API de rastreo pública real, correcta si el producto lo quiere así). Decidir con producto.
+- Consumidor único a verificar: `components/AccionesEnvio.tsx` — leer qué campos del `envio.destinatario` renderiza y validar que la trimmed version le alcanza.
+
+**Relación con DEUDA 106**: misma clase (endpoint tracking-as-key devolviendo PII de más). Se separa como deuda propia porque el endpoint es distinto y su clasificación en el proxy es distinta — no comparte el fix con PIEZA 1 (que fue cirugía sobre buscar) ni con PIEZA 2 (que introduce el token).
+
+**Prioridad:** media. Menos grave que DEUDA 106 pieza 1 (no leaka finanzas de empresa), pero sigue exponiendo PII del comprador. Cerrar antes del onboarding masivo.
+
+---
+
+## DEUDA 179 — Borrar las 4 pantallas viejas de tarifa (hoy ocultas del menú, rutas vivas) — cuando la consola esté probada en prod (registrada 2026-09-11, scope chico, prioridad baja) (RESUELTA 2026-10-01 — commit `c1f88a1`, en prod)
+
+**Status:** ABIERTA. Prioridad **baja** — no molesta ocultas del menú, es prolijidad. Se aborda cuando la Consola de Tarifa (DEUDA 170 P2) demuestre en prod (semanas de uso con clientes reales) que cubre todo lo que hacían las 4 pantallas viejas.
+
+**Contexto:** el 2026-09-11 (commit `281e4cd` local, pend. deploy) se removió del sidebar las 4 pantallas individuales que la Consola de Tarifa reemplaza:
+- `/admin-markup-dueno` (markup del intermediario per courier).
+- `/admin-markup-courier` (markup Shipro per courier con toggle HEREDA/PROPIO).
+- `/admin-smo` (SMO per courier con vigencias).
+- `/admin-parametros-tarifa` (markup Shipro global con vigencias).
+
+**Estado actual:** las 4 rutas + sus `page.tsx` + APIs asociadas **SIGUEN VIVAS** (deep-link accesible por URL directa). Es una red de seguridad consciente (decisión Nacho 2026-09-11 en dos tiempos):
+1. **Paso 1 (hecho):** ocultar del menú. La consola es el único acceso desde el sidebar; el que sabe la URL puede seguir usando la pantalla individual si detecta algo que falta en la consola. **Reversible trivial** (volver a agregar el `<Link>` en `layout.tsx`).
+2. **Paso 2 (esta deuda):** borrar las 4 rutas cuando la consola esté probada en prod.
+
+**Cuándo borrar:** después de semanas de uso real (clientes reales operando via la Consola), sin reportes de "falta X funcionalidad de la pantalla vieja". Ahí:
+- `rm -rf` los 4 directorios `app/(dashboard)/admin-markup-{dueno,courier,smo}` + `admin-parametros-tarifa`.
+- Grep exhaustivo de las 4 APIs asociadas (`app/api/admin/markup-dueno`, `app/api/admin/markup-courier`, `app/api/admin/smo-courier`, `app/api/admin/markup-shipro` — nombres exactos por-recon): si NADIE más las usa (la consola escribe via `app/api/admin/consola-tarifa/*`), borrarlas también. **Verificación previa obligatoria**: `grep -rn` desde `app/`, `components/`, `lib/`, tests — cualquier import o call queda en flag antes de la eliminación.
+- Verificar que la consola escribe a los MISMOS modelos Prisma (`MarkupCourier`, `SmoCourier`, `MarkupIntermediarioCourier`, `MarkupShiproVigencia`, `OperacionFee`) — si sí (comentario `admin-consola-tarifa/page.tsx:2204` confirma *"escribe a los mismos modelos (fuente única)"*), la lógica de negocio sobrevive intacta.
+- Los modelos + tabla NO se tocan (siguen siendo la fuente de verdad).
+
+**Follow-up menor (sub-tarea):** [app/(dashboard)/clientes/page.tsx:671, 674](app/(dashboard)/clientes/page.tsx#L671) tiene texto informativo en el wizard de alta cliente:
+```
+<strong>Markup de Shipro:</strong> se configura en <code>/admin-markup-courier</code>
+<strong>Markup del dueño de credenciales:</strong> se configura en <code>/admin-markup-dueno</code>
+```
+Son `<code>` (no `<Link>` — no rompen, es texto informativo). **Apuntan a pantallas ahora ocultas del menú**. Actualizar el copy a `<code>/admin-consola-tarifa</code>` cuando se toque esa pantalla, o cuando se ejecute la eliminación de las 4 pantallas viejas — lo que ocurra primero. Cero urgencia, cero riesgo, solo consistencia UX.
+
+**Scope de borrado:** chico. 4 directorios `page.tsx` (típicamente 400-800 líneas cada uno) + 4 API routes (200-500 líneas cada uno) + eventuales imports huérfanos (los helpers de Prisma sobreviven). Cero migración de schema.
+
+**Riesgo:** BAJO tras un período de estabilización. La red de seguridad (rutas vivas post-hide-from-menu) permite recuperación instantánea si algún operador reporta un gap durante ese período. Al borrar, la reversibilidad se pierde — por eso el "dos tiempos".
+
+**Relación:** [[DEUDA 170]] (Consola de Tarifa — su cierre completo depende parcialmente del hide-del-menú de esta deuda; la eliminación es la limpieza final). [[DEUDA 157]] (markup Shipro por courier — pantalla original que la consola absorbe). [[DEUDA 115]] (SMO per courier). [[DEUDA 173]] (estados de envío String libre — sin relación pero mismo espíritu de "consolidar la fuente de verdad").
+
+**Origen:** decisión Nacho 2026-09-11 al cerrar la Consola de Tarifa (DEUDA 170 P2) + verificar que las 5 variables + preview live funcionan en prod. La consola es reciente — merece semanas de exposición antes de tirar la red.
+
+---
+

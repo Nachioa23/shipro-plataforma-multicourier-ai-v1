@@ -5177,3 +5177,74 @@ Fallback conservador si la tabla está vacía: constantes inline $250k/$1M + `co
 **Estado**: ABIERTA, prioridad BAJA. Sub-pieza autocontenida del modelo de crédito post-etapa 1. Recon ya hecho — cuando haya foco/prioridad, la implementación es directa (~1-2 horas).
 
 **Origen**: recon Chat A 2026-09-30 durante el diseño de DEUDA 176 etapa 1. Al construir el editor genérico, Nacho identificó el hueco anti-fat-finger + la necesidad de que los umbrales sean editables sin deploy (inflación). Se defirió a su propia deuda para no engordar el commit de la 176 (etapa 1 quedó limpia con solo el editor sin techo). Registrado acá para no perder el gap.
+
+---
+
+## DEUDA 185 — Leak cross-tenant de contactos del Directorio: `Direccion` es tabla global compartida por email, mutada y leída entre empresas (registrada 2026-10-01, **CONFIRMADO EMPÍRICAMENTE EN PROD 2026-10-05**, prioridad ALTA, bloqueante pre-onboarding de clientes reales)
+
+**Status:** ABIERTA. Investigada el 2026-10-01 (chat A) a raíz de que Nacho vio empíricamente, probando con usuarios de empresas distintas, que el buscador de `/api/directorio` devolvía los mismos contactos "Albinati" para cuentas que no debían compartirlos. Confirmada hoy (2026-10-05) con una prueba aislante que no deja lugar a duda. Hoy está **contenida** porque es data de prueba — bloquea el onboarding de clientes reales.
+
+**Diagnóstico (recon Chat A, 2026-10-01):**
+
+El endpoint [app/api/directorio/route.ts](app/api/directorio/route.ts) scope-ea bien: construye `where.enviosDestino = { some: { empresaId: ctx.empresaId } }` AND-eado con el `OR` del search; `resolverContext` para un rol `gerente_cliente`/`operador_cliente` devuelve `empresaId` numérico desde el `x-empresa-id` inyectado por proxy desde el JWT, sin manipulación posible desde el cliente. **El filtro NO es la grieta** — se verificó línea por línea.
+
+La grieta está en el **modelo de `Direccion`** + el **upsert por email** en [lib/envios/crear.ts:235](lib/envios/crear.ts#L235):
+
+```ts
+const direccionExistente = await prisma.direccion.findFirst({ where: { email: email } });
+if (direccionExistente) {
+  const dirActualizada = await prisma.direccion.update({
+    where: { id: direccionExistente.id },
+    data: { nombre, documento, telefono, calle, altura, piso, dpto, cp, localidad, provincia }
+  });
+```
+
+- La tabla `Direccion` NO tiene `empresaId` — es **global por diseño**.
+- El `findFirst({ where: { email } })` **no filtra por empresa** — mach-ea por email literal, cross-tenant.
+- El `update` posterior **sobreescribe** nombre/documento/teléfono/dirección con los datos de quien esté creando el envío ahora, pisando lo que haya puesto cualquier otra empresa antes (last-write-wins).
+
+Resultado conceptual: si dos empresas tienen al mismo comprador real (mismo email), ambas apuntan sus `Envio.destinoId` a la **misma fila `Direccion`**. El filtro `enviosDestino.some(empresaId=X)` matchea esa fila para **ambas** empresas (correctamente — ambas tienen envíos a esa dirección), pero (a) la fila es físicamente **una sola** y mutable por cualquiera de las dos, y (b) lo que una guarda lo ve la otra.
+
+**CONFIRMADO EMPÍRICAMENTE EN PROD 2026-10-05 (prod en `c1f88a1`):**
+
+Dos pruebas complementarias:
+
+1. **Query prod sobre `Direccion`**:
+   - `ignacio.albinati@gmail.com` (`Direccion.id=8`) tiene envíos de **3 empresas** (ids 1, 4, 8) → aparece en el directorio de las 3, lo cual es **legítimo** per el filtro (`enviosDestino.some(empresaId=X)` matchea). Esto por sí solo no distingue leak de comportamiento correcto — las 3 empresas sí le enviaron.
+   - `ia@shipro.pro` (`Direccion.id=3`) tiene envíos de **1 sola empresa** → aparece correctamente solo ahí. El filtro funciona en el caso trivial.
+
+2. **Prueba aislante — la que confirma el bug sin ruido**:
+   - Nacho editó el contacto de `ignacio.albinati@gmail.com` desde el perfil de **Francisco Casal** (una de las 3 empresas). Cambió **el nombre** a `"Julia Astelarra"` (dejó el email intacto).
+   - Luego buscó `"Astelarra"` desde el perfil de **Jeremías Amaro** (otra de las 3 empresas, no la que editó).
+   - Resultado: el contacto `"Julia Astelarra"` aparece en **ambas empresas** (Amaro **y** Casal).
+
+Esto evidencia **las dos caras del bug**:
+
+- **(1) Mutación cross-tenant**: la edición que hizo Casal en su "contacto" se escribió sobre la fila `Direccion` compartida y así quedó para todas las empresas que apuntan a ese `destinoId`.
+- **(2) Lectura cross-tenant**: Amaro, que nunca editó nada ni "agendó" al comprador con ese alias, lee desde su directorio el nombre que puso Casal.
+
+**Matiz de diseño (producto, Nacho 2026-10-05) — afina qué hay que separar y qué NO:**
+
+Nacho **sí quiere** mantener un dato físico canónico por comprador, compartido entre empresas y actualizado por todas (economía de datos — la dirección física/calle/altura/CP de una persona real es la misma para todos los que le envíen). Lo que **NO debe compartirse** son:
+
+- **(a) La relación comercial** "este comprador es contacto de MI empresa": un cliente no debería ver en su directorio compradores a los que **él nunca envió** (hoy el filtro `enviosDestino.some` ya cubre esto correctamente — no es parte del bug).
+- **(b) Cómo cada empresa lo tiene agendado**: el nombre `"Julia Astelarra"` que le puso Casal **no debe verlo** Amaro. Cada empresa tiene su propia agenda — alias/nombre interno, tal vez un teléfono de contacto operativo distinto, observaciones. El dato físico (calle/CP/geocódigo) sigue siendo uno solo; el "cómo lo llama cada empresa" es por-empresa.
+
+El fix **NO es** simplemente "agregar `empresaId` a `Direccion`" — eso rompería la economía del dato físico (el barrio/CP/geocódigo del comprador se duplicaría una vez por empresa que le envíe). El fix tiene que **separar las dos capas**:
+
+- **Capa física (compartida)**: `Direccion` sigue global y única por email (o por una identidad canónica a definir), guarda el dato físico. Esta fila la escribe el `crear.ts` cuando se trabaja un envío, mezclando lo que informó el shipper — con la cautela de que un cambio físico (mudanza del comprador) legítimamente debería propagarse para la próxima vez que cualquier empresa le envíe.
+- **Capa agenda/relación (privada por empresa)**: tabla nueva **`ContactoEmpresa`** probablemente — campos tentativos `(id, empresaId, direccionId o email, nombreAgendado, aliasInterno?, telefonoInterno?, observaciones?, timestamps)` + `@@unique([empresaId, direccionId])` o `([empresaId, email])`. Esta tabla es lo que el buscador de `/api/directorio` leería y escribiría, estrictamente scopeada por `empresaId`. La edición "Casal cambia el nombre a Julia Astelarra" se guardaría en `ContactoEmpresa` de Casal — Amaro al buscar leería **su propia** fila `ContactoEmpresa` con el nombre canónico/original.
+- **Forma final del diseño**: a confirmar en el recon del fix. Habrá que decidir: (i) qué campos quedan en `Direccion` (físicos puros) vs cuáles pasan a `ContactoEmpresa` (nombre, documento, teléfono?); (ii) backfill para separar la base actual (dedupe + reparto); (iii) cómo se actualiza la capa física sin propagar la agenda; (iv) qué hace el autocomplete del wizard de nuevo envío cuando una empresa busca a un comprador que NO está en SU `ContactoEmpresa` pero sí existe la `Direccion` global (¿opción explícita "agregar a mi directorio" + crear fila `ContactoEmpresa`? probablemente sí, con confirmación del usuario para que no se cuelen compradores de otras empresas).
+
+**Scope**: medio-alto. Involucra (i) migración Prisma (crear `ContactoEmpresa` + backfill desde `Direccion` + mapeo de los envíos existentes), (ii) refactor del `crear.ts` para separar la escritura de capa física vs capa agenda, (iii) refactor de `/api/directorio` para leer de `ContactoEmpresa`, (iv) refactor del wizard de alta en `/nuevo-envio` para el autocomplete + flujo "agregar a mi agenda", (v) auditoría de otros callers de `prisma.direccion.*` para evitar leer datos de agenda desde la capa física.
+
+**Prioridad**: ALTA, bloqueante pre-onboarding real. Hoy contenido porque solo hay data de prueba — en el momento que entren clientes reales con compradores que se solapen entre empresas (totalmente esperable: hay muchos marketplaces chicos que venden en Argentina al mismo público), el leak se vuelve activo y visible. **NO improvisar**: obra con diseño + recon + migración + verificación empírica controlada.
+
+**Scope del fix (estimación grueso tras el matiz de diseño)**: diseño ~2-3 horas, recon de callers ~1 hora, migración + backfill ~2-3 horas, refactor código ~4-6 horas, verificación empírica (replicar la prueba Astelarra + edge cases) ~1-2 horas. **Riesgo**: medio — toca modelo de datos usado por `crear.ts` (crítico) y la UI del directorio; el backfill de la base actual requiere decisión de producto sobre qué nombres/teléfonos "pertenecen a quién" históricamente (probablemente se congela el estado actual en `ContactoEmpresa` de cada empresa que tenga envíos a esa `Direccion`, duplicando el campo nombre tal como está hoy — la pérdida de precisión es tolerable porque la gran mayoría coincide, y lo que no coincide pasa a ser una divergencia aceptable per-empresa).
+
+**Relación**:
+- Mismo espíritu de aislamiento que **[[DEUDA 126]]** (PII leak en `/api/envios/rastreo-manual` — RESUELTA el 2026-10-01 con ownership gate), pero esta es más profunda: no es una autz check faltante, es que el modelo de datos no soporta aislamiento.
+- Toca el mismo área que el bug cross-tenant de `/api/metricas` que resolvió **DEUDA 7** (ver DEUDAS-RESUELTAS.md:52) — ambos tienen la misma raíz conceptual (un recurso que debería estar scopeado por empresa no lo está, aunque por razones distintas).
+- Dependencia: NINGUNA — se puede abordar standalone. No bloquea ni es bloqueada por obra activa.
+
+**Origen**: recon profundo Chat A 2026-10-01 (crear.ts:235 ubicado, filtro y resolverContext descartados como grieta). Confirmación empírica + prueba aislante Nacho 2026-10-05 (prueba Astelarra: ignacio.albinati@gmail.com editado desde Casal, leído desde Amaro). Matiz de diseño de producto Nacho 2026-10-05 (NO romper economía del dato físico; separar en dos capas).

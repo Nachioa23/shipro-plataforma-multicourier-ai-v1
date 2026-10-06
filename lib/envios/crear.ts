@@ -231,21 +231,101 @@ export async function crearEnvio(input: CrearEnvioInput) {
   }
   const courierIdReal = courierReal.id;
 
-  // DIRECTORIO Y ABM: Actualizar o crear contacto
-  const direccionExistente = await prisma.direccion.findFirst({ where: { email: email } });
-  let direccionId: number;
-  if (direccionExistente) {
-    const dirActualizada = await prisma.direccion.update({
-      where: { id: direccionExistente.id },
-      data: { nombre: destinatarioNombre, documento: dni, telefono: telefono, calle: calle, altura: altura, piso: piso, dpto: dpto, cp: String(cpDestino), localidad: localidad, provincia: provinciaDestino }
+  // DIRECTORIO Y ABM — DEUDA 185 ETAPA 2 (2026-10-06): modelo contacto compartido.
+  // El Directorio es una ENTIDAD compartida identificada por email ("username"
+  // del comprador). Hay UNA sola fila Direccion por email con tipo='CONTACTO';
+  // sus datos (nombre, documento, teléfono, dirección física) son compartidos
+  // y los edits propagan a todas las empresas que le vendieron.
+  //
+  // Aislamiento = ACCESO (no data): ContactoEmpresa(empresaId, direccionId) es
+  // la fila ACL que marca "esta empresa le vendió al menos una vez a este
+  // contacto". El buscador de /api/directorio (Etapa 3) solo lista contactos
+  // con fila ContactoEmpresa de la empresa en sesión.
+  //
+  // El unique parcial de email vive en el índice SQL (migration de Etapa 1):
+  // Direccion_email_contacto_key ON Direccion(email) WHERE tipo='CONTACTO'.
+  // Prisma no reconoce índices parciales como @unique → no se puede usar
+  // prisma.direccion.upsert({ where: { email } }). Se usa find-tipo-scoped +
+  // update-or-create con guard P2002 (race condition cross-create).
+  let direccionDestino = await prisma.direccion.findFirst({
+    where: { email: email, tipo: "CONTACTO" },
+  });
+  if (direccionDestino) {
+    // Edits PROPAGAN: todas las empresas con acceso ven el update.
+    direccionDestino = await prisma.direccion.update({
+      where: { id: direccionDestino.id },
+      data: {
+        nombre: destinatarioNombre,
+        documento: dni,
+        telefono: telefono,
+        calle: calle,
+        altura: altura,
+        piso: piso,
+        dpto: dpto,
+        cp: String(cpDestino),
+        localidad: localidad,
+        provincia: provinciaDestino,
+      },
     });
-    direccionId = dirActualizada.id;
   } else {
-    const nuevaDir = await prisma.direccion.create({
-      data: { nombre: destinatarioNombre, documento: dni, email: email, telefono: telefono, calle: calle, altura: altura, piso: piso, dpto: dpto, cp: String(cpDestino), localidad: localidad, provincia: provinciaDestino, pais: "Argentina" }
-    });
-    direccionId = nuevaDir.id;
+    try {
+      direccionDestino = await prisma.direccion.create({
+        data: {
+          tipo: "CONTACTO",
+          nombre: destinatarioNombre,
+          documento: dni,
+          email: email,
+          telefono: telefono,
+          calle: calle,
+          altura: altura,
+          piso: piso,
+          dpto: dpto,
+          cp: String(cpDestino),
+          localidad: localidad,
+          provincia: provinciaDestino,
+          pais: "Argentina",
+        },
+      });
+    } catch (e: unknown) {
+      // Race condition: otra creación concurrente insertó la fila CONTACTO
+      // con el mismo email entre nuestro findFirst y create. P2002 = unique
+      // constraint violation del índice parcial. Recuperamos leyendo la fila
+      // que ganó la carrera + aplicamos el update (edits propagan).
+      const code = (e as { code?: string }).code;
+      if (code !== "P2002") throw e;
+      direccionDestino = await prisma.direccion.findFirst({
+        where: { email: email, tipo: "CONTACTO" },
+      });
+      if (!direccionDestino) throw e;
+      direccionDestino = await prisma.direccion.update({
+        where: { id: direccionDestino.id },
+        data: {
+          nombre: destinatarioNombre,
+          documento: dni,
+          telefono: telefono,
+          calle: calle,
+          altura: altura,
+          piso: piso,
+          dpto: dpto,
+          cp: String(cpDestino),
+          localidad: localidad,
+          provincia: provinciaDestino,
+        },
+      });
+    }
   }
+  const direccionId = direccionDestino.id;
+
+  // DEUDA 185 ETAPA 2: ensure acceso de esta empresa al contacto compartido.
+  // ContactoEmpresa es pure-ACL (sin fields privados). Upsert idempotente — si
+  // la empresa ya tenía acceso (envío previo al mismo comprador), no-op.
+  await prisma.contactoEmpresa.upsert({
+    where: {
+      empresaId_direccionId: { empresaId: empresaId, direccionId: direccionId },
+    },
+    create: { empresaId: empresaId, direccionId: direccionId },
+    update: {},
+  });
 
   // ==============================================================
   // DEPÓSITO DE ORIGEN (DEUDA 4)
@@ -322,8 +402,15 @@ export async function crearEnvio(input: CrearEnvioInput) {
   // futuro, los envíos viejos mantienen la dirección de origen del momento.
   // Si bloqueadoPorDeposito: NO creamos snapshot (no hay datos del depósito).
   // origenId y depositoId quedan en null en el envío hasta que se destrabe.
+  // DEUDA 185 ETAPA 2 (2026-10-06): tipo='SNAPSHOT_ORIGEN' explícito. Default
+  // del schema es CONTACTO; sin este flag, un depósito con contactoEmail que
+  // coincide con el email de un comprador CONTACTO existente dispararía P2002
+  // en el índice parcial Direccion_email_contacto_key. Los origen snapshots
+  // son inmutables per-envío y PUEDEN repetir deposito.contactoEmail — por
+  // eso el índice parcial excluye SNAPSHOT_ORIGEN.
   const direccionOrigen = deposito ? await prisma.direccion.create({
     data: {
+      tipo: "SNAPSHOT_ORIGEN",
       nombre: deposito.nombre,
       calle: deposito.direccionCalle,
       altura: deposito.direccionAltura,

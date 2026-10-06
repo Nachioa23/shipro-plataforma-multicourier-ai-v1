@@ -107,6 +107,8 @@ model Empresa {
   asignacionesCourierZonaFlex AsignacionCourierZonaFlex[]
   // MEF Fase 2.3 retrofit — shipments Flex persistidos por el receiver.
   shipmentsFlex               ShipmentFlex[]
+  // DEUDA 185 ETAPA 1 — accesos de la empresa al directorio de contactos compartidos.
+  contactosEmpresa            ContactoEmpresa[]
 }
 
 // ==========================================
@@ -539,6 +541,13 @@ model CredencialCourier {
 // 2. MÓDULOS SATÉLITES (La Inteligencia)
 // ==========================================
 
+// DEUDA 185 ETAPA 1 — discriminador entre contactos compartidos (keyed por email) y
+// snapshots de depósito-origen inmutables per-envío (sin key compartible).
+enum DireccionTipo {
+  CONTACTO         // fila compartida por email: una por comprador real. Edits propagan.
+  SNAPSHOT_ORIGEN  // snapshot inmutable del depósito al crear el envío (origenId). Puede repetir email.
+}
+
 model Direccion {
   id          Int     @id @default(autoincrement())
   nombre      String?
@@ -555,8 +564,39 @@ model Direccion {
   pais        String  @default("Argentina")
   observacion String?
 
-  enviosOrigen  Envio[] @relation("EnvioOrigen")
-  enviosDestino Envio[] @relation("EnvioDestino")
+  // DEUDA 185 ETAPA 1 — distingue el rol de la fila. CONTACTO = buyer compartido
+  // (email único vía índice parcial declarado en SQL del migration — Prisma no
+  // expresa unique parcial nativamente). SNAPSHOT_ORIGEN = snapshot per-envío
+  // del depósito del seller; puede repetir deposito.contactoEmail y NO entra en
+  // el unique parcial.
+  tipo          DireccionTipo @default(CONTACTO)
+  // DEUDA 185 ETAPA 1 — audit de propagación: cualquier update canónico actualiza
+  // esta fecha, útil para debug "cuándo cambió este contacto".
+  actualizadoEn DateTime      @updatedAt
+
+  enviosOrigen  Envio[]           @relation("EnvioOrigen")
+  enviosDestino Envio[]           @relation("EnvioDestino")
+  // DEUDA 185 ETAPA 1 — accesos per-empresa (join pure-ACL, sin fields privados).
+  accesos       ContactoEmpresa[]
+}
+
+// DEUDA 185 ETAPA 1 — tabla puente "qué empresas tienen ACCESO a qué contactos
+// compartidos del Direccion global". Patrón shared-reference + per-tenant ACL
+// (textbook CRM multi-tenant). SIN campos privados per diseño Nacho: toda la
+// data vive compartida en Direccion y edits propagan; lo privado es solo el
+// hecho de que "esta empresa ya le vendió a ese contacto".
+model ContactoEmpresa {
+  id          Int      @id @default(autoincrement())
+  empresaId   Int
+  direccionId Int
+  creadoEn    DateTime @default(now())
+
+  empresa   Empresa   @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  direccion Direccion @relation(fields: [direccionId], references: [id], onDelete: Cascade)
+
+  @@unique([empresaId, direccionId])
+  @@index([empresaId])
+  @@index([direccionId])
 }
 
 model OrdenExterna {

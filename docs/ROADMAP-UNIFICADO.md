@@ -28,13 +28,13 @@ En prod hoy: **motor de plata FASE 1 rama-aware** (cascada intermediario+Shipro,
 
 ### CAPA 0 — Bloqueantes DUROS (sin esto NO se onboardea)
 
-**Progreso 2026-10-08**: **2 de 4 cerrados** ✅. Quedan 169 Fix B (posible bajada a post-cliente) + 108 (acción externa).
+**Progreso 2026-10-08**: **2 de 4 cerrados** ✅ + **1 diferido** (169 Fix B → post-cliente). Queda **1 bloqueante vivo**: 108 (acción externa).
 
 | DEUDA | Qué | Chat | Tipo | Estado |
 |---|---|---|---|---|
 | ~~**185**~~ | ~~Leak cross-tenant contactos~~ | Chat A | — | ✅ **RESUELTA EN PROD 2026-10-08** (4 etapas: modelo ContactoEmpresa + write + read scoped + LGPD opción B; verificado "Astelarra" aislado por acceso). Ver DEUDAS-RESUELTAS.md |
 | ~~**96**~~ | ~~Recuperación de contraseña~~ | Chat A | — | ✅ **RESUELTA EN PROD 2026-10-08** (2 piezas: reset flow + invalidación sesión OWASP; cierra DEUDA 69). Ver DEUDAS-RESUELTAS.md |
-| **169 Fix B** | "La venta nunca se pierde" — hoy el 500 convertido a 400 no reintenta; un envío legítimo puede quedar como venta perdida si el courier no resuelve | Chat A + Chat C (cross) | obra con decisión producto | **ABIERTA** — Fix A ya en prod. Fix B requiere decisión schema (nullable vs placeholder vs mantener status quo); posible bajada a post-cliente si Nacho decide que Fix A alcanza como contrato |
+| ~~**169 Fix B**~~ | ~~"La venta nunca se pierde"~~ | Chat A + Chat C | — | ⏭ **DIFERIDO POST-CLIENTE (Nacho 2026-10-08)**: Fix A en prod ya cumple contrato no-5xx; Fix B (~9-13h) es robustez de lujo no bloqueante para onboarding controlado. Se retoma post primer cliente si el volumen de plugins con couriers mal formateados lo justifica. |
 | **108** | Server viejo (beta.shipro.pro) sin firewall + 5 clientes reales + logs con ataques SSH | EXTERNO (Nacho → Fran) | acción admin | **ABIERTA** — bloquea onboarding sobre superficie expuesta |
 
 ### CAPA 1 — Cobertura de couriers que el cliente va a usar

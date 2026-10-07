@@ -3846,7 +3846,9 @@ Hoy la doble etiqueta sólo se dispara por (a). Falta el disparador (b): un env�
 
 ---
 
-## DEUDA 169 — 500 en POST /api/envios: auto-provision fantasma del courier + normalización + Fix B pendiente (degradación "la venta nunca se pierde") (registrada 2026-09-04, Fix A + Resolución normalizada courier + Provincia desde CP + Parser de altura TODO DEPLOYADO EN PROD 2026-09-06, EN PROGRESO — Fix B ABIERTO scope medio prioridad alta)
+## DEUDA 169 — 500 en POST /api/envios: auto-provision fantasma del courier + normalización + Fix B pendiente (degradación "la venta nunca se pierde") (registrada 2026-09-04, Fix A + Resolución normalizada courier + Provincia desde CP + Parser de altura TODO DEPLOYADO EN PROD 2026-09-06; **Fix B DIFERIDO A POST-CLIENTE (Nacho 2026-10-08)**)
+
+> **Fix B DIFERIDO A POST-CLIENTE (Nacho 2026-10-08)**: Fix A (en prod) ya cumple el contrato "no 5xx" — devuelve 400 `COURIER_AUSENTE` claro, el caller (plugin/e-commerce) sabe qué corregir. Fix B (degradación a `BLOQUEADO_COURIER_AUSENTE` con placeholder courier + handler `procesar-bloqueados-courier-ausente.ts` + UI operador, ~9-13h con verificación money-safe) es **robustez-de-lujo no bloqueante para un primer cliente controlado** — se asume que durante onboarding Nacho conoce los plugins que operan contra Shipro y que mandan `nombreCourier` válido (contrato ya locked para WooCommerce y plugins futuros). **Se retoma post primer cliente** o si el volumen de plugins con couriers mal formateados lo justifica. Baja de Capa 0 del roadmap.
 
 **Status:** Fix A (guard) + Resolución normalizada resueltos en local (commits `248cbd3` + `caf158b`), pendientes deploy. Fix B abierto — es el trabajo real: enganchar la política "la venta nunca se pierde" al camino de creación de envío.
 

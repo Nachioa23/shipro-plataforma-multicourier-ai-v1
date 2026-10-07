@@ -5,11 +5,11 @@
 
 ---
 
-## Estado general (2026-10-05)
+## Estado general (2026-10-08)
 
-En prod hoy (origin/main `c1f88a1`): **motor de plata FASE 1 rama-aware** (cascada intermediario+Shipro, SMO, Fee, IVA una vez; débito rama-aware) · **modelo de crédito etapa 1** (colchón PREPAGO funcional + editor post-onboarding de `modalidadPago` + `limiteDescubierto` con audit, DEUDAS 174/175/176) · **MEF Fases 1+2** (OAuth ML + ruteo por zonas, DEUDA 180) · **hub de conexiones** 5 piezas (modelo Conexion + flujo API Key Opción A + vista/registro + registro auto Tiendanube + mandar plugin, DEUDA 150) · **consola de tarifa unificada** (DEUDA 170, 4 pantallas viejas jubiladas DEUDA 179) · **tripleta first-mile genérica** (recolector/dueño/entregador vía capacidad opcional, DEUDA 182) · **Intralog Fase 1** activo · **WooCommerce** end-to-end validado · **ownership gates** cerrados en rastreo-manual (DEUDA 126) y métricas cross-tenant (DEUDA 7).
+En prod hoy: **motor de plata FASE 1 rama-aware** (cascada intermediario+Shipro, SMO, Fee, IVA una vez; débito rama-aware) · **modelo de crédito etapa 1** (colchón PREPAGO funcional + editor post-onboarding con audit, DEUDAS 174/175/176) · **MEF Fases 1+2** (OAuth ML + ruteo por zonas, DEUDA 180) · **hub de conexiones** 5 piezas (DEUDA 150) · **consola de tarifa unificada** (DEUDA 170, 4 pantallas viejas jubiladas DEUDA 179) · **tripleta first-mile genérica** (DEUDA 182) · **Intralog Fase 1** activo · **WooCommerce** end-to-end validado · **ownership gates** cerrados en rastreo-manual (DEUDA 126) y métricas cross-tenant (DEUDA 7) · **✅ DEUDA 185 cross-tenant Direccion RESUELTA Y VERIFICADA EN PROD 2026-10-08** (4 etapas: modelo ContactoEmpresa + write + read scoped + LGPD opción B) · **✅ DEUDA 96 recuperación de contraseña RESUELTA Y VERIFICADA EN PROD 2026-10-08** (2 piezas: reset flow con token single-use 2h + invalidación de sesión OWASP; cierra DEUDA 69 audit `password_reset`).
 
-**Lo que falta para el primer cliente real**: cerrar el leak cross-tenant de contactos (DEUDA 185, el único bloqueante money-adjacent descubierto 2026-10-05), habilitar recuperación de contraseña (DEUDA 96), cerrar el Fix B de "la venta nunca se pierde" (DEUDA 169), sacar del aire el server viejo de Fran (DEUDA 108), cablear credenciales reales de Correo Argentino y el entorno de pruebas de Andreani, y pasar el test de estrés mínimo.
+**Lo que falta para el primer cliente real** (actualizado 2026-10-08 — 2 de 4 bloqueantes de Capa 0 cerrados): **169 Fix B** "la venta nunca se pierde" (Fix A ya en prod; Fix B es la degradación a `BLOQUEADO_COURIER_AUSENTE` — decisión producto pendiente, posible bajada a post-cliente) · **108** server viejo de Fran sin firewall (acción externa Nacho→Fran) · cablear credenciales reales de Correo Argentino y el entorno de pruebas de Andreani · pasar el test de estrés mínimo.
 
 **4 chats activos en paralelo**: Chat A (núcleo), Chat B (couriers), Chat C (plugins/API externa), Chat D (MEF/ML).
 
@@ -28,12 +28,14 @@ En prod hoy (origin/main `c1f88a1`): **motor de plata FASE 1 rama-aware** (casca
 
 ### CAPA 0 — Bloqueantes DUROS (sin esto NO se onboardea)
 
+**Progreso 2026-10-08**: **2 de 4 cerrados** ✅. Quedan 169 Fix B (posible bajada a post-cliente) + 108 (acción externa).
+
 | DEUDA | Qué | Chat | Tipo | Estado |
 |---|---|---|---|---|
-| **185** | Leak cross-tenant contactos (Direccion global compartida por email; mutación + lectura cross-tenant confirmadas en prod con prueba Astelarra) | Chat A | obra + diseño (dos capas: física vs agenda) | ABIERTA — CONFIRMADA EMPÍRICAMENTE EN PROD 2026-10-05 |
-| **96** | Login: link "¿La olvidaste?" no funciona + flujo de recuperación de contraseña | Chat A | obra (diseño cerrado 2026-10-08, 2 piezas, en construcción por Chat A — cierra también [[DEUDA 69]]; [[DEUDA 97]] Google OAuth queda FUERA del scope) | ABIERTA — sin esto, un cliente que olvida la clave queda afuera |
-| **169 Fix B** | "La venta nunca se pierde" — hoy el 500 convertido a 400 no reintenta; un envío legítimo puede quedar como venta perdida si el courier no resuelve | Chat A + Chat C (cross) | obra con decisión producto | ABIERTA — Fix A ya en prod, Fix B pendiente |
-| **108** | Server viejo (beta.shipro.pro) sin firewall + 5 clientes reales + logs con ataques SSH | EXTERNO (Nacho → Fran) | acción admin | ABIERTA — bloquea onboarding sobre superficie expuesta |
+| ~~**185**~~ | ~~Leak cross-tenant contactos~~ | Chat A | — | ✅ **RESUELTA EN PROD 2026-10-08** (4 etapas: modelo ContactoEmpresa + write + read scoped + LGPD opción B; verificado "Astelarra" aislado por acceso). Ver DEUDAS-RESUELTAS.md |
+| ~~**96**~~ | ~~Recuperación de contraseña~~ | Chat A | — | ✅ **RESUELTA EN PROD 2026-10-08** (2 piezas: reset flow + invalidación sesión OWASP; cierra DEUDA 69). Ver DEUDAS-RESUELTAS.md |
+| **169 Fix B** | "La venta nunca se pierde" — hoy el 500 convertido a 400 no reintenta; un envío legítimo puede quedar como venta perdida si el courier no resuelve | Chat A + Chat C (cross) | obra con decisión producto | **ABIERTA** — Fix A ya en prod. Fix B requiere decisión schema (nullable vs placeholder vs mantener status quo); posible bajada a post-cliente si Nacho decide que Fix A alcanza como contrato |
+| **108** | Server viejo (beta.shipro.pro) sin firewall + 5 clientes reales + logs con ataques SSH | EXTERNO (Nacho → Fran) | acción admin | **ABIERTA** — bloquea onboarding sobre superficie expuesta |
 
 ### CAPA 1 — Cobertura de couriers que el cliente va a usar
 

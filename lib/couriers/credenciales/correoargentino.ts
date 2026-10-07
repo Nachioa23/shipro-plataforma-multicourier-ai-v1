@@ -4,7 +4,11 @@ export interface CredencialesCorreoArgentino {
   agreement: string;   // header: agreement
   sellerId: string;    // se manda en el body de cada order
   // MiCorreo API (cotización — endpoint distinto, auth distinta)
-  customerId: string;  // se manda en el body del rates request
+  customerId: string;        // se manda en el body del rates request
+  // DEUDA 171 BUG 1 (2026-10-08): auth real de MiCorreo. POST /token con
+  // Basic auth (user:password) devuelve Bearer JWT que se inyecta en /rates.
+  micorreoUser: string;      // Basic auth del POST /token de MiCorreo
+  micorreoPassword: string;
   // Environment
   sandbox?: boolean;   // true → apitest.correoargentino.com.ar
 }
@@ -20,6 +24,9 @@ export function obtenerShipro(): CredencialesCorreoArgentino {
     agreement: process.env.CA_AGREEMENT?.trim() || '',
     sellerId: process.env.CA_SELLER_ID?.trim() || '',
     customerId: process.env.CA_CUSTOMER_ID?.trim() || '',
+    // DEUDA 171 BUG 1: MiCorreo Basic auth → Bearer token para /rates.
+    micorreoUser:     process.env.CA_MICORREO_USER?.trim()     || '',
+    micorreoPassword: process.env.CA_MICORREO_PASSWORD?.trim() || '',
     sandbox: process.env.CA_SANDBOX === 'true'
   };
 }
@@ -52,6 +59,11 @@ export function parsearPropias(json: string | null | undefined): CredencialesCor
     agreement: parsed.agreement,
     sellerId: parsed.sellerId,
     customerId: parsed.customerId,
+    // DEUDA 171 BUG 1: micorreoUser/Password propagan best-effort. NO entran
+    // al check de "incompletas" (ese check es de Paq.ar/despacho). Si faltan,
+    // cotizar() devuelve [] con log claro y el checkout cae a otros couriers.
+    micorreoUser:     parsed.micorreoUser     ?? '',
+    micorreoPassword: parsed.micorreoPassword ?? '',
     sandbox: parsed.sandbox === true
   };
 }

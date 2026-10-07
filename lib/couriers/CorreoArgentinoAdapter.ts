@@ -7,6 +7,7 @@ import {
 } from './CourierInterface';
 import type { CredencialesCorreoArgentino } from './credenciales/correoargentino';
 import { provinciaACodigoCorreo } from './correo/provincia-a-codigo';
+import { resolverProvinciaDesdeCP } from '@/lib/geo/resolver-cp';
 
 // Re-export para que CourierFactory pueda importar el tipo desde un solo lugar
 // (mismo patrón que OcaAdapter re-exportando CredencialesOca).
@@ -33,20 +34,27 @@ async function fetchConTimeout(input: string | URL, init?: RequestInit, timeoutM
   }
 }
 
-// URLs de Correo Argentino (DEUDA 141):
+// URLs de Correo Argentino (DEUDA 141 + DEUDA 171 BUG 1):
 //   Paq.ar API 2.0 — despacho / etiqueta / rastreo / sucursales / cancelación.
 //     Sandbox: apitest.correoargentino.com.ar/paqar/v1
 //     Producción: api.correoargentino.com.ar/paqar/v1
-//   MiCorreo — SÓLO cotización.
-//     Endpoint único (sin ambiente sandbox documentado): api.correoargentino.com.ar/micorreo/v1
-const CA_PAQAR_URL_PROD = "https://api.correoargentino.com.ar/paqar/v1";
-const CA_PAQAR_URL_QA   = "https://apitest.correoargentino.com.ar/paqar/v1";
-const CA_MICORREO_URL   = "https://api.correoargentino.com.ar/micorreo/v1";
+//   MiCorreo — SÓLO cotización. DEUDA 171 BUG 1 (2026-10-08): switch sandbox
+//     agregado. Sandbox: apitest.correoargentino.com.ar/micorreo/v1. Producción:
+//     api.correoargentino.com.ar/micorreo/v1.
+const CA_PAQAR_URL_PROD    = "https://api.correoargentino.com.ar/paqar/v1";
+const CA_PAQAR_URL_QA      = "https://apitest.correoargentino.com.ar/paqar/v1";
+const CA_MICORREO_URL_PROD = "https://api.correoargentino.com.ar/micorreo/v1";
+const CA_MICORREO_URL_QA   = "https://apitest.correoargentino.com.ar/micorreo/v1";
 
 export class CorreoArgentinoAdapter implements ICourierIntegrator {
   private paqarBaseUrl: string;
   private micorreoBaseUrl: string;
   private creds: CredencialesCorreoArgentino;
+
+  // DEUDA 171 BUG 1 (2026-10-08) — cache del Bearer token de MiCorreo. Vida
+  // típica declarada por el `expires` del response (hora Argentina sin offset
+  // → forzamos -03:00 al parsear). Refresh con margen de 5 min antes de vencer.
+  private tokenMiCorreoCache: { token: string; venceEnMs: number } | null = null;
 
   // DEUDA 141: MiCorreo /rates devuelve precios NETOS por default (no hay campo
   // que declare IVA en la respuesta). Se trata como neto — mismo criterio conservador
@@ -56,12 +64,14 @@ export class CorreoArgentinoAdapter implements ICourierIntegrator {
   constructor(credenciales: CredencialesCorreoArgentino) {
     this.creds = credenciales;
     this.paqarBaseUrl = credenciales.sandbox ? CA_PAQAR_URL_QA : CA_PAQAR_URL_PROD;
-    this.micorreoBaseUrl = CA_MICORREO_URL;
+    // DEUDA 171 BUG 1: MiCorreo ahora también tiene switch sandbox (apitest).
+    this.micorreoBaseUrl = credenciales.sandbox ? CA_MICORREO_URL_QA : CA_MICORREO_URL_PROD;
   }
 
   // Headers de auth para todas las llamadas Paq.ar v2.0 (despacho/etiqueta/rastreo/etc).
   // Paq.ar usa `Authorization: Apikey <key>` + `agreement: <acuerdo comercial>` en cada request.
-  // MiCorreo (cotización) usa un mecanismo DIFERENTE: customerId en el body, sin headers de auth.
+  // MiCorreo (cotización) usa un mecanismo DIFERENTE: Basic auth → Bearer JWT via
+  // getTokenMiCorreo() (DEUDA 171 BUG 1).
   private paqarAuthHeaders(): Record<string, string> {
     return {
       "Authorization": `Apikey ${this.creds.apiKey}`,
@@ -71,10 +81,60 @@ export class CorreoArgentinoAdapter implements ICourierIntegrator {
   }
 
   // ==========================================
+  // DEUDA 171 BUG 1 (2026-10-08) — getTokenMiCorreo
+  // Flow: Basic auth (user:password) → POST /token → { token, expires }.
+  // Cache in-memory por-adapter-instance con margen de 5 min antes del vencimiento
+  // declarado por el server. En 401 del /rates, el caller limpia cache y reintenta
+  // una vez (clock-skew / token revoked). Si falta user o password en credenciales,
+  // throw inmediato — cotizar() lo atrapa y degrada a [] (venta no se pierde).
+  // ==========================================
+  private async getTokenMiCorreo(): Promise<string> {
+    if (!this.creds.micorreoUser || !this.creds.micorreoPassword) {
+      throw new Error('[Correo Argentino] MiCorreo credenciales incompletas (falta micorreoUser o micorreoPassword)');
+    }
+    const ahora = Date.now();
+    const MARGEN_MS = 5 * 60_000; // refrescar 5 min antes del vencimiento
+    if (this.tokenMiCorreoCache && this.tokenMiCorreoCache.venceEnMs - MARGEN_MS > ahora) {
+      return this.tokenMiCorreoCache.token;
+    }
+    const basic = Buffer.from(`${this.creds.micorreoUser}:${this.creds.micorreoPassword}`).toString('base64');
+    // Contrato GN: POST /token, Basic auth, SIN body. Respuesta: { token, expires: "YYYY-MM-DD HH:mm:ss" }
+    const res = await fetchConTimeout(`${this.micorreoBaseUrl}/token`, {
+      method: 'POST',
+      headers: { 'Authorization': `Basic ${basic}` },
+    });
+    if (!res.ok) {
+      throw new Error(`[Correo Argentino] MiCorreo /token HTTP ${res.status} — revisar CA_MICORREO_USER/PASSWORD`);
+    }
+    const data: any = await res.json().catch(() => null);
+    const token: string | undefined = data?.token;
+    if (!token) throw new Error('[Correo Argentino] MiCorreo /token sin campo token');
+    // expires viene en hora Argentina (UTC-3) sin offset → lo forzamos a -03:00
+    let venceEnMs = ahora + 60 * 60_000; // fallback conservador si no parsea
+    if (typeof data.expires === 'string') {
+      const ms = Date.parse(data.expires.replace(' ', 'T') + '-03:00');
+      if (!Number.isNaN(ms)) venceEnMs = ms;
+    }
+    this.tokenMiCorreoCache = { token, venceEnMs };
+    return token;
+  }
+
+  // ==========================================
   // 1. COTIZAR (MiCorreo POST /rates)
-  // NO usa Paq.ar. Auth = customerId en el body. Sin headers de Authorization/agreement.
+  // DEUDA 171 BUG 1 (2026-10-08): auth real = Bearer JWT via getTokenMiCorreo().
+  // customerId sigue en el body (es el id del cliente/contrato, no el auth).
   // ==========================================
   async cotizar(params: CotizacionParams): Promise<{ servicio: string; precioNeto: number }[]> {
+    // DEUDA 171 BUG 1: short-circuit sin credenciales de MiCorreo. Degradamos a []
+    // sin tocar la red — Correo queda oculto del checkout; el cliente ve otros
+    // couriers y la venta no se pierde.
+    if (!this.creds.micorreoUser || !this.creds.micorreoPassword) {
+      console.info(
+        `[Correo Argentino] cotizar: credenciales MiCorreo faltantes (CA_MICORREO_USER/PASSWORD) — se oculta del checkout`,
+      );
+      return [];
+    }
+
     const totalPesoKg = params.paquetes.reduce((s, p) => s + (Number(p.pesoKg) || 0), 0);
     // Para cotización consolidada: MAX por dimensión (single-parcel view; conservador
     // — captura el bulto más grande como referencia dimensional).
@@ -94,51 +154,80 @@ export class CorreoArgentinoAdapter implements ICourierIntegrator {
       },
     };
 
-    const res = await fetchConTimeout(`${this.micorreoBaseUrl}/rates`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    // DEUDA 171 BUG 1: Bearer + retry 401. Un throw de getTokenMiCorreo (ej:
+    // credenciales malas) queda atrapado en el try externo → log + return [].
+    // cotizar() NUNCA tira hacia arriba — la venta no se pierde.
+    try {
+      const hacerRequest = async (): Promise<Response> => {
+        const token = await this.getTokenMiCorreo();
+        return fetchConTimeout(`${this.micorreoBaseUrl}/rates`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`,
+          },
+          body: JSON.stringify(body),
+        });
+      };
 
-    // HTTP-level failure → return [] (no cobertura desde el punto de vista del checkout).
-    // Mismo patrón que Mocis: fallas reales de red/timeout throwean arriba; una respuesta
-    // 4xx/5xx acá indica "MiCorreo dice que no puede/no cotiza para este pedido".
-    if (!res.ok) {
+      let res = await hacerRequest();
+      if (res.status === 401) {
+        // Token vencido o clock-skew → invalidar cache y reintentar UNA vez.
+        this.tokenMiCorreoCache = null;
+        res = await hacerRequest();
+      }
+
+      if (!res.ok) {
+        // Distinguir auth (401 persistente post-retry) de sin-cobertura (otros códigos).
+        if (res.status === 401) {
+          console.warn(
+            `[Correo Argentino] MiCorreo /rates 401 PERSISTENTE post-retry para ${params.cpOrigen}→${params.cpDestino} — revisar credenciales MiCorreo`,
+          );
+        } else {
+          console.info(
+            `[Correo Argentino] MiCorreo HTTP ${res.status} para ${params.cpOrigen}→${params.cpDestino} — se oculta del checkout`,
+          );
+        }
+        return [];
+      }
+
+      const data: any = await res.json().catch(() => null);
+      const rates: any[] = Array.isArray(data?.rates) ? data.rates : [];
+      if (rates.length === 0) {
+        console.info(
+          `[Correo Argentino] sin tarifas para ${params.cpOrigen}→${params.cpDestino} (respuesta vacía, se oculta del checkout)`,
+        );
+        return [];
+      }
+
+      const opciones: { servicio: string; precioNeto: number }[] = [];
+      for (const r of rates) {
+        const productName: string =
+          typeof r?.productName === "string" && r.productName.trim()
+            ? r.productName.trim()
+            : typeof r?.productType === "string" && r.productType.trim()
+            ? r.productType.trim()
+            : "Estándar";
+        const deliveredType: string = typeof r?.deliveredType === "string" ? r.deliveredType : "";
+        const servicio = deliveredType === "S" ? `${productName} (Sucursal)` : productName;
+        const precioRaw = r?.price ?? r?.total ?? r?.amount;
+        const precioNeto = parseFloat(String(precioRaw ?? "").replace(",", "."));
+        if (!Number.isFinite(precioNeto) || precioNeto <= 0) continue;
+        opciones.push({ servicio, precioNeto });
+      }
+
       console.info(
-        `[Correo Argentino] MiCorreo HTTP ${res.status} para ${params.cpOrigen}→${params.cpDestino} — se oculta del checkout`,
+        `[Correo Argentino] tarifas OK ${params.cpOrigen}→${params.cpDestino} count=${opciones.length}`,
+      );
+      return opciones;
+    } catch (e: any) {
+      // Throw desde getTokenMiCorreo (401 en /token, user/pass mal), timeout, etc.
+      // Log loud + return []: Correo se oculta del checkout, no afecta la venta.
+      console.warn(
+        `[Correo Argentino] cotizar falló para ${params.cpOrigen}→${params.cpDestino}: ${e?.message || e}`,
       );
       return [];
     }
-
-    const data: any = await res.json().catch(() => null);
-    const rates: any[] = Array.isArray(data?.rates) ? data.rates : [];
-    if (rates.length === 0) {
-      console.info(
-        `[Correo Argentino] sin tarifas para ${params.cpOrigen}→${params.cpDestino} (respuesta vacía, se oculta del checkout)`,
-      );
-      return [];
-    }
-
-    const opciones: { servicio: string; precioNeto: number }[] = [];
-    for (const r of rates) {
-      const productName: string =
-        typeof r?.productName === "string" && r.productName.trim()
-          ? r.productName.trim()
-          : typeof r?.productType === "string" && r.productType.trim()
-          ? r.productType.trim()
-          : "Estándar";
-      const deliveredType: string = typeof r?.deliveredType === "string" ? r.deliveredType : "";
-      const servicio = deliveredType === "S" ? `${productName} (Sucursal)` : productName;
-      const precioRaw = r?.price ?? r?.total ?? r?.amount;
-      const precioNeto = parseFloat(String(precioRaw ?? "").replace(",", "."));
-      if (!Number.isFinite(precioNeto) || precioNeto <= 0) continue;
-      opciones.push({ servicio, precioNeto });
-    }
-
-    console.info(
-      `[Correo Argentino] tarifas OK ${params.cpOrigen}→${params.cpDestino} count=${opciones.length}`,
-    );
-    return opciones;
   }
 
   // Helper: resuelve el deliveryType de Paq.ar según el tipoEntrega del sistema.
@@ -393,61 +482,106 @@ export class CorreoArgentinoAdapter implements ICourierIntegrator {
   // 6. OBTENER SUCURSALES (Paq.ar GET /v1/agencies?pickup_availability=true)
   // Filtro documentado por CA: solo agencias habilitadas para retiro (pickup).
   // ==========================================
+  // DEUDA 171 BUG 3 (2026-10-08) — Helper: fetch + parse de agencias desde una URL
+  // ya armada. Extraído para no duplicar código entre el intento filtrado por
+  // stateId y el fallback amplio (reintento por lista vacía). Devuelve [] en
+  // !res.ok o cuando el parse no encuentra items — el caller decide si reintenta.
+  private async fetchYParsearAgencias(url: string, cp: string): Promise<SucursalInfo[]> {
+    const res = await fetchConTimeout(url, {
+      method: "GET",
+      headers: this.paqarAuthHeaders(),
+    });
+
+    if (!res.ok) {
+      console.warn(
+        `[Correo Argentino] obtenerSucursales HTTP ${res.status} para CP ${cp} (url=${url})`,
+      );
+      return [];
+    }
+
+    const data: any = await res.json().catch(() => null);
+    const items: any[] = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.agencies)
+      ? data.agencies
+      : [];
+
+    const sucursales: SucursalInfo[] = [];
+    for (const a of items) {
+      const id = a?.agency_id ?? a?.agencyId ?? a?.id;
+      if (id == null) continue;
+
+      const nombre = String(a?.name ?? a?.description ?? "").trim();
+      const address = a?.address ?? {};
+      const calle = String(address?.streetName ?? address?.street ?? "").trim();
+      const nro = String(address?.streetNumber ?? address?.number ?? "").trim();
+      const direccion = `${calle} ${nro}`.trim();
+      const localidad = String(address?.cityName ?? address?.city ?? a?.city ?? "").trim();
+      const provincia = String(address?.state ?? a?.state ?? "").trim();
+      const cpS = String(address?.zipCode ?? address?.postalCode ?? a?.zipCode ?? "").trim();
+
+      const suc: SucursalInfo = {
+        id: String(id),
+        nombre,
+        direccion,
+        localidad,
+        provincia,
+        cp: cpS,
+      };
+      const latRaw = a?.lat ?? a?.latitude ?? address?.lat;
+      const lngRaw = a?.lng ?? a?.longitude ?? address?.lng;
+      if (latRaw != null) {
+        const lat = parseFloat(String(latRaw).replace(",", "."));
+        if (Number.isFinite(lat)) suc.latitud = lat;
+      }
+      if (lngRaw != null) {
+        const lng = parseFloat(String(lngRaw).replace(",", "."));
+        if (Number.isFinite(lng)) suc.longitud = lng;
+      }
+      sucursales.push(suc);
+    }
+
+    return sucursales;
+  }
+
   async obtenerSucursales(cp: string): Promise<SucursalInfo[]> {
     try {
-      const url = `${this.paqarBaseUrl}/agencies?pickup_availability=true`;
-      const res = await fetchConTimeout(url, {
-        method: "GET",
-        headers: this.paqarAuthHeaders(),
-      });
-
-      if (!res.ok) {
+      // DEUDA 171 BUG 3 (2026-10-08): filtrar por `stateId` (provincia) derivado del CP.
+      // El endpoint `/agencies` acepta `stateId`; antes el `cp` se recibía pero no se
+      // usaba en el filtro — se devolvían TODAS las agencias de todo el país.
+      // Fallback amplio: si el CP no resuelve a provincia conocida, o si el filtro
+      // con stateId devuelve 0 agencias (p.ej. formato de código distinto del esperado),
+      // reintentamos con el filtro original (solo pickup_availability) para no quedar
+      // por debajo del comportamiento pre-fix. El ranking por lat/long contra el CP
+      // destino (en el caller) sigue filtrando por cercanía sobre el resultado final.
+      const urlAmplia = `${this.paqarBaseUrl}/agencies?pickup_availability=true`;
+      let url = urlAmplia;
+      const resolucion = await resolverProvinciaDesdeCP(cp);
+      if (resolucion) {
+        const codigo = provinciaACodigoCorreo(resolucion.provincia);
+        if (codigo) {
+          url = `${this.paqarBaseUrl}/agencies?stateId=${encodeURIComponent(codigo)}&pickup_availability=true`;
+        } else {
+          console.warn(
+            `[Correo Argentino] obtenerSucursales: provincia '${resolucion.provincia}' sin código Correo para CP ${cp}, uso filtro amplio`,
+          );
+        }
+      } else {
         console.warn(
-          `[Correo Argentino] obtenerSucursales HTTP ${res.status}, se devuelve [] para CP ${cp}`,
+          `[Correo Argentino] obtenerSucursales: CP ${cp} no resolvió provincia, uso filtro amplio`,
         );
-        return [];
       }
+      const usoStateId = url.includes("stateId=");
 
-      const data: any = await res.json().catch(() => null);
-      const items: any[] = Array.isArray(data)
-        ? data
-        : Array.isArray(data?.agencies)
-        ? data.agencies
-        : [];
+      let sucursales = await this.fetchYParsearAgencias(url, cp);
 
-      const sucursales: SucursalInfo[] = [];
-      for (const a of items) {
-        const id = a?.agency_id ?? a?.agencyId ?? a?.id;
-        if (id == null) continue;
-
-        const nombre = String(a?.name ?? a?.description ?? "").trim();
-        const address = a?.address ?? {};
-        const calle = String(address?.streetName ?? address?.street ?? "").trim();
-        const nro = String(address?.streetNumber ?? address?.number ?? "").trim();
-        const direccion = `${calle} ${nro}`.trim();
-        const localidad = String(address?.cityName ?? address?.city ?? a?.city ?? "").trim();
-        const provincia = String(address?.state ?? a?.state ?? "").trim();
-        const cpS = String(address?.zipCode ?? address?.postalCode ?? a?.zipCode ?? "").trim();
-
-        const suc: SucursalInfo = {
-          id: String(id),
-          nombre,
-          direccion,
-          localidad,
-          provincia,
-          cp: cpS,
-        };
-        const latRaw = a?.lat ?? a?.latitude ?? address?.lat;
-        const lngRaw = a?.lng ?? a?.longitude ?? address?.lng;
-        if (latRaw != null) {
-          const lat = parseFloat(String(latRaw).replace(",", "."));
-          if (Number.isFinite(lat)) suc.latitud = lat;
-        }
-        if (lngRaw != null) {
-          const lng = parseFloat(String(lngRaw).replace(",", "."));
-          if (Number.isFinite(lng)) suc.longitud = lng;
-        }
-        sucursales.push(suc);
+      // Fallback por lista vacía: si usamos stateId y vino 0, reintentamos UNA vez
+      // con la URL amplia. Garantiza cero regresión vs el comportamiento pre-fix.
+      if (sucursales.length === 0 && usoStateId) {
+        console.warn(
+          `[Correo Argentino] obtenerSucursales: 0 agencias con stateId para CP ${cp}, reintento con filtro amplio`,
+        );
+        sucursales = await this.fetchYParsearAgencias(urlAmplia, cp);
       }
 
       return sucursales;

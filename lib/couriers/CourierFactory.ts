@@ -107,6 +107,11 @@ export class CourierFactory {
           agreement:  credenciales.agreement  || "",
           sellerId:   credenciales.sellerId   || "",
           customerId: credenciales.customerId || "",
+          // DEUDA 171 BUG 1 (2026-10-08): propagación de credenciales MiCorreo.
+          // NO entran al check de abajo (ese es Paq.ar/despacho). Si vienen vacías,
+          // cotizar() hace short-circuit y devuelve [] (venta cae a otro courier).
+          micorreoUser:     credenciales.micorreoUser     || "",
+          micorreoPassword: credenciales.micorreoPassword || "",
           sandbox:    credenciales.sandbox === true,
         };
         if (!ca.apiKey || !ca.agreement || !ca.sellerId || !ca.customerId) {

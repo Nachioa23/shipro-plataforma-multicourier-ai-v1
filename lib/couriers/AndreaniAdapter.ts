@@ -41,10 +41,25 @@ export interface CredencialesAndreani {
   contrato_domicilio_sucursal?: string;
   contrato_sucursal_domicilio?: string;
   contrato_domicilio_domicilio?: string;
+  // DEUDA 147 (2026-10-08) — switch sandbox/prod. Mismo patrón que
+  // CredencialesOca.sandbox + CredencialesCorreoArgentino.sandbox. Default
+  // (undefined/false) = prod → comportamiento byte-idéntico al previo.
+  sandbox?: boolean;
 }
 
+// DEUDA 147 (2026-10-08) — constantes a nivel módulo para switch sandbox/prod.
+// Mismo patrón que OcaAdapter L49-50. Resolución en el constructor según
+// credenciales.sandbox. Default (sandbox undefined/false) → URL_PROD, idéntico
+// al comportamiento previo al fix: cero regresión en operación productiva.
+// Host QA CONFIRMADO 2026-10-07 (vía Intralog, que provee las credenciales
+// Andreani de la tripleta first-mile — DEUDA 182). El flag sandbox se activa
+// solo con ANDREANI_SANDBOX=true (env) o `sandbox: true` en el JSON de
+// credenciales propias del cliente.
+const ANDREANI_URL_PROD = 'https://apis.andreani.com';
+const ANDREANI_URL_QA   = 'https://apisqa.andreani.com';
+
 export class AndreaniAdapter implements ICourierIntegrator {
-  private API_URL = 'https://apis.andreani.com';
+  private API_URL: string;
   private creds: CredencialesAndreani;
 
   // DEUDA 123 mov 1 (2026-08-03): la API de Andreani (v1/tarifas) devuelve
@@ -64,6 +79,8 @@ export class AndreaniAdapter implements ICourierIntegrator {
 
   constructor(credenciales: CredencialesAndreani) {
     this.creds = credenciales;
+    // DEUDA 147: resuelve base URL según flag sandbox. Patrón OcaAdapter L85.
+    this.API_URL = credenciales.sandbox ? ANDREANI_URL_QA : ANDREANI_URL_PROD;
   }
 
   // DEUDA 29 Sub-fase 2.G (no implementada por decisión):

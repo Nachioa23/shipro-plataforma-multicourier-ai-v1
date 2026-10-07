@@ -11,6 +11,10 @@ export interface CredencialesAndreani {
   contrato_domicilio_sucursal: string;
   contrato_sucursal_domicilio: string;
   contrato_domicilio_domicilio: string;
+  // DEUDA 147 (2026-10-08) — switch sandbox/prod. Mismo patrón que
+  // CredencialesOca.sandbox + CredencialesCorreoArgentino.sandbox. Default
+  // (undefined/false) = prod → comportamiento byte-idéntico al previo.
+  sandbox?: boolean;
 }
 
 /**
@@ -31,7 +35,10 @@ export function obtenerShipro(): CredencialesAndreani {
     contrato_sucursal_sucursal: process.env.ANDREANI_CONTRATO_SUC_SUC?.trim() || '',
     contrato_domicilio_sucursal: process.env.ANDREANI_CONTRATO_DOM_SUC?.trim() || '',
     contrato_sucursal_domicilio: process.env.ANDREANI_CONTRATO_SUC_DOM?.trim() || '',
-    contrato_domicilio_domicilio: process.env.ANDREANI_CONTRATO_DOM_DOM?.trim() || ''
+    contrato_domicilio_domicilio: process.env.ANDREANI_CONTRATO_DOM_DOM?.trim() || '',
+    // DEUDA 147: flag opcional. ANDREANI_SANDBOX=true → QA; cualquier otro
+    // valor (incluido unset) → prod. Patrón `CA_SANDBOX === 'true'`.
+    sandbox: process.env.ANDREANI_SANDBOX === 'true'
   };
 }
 
@@ -73,6 +80,8 @@ export function parsearPropias(json: string | null | undefined): CredencialesAnd
     contrato_sucursal_sucursal: parsed.contrato_sucursal_sucursal || '',
     contrato_domicilio_sucursal: parsed.contrato_domicilio_sucursal || '',
     contrato_sucursal_domicilio: parsed.contrato_sucursal_domicilio || '',
-    contrato_domicilio_domicilio: parsed.contrato_domicilio_domicilio || ''
+    contrato_domicilio_domicilio: parsed.contrato_domicilio_domicilio || '',
+    // DEUDA 147: opt-in sandbox desde el JSON del cliente. No es requerido.
+    sandbox: parsed.sandbox === true
   };
 }

@@ -1,49 +1,61 @@
 // ============================================================================
 // DEUDA 104 — LGPD customers/redact para Tiendanube.
+// DEUDA 185 ETAPA 4 (2026-10-07) — reescrito para OPCIÓN B del modelo de
+// contacto compartido con acceso per-empresa (Etapas 1-3):
 //
-// Anonimiza la PII de un comprador (identificado por email/documento del
-// webhook + su lista de order_ids) sobre TODAS las direcciones destino de sus
-// envíos en la tienda. La política es "anonimización real" pero con criterio:
+//   El store Tiendanube es DATA CONTROLLER de SU comprador. Shipro es
+//   PROCESSOR. Un pedido de redact de ese store NO debe nullear la PII del
+//   contacto para otras empresas que también le vendieron al mismo buyer —
+//   cada una tiene su propio controller con su propio ciclo de redact.
 //
-//   NULL (PII personal — la persona desaparece):
+//   Política Opción B:
+//     1. Quitar el ACCESO: delete ContactoEmpresa(empresaId_del_store, direccionId).
+//        El store deja de ver al contacto en su directorio (Etapa 3).
+//     2. Si al contacto le quedan OTRAS empresas con acceso: KEEP la Direccion
+//        + sus datos. Las otras empresas lo siguen viendo con la data que
+//        tenían al momento (edits propagan por diseño).
+//     3. Si NO queda ningún acceso (último retiro): NULL la PII del shared
+//        Direccion — el contacto quedó huérfano, nadie lo va a volver a mirar,
+//        es seguro anonimizar.
+//
+//   NULL en caso de orfandad (persona desaparece):
 //     nombre, documento, telefono, email, piso, dpto, observacion
 //
-//   KEEP (datos postales — la dirección queda "huérfana"):
+//   KEEP SIEMPRE (datos postales anonimizados):
 //     calle, altura, cp, localidad, provincia, pais
+//     — se preservan para dashboards de Torre/métricas geográficas; sin
+//       identidad linkeada dejan de ser PII.
 //
-// Rationale: sin nombre/doc/tel/email la dirección deja de identificar a una
-// persona. calle/altura se preservan porque el Panel de Control y la Torre de
-// Control las consumen (geolocalización, "top direcciones problemáticas") — sin
-// identidad linkeada dejan de ser PII. cp/localidad/provincia se usan en TODAS
-// las métricas geográficas (SLA por provincia, distribución, devoluciones);
-// nullearlas rompería dashboards.
+//   Edge: nullear email en un CONTACTO huérfano saca la fila del índice
+//   parcial Direccion_email_contacto_key (WHERE email IS NOT NULL) sin
+//   colisión. El tipo queda en CONTACTO (anonimizado); si el mismo email
+//   vuelve en el futuro (otro comprador, otra empresa), crear.ts creará
+//   una fila CONTACTO nueva (el índice parcial permite email NULL repetido).
 //
-// SCOPE (críticos):
-//   - SOLO se anonimizan las direcciones referenciadas via `envio.destino`.
-//     NUNCA `envio.origen` (que son depósitos de la empresa, no del comprador).
+// SCOPE (invariantes):
+//   - SOLO se tocan Direcciones referenciadas via `envio.destino` (NUNCA
+//     `envio.origen`, que son snapshots de depósito del seller).
 //   - NUNCA se borra el envío ni los registros financieros (iron rule Nacho).
-//   - Los tickets de soporte NO se scrubbean (Nacho: retener historia
-//     operativa). Esta decisión se documenta explícitamente en el audit log.
+//   - Los tickets de soporte NO se scrubbean (política: historial operativo).
 //
 // MATCH (dos vías, se une el resultado):
 //   - PRIMARIO por order_id: (storeId, tiendanubeOrderId IN orders_to_redact).
-//     Cobertura garantizada para envíos con order_id ya backfilled por el
-//     webhook fulfillment_order/*.
 //   - FALLBACK por buyer PII: (storeId, destino.email=X OR destino.documento=Y).
-//     Cobertura para envíos viejos cuyo tiendanubeOrderId aún es null.
-//   Union por envío id.
 //
-// IDEMPOTENCIA:
-//   Tiendanube reintenta cualquier no-2xx hasta 16× en 48h. Guard previo:
-//   contar direcciones destino con `nombre` no-null entre las matched. Si son
-//   0 → es retry sobre un redact ya aplicado → skip update + skip audit + log.
-//   Si son >0 → hay PII que anonimizar → run update + audit.
+// IDEMPOTENCIA (post-Opción B):
+//   Guard previo: contar ContactoEmpresa de ESTA empresa para los destinoIds
+//   matched. Si son 0 → esta empresa ya no tiene acceso → es retry sobre un
+//   redact ya aplicado → skip. Reintentos de Tiendanube (16× en 48h) son
+//   no-ops limpios.
+//
+// ATOMICIDAD:
+//   El delete-de-acceso + el nulling-de-huérfanos corre en una $transaction.
+//   Si algo falla a mitad, Postgres rolea back; un orfano no puede quedarse
+//   con PII por un crash entre pasos.
 //
 // AUDIT (compliance proof):
 //   Una fila en AuditoriaConfiguracion con campo="lgpd:customers_redact",
-//   counts + nota de tickets retenidos por política. NO PII del comprador en
-//   el audit (obviously). empresaId de los envíos matched (todos comparten la
-//   empresa del store); si no hay matches, se deriva vía TiendaTiendanube.
+//   counts + nota sobre acceso vs anonimización. NO PII del comprador.
 // ============================================================================
 
 import prisma from "@/lib/prisma";
@@ -139,54 +151,84 @@ export async function redactCustomer(input: RedactCustomerInput): Promise<void> 
     return;
   }
 
-  // ---- Idempotency guard ----
-  // Contamos direcciones destino que todavía tienen PII (nombre no-null es
-  // el proxy más simple — los 7 fields se nullean juntos). Si 0 → retry sobre
-  // un redact ya aplicado → skip todo, log observable.
-  const pendientes = await prisma.direccion.count({
-    where: { id: { in: destinoIds }, nombre: { not: null } },
+  // empresaId del store (invariant: todos los envíos matched comparten la
+  // empresa del store). Usado para scope-ear el acceso + el audit.
+  const empresaId = envios[0].empresaId;
+
+  // ---- Idempotency guard (OPCIÓN B) ----
+  // ¿Esta empresa todavía tiene algún acceso a los contactos matched? Si no,
+  // es retry sobre un redact ya aplicado para esta empresa → skip.
+  const accesosEmpresa = await prisma.contactoEmpresa.findMany({
+    where: { empresaId, direccionId: { in: destinoIds } },
+    select: { direccionId: true },
   });
-  if (pendientes === 0) {
-    console.log("[lgpd customers/redact] retry sobre redact ya aplicado — skip:", {
+  if (accesosEmpresa.length === 0) {
+    console.log("[lgpd customers/redact] retry sobre redact ya aplicado para esta empresa — skip:", {
       storeId,
+      empresaId,
       destinoIds: destinoIds.length,
       envios: envios.length,
     });
     return;
   }
 
-  // ---- Anonimización ----
-  // NULL los 7 fields PII personales. KEEP calle/altura/cp/localidad/provincia/pais.
-  const updated = await prisma.direccion.updateMany({
-    where: { id: { in: destinoIds } },
-    data: {
-      nombre: null,
-      documento: null,
-      telefono: null,
-      email: null,
-      piso: null,
-      dpto: null,
-      observacion: null,
-    },
+  const direccionIdsConAcceso = accesosEmpresa.map((a) => a.direccionId);
+
+  // ---- Delete access + null orphans (atomic) ----
+  // El delete + el null corren en la misma $transaction para que un crash
+  // intermedio no deje un contacto huérfano con PII. Si falla el null tras
+  // el delete, Postgres rollea back el delete también (si re-aplica más
+  // tarde, idempotency guard arriba lo detecta limpio).
+  const resultado = await prisma.$transaction(async (tx) => {
+    // 1. Quitar el acceso de ESTA empresa a los contactos matched.
+    const deleted = await tx.contactoEmpresa.deleteMany({
+      where: { empresaId, direccionId: { in: direccionIdsConAcceso } },
+    });
+
+    // 2. ¿Qué contactos quedaron HUÉRFANOS (ninguna otra empresa con acceso)?
+    const sobrevivientes = await tx.contactoEmpresa.findMany({
+      where: { direccionId: { in: direccionIdsConAcceso } },
+      select: { direccionId: true },
+    });
+    const vivasIds = new Set(sobrevivientes.map((c) => c.direccionId));
+    const huerfanos = direccionIdsConAcceso.filter((id) => !vivasIds.has(id));
+
+    // 3. Para los huérfanos: NULL los 7 fields PII (persona desaparece). KEEP
+    //    calle/altura/cp/localidad/provincia/pais.
+    let anonimizados = 0;
+    if (huerfanos.length > 0) {
+      const updated = await tx.direccion.updateMany({
+        where: { id: { in: huerfanos } },
+        data: {
+          nombre: null,
+          documento: null,
+          telefono: null,
+          email: null,
+          piso: null,
+          dpto: null,
+          observacion: null,
+        },
+      });
+      anonimizados = updated.count;
+    }
+
+    return { accesosRemovidos: deleted.count, anonimizados, huerfanosCount: huerfanos.length };
   });
 
-  // empresaId para el audit: viene de cualquier envío matched (todos comparten
-  // la empresa del store por invariant del labels flow).
-  const empresaId = envios[0].empresaId;
-
+  // ---- Audit (compliance proof) ----
   await prisma.auditoriaConfiguracion
     .create({
       data: {
         empresaId,
         campo: "lgpd:customers_redact",
-        valorAnterior: `${destinoIds.length} direcciones destino con PII (nombre/doc/tel/email/piso/dpto/observacion)`,
-        valorNuevo: `PII anonimizada (7 fields → null); datos postales conservados (calle/altura/cp/localidad/provincia/pais); ${envios.length} envíos afectados; tickets de soporte RETENIDOS por política (historial operativo)`,
+        valorAnterior: `${direccionIdsConAcceso.length} contactos con acceso de esta empresa (vía ContactoEmpresa)`,
+        valorNuevo: `${resultado.accesosRemovidos} accesos ContactoEmpresa removidos (Opción B: data controller); ${resultado.anonimizados}/${resultado.huerfanosCount} direcciones huérfanas anonimizadas (PII 7 fields → null, postales conservados); ${envios.length} envíos afectados; tickets de soporte RETENIDOS por política (historial operativo)`,
         motivo: `LGPD customers/redact de Tiendanube (storeId=${storeId})`,
       },
     })
     .catch((auditErr) =>
-      // Que el audit falle NO revierte la anonimización — la anonimización es
-      // lo que importa para compliance. Loguear para investigación posterior.
+      // Que el audit falle NO revierte el redact — el redact es lo que importa
+      // para compliance. Loguear para investigación posterior.
       console.error("[lgpd customers/redact] audit no persistió (post-update):", {
         storeId,
         empresaId,
@@ -194,9 +236,12 @@ export async function redactCustomer(input: RedactCustomerInput): Promise<void> 
       }),
     );
 
-  console.log("[lgpd customers/redact] anonimización completa:", {
+  console.log("[lgpd customers/redact] redact Opción B completo:", {
     storeId,
+    empresaId,
     envios: envios.length,
-    direccionesAnonimizadas: updated.count,
+    accesosRemovidos: resultado.accesosRemovidos,
+    direccionesHuerfanas: resultado.huerfanosCount,
+    anonimizadas: resultado.anonimizados,
   });
 }

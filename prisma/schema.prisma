@@ -205,6 +205,14 @@ model Usuario {
   // Usuarios desactivados NO pueden loguearse (check en lib/auth.ts authorize).
   activo Boolean @default(true)
 
+  // DEUDA 96 Pieza 2 (2026-10-08) — timestamp del ÚLTIMO cambio de password.
+  // Nullable: usuarios existentes pre-pieza-2 quedan en null = sin corte = sesión
+  // vieja permanece válida (safe default). Cada password write (reset-password,
+  // cambiar-password, mi-equipo, clientes) setea este campo a NOW(). El jwt
+  // callback de NextAuth compara token.iat < passwordChangedAt → invalida la
+  // sesión y fuerza re-login (estándar OWASP).
+  passwordChangedAt DateTime?
+
   empresaId Int?
   empresa   Empresa? @relation(fields: [empresaId], references: [id])
 

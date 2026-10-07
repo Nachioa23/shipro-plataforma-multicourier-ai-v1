@@ -83,6 +83,9 @@ export async function POST(request: Request) {
       data: {
         password: passwordNuevaHasheado,
         passwordTemporal: false, // Ya no es temporal.
+        // DEUDA 96 Pieza 2: invalidar sesiones viejas al cambiar la clave
+        // (jwt callback compara token.iat < passwordChangedAt → re-login).
+        passwordChangedAt: new Date(),
       },
     });
 

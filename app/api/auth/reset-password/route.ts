@@ -126,11 +126,14 @@ export async function POST(request: Request) {
         }
 
         // Update password + liberar passwordTemporal (si venía del wizard).
+        // DEUDA 96 Pieza 2: passwordChangedAt invalida sesiones viejas vía el
+        // jwt callback (token.iat < passwordChangedAt → re-login). Estándar OWASP.
         await tx.usuario.update({
           where: { id: usuario.id },
           data: {
             password: passwordNuevaHasheado,
             passwordTemporal: false,
+            passwordChangedAt: new Date(),
           },
         });
 

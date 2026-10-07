@@ -161,6 +161,8 @@ export async function POST(request: Request) {
             telefono: gerente.telefono,
             password: passwordHasheado,
             passwordTemporal: true,
+            // DEUDA 96 Pieza 2: baseline del passwordChangedAt al crear.
+            passwordChangedAt: new Date(),
             rol: "gerente_cliente"
           }
         },
@@ -362,7 +364,9 @@ export async function PUT(request: Request) {
       const nuevoUsuario = await prisma.usuario.create({
         data: {
           nombre, email, password: passwordHasheado, rol,
-          empresaId: parseInt(empresaId)
+          empresaId: parseInt(empresaId),
+          // DEUDA 96 Pieza 2: baseline del passwordChangedAt al crear.
+          passwordChangedAt: new Date(),
         }
       });
 

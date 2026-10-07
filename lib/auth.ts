@@ -83,6 +83,39 @@ export const authOptions: NextAuthOptions = {
         }
       }
 
+      // DEUDA 96 Pieza 2 (2026-10-08) — session invalidation on password change.
+      // Standard OWASP: cambiar la clave debe cerrar todas las sesiones vivas.
+      // Se corre en cada refresh del jwt (no en el initial sign-in: ese ya tiene
+      // iat>=passwordChangedAt por construcción). Fetch targeted de 1 field
+      // indexado — costo bajo. Si usuario.passwordChangedAt > token.iat → el
+      // token fue emitido antes del último cambio → throw para forzar re-login.
+      // Null passwordChangedAt = usuario pre-pieza-2 sin corte declarado = la
+      // sesión actual sigue válida (safe default; los nuevos cambios setean el
+      // field y empiezan a invalidar desde ese punto en adelante).
+      // CAVEAT conocido: este check corre en el jwt callback de NextAuth (que
+      // dispara en /api/auth/* y useSession), NO en proxy.ts (que usa getToken
+      // y solo verifica firma + exp). En práctica alcanza para browser clients
+      // (useSession carga en page-load → invalida → redirect a login → cookie
+      // perdida → API calls siguientes rechazadas). Un atacante con la cookie
+      // raw bypaseando el browser podría usarla hasta el exp natural (8h). Si
+      // Nacho quiere cerrar ese gap, agregar lookup Usuario.passwordChangedAt
+      // en proxy.ts authBySession (futura Pieza 2.1). Flaggeado.
+      if (!user && token.email && typeof token.iat === "number") {
+        const usuarioPwd = await prisma.usuario.findUnique({
+          where: { email: token.email },
+          select: { passwordChangedAt: true },
+        });
+        if (usuarioPwd?.passwordChangedAt) {
+          const changedAtSec = Math.floor(usuarioPwd.passwordChangedAt.getTime() / 1000);
+          if (token.iat < changedAtSec) {
+            // Throw: NextAuth captura la excepción, invalida el token refresh
+            // y el frontend recibe status "unauthenticated" en el próximo
+            // useSession() → redirect a /login.
+            throw new Error("SESSION_INVALIDATED_PASSWORD_CHANGED");
+          }
+        }
+      }
+
       return token;
     },
     async session({ session, token }) {

@@ -112,6 +112,10 @@ export async function POST(request: Request) {
         email,
         telefono,
         password: passwordHash,
+        // DEUDA 96 Pieza 2: baseline del passwordChangedAt al crear el usuario,
+        // así los primeros tokens que se emitan tengan iat > passwordChangedAt
+        // y queden válidos.
+        passwordChangedAt: new Date(),
         rol: "operador_cliente",
         empresaId: auth.empresaId,
         passwordTemporal: true,

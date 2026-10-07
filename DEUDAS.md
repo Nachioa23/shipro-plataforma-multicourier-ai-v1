@@ -880,6 +880,8 @@ Los 3 campos estan en `CAMPOS_AUDITABLES` (lib/auditoria-configuracion.ts) listo
 
 **Status:** ABIERTA. Detectada durante implementacion DEUDA 17.E.1 (`/api/onboarding/cambiar-password`).
 
+> **Cierre coordinado (2026-10-08)**: se cierra junto con [[DEUDA 96]] — el endpoint `reset-password` escribe `AuditoriaConfiguracion(campo="password_reset")`; en el mismo movimiento se agrega el audit faltante al endpoint `cambiar-password` del wizard (misma función `registrarCambioConfiguracion`). No se trabaja por separado.
+
 **Origen:** Claude Code observo durante 17.E.1 que el endpoint cambia `Usuario.password` sin pasar por `registrarCambioConfiguracion`. Razon de no implementarlo en el momento: scope creep — DEUDA 17 era wizard onboarding, no extender audit log. Decision explicita del director: registrar como deuda separada.
 
 **Trabajo:**
@@ -1595,10 +1597,75 @@ manual por admin mientras haya pocos clientes.
 
 ---
 
+### DISEÑO CERRADO (2026-10-08) — DEUDA 96
+
+**Patrón reusado (zero invención)**:
+- **Modelo single-use**: clon byte-exact de `TokenSetupApiKey` ([schema.prisma:2393](prisma/schema.prisma#L2393)) → nuevo modelo `TokenResetPassword`. Campos: `usuarioId Int` FK (NO empresaId — usuarios Shipro con `empresaId=null` también deben poder resetear), `token String @unique` (192-bit base64url via `randomBytes(24).toString("base64url")`), `expira DateTime`, `usadoEn DateTime?`, `ipOrigen String?`, `createdAt DateTime @default(now())`. FK Cascade al Usuario. Index por usuarioId.
+- **Mailer**: `enviarMailReseteoPassword(email, nombre, urlReset)` clona el shape de `enviarMailSetupApiKey` ([mailer.ts:322](lib/mailer.ts#L322)).
+- **Password write**: byte-exact de [`cambiar-password/route.ts:79-87`](app/api/onboarding/cambiar-password/route.ts#L79) — `bcrypt.hash(..., 10)` + `prisma.usuario.update({ password, passwordTemporal: false })`.
+- **Atomic consumer**: patrón [via-token/route.ts:92-103](app/api/empresa/api-key/via-token/route.ts#L92) — `$transaction` + `updateMany({ where: { id, usadoEn: null }, data: { usadoEn: now } })` + rollback si count=0.
+- **404 genérico** para cualquier falla de token (no revela existencia).
+
+**Arquitectura**:
+- 2 endpoints bajo `/api/auth/` (ya public por [proxy.ts:7](proxy.ts#L7) → PUBLIC_API_PREFIXES incluye `/api/auth/`, zero cambio a proxy):
+  - `POST /api/auth/forgot-password` — body `{email}`, siempre 200 genérico, rate-limited.
+  - `POST /api/auth/reset-password` — body `{token, passwordNueva}`, atomic consume + update + audit.
+- 2 páginas: `app/forgot-password/page.tsx` + `app/reset-password/[token]/page.tsx`.
+- 1 mod: [login/page.tsx:160](app/login/page.tsx#L160) `href="#"` → `href="/forgot-password"`.
+
+**DECISIONES LOCKED (Nacho, 2026-10-08)**:
+
+1. **Token TTL = 2 horas** (corto, sensible — distinto del 7d del api-key setup; un link de reset en un inbox comprometido es riesgo real; 2h cubre el tiempo humano de "pedí reset + voy al mail").
+2. **Rate-limit en BASE DE DATOS** (NO in-memory): Nacho explícito — *"lo que funcione con 2 o 1.000 usuarios, no un problema por ahorrar 12 min"*. Tabla persistente de intentos (por email + por IP), con TTL de limpieza vía cron. Soporta rolling restart + multi-process sin perder estado.
+3. **Mensaje genérico SIEMPRE** (anti-enumeration): forgot endpoint responde `{ok:true, mensaje:"Si el email está registrado, te mandamos un link."}` para TODO caso. Branch "no user" hace fake delay (~200ms) para mitigar timing attack. Igual para reset endpoint: 404 genérico ante token inválido / expirado / usado / usuario inactivo.
+4. **Invalidación de sesión al resetear**: SÍ (estándar OWASP — cambiar password cierra todas las sesiones vivas del usuario). Implementada como **PIEZA 2 separada** (toca `lib/auth.ts`, auth-critical) con `Usuario.passwordChangedAt DateTime` + check en el callback `jwt` de NextAuth (invalida si `token.iat < user.passwordChangedAt`).
+
+**PLAN DE 2 PIEZAS**:
+
+- **Pieza 1 — Flujo de reset**: modelo `TokenResetPassword` + tabla rate-limit + 2 endpoints + 2 páginas + mailer function + link del login. Auto-contenida, zero touch a `lib/auth.ts`.
+- **Pieza 2 — Invalidación de sesión post-reset**: `Usuario.passwordChangedAt` + modificación del callback `jwt` en [lib/auth.ts](lib/auth.ts). Auth-critical, se separa para merge/deploy gated independiente (si Pieza 2 rompe algo, Pieza 1 ya está funcionando con la ventana de 8h máximo de sesión vieja — mitigación residual aceptable).
+
+**Normalización email**: en ambos endpoints + al escribir — `email.toLowerCase().trim()`. Tapa un bug latente de case-sensitivity de Postgres (hoy los writers de Usuario no normalizan — ver `clientes/route.ts`, `mi-equipo/route.ts`). Flag separado para auditar los otros writers.
+
+**CIERRA DEUDA 69**: el endpoint `reset-password` escribe `AuditoriaConfiguracion(campo="password_reset", empresaId: usuario.empresaId, valorAnterior:"***", valorNuevo:"***", motivo:"Reseteo via link token", ipOrigen)`. Cumple el requisito de audit de cambio de password en el mismo movimiento sin trabajo extra. [[DEUDA 69]] se marca RESUELTA junto con la Pieza 1 de 96.
+
+**Scope archivos**:
+- NEW: `prisma/schema.prisma` (model `TokenResetPassword` + tabla rate-limit + `Usuario.passwordChangedAt` en Pieza 2) + 1-2 migraciones aditivas.
+- NEW: `app/api/auth/forgot-password/route.ts`.
+- NEW: `app/api/auth/reset-password/route.ts`.
+- NEW: `app/forgot-password/page.tsx`.
+- NEW: `app/reset-password/[token]/page.tsx`.
+- MOD: `lib/mailer.ts` (+1 función).
+- MOD: `app/login/page.tsx` (1 línea).
+- MOD Pieza 2 ONLY: `lib/auth.ts` (passwordChangedAt check en callback jwt).
+
+**Total**: 7 archivos (5 nuevos + 2 mod) + 1-2 migraciones. **Zero money, zero touch a crear/cotizador/dispatch/finanzas.**
+
+**Pre-cliente bloqueante** (Capa 0 del roadmap).
+
+**Estimado**: 6-7h Pieza 1 + 1-2h Pieza 2 = **7-9h total con verificación empírica**.
+
+**Pitfalls de seguridad flaggeados** (todos cubiertos por decisiones locked):
+- Enum de emails → mensaje genérico siempre + fake delay en forgot.
+- Token entropy → 192-bit base64url (patrón ya probado).
+- Token TTL → 2h decision.
+- Rate-limit → DB-backed decision.
+- Soft-deleted users → 404 genérico (igual que token inválido).
+- Case-sensitivity del email → `.toLowerCase().trim()` en todo lookup.
+- Session invalidation → Pieza 2.
+- Burn single-use → atomic consumer pattern.
+- Password strength → ≥8 chars (mismo gate que wizard).
+
+**Origen del diseño**: recon Chat A 2026-10-07, decisiones Nacho 2026-10-08.
+
+---
+
 ## DEUDA 97 — Login: botón "Continuar con Google" es decorativo (Google OAuth no configurado) (registrada 2026-07-12, scope medio — decisión de producto primero)
 
 **Tipo:** Funcionalidad faltante + decisión de producto. Puerta de entrada (login).
 **Status:** ABIERTA. Detectada durante prueba del wizard (2026-07-12).
+
+> **Scope aclarado (2026-10-08)**: NO forma parte de [[DEUDA 96]] (recuperación de contraseña por email). Es feature OPCIONAL separada — requiere decisión de producto (vincular cuentas email↔Google, scope cliente/Shipro, UX del alta cuando el gerente ya tiene cuenta Google con otro email). Se evalúa su prioridad aparte; **email + contraseña + reset alcanza para operar con el primer cliente** (Capa 0 del roadmap).
 
 **Síntoma:** El botón "Continuar con Google" en el login no hace nada (o no inicia sesión).
 

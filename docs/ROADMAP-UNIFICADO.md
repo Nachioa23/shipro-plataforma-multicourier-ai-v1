@@ -31,7 +31,7 @@ En prod hoy (origin/main `c1f88a1`): **motor de plata FASE 1 rama-aware** (casca
 | DEUDA | Qué | Chat | Tipo | Estado |
 |---|---|---|---|---|
 | **185** | Leak cross-tenant contactos (Direccion global compartida por email; mutación + lectura cross-tenant confirmadas en prod con prueba Astelarra) | Chat A | obra + diseño (dos capas: física vs agenda) | ABIERTA — CONFIRMADA EMPÍRICAMENTE EN PROD 2026-10-05 |
-| **96** | Login: link "¿La olvidaste?" no funciona + flujo de recuperación de contraseña | Chat A | obra | ABIERTA — sin esto, un cliente que olvida la clave queda afuera |
+| **96** | Login: link "¿La olvidaste?" no funciona + flujo de recuperación de contraseña | Chat A | obra (diseño cerrado 2026-10-08, 2 piezas, en construcción por Chat A — cierra también [[DEUDA 69]]; [[DEUDA 97]] Google OAuth queda FUERA del scope) | ABIERTA — sin esto, un cliente que olvida la clave queda afuera |
 | **169 Fix B** | "La venta nunca se pierde" — hoy el 500 convertido a 400 no reintenta; un envío legítimo puede quedar como venta perdida si el courier no resuelve | Chat A + Chat C (cross) | obra con decisión producto | ABIERTA — Fix A ya en prod, Fix B pendiente |
 | **108** | Server viejo (beta.shipro.pro) sin firewall + 5 clientes reales + logs con ataques SSH | EXTERNO (Nacho → Fran) | acción admin | ABIERTA — bloquea onboarding sobre superficie expuesta |
 

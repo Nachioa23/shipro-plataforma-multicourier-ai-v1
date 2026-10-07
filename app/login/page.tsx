@@ -157,7 +157,7 @@ export default function Login() {
             <div>
               <div className="flex justify-between items-center mb-2">
                 <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide">Contraseña</label>
-                <a href="#" className="text-xs font-bold text-blue-600 hover:text-blue-800 transition-colors">¿La olvidaste?</a>
+                <Link href="/forgot-password" className="text-xs font-bold text-blue-600 hover:text-blue-800 transition-colors">¿La olvidaste?</Link>
               </div>
               <div className="relative">
                 <Lock className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />

@@ -370,6 +370,53 @@ export async function enviarMailSetupApiKey(emailDestino: string, nombreEmpresaO
 }
 
 // ==============================================================
+// MAIL 5b: RECUPERACIÓN DE CONTRASEÑA (DEUDA 96 Pieza 1)
+// ==============================================================
+// Link single-use + TTL 2h → página /reset-password/[token].
+// NO revela si el email existe (el forgot endpoint responde genérico siempre);
+// el mail solo se envía si el usuario existe + está activo. Clon del shape de
+// enviarMailSetupApiKey para branding consistente.
+export async function enviarMailReseteoPassword(emailDestino: string, nombre: string, urlReset: string) {
+  try {
+    const mailOptions = {
+      from: `"Shipro Seguridad" <${process.env.SMTP_USER}>`,
+      to: emailDestino,
+      subject: `🔐 Shipro: Restablecé tu contraseña`,
+      html: `
+        <style>${fontImport}</style>
+        <div style="font-family: Arial, sans-serif; color: #333; max-w: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eaeaea; border-radius: 10px;">
+          <h2 style="color: #233b6b;">¡Hola, ${nombre}!</h2>
+          <p>Alguien pidió restablecer la contraseña de tu cuenta en <strong>Shipro</strong>. Si fuiste vos, hacé clic en el botón para elegir una contraseña nueva.</p>
+
+          <div style="text-align: center; margin: 35px 0;">
+            <a href="${urlReset}" target="_blank" style="background-color: #2563eb; color: #ffffff; padding: 14px 28px; text-decoration: none; font-weight: bold; border-radius: 6px; display: inline-block;">
+              Restablecer mi contraseña
+            </a>
+          </div>
+
+          <div style="background-color: #fff7ed; padding: 12px 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #f59e0b;">
+            <p style="margin: 0; font-size: 13px; color: #9a3412;">
+              <strong>Importante:</strong> este link vence en <strong>2 horas</strong> y solo se puede usar una vez. Después de ese tiempo tendrás que pedir un link nuevo.
+            </p>
+          </div>
+
+          <p style="font-size: 12px; color: #9ca3af; text-align: center; margin-top: 30px;">
+            Si NO pediste este reseteo, ignorá este correo — tu contraseña actual sigue funcionando y el link vence solo.<br>
+            Cualquier duda, respondé este mail.
+          </p>
+          ${firmaShipro}
+        </div>
+      `,
+    };
+    await transporter.sendMail(mailOptions);
+    return true;
+  } catch (error) {
+    console.error("[Mailer] Error Mail Reseteo Password:", error);
+    return false;
+  }
+}
+
+// ==============================================================
 // MAIL 6: ESCALACIÓN AL COURIER (Soporte Shipro)
 // ==============================================================
 export async function enviarMailEscalacionCourier(emailCourier: string, nombreCourier: string, tracking: string, estadoActual: string, motivo: string, observacion: string) {

@@ -215,6 +215,53 @@ model Usuario {
   // masivos del Fee. Nullable en el evento (SetNull en el FK) para no perder
   // el registro si el usuario admin es dado de baja.
   ajustesMasivosFee AjusteMasivoFee[]
+
+  // DEUDA 96 Pieza 1 (2026-10-08) — tokens single-use del flujo de recuperación
+  // de contraseña. Cascade: si el usuario se elimina (hard delete raro, soft via
+  // activo=false es lo normal), sus tokens pendientes caen también.
+  tokensResetPassword TokenResetPassword[]
+}
+
+// DEUDA 96 Pieza 1 (2026-10-08) — token single-use para el flujo de reset de
+// contraseña. Clon del patrón TokenSetupApiKey (DEUDA 150) adaptado per-usuario
+// (no per-empresa — usuarios shipro con empresaId=null también deben poder
+// resetear). TTL corto (2h) por sensibilidad; single-use via usadoEn.
+model TokenResetPassword {
+  id        Int       @id @default(autoincrement())
+  usuarioId Int
+  usuario   Usuario   @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  // Token random 192-bit base64url. @unique para lookup O(1) + anti-collision.
+  token String @unique
+
+  // Vencimiento del link (now + 2h). Un link vencido no habilita reset.
+  expira DateTime
+
+  // Single-use: null hasta que el POST /api/auth/reset-password lo consuma;
+  // entonces se setea al timestamp de consumo. Un token usado no sirve de nuevo.
+  usadoEn DateTime?
+
+  // IP de origen del POST /api/auth/forgot-password (audit opcional).
+  ipOrigen String?
+
+  createdAt DateTime @default(now())
+
+  @@index([usuarioId])
+}
+
+// DEUDA 96 Pieza 1 (2026-10-08) — tabla de intentos del forgot-password para
+// rate-limit en BD (decisión Nacho: robusto, no in-memory). Cada POST de
+// /api/auth/forgot-password registra una fila; el endpoint cuenta filas
+// recientes para rate-limit por email (1/60s) y por IP (10/5min). Cron de
+// limpieza futuro (barre filas con createdAt < now-24h).
+model IntentoResetPassword {
+  id        Int      @id @default(autoincrement())
+  email     String
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([email, createdAt])
+  @@index([ip, createdAt])
 }
 
 model Courier {

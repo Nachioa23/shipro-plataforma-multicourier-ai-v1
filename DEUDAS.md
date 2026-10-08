@@ -4819,3 +4819,66 @@ Fallback conservador si la tabla está vacía: constantes inline $250k/$1M + `co
 
 ---
 
+## DEUDA 186 — Motor de reglas avanzado + scoring ponderado (ticket to win de la NPMS) — blueprint maestro (ABIERTA 2026-10-08, prioridad ALTA pre-cliente para construcción oculta, scoring real post-datos)
+
+**🗺️ Blueprint consolidado**: ver [`docs/BLUEPRINT-MOTOR-REGLAS.md`](docs/BLUEPRINT-MOTOR-REGLAS.md) — fuente de verdad del diseño (9 secciones: propósito + estado actual Fase 0 + arquitectura 2 capas + catálogo reglas deterministas + fórmula scoring + confiabilidad-curva-por-volumen (aporte Nacho) + métricas 4 bloques + plan 5 fases + decisiones abiertas + relación con deudas).
+
+**Qué es**: el motor que elige el courier óptimo para cada pedido combinando (a) reglas deterministas de negocio (CP, peso, valor, SKU, promesa, cut-off, caps) y (b) scoring ponderado multi-dim (costo × confiabilidad × velocidad × capacidad). Es el **diferencial de Shipro sobre el estado del arte de agregadoras logísticas** — automatiza con criterio de dirección comercial + feedback loop de datos reales la decisión que hoy se toma manual o pass-through.
+
+**Por qué existe esta deuda** (vs las ya registradas 99, 100, 110):
+- **DEUDA 99** (variable `PROVINCIA_DESTINO`): sub-item concreto del motor — se cierra en Fase 2 de este blueprint.
+- **DEUDA 100** (operador `ENTRE`): sub-item concreto del motor — se cierra en Fase 2 de este blueprint.
+- **DEUDA 110** (motor de optimización, producto): placeholder histórico del concepto. **DEUDA 186 la ABSORBE / la precisa** — este blueprint es el diseño detallado que 110 pedía. 110 queda como breadcrumb del backlog histórico; 186 es el blueprint maestro.
+- **DEUDA 111** (inteligencia del checkout — captura de eventos del embudo): alimenta datos — complementa, no reemplaza.
+- **DEUDA 39** (Torre de Control): fuente de métricas — complementa, no reemplaza.
+
+**DECISIÓN NACHO (2026-10-08) — BUILD NOW, HIDDEN, DATA-FED**:
+- **Construir AHORA** (pre-primer-cliente): framework completo (reglas ricas + scoring + fallback). Zero data dependency en la capa determinista; scoring usa fallback escalonado (patrón `calcularPromesaCalibrada`): con poca/nula data cae a reglas / cheapest (comportamiento byte-idéntico al actual).
+- **Dejarlo oculto / shadow mode**: scoring loguea qué habría elegido sin afectar la selección real. Zero regresión funcional.
+- **Encenderlo con datos reales**: post-primer-cliente + 1-2 meses, cuando el histórico `(courier, zona)` alcance umbral. Momento en que el motor empieza a decidir **con confiabilidad observada**, no teórica. "Solución a espaldas del cliente que impactará su negocio cuando los datos lleguen" — Nacho.
+
+**Plan de 5 fases** (detalle completo en §7 del blueprint):
+
+1. **FASE 1 — Diseño consolidado** ✅ **CERRADA 2026-10-08**: blueprint maestro + este registro.
+2. **FASE 2 — Ampliar motor determinista** (pre-cliente): variables nuevas (PROVINCIA_DESTINO, ZONA, CP_PATTERN, TICKET_SIZE, TIEMPO_EN_DEPOSITO_HORAS, SKU_FLAG, CUTOFF_TIME) + operadores nuevos (ENTRE, EN_LISTA, COINCIDE_REGEX) + acciones nuevas (EXCLUIR_COURIER, RESTRINGIR_A_TIER, TOPE_COSTO_PORCENTAJE, AJUSTAR_PESOS_SCORING). Cierra DEUDA 99 + DEUDA 100. Zero data dependency.
+3. **FASE 3 — Framework scoring con fallback** (pre-cliente): helper `lib/cotizador/scoring.ts` + integración en `cotizador.ts` + **shadow mode** (loguea sin afectar selección) + telemetría. Scoring 100% operacional en sombra. `c_sla=1.0` pre-datos (fallback).
+4. **FASE 4 — Encender scoring real** (post-cliente, ≥1-2 meses de histórico): switch global off → on. `c_sla` real por `(courier, zona)` con fallback escalonado 4 niveles. Opcional Fase 4.1: curva SLA-vs-volumen (dimensión diferencial Nacho — §5 blueprint).
+5. **FASE 5 — Features producto** (post-datos, prioridad negocio): free-shipping threshold + PUDO/lockers + carrier vetting workflow. Cada una se registra como deuda separada cuando el negocio pida.
+
+**Decisiones abiertas** (detalle §8 del blueprint, se resuelven al arrancar cada fase):
+- `ReglaRuteo` extendido vs motor JSON declarativo (Fase 2).
+- Shadow mode: env flag puro vs config per-empresa + storage de logs (Fase 3).
+- Umbral de muestra para activar confiabilidad real (Fase 4).
+- Curva SLA-vs-volumen: forma, granularidad, inputs (Fase 4.1).
+- Umbrales AR del catálogo ($200k VIP, $80k bajo): patrón `MarkupShiproVigencia` con editor admin sin deploy (Fase 2).
+- Mapa de zonas comerciales: `Provincia.zonaComercial` enum vs `CodigoPostal` patterns (Fase 2).
+
+**Aporte Nacho — diferencial sobre industria** (§5 blueprint): confiabilidad del courier como **curva por volumen diario asignado**, no escalar fijo. Un courier con red saturada entrega peor; uno subutilizado mejor. El scoring ideal pregunta "¿qué confiabilidad tiene X al volumen V que le voy a dar HOY?" — anti-saturación por diseño. Se activa en Fase 4.1 cuando haya histórico. Marca el motor Shipro como **más sofisticado que el estado del arte descrito en el informe de la industria**.
+
+**Prerrequisitos / dependencias**:
+- Fase 2 + 3: **zero** (buildable ya).
+- Fase 4: histórico ≥ umbral post-primer-cliente, muestra `(courier, zona)` suficiente, pipeline de ingesta de `% on-time` real desde `MetricaSLA` extendido o nueva tabla `MetricaConfiabilidad`.
+- Fase 5: según prioridad negocio.
+
+**Impacto esperado**:
+- **Pre-cliente** (Fase 2+3 construidas, sombra): reglas ricas disponibles para que Nacho/clientes declaren comportamiento comercial (ticket VIP, zona rural, upgrade por retraso, etc.). Zero cambio de selección real.
+- **Post-datos** (Fase 4 encendida): el motor empieza a elegir con confiabilidad real. Métricas esperadas: menos incidencias por saturación, menor costo total promedio al asignar carga a couriers subutilizados (que cumplen más y permiten negociar mejor con los saturados), diferencial medible vs cheapest-wins.
+- **Comercial**: posicionamiento de Shipro como NPMS con ventaja de "ticket to win" demostrable — único player AR con motor data-fed de confiabilidad por courier/zona/volumen.
+
+**Scope estimado grueso** (refinable al arrancar cada fase):
+- Fase 2: ~800-1200 líneas + 1-2 migraciones aditivas + UI admin para reglas. Riesgo: medio (toca `cotizador.ts`, pero puramente aditivo).
+- Fase 3: ~400-600 líneas (helper scoring + integración + telemetría) + migración aditiva (`Empresa.ponderacionScoring Json?`). Riesgo: bajo (todo en sombra; sin cambio de selección real).
+- Fase 4: switch + alertas + extensión de `MetricaSLA`. Riesgo: medio (cambia comportamiento). Mitigación: encender gradual + circuit breaker.
+- Fase 4.1: curva volumen (algoritmo + ingesta). Riesgo: medio-alto (data science ligera + ajuste empírico).
+- Fase 5: por feature. Cada una registra deuda propia.
+
+**Relación con deudas existentes** (§9 del blueprint, resumen):
+- Cierra: DEUDA 99, DEUDA 100 (en Fase 2). Absorbe: DEUDA 110 (producto, placeholder histórico).
+- Alimenta / se alimenta: DEUDA 39 (Torre — métricas), DEUDA 111 (checkout — eventos), DEUDA 43 (SLA nominal → fallback nivel 4), DEUDA 45 (calibrada vs nominal → feedback loop), DEUDA 140 (volumétrico — gap persistente), DEUDA 129 (failover técnico — ya cubre un sub-caso), DEUDA 138 (stress-test — telemetría del motor bajo carga), DEUDA 173 + DEUDA 50 (estados canónicos — prerequisito de métricas puras), DEUDA 91 (capability filtering — fundación de Capa 1, ya cerrada).
+
+**Status**: ABIERTA. Fase 1 cerrada 2026-10-08 (este registro + blueprint). Fases 2 + 3 pre-cliente. Fases 4+ post-datos.
+
+**Origen**: Chat A 2026-10-08. Nacho pidió recon vs informe de rules engines avanzados de la industria. Mapeo Fase 0 confirmó cimientos sólidos (promesa calibrada + MetricaSLA + Torre + DEUDA 91 + failover 129) pero gaps claros (variables/operadores/acciones acotados en el motor actual, scoring single-dim, no feedback loop estructurado). Decisión Nacho: construir AHORA pensando en el día que lleguen los datos del primer cliente. Blueprint consolidado en `docs/BLUEPRINT-MOTOR-REGLAS.md` como SSOT (mirror conceptual de `docs/BLUEPRINT-MEF-FLEX.md` para MEF).
+
+---
+

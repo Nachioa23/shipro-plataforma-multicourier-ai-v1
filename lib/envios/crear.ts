@@ -1258,28 +1258,43 @@ export async function crearEnvio(input: CrearEnvioInput) {
       const delta = montoDebito.sub(yaAplicado);
 
       if (delta.gt(0)) {
-        const saldoActualEmpresa = empresaData?.saldoActivo ?? new Prisma.Decimal(0);
-        const saldoPosteriorDelta = saldoActualEmpresa.sub(delta);
-
         const descripcionRama = esRamaB
           ? `Fee Shipro ${trackingOficial} — ${courierReal.nombre} (flete facturado por el courier al cliente)`
           : `Envío ${trackingOficial} — ${courierReal.nombre}`;
+
+        // DEUDA 136 Fase A de [[DEUDA 138]] (2026-10-08): decremento ATÓMICO en vez
+        // del read-then-write previo (`saldoPosteriorDelta = saldoActual.sub(delta)` +
+        // `update({ saldoActivo: saldoPosteriorDelta })`). El patrón viejo era un
+        // classic lost-update bajo READ COMMITTED: dos tx concurrentes leían el mismo
+        // saldoActivo stale desde empresaData y pisaban el write del otro → saldo
+        // quedaba menos-negativo que la suma real de los MovimientoFinanciero →
+        // bloqueo/suspensión disparaban TARDE. Movimientos nunca se perdían (cada
+        // uno con PK propio), pero el `saldoPosterior` del snapshot y el valor del
+        // Empresa.saldoActivo quedaban incoherentes. Fix: Postgres hace la
+        // aritmética atomic con `{ decrement: delta }` (serializa updates sobre la
+        // misma fila), devolvemos el saldo real post-write con `select` para
+        // alimentar: (a) el saldoPosterior del MovimientoFinanciero, y
+        // (b) evaluarSuspension (dispara al momento correcto, no late).
+        // ORDEN dentro de la MISMA tx: update atómico → leer saldo real → create
+        // Movimiento con el valor real → evaluar suspensión con el valor real.
+        // El monto `delta` es byte-idéntico al previo — solo cambia CÓMO se escribe.
+        const empresaActualizada = await tx.empresa.update({
+          where: { id: empresaId },
+          data: { saldoActivo: { decrement: delta } },
+          select: { saldoActivo: true },
+        });
+        const saldoPosteriorReal = empresaActualizada.saldoActivo;
 
         await tx.movimientoFinanciero.create({
           data: {
             empresaId,
             tipo: "DEBITO_ENVIO",
             monto: delta.neg(),
-            saldoPosterior: saldoPosteriorDelta,
+            saldoPosterior: saldoPosteriorReal,
             referencia: trackingOficial,
             descripcion: descripcionRama,
             envioId: envioCreado.id
           }
-        });
-
-        await tx.empresa.update({
-          where: { id: empresaId },
-          data: { saldoActivo: saldoPosteriorDelta }
         });
 
         // DEUDA 22 (2026-06-18): evaluar suspension post-debit.
@@ -1288,15 +1303,16 @@ export async function crearEnvio(input: CrearEnvioInput) {
         // NOTA: corre fuera de la tx (la tx ya cerro este update). Si suspenderEmpresa
         // falla, el debit queda commited (intencional: no queremos rollbackear envios
         // legitimos por fallas en notificaciones).
+        // DEUDA 136 (2026-10-08): recibe el saldo REAL post-atomic (no el stale calc).
         const { debeSuspender } = evaluarSuspension(
-          saldoPosteriorDelta,
+          saldoPosteriorReal,
           empresaConData.limiteDescubierto ?? new Prisma.Decimal(0),
           false  // suspendidaActual = false porque si fuera true, el pre-check lo hubiera bloqueado
         );
         if (debeSuspender) {
           // Schedule post-tx (no await dentro de la tx).
           suspensionPendiente = {
-            saldoFinal: saldoPosteriorDelta,
+            saldoFinal: saldoPosteriorReal,
             limiteAfectado: empresaConData.limiteDescubierto ?? new Prisma.Decimal(0),
           };
         }

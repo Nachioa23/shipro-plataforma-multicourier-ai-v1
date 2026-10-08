@@ -463,16 +463,31 @@ export async function POST(request: Request) {
           },
         });
 
-        // Refetch saldoActivo dentro del tx externo: el mismo Excel puede tocar N
-        // envíos de la misma empresa; siempre partimos del saldo autoritativo
-        // más actualizado (evita drift con el envio.empresa cacheado del find).
-        const empFresh = await tx.empresa.findUnique({
+        // DEUDA 136 Fase A de [[DEUDA 138]] (2026-10-08): decremento ATÓMICO en
+        // vez del refetch + read-then-write previo. El patrón viejo (refetch
+        // defensivo + `nuevoSaldo = empFresh.sub(aforoConIva)` + `update literal`)
+        // mitigaba drift CROSS-ITERACIÓN dentro del mismo Excel (varios envíos
+        // de la misma empresa en el loop), pero NO protegía contra concurrencia
+        // CROSS-TX (otro débito concurrente al mismo saldoActivo). Con
+        // `{ decrement: aforoConIva }` Postgres serializa el update sobre la
+        // fila atómicamente — el refetch defensivo deja de ser necesario (el
+        // decremento se aplica sobre el valor actual real de la BD, no sobre el
+        // snapshot leído). `select: { saldoActivo: true }` devuelve el saldo
+        // real post-write para `saldoPosterior` del MovimientoFinanciero.
+        // aforoConIva byte-idéntico — solo cambia CÓMO se escribe.
+        // La suspensión post-tx (L580-589) ya re-fetchea con prisma.empresa.
+        // findUnique, no requiere cambio.
+        const empresaActualizada = await tx.empresa.update({
           where: { id: envio.empresaId },
+          data: { saldoActivo: { decrement: aforoConIva } },
           select: { saldoActivo: true },
+        }).catch((e) => {
+          if ((e as { code?: string }).code === "P2025") {
+            throw new Error(`Empresa ${envio.empresaId} no encontrada (concurrencia).`);
+          }
+          throw e;
         });
-        if (!empFresh) throw new Error(`Empresa ${envio.empresaId} no encontrada (concurrencia).`);
-
-        const nuevoSaldo = empFresh.saldoActivo.sub(aforoConIva);
+        const nuevoSaldo = empresaActualizada.saldoActivo;
 
         await tx.movimientoFinanciero.create({
           data: {
@@ -485,11 +500,6 @@ export async function POST(request: Request) {
             envioId: envio.id,
             conciliacionRunId: runId,
           },
-        });
-
-        await tx.empresa.update({
-          where: { id: envio.empresaId },
-          data: { saldoActivo: nuevoSaldo },
         });
 
         empresasTocadas.add(envio.empresaId);

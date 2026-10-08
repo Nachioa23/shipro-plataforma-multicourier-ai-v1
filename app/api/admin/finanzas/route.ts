@@ -53,22 +53,28 @@ export async function POST(request: Request) {
 
     // Transacción segura para evitar desfasajes
     const resultado = await prisma.$transaction(async (tx) => {
-      const empresa = await tx.empresa.findUnique({
-        where: { id: parseInt(empresaId) }
-      });
-
-      if (!empresa) throw new Error("Empresa no encontrada");
-
-      // Sumamos el pago al saldo actual (Si debía -5000 y paga 5000, queda en 0)
-      const nuevoSaldo = empresa.saldoActivo.add(montoDecimal);
-
-      // 1. Actualizamos el saldo de la empresa
-      await tx.empresa.update({
+      // DEUDA 136 Fase A de [[DEUDA 138]] (2026-10-08): increment ATÓMICO en vez
+      // del read-then-write previo (`findUnique` → `nuevoSaldo = saldo.add(monto)`
+      // → `update({ saldoActivo: nuevoSaldo })`). Patrón viejo era lost-update
+      // bajo concurrencia. Postgres serializa el update sobre la misma fila con
+      // `{ increment: montoDecimal }` y devuelve el saldo real post-write vía
+      // `select` para alimentar `saldoPosterior` del MovimientoFinanciero.
+      // montoDecimal byte-idéntico — solo cambia CÓMO se escribe.
+      const empresaActualizada = await tx.empresa.update({
         where: { id: parseInt(empresaId) },
-        data: { saldoActivo: nuevoSaldo }
+        data: { saldoActivo: { increment: montoDecimal } },
+        select: { saldoActivo: true },
+      }).catch((e) => {
+        // P2025 = empresa no existe (equivalente al throw del findUnique+check previo).
+        if ((e as { code?: string }).code === "P2025") {
+          throw new Error("Empresa no encontrada");
+        }
+        throw e;
       });
+      const nuevoSaldo = empresaActualizada.saldoActivo;
 
-      // 2. Dejamos el registro en el extracto bancario (Ledger)
+      // 2. Dejamos el registro en el extracto bancario (Ledger) con el saldo real
+      // post-atomic (no un cálculo stale).
       const movimiento = await tx.movimientoFinanciero.create({
         data: {
           empresaId: parseInt(empresaId),

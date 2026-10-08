@@ -2592,6 +2592,8 @@ Las credenciales de TEST de Andreani viven en un host QA distinto (tipo `apisqa.
 
 `MocisAdapter.ts` tiene la misma forma: `private API_URL = 'https://mocis.akeron.net/api/v1'` (L25), sin switch de ambiente. Mismo patrón, mismo síntoma si algún día se prueba con credenciales test de Mocis.
 
+> **Hallazgo adicional (2026-10-08) — `MOCIS_BASE_URL` sin cablear:** en el `.env` de **producción** existe la variable `MOCIS_BASE_URL`, pero `MocisAdapter.ts` NO la lee — tiene la URL hardcodeada en `API_URL`. **Hoy esa env var no hace nada** (huérfana, análogo al caso de `ANDREANI_URL` registrado arriba). Cuando se ejecute la parte de Mocis de esta deuda, además del `sandbox?: boolean` + constantes `MOCIS_URL_PROD` / `MOCIS_URL_QA`, cablear la base URL para que respete el env var (alineado con "nada hardcodeado"). Scope sin cambio — forma parte del mismo trabajo diferido del switch sandbox/prod de Mocis. No urge, no bloquea producción.
+
 **Precedente ya resuelto en otro adapter:** el `OcaAdapter` (integrado 2026-08) YA implementa el patrón — `sandbox?: boolean` en `CredencialesOca` que switchea entre `OCA_URL_PROD` y `OCA_URL_QA` en el constructor. Y `HopEnviosAdapter` (integrado 2026-08-23) también trae `baseUrl?: string` en sus credenciales con fallback a sandbox si no viene. Y `CorreoArgentinoAdapter` también usa `sandbox?: boolean`. Adicionalmente, `lib/couriers/credenciales/tipos.ts:10` ya declara el placeholder `EntornoCredenciales: 'sandbox' | 'live'` reservado a futuro para couriers con dual environment. **El molde existe, ya se usa en 3 adapters — falta aplicarlo a los 2 legacy (Andreani y Mocis).**
 
 **Fix propuesto (no ejecutar):** en `CredencialesAndreani` (y `CredencialesMocis`) agregar `sandbox?: boolean` opcional (mismo patrón que `CredencialesOca`). En el constructor del adapter, resolver `this.API_URL` entre una constante `ANDREANI_URL_PROD` y `ANDREANI_URL_QA` (o `MOCIS_URL_QA`) según el flag. Confirmar los hosts QA reales contra la doc de cada courier antes de hardcodearlos (Nacho tiene la doc de Andreani en el Gemini Notebook; Mocis probablemente requiere consulta comercial). Actualizar `TransportesTab.tsx` para exponer el switch al cargar credenciales del cliente (mismo pattern que se documentó para OCA). Alinear con el patrón que ya existe en OCA/CA/Hop.
@@ -3933,11 +3935,19 @@ Contexto: WooCommerce YA funciona e2e (etiqueta Andreani `360003092333370` valid
 
 ---
 
-## DEUDA 171 — Adapter Correo Argentino: bugs de alineación con la API real (2 arreglados, 2 pendientes; bloqueado por credenciales para validar) (registrada 2026-09-07)
+## DEUDA 171 — Adapter Correo Argentino: código completo, pendiente validación QA con credenciales de testing (registrada 2026-09-07, código completo 2026-10-08 commit `e6b4d3f`)
 
-**Status:** PARCIAL. El adapter existe y está bien estructurado (8 métodos, sandbox switch, `tarifaApiIncluyeIva=false`). Cruzado contra la doc real de Correo Argentino (MiCorreo + Paq.ar) via Gemini ANTES de validar — se encontraron **4 desalineaciones** que lo harían fallar. **NO se puede validar e2e todavía**: Correo usa "sandbox cerrado" (sin credenciales públicas de test), hay que pedir apiKey + agreement de QA a un ejecutivo comercial de Correo. Además son **DOS cuentas distintas**: MiCorreo (`customerId + usuario/password`, para cotizar) y Paq.ar (`apiKey + agreement`, para despachar) — el cliente gestiona ambas por separado.
+**Status:** CÓDIGO COMPLETO, PENDIENTE VALIDACIÓN QA. Los 4 BUGs identificados en el cross-check vs doc Gemini están implementados (BUG 2 commit `0a01095`, BUG 4 cubierto por BUG 2, BUG 1 + BUG 3 commit `e6b4d3f` 2026-10-08). El adapter ahora: (a) autentica MiCorreo con Bearer JWT via `POST /token` Basic auth + cache in-memory, (b) switchea sandbox/prod también en MiCorreo (`CA_MICORREO_URL_PROD` / `_QA`), (c) filtra sucursales por `stateId` derivado del CP (vía `resolverProvinciaDesdeCP` + `provinciaACodigoCorreo`), con fallback amplio por lista vacía para cero regresión vs el comportamiento nationwide pre-fix.
 
-**BUG 1 (CRÍTICO, PENDIENTE) — auth de MiCorreo ausente en `cotizar()`.**
+**Prod-safe garantizado**: sin credenciales de MiCorreo (`CA_MICORREO_USER` / `CA_MICORREO_PASSWORD` ausentes del env), `cotizar()` short-circuit a `[]` con log claro → **Correo oculto del checkout sin tocar la red** → cero regresión; el checkout cae a otros couriers y la venta no se pierde. El deploy no requiere env vars nuevas para operar; las vars de MiCorreo se setean el día que lleguen las credenciales.
+
+**Bloqueado por credenciales**: la validación e2e (cotizar + despachar + etiqueta + rastrear + sucursales contra las APIs reales de Correo QA) depende de que Nacho consiga del ejecutivo comercial de Correo: (i) `apiKey` + `agreement` de Paq.ar QA, (ii) `user` + `password` + `customerId` de MiCorreo QA. Correo tiene sandbox cerrado (sin credenciales públicas). Una vez con credenciales, se setea `CA_SANDBOX=true` + las 4 vars y se valida contra apitest.
+
+**Supuestos de la doc a confirmar en la validación**: (i) formato exacto de `POST /token` (hoy el adapter hace Basic auth sin body y parsea `{ token, expires }` con `expires` en hora Argentina sin offset → fuerza `-03:00` al parsear — contrato razonable per spec Gemini, confirmar en vivo); (ii) IVA (adapter asume neto, `tarifaApiIncluyeIva=false` — la doc no especifica); (iii) catálogo completo de estados de tracking (la doc solo lista PRE/CAN/CAU).
+
+---
+
+**BUG 1 (ARREGLADO, commit `e6b4d3f` 2026-10-08) — auth de MiCorreo con Bearer token + switch sandbox.**
 El `cotizar()` manda el request a MiCorreo `/rates` **SIN Authorization** (solo `Content-Type`). La doc real (Gemini) confirma que MiCorreo requiere `Authorization: Bearer <token JWT>`. El token se obtiene con `POST /token` (HTTP Basic Auth con usuario+password) → devuelve token + expiración. El `customerId` se puede recuperar con `POST /users/validate` (email+password + Bearer). Como está hoy, `cotizar()` recibe `401` y el catch lo trata como "sin cobertura" (devuelve `[]`) → **Correo nunca cotizaría y el error quedaría silenciado**.
 
 *Diseño del fix (para cuando haya credenciales):*
@@ -3949,8 +3959,8 @@ El `cotizar()` manda el request a MiCorreo `/rates` **SIN Authorization** (solo 
 **BUG 2 (ARREGLADO, commit `0a01095`) — `state` vacío en el despacho.**
 El despacho mandaba `senderData/shippingData.state=""` pero Correo exige el código de provincia de 1 letra (obligatorio). **Fix:** helper `lib/couriers/correo/provincia-a-codigo.ts` mapea el nombre canónico (que `crear.ts` resuelve desde el CP) al código ISO 3166-2:AR de 1 letra ("B", "C", "K", …). Específico de Correo (Andreani usa nombre directo); si un 2do courier lo necesita, se promueve a `lib/constants/codigos-provincia-ar.ts` (acuerdo con Chat A / Núcleo). Sin match → `""` (mejor bloqueado que provincia equivocada — el envío degrada a RETENIDO en vez de generar etiqueta a provincia incorrecta).
 
-**BUG 3 (PENDIENTE, menor) — `obtenerSucursales` no filtra por CP.**
-El endpoint `/v1/agencies` de Paq.ar filtra por `stateId` (provincia), no por CP. El adapter recibe `cp`. *Fix (cuando se valide sucursal)*: derivar provincia del CP (`resolverProvinciaDesdeCP` ya está en núcleo) → usar el código ISO (BUG 2 helper) → llamar `/agencies?stateId=<código>` → usar `latitude/longitude` de las agencias devueltas para rankear por cercanía real al CP del comprador. Patrón similar al de otros couriers zonales.
+**BUG 3 (ARREGLADO, commit `e6b4d3f` 2026-10-08) — `obtenerSucursales` filtra por provincia derivada del CP, con fallback amplio.**
+Hoy `obtenerSucursales(cp)` deriva provincia vía `resolverProvinciaDesdeCP(cp)` (núcleo) → código ISO 1 letra vía `provinciaACodigoCorreo` (helper BUG 2) → `/agencies?stateId=<código>&pickup_availability=true`. **Fallback por lista vacía**: si el filtro `stateId` devuelve 0 agencias (p.ej. formato de código distinto del esperado por la API), reintenta UNA vez con la URL amplia (`?pickup_availability=true`) para garantizar **cero regresión** vs el comportamiento nationwide pre-fix. Si el CP no resuelve a provincia o la provincia no tiene código Correo, usa el filtro amplio directamente. Fetch + parse extraídos a helper privado `fetchYParsearAgencias(url, cp)` para no duplicar código. Ranking por lat/long contra el CP destino sigue en el caller (sin cambios).
 
 **BUG 4 (cubierto por BUG 2) — mapeo provincia→código.** Resuelto junto con BUG 2.
 

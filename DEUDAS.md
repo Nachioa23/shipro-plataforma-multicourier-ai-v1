@@ -2115,6 +2115,8 @@ Pregunta sin responder: **¿Andreani o Mocis se comportan mal si reciben dos ped
 
 **Status:** ABIERTA. Registrada 2026-08-05.
 
+> **Fase A de [[DEUDA 138]]** (stress-test, PRE-CLIENTE): se cierra ANTES del test de carga completo para que el stress mida el sistema, no bugs ya conocidos.
+
 **Problema:** si dos requests llegan exactamente al mismo tiempo con la misma
 `Idempotency-Key` y `empresaId`, ambos pasan el `findFirst` (el primero no existe
 aún), y ambos intentan crear el `Envio`. El segundo obtiene una violación P2002
@@ -2241,6 +2243,8 @@ un bug de facturación que ya existe hoy. NO bloquea el desarrollo del plugin de
 
 **Status:** ABIERTA. Reencuadrada 2026-08-06 con criterio de negocio de Nacho.
 
+> **Fase A de [[DEUDA 138]]** (stress-test, PRE-CLIENTE): se cierra ANTES del test de carga completo para que el stress mida el sistema, no bugs ya conocidos.
+
 **Reencuadre (Nacho):** el patrón read-then-write en la actualización de saldo puede dejar el saldo en un valor inconsistente bajo concurrencia (ej. dos débitos simultáneos que dejan `-1000` en vez de `0`). PERO **esto NO es pérdida de dinero**: el saldo queda negativo, el cliente queda debiendo esa diferencia, y el mecanismo de bloqueo por saldo negativo debe activarse hasta que transfiera. **El dinero no se evapora — queda registrado como deuda del cliente.** El "lost update" clásico no aplica como catástrofe financiera en este modelo.
 
 **Lo que SÍ hay que verificar (la deuda real, más chica):**
@@ -2328,6 +2332,40 @@ No es problema al volumen actual.
 - **Fase 4: resolver los cuellos que aparezcan.**
 
 **Prioridad:** alta ANTES de producción a escala / homologación; baja al volumen actual. Atacar como parte de "preparar el plugin para producción".
+
+---
+
+### PLAN DE EJECUCIÓN (2026-10-08, Nacho: PRE-CLIENTE)
+
+**Contexto**: Nacho mueve DEUDA 138 a **PRE-CLIENTE** (quiere el sistema probado bajo carga **antes** del primer cliente real, no reactivo). Nacho se encarga de conseguir/armar una **base de datos de operaciones** (dataset realista de pedidos: compradores, CPs, pesos, dimensiones, couriers, modalidades, origenes) para disparar múltiples cotizaciones + múltiples emisiones de etiqueta + múltiples consultas de estado en una ventana acotada, algunas simultáneas, otras con segundos de diferencia — simulando tráfico real concentrado (ej. pico Black Friday de un cliente mediano).
+
+**LAS DOS MITADES DEL TEST (aclaración de arquitectura — ambas son parte de 138):**
+
+1. **Generar la carga (el generador)**: script que dispara N operaciones concurrentes contra `/api/cotizar` + `POST /api/envios` + consultas de estado (`/api/envios/buscar`, `/api/envios/rastreo-manual`), con patrones de concurrencia controlada (burst / sostenido / ramp-up). Consume la base de datos de operaciones de Nacho. Herramientas candidatas: **k6**, **Artillery** o un script custom en Node si el perfil de carga lo justifica (decisión Fase B).
+2. **Medir bajo carga (donde está el valor)**: latencias (p50 / p95 / p99), tasa de errores, **TIMEOUTS**, **race conditions** detectadas (saldos inconsistentes, trackings duplicados, double-débito), integridad del saldo (ningún `DEBITO_ENVIO` perdido ni duplicado), comportamiento de BD (saturación del connection pool de Prisma, locks, deadlocks, slow queries). Esta mitad es la que **define el límite** del sistema y **qué se rompe primero** — es la salida accionable.
+
+**FASES DEL PROCESO (money-critical: toda la concurrencia toca saldos + creación de envíos):**
+
+- **FASE A — Chat A, núcleo (PREREQUISITO del test de carga)**: cerrar las race conditions conocidas del núcleo **antes** de estresar, para que el test mida el sistema y no bugs ya conocidos:
+  - **[[DEUDA 131]]** — idempotencia atómica en `POST /api/envios` (upgrade del `findFirst` + `create` a INSERT con `ON CONFLICT` o unique constraint que haga el gate del idempotency-key atómico).
+  - **[[DEUDA 136]]** — verificar bajo concurrencia que el bloqueo por saldo negativo se dispara correctamente (dos débitos simultáneos → saldo queda negativo coherente → `evaluarSuspension` activa el bloqueo). El reencuadre de Nacho dice que no es pérdida de plata; esta fase lo **demuestra empíricamente**.
+  - Si el stress-test (Fase D) encontrara estas sin arreglarlas, sería **tiempo perdido** (los hallazgos ya los conocemos). Fase A las cierra para que la Fase D mida lo desconocido.
+
+- **FASE B — Chat B lidera (toca despachos)**: diseñar + construir el **generador de carga** + consumir la base de datos de operaciones de Nacho. Decidir herramienta (k6 vs Artillery vs custom), armar los escenarios (burst de cotizaciones, pipeline cotizar→crear→despachar, ramp-up de consultas de estado), parametrizar RPS objetivo. Entregable: script ejecutable + fixture de datos + runbook de ejecución.
+
+- **FASE C — Chat A + Chat B (métricas + instrumentación)**: definir las métricas de **éxito/fracaso** (latencias objetivo, cero duplicados de tracking, cero pérdida/duplicación de débito, BD estable sin deadlocks). Chat A instrumenta sobre `crear.ts` + saldos (counters/timers Prisma); Chat B instrumenta sobre adapters de courier. Entregable: dashboard + queries de verificación post-run.
+
+- **FASE D — Chat B lidera (ejecución + análisis)**: correr el generador contra un ambiente controlado (idealmente staging/sandbox, NO prod), observar métricas, encontrar el **límite de carga** + qué componente **se degrada primero** (BD, adapter de courier, pool de conexiones, lock en `empresa.saldoActivo`, idempotency, etc.). Registrar hallazgos — probablemente generen **nuevas deudas de optimización** (índices, batching, cache, pool tuning). Verificación cuidadosa money-safe: **cero débitos perdidos**, **cero débitos duplicados**, **cero envíos con tracking colisionado**.
+
+**Territorio**: **Chat B lidera 138** (generador + ejecución Fase B/D, toca despachos/adapters). **Chat A** hace **Fase A** (131 + 136, concurrencia del núcleo) + **acompaña Fase C** (métricas sobre `crear.ts` y saldos). La ejecución exacta de Fase B/D no toca territorio Chat A salvo las lecturas de métricas.
+
+**Prerequisito money-critical**: toda la concurrencia bajo prueba toca `empresa.saldoActivo` + `MovimientoFinanciero` + creación de `Envio`. La "mitad medir" es la que importa: **que bajo carga ningún débito se pierda ni se duplique**. Si Fase D encuentra alguna anomalía money-related, bloqueante hasta cerrarla.
+
+**Relación**: **[[DEUDA 131]]** + **[[DEUDA 136]]** son **Fase A** de este plan. Insumo de homologación Tiendanube (138 era prerequisito declarado ahí también — ítem Awesome stress-test). [[DEUDA 108]] es independiente (acción externa infra del server).
+
+**Estado**: ABIERTA, PRE-CLIENTE, plan registrado. Pendiente de arrancar por **Fase A (Chat A, 131 + 136)**. Fase B puede empezar en paralelo si Chat B tiene bandwidth, pero el test de carga (Fase D) no corre hasta Fase A cerrada.
+
+**Origen plan**: decisión Nacho 2026-10-08 (post-Capa 0: cerrados 185 + 96 + 147; diferido 169 Fix B; vivos quedan 108 + 171 + stress-test).
 
 ---
 

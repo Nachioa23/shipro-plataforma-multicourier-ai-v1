@@ -281,6 +281,68 @@ export async function POST(request: Request) {
         { status: 422 }
       );
     }
+
+    // DEUDA 131 Fase A de [[DEUDA 138]] (2026-10-08) — race loser del idempotency
+    // check. Si dos requests concurrentes con la misma (empresaId, idempotencyKey)
+    // pasan ambos el pre-check findFirst de L127 (ninguno existe aún) y entran al
+    // $transaction de crearEnvio, el 2do que llega al `tx.envio.create` recibe
+    // P2002 por el @@unique([empresaId, idempotencyKey]) (DEUDA 128). Prisma hace
+    // ROLLBACK atómico de toda la tx del 2do request (envío + MovimientoFinanciero
+    // DEBITO_ENVIO + empresa.update saldoActivo) → CERO riesgo de doble débito.
+    //
+    // Antes de este catch, el P2002 caía al 500 genérico — bug UX, no money.
+    // Ahora: re-query → devuelve el envío del ganador con la MISMA shape que el
+    // happy-path replay de L137-149. El plugin recibe la respuesta idempotente
+    // esperada (replayed: true + Idempotency-Replayed header), indistinguible de
+    // un retry post-commit.
+    //
+    // Target check: inspeccionamos error.meta.target para asegurarnos que el
+    // conflict es sobre el índice de idempotencia y NO otra unique constraint
+    // de Envio (ej. trackingNumber, correccionToken). Evita que un P2002 ajeno
+    // cosechado por otro bug termine devolviendo una respuesta idempotente falsa.
+    // idempotencyKey del try block no está en scope acá (es `const` dentro
+    // del try); re-leerla del request header para no promover la declaración.
+    const idempotencyKeyCatch = request.headers.get("Idempotency-Key") ?? null;
+    if (
+      idempotencyKeyCatch &&
+      error?.code === "P2002" &&
+      Array.isArray(error?.meta?.target) &&
+      error.meta.target.includes("idempotencyKey")
+    ) {
+      const existente = await prisma.envio.findFirst({
+        where: { empresaId, idempotencyKey: idempotencyKeyCatch },
+        select: {
+          trackingNumber: true,
+          etiquetaUrl: true,
+          estadoActual: true,
+          courier: { select: { nombre: true } },
+        },
+      });
+      if (existente) {
+        return NextResponse.json(
+          {
+            tracking: existente.trackingNumber,
+            etiquetaUrl: existente.etiquetaUrl,
+            status: existente.estadoActual,
+            courier: existente.courier?.nombre ?? null,
+            replayed: true,
+          },
+          {
+            status: 200,
+            headers: { "Idempotency-Replayed": "true" },
+          },
+        );
+      }
+      // Defensa: el P2002 probó que la fila existe, pero el re-query no la
+      // encontró (visibility raro en una tx aún-no-commiteada, lectura con
+      // read-committed, etc.). 409 transient-safe en vez de 500 — el caller
+      // puede reintentar y la próxima vez el pre-check de L127 ya la ve.
+      return NextResponse.json(
+        { error: "La clave de idempotencia está en uso por otra creación en curso. Reintentá en unos segundos.", code: "IDEMPOTENCY_IN_FLIGHT" },
+        { status: 409 },
+      );
+    }
+
     console.error("Error en POST /api/envios:", error);
     return NextResponse.json({ error: "Error interno al crear el envío o debitar el saldo." }, { status: 500 });
   }

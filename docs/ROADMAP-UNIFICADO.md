@@ -59,7 +59,6 @@ En prod hoy: **motor de plata FASE 1 rama-aware** (cascada intermediario+Shipro,
 | **125** | Hardening alta `CredencialCourier` — exigir `propietarioTipo` en Rama A (deploy FASE 2 mordió esto) | Chat A |
 | **99** | Regla "Provincia de Destino" opción muerta en motor (bug silencioso) | Chat A |
 | **100** | Operador "ENTRE" opción muerta en motor (bug silencioso) | Chat A |
-| **132** | Fuga de dimensiones en dashboard — largo/ancho/alto se pierden y caen a 10×10×10 hardcoded (bug de facturación real) | Chat A |
 | **71** | Guardar credenciales de courier al finalizar wizard — hoy paso 4 activa couriers sin persistir credenciales | Chat B |
 | **173** | `estadoActual` String libre sin centralizar — prerequisito de plugins externos y UX consistente | cross-chat (A+B+C) |
 
@@ -97,7 +96,7 @@ En prod hoy: **motor de plata FASE 1 rama-aware** (cascada intermediario+Shipro,
   - **96** (recuperación de contraseña) — flujo de reset con token single-use + email + UI + rate-limit. **Prioridad #2.**
   - Acompaña Fix B de **169** en lo que toca `crear.ts` (shape del estado bloqueado hacia plugins — coordinar con Chat C).
   - Acompaña **138** stress-test (lecturas de schema + `$transaction` en el update de saldo).
-  - Como bonus si queda tiempo: **125** + **99** + **100** + **132** (bugs chicos de capa 3 que son self-contained).
+  - Como bonus si queda tiempo: **125** + **99** + **100** (bugs chicos de capa 3 que son self-contained).
 
 - **Chat B** — Couriers:
   - **171** (Correo Argentino 2 bugs) + verificación e2e cuando lleguen credenciales de Nacho.

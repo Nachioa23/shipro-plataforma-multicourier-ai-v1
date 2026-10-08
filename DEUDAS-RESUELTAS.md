@@ -2042,3 +2042,70 @@ manual por admin mientras haya pocos clientes.
 
 ---
 
+## DEUDA 132 — Fuga de dimensiones en la creación de envío del dashboard: largo/ancho/alto se pierden y caen a 10×10×10 hardcoded (bug de facturación real, scope chico-medio) (RESUELTA EN PROD 2026-08-26 — commit `6df8920`; dims persistidas + barrera BLOQUEADO_DATOS_PAQUETE; verificado en prod. Pendiente e2e no bloqueante: modal destrabe Paso 4 vía e-commerce)
+
+**Status:** EN PRODUCCIÓN desde 2026-08-26 (commit 6df8920) — núcleo verificado en prod. Deploy con rebuild limpio + 3 migraciones aplicadas OK. Verificado en producción: clientes carga, tarifa de rescate por courier visible, ciclo crear/despachar/cancelar con Andreani+Mocis OK. PENDIENTE única: prueba e2e del modal de destrabe (Paso 4) — requiere ingreso de e-commerce sin datos, lo dispara el chat de plugins cuando Tiendanube esté vivo. El Admin Link de Tiendanube (chat B, commit 385ab77) subió en el mismo deploy, aprobado por ese chat.
+
+**Modelo final (dos puertas de entrada):**
+- DASHBOARD (humano): el formulario EXIGE peso + 3 dimensiones antes de crear. Nunca nace un envío bloqueado por datos desde acá — el operador tiene la caja delante y carga el dato en el momento.
+- E-COMMERCE (Tiendanube y cualquier plugin, sin humano): si el pedido entra sin peso/dims, el envío nace BLOQUEADO_DATOS_PAQUETE, se publica la tarifa de rescate por courier (no se frena la venta), y un operador completa los datos después desde el modal de la NPMS.
+- La barrera (Paso 3), el estado BLOQUEADO_DATOS_PAQUETE y el modal de destrabe (Paso 4) son para la puerta de e-commerce, no para el dashboard.
+
+**Avance final (todos los commits locales, sin pushear):**
+- Paso 1 (b4f45bb) — columnas largoCm/anchoCm/altoCm en Envio.
+- Paso 2 (cf5d486) — dims reales a los 6 callers de despacharCourier.
+- Paso 3a (b1f7e3d) — barrera BLOQUEADO_DATOS_PAQUETE + eliminación de fallbacks silenciosos 10×10×10 y 1kg (hard-throw defensivo).
+- Paso 4a (433eb35, hecho por chat Tiendanube) — /corregir acepta BLOQUEADO_DATOS_PAQUETE, persiste peso/dims, aplica la barrera antes de despachar, re-despacha.
+- Paso 4b — modal unificado de corrección (dirección + datos de paquete) con candado por bloque, título/carteles derivados del estado (nada hardcodeado).
+- Paso 5a — tarifa de rescate por courier en CredencialCourier; reemplaza y DROPEA Empresa.tarifaPlanaRespaldo.
+- Paso 5a-bis — restaura el escalón de HistoricoCotizaciones (180d) antes de la tarifa plana, que el 5a había salteado.
+- Paso 5b — campo de tarifa de rescate en TransportesTab + validación obligatoria (>0) cliente Y servidor (patrón D-10).
+- Paso 5c — RESUELTO por arquitectura: el ingreso de Tiendanube ya usa crearEnvio (barrera) y el rates callback ya usa la cascada del cotizador. No requirió código nuevo en el Núcleo. Cabo de UX (mensaje al comprador "tarifa de referencia, se ajusta al despachar") queda anotado para el chat de plugins.
+- Fix post-migración — eliminadas 2 referencias colgadas a Empresa.tarifaPlanaRespaldo (columna dropeada) que causaban 500 en runtime (no las agarró tsc; aparecieron en verificación localhost).
+
+**Verificación en localhost (2026-08-26):**
+- ✅ Prueba dashboard exige datos (form frena sin peso/dims).
+- ✅ Prueba medidas reales al courier (40×40×40 llega correcto — subcobro resuelto).
+- ✅ Prueba tarifa de rescate obligatoria (rechaza guardar courier sin tarifa >0).
+- ⬜ PENDIENTE e2e: el modal de destrabe (Paso 4) no se pudo probar en localhost porque desde el dashboard nunca nace un envío bloqueado; requiere un pedido de e-commerce sin datos. Se prueba cuando el chat de plugins tenga vivo el ingreso de Tiendanube. Código correcto (tsc 0) pero sin ejecución e2e.
+
+**⚠️ DEPLOY:** la 132 toca schema (3 migraciones: dims en Envio, tarifa por courier add, drop tarifa empresa) → rebuild limpio obligatorio (prisma generate + rm -rf .next + build + pm2 restart --update-env). Plan de deploy commit-por-commit a definir antes de subir (hay commits de otros frentes entre producción y HEAD). Recordar cargar tarifa de rescate a los couriers de prueba tras deploy.
+
+**Registrada:** 2026-08-07. Detectada durante el recon de DEUDA 103.
+Bug independiente del plugin — afecta al dashboard humano HOY.
+
+**Problema:** el formulario `/nuevo-envio` obliga al usuario a cargar peso + largo + ancho
++ alto (validación en `nuevo-envio/page.tsx:246`). Esas dimensiones viajan como URL params
+a `/cotizar` y se usan correctamente en `POST /api/cotizar` — **el precio que ve el usuario
+es correcto**. Pero al confirmar y crear (`cotizar/page.tsx:208-210`), el payload a
+`POST /api/envios/manual` **NO incluye las dimensiones**. `crear.ts:408-413` cae entonces
+a un `paquetes: [{ largoCm: 10, anchoCm: 10, altoCm: 10 }]` **hardcoded literal**.
+
+**Consecuencia (descalce silencioso):**
+- La cotización mostrada usa dimensiones reales → precio correcto en pantalla.
+- La re-cotización interna de `crear.ts` (para persistir en `FinanzasEnvio` y matchear la
+  opción elegida) usa 10×10×10 → puede diferir del precio mostrado si el peso volumétrico real es alto.
+- La etiqueta despachada al courier (`AndreaniAdapter.despachar` → `bultos[0]` con dims
+  hardcoded) usa 10×10×10 → el courier factura por SUS medidas reales al procesar el bulto,
+  no por las 10×10×10 → **cotizado ≠ despachado ≠ facturado**. Descalce que golpea la conciliación.
+
+**Fix:** threading de las dimensiones reales de punta a punta:
+1. `CrearEnvioInput`: agregar `largoCm?`, `anchoCm?`, `altoCm?` (o `paquetes?: Paquete[]`).
+2. `POST /api/envios/manual` + `POST /api/envios`: leer las dimensiones del body.
+3. `cotizar/page.tsx` (confirmación): incluir las dimensiones en el payload a `/manual`.
+4. `crear.ts:408-413`: usar las dimensiones del input si vienen; sintetizar 10×10×10 sólo
+   como último recurso (backward-compat).
+5. Persistir `pesoVolumetrico` calculado desde las dimensiones reales.
+
+**Relación con DEUDA 103:** es la "sub-pieza temprana de CAPA 2" mencionada en DEUDA 103.
+Se puede atacar de forma independiente y ANTES del motor de reglas (CAPA 1), porque arregla
+un bug de facturación que ya existe hoy. NO bloquea el desarrollo del plugin de Tiendanube.
+
+**Archivos:** `lib/envios/crear.ts`, `app/api/envios/manual/route.ts`, `app/api/envios/route.ts`,
+`app/(dashboard)/cotizar/page.tsx`, `lib/couriers/AndreaniAdapter.ts`, `prisma/schema.prisma`
+(si se decide persistir dimensiones o `pesoVolumetrico` real).
+
+**Prioridad:** media-alta. Bug de facturación real, pero acotado. Diferible respecto al plugin.
+
+---
+

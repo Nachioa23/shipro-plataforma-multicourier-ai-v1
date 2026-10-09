@@ -147,14 +147,58 @@ Hasta que Nacho decida activar el motor, corre **en sombra**:
 
 ## 3. Catálogo de reglas deterministas (producto — input Nacho, umbrales en pesos AR)
 
-### 3.1 — AOV (Average Order Value)
+### 3.0 — Métricas Shipro ya disponibles que alimentan las reglas y el scoring
 
-| Regla | Condición | Acción |
+Antes del catálogo, listado de las señales operativas que la Torre YA está capturando (o que son triviales de
+derivar) y pueden entrar como variables de reglas o como dimensiones del scoring:
+
+- **Promesa calibrada** — SLA real por `(depósito, courier, provincia)` con cuádruple fallback. YA en prod
+  (`lib/utils/promesa-calibrada.ts`). Patrón arquitectural del scoring (§2 + §4).
+- **Efectividad en primera visita** — `% de envíos entregados en el primer intento` por courier/zona. La Torre
+  tiene el dato (estados canónicos COURIER + eventos `ENTREGADO` vs `VISITA_FALLIDA`). Variable natural de regla
+  ("si efectividad primera visita del courier X en zona Z < 85% → excluir / degradar") y dimensión del scoring
+  (sub-componente de `c_sla`).
+- **NPS del cliente empresa** — ya existe (`nps-empresa.ts`). Señal de salud de la cuenta — relevante para reglas
+  que condicionan comportamiento según engagement del cliente.
+- **🆕 Índice de tiempo de actualización de estado del tracking** (propuesto Nacho, métrica NUEVA): la NPMS
+  verifica cambios de estado del envío cada ~30 min (cron de rastreo). Esto permite medir, por courier, **qué tan
+  rápido reporta movimientos de tracking**: tiempo transcurrido entre un cambio real (ej. "en reparto" → "entregado")
+  y el momento en que el courier lo informa a la API. Un courier opaco/lento = señal fuerte de peor calidad de
+  servicio (buyers ansiosos, más WISMO, menor confianza). **Alimenta `c_sla` como sub-componente**: la dimensión
+  confiabilidad no es solo "entrega on-time" sino también "comunica el progreso con baja latencia".
+  - Dato ya capturable del log de cambios de `estadoCanonicoCourier` vs timestamps de ingesta en la API del courier.
+  - Diferencial sobre industria: la agregadora que mide esto puede castigar en el ranking a los couriers oscuros
+    aunque sean baratos y "cumplan el SLA de entrega".
+
+Estas 4 señales (promesa + efectividad 1ra visita + NPS + índice actualización) son los inputs iniciales de la
+capa scoring (§4) + se exponen como variables condicionales en las reglas (§3.1-3.5).
+
+### 🚨 Umbrales: los fija CADA CLIENTE, no son constantes de Shipro
+
+Los números concretos de los umbrales de las reglas AOV (`$200.000` VIP, `$80.000` bajo, etc. abajo) son
+**ejemplos ilustrativos** — NO son constantes del motor Shipro. **Cada empresa cliente configura sus propios
+umbrales** según su negocio (su ticket promedio, su mix de precios, su definición de "VIP").
+
+El motor provee la **mecánica** (regla declarativa "si `valorCarrito ≥ X` entonces acción Y") y la UI para
+que la empresa declare X; **el motor NO decide qué es un ticket alto para esa empresa** — lo decide la
+empresa misma. Esto se refleja en el modelo (`ReglaRuteo.condicionValor` es `Decimal`, editable por cliente) +
+en la UI admin (empresa escribe sus umbrales por regla).
+
+**Excepción — reglas con criterio lógico universal**: las reglas geográficas (§3.2) tienen criterio **común a
+todos los clientes AR** porque la cobertura real del mercado logístico argentino es la misma para todos:
+Correo Argentino cubre rural donde los privados no llegan, flotas locales dominan AMBA denso, Andreani es
+fuerte en interior profundo. Validado por Nacho como criterio lógico universal del mercado AR. Estas reglas
+son defaults recomendados del motor; el cliente puede sobreescribirlas si tiene razón para hacerlo
+(ej. un contrato específico con un courier regional).
+
+### 3.1 — AOV (Average Order Value) — *valores de ejemplo; cada cliente configura los suyos*
+
+| Regla | Condición (umbral configurable por cliente) | Acción |
 |---|---|---|
-| **Ticket VIP** | `valorCarrito ≥ $200.000` | Restringir a couriers premium (siniestralidad < 1% histórica + firma en entrega). Scoring: subir peso de confiabilidad y bajar costo. |
-| **Ticket bajo** | `valorCarrito < $80.000` | Priorizar económico (terrestre / postal, típico Correo Argentino). Scoring: subir costo (abaratar). |
+| **Ticket VIP** | `valorCarrito ≥ X_vip` (ejemplo: $200.000 — fijado por cliente) | Restringir a couriers premium (siniestralidad < 1% histórica + firma en entrega). Scoring: subir peso de confiabilidad y bajar costo. |
+| **Ticket bajo** | `valorCarrito < X_bajo` (ejemplo: $80.000 — fijado por cliente) | Priorizar económico (terrestre / postal, típico Correo Argentino). Scoring: subir costo (abaratar). |
 
-### 3.2 — Geográficas
+### 3.2 — Geográficas (criterio lógico universal AR — validado Nacho)
 
 | Regla | Condición | Acción |
 |---|---|---|
@@ -199,7 +243,30 @@ operador. **Dejar el gancho** permite enganchar la capacidad cuando algún couri
 
 ## 4. Scoring ponderado — fórmula + pesos
 
-### Fórmula
+### En criollo (lo que hace y por qué es el salto)
+
+El scoring **le pone una NOTA a cada courier combinando varias dimensiones a la vez** (costo + confiabilidad +
+velocidad + capacidad), **cada una con un PESO que configura el cliente** (cuánto importa cada cosa para su
+negocio). El courier con la mejor nota gana el envío.
+
+**Ejemplo concreto** — 3 couriers a una zona:
+
+| Courier | Costo | Confiabilidad | Velocidad | Capacidad |
+|---|---|---|---|---|
+| Andreani | $$ caro | 95% on-time | 48 hs | sucursales + firma |
+| Correo Argentino | $ barato | 85% on-time | 96 hs | solo domicilio |
+| Flota local | $$ medio | 92% on-time | 24 hs | solo domicilio AMBA |
+
+Si el cliente le pone **70% peso al costo** → gana Correo Argentino (barato).
+Si el cliente le pone **50% peso a la velocidad** → gana la flota local (24 hs).
+Si el cliente le pone **45% peso a la confiabilidad** → gana Andreani (95%).
+
+**Hoy el motor de Shipro elige por UNA sola cosa**: ordena por precio solo, O por SLA solo (ver `aplicarEstrategia`
+en `cotizador.ts:745-750`). **El scoring elige por la MEZCLA** — pondera todas las dimensiones a la vez con los
+pesos del cliente. Ese es el **salto del "ticket to win"**: pasar de regla binaria (más barato / más rápido) a
+decisión multi-dimensional que refleja la estrategia comercial de cada empresa.
+
+### Fórmula (formalización de lo de arriba)
 
 ```
 score(courier) = w_costo × c_costo + w_sla × c_sla + w_velocidad × c_velocidad + w_capacidad × c_capacidad
@@ -242,46 +309,95 @@ Resultado: scoring arranca aproximando "cheapest + fastest" (porque c_sla es con
 
 ---
 
-## 5. 🆕 APORTE NACHO — confiabilidad como CURVA por volumen (dimensión nueva, no está en el informe)
+## 5. 🆕 APORTE NACHO — confiabilidad = demora ponderada POR ZONA × VOLUMEN × VENTANA TEMPORAL
 
-### La observación
+### Formulación en palabras de Nacho
 
-El SLA de un courier **degrada con el volumen diario que se le asigna**. Ejemplo empírico:
+> *"La demora ponderada de entrega POR ZONA, según el volumen que le dimos al courier en una ventana de tiempo."*
 
-| Courier | Volumen diario | SLA on-time |
-|---|---|---|
-| Andreani | 100 paquetes | 99% |
-| Andreani | 200 paquetes | 95% |
-| Andreani | 300 paquetes | 92% |
+Es decir: lo que importa medir es **cuánto tarda REALMENTE el courier en entregar en tal zona, dado el volumen que
+le estamos dando en una ventana temporal concreta**. Es la **métrica de oro de la dimensión confiabilidad**.
 
-Un courier con red saturada entrega peor; uno subutilizado entrega mejor. El volumen asignado por **Shipro mismo**
-influye en el SLA real.
+### Dos precisiones críticas sobre el estado del arte
+
+#### (a) VENTANA TEMPORAL — no acumulado histórico
+
+El volumen se mide en un **período acotado** (los N paquetes que el courier retiró de Shipro en una ventana
+día/semana/mes), NO en acumulado histórico desde el inicio de la relación. Razón: la capacidad de un courier
+oscila — esta semana puede tener su red cargada por el Black Friday de otro agregador, la semana que viene
+estar vacía. El SLA de esta semana puede ser radicalmente distinto al de la semana pasada aunque el volumen
+promedio histórico sea idéntico.
+
+**Implica**:
+- Ventana configurable (default propuesto: 7 días rolling).
+- La curva se re-ajusta en cada ejecución del scoring con la ventana vigente, no un fit histórico fijo.
+- Permite capturar degradación temporal del servicio (ej. mes de picos de ecommerce).
+
+#### (b) POR ZONA — no SLA global del courier
+
+Es el SLA del courier **en una zona específica**, NO el agregado nacional. Razón: un courier puede ser excelente
+en AMBA (red densa de distribución) y mediocre en interior profundo (dependencia de operadores locales). Agregar
+el SLA global oculta esta estructura y lleva al scoring a elegir mal cuando el envío es a zona de bajo
+desempeño de un courier con buen promedio.
+
+**Implica**:
+- Granularidad mínima: `(courier, zona, ventana)`. Donde "zona" ≥ provincia; idealmente partidos / CP buckets
+  (ver §3.2 — "mapa de zonas comerciales").
+- Al cotizar envío a zona Z, el scoring consulta la curva de ese courier en Z, no la curva nacional.
+
+### Observación empírica que justifica el diseño
+
+El SLA de un courier **degrada con el volumen asignado por zona en la ventana**. Ejemplo empírico:
+
+| Courier | Zona | Volumen semanal (ventana=7d) | Demora real promedio (hs) |
+|---|---|---|---|
+| Andreani | CABA | 100 paquetes | 48 hs |
+| Andreani | CABA | 200 paquetes | 52 hs |
+| Andreani | CABA | 300 paquetes | 68 hs |
+| Andreani | Patagonia | 10 paquetes | 120 hs |
+| Andreani | Patagonia | 30 paquetes | 180 hs |
+
+El mismo courier, dos curvas distintas (CABA + Patagonia), ambas crecientes con el volumen, pero con **puntos de
+saturación diferentes**. Un courier con red saturada en una zona entrega peor en esa zona; en otra zona
+subutilizada el mismo courier puede seguir cumpliendo. El volumen asignado por **Shipro mismo**, en una ventana
+reciente, influye en el SLA real que ese courier va a producir en el próximo envío.
 
 ### Implicación de diseño
 
-La dimensión "confiabilidad" del scoring **NO es un escalar fijo por courier** — es una **función del volumen que
-Shipro le está por asignar hoy**:
+La dimensión "confiabilidad" del scoring **NO es un escalar fijo por courier**, **ni siquiera un escalar por
+`(courier, zona)`** — es una **función del volumen asignado en una ventana reciente, por zona**:
 
 ```
-c_sla(courier) = f_sla_volumen(courier, volumen_actual_del_dia + 1)
+c_sla(courier, zona, ventana) = f_demora_ponderada(courier, zona, volumen_en_ventana + 1)
 ```
 
-El scoring ideal pregunta: *"¿qué confiabilidad tiene el courier X al volumen V que le voy a dar HOY, con V+1 el
-próximo despacho?"*, no "¿qué confiabilidad tiene X?".
+Donde `f_demora_ponderada` devuelve el valor (normalizado a `[0, 1]`) correspondiente a la demora esperada en
+esa zona dado el volumen que el courier ya tiene asignado en la ventana + el envío que estamos por sumar.
+
+El scoring pregunta: *"¿qué demora real tengo con el courier X al entregar en la zona Z, dado que ya le mandé V
+paquetes en los últimos 7 días a esa zona, con V+1 el próximo despacho?"* — no "¿qué SLA tiene X?".
 
 ### Métrica nueva requerida
 
-**SLA vs volumen-diario por courier (curva empírica)**: se construye observando histórico de `(courier, volumen_del_día,
-% on-time)` y ajustando una curva (regresión polinomial o segmentos lineales). Permite al scoring saber cuánto
-degrada cada courier a medida que se le carga volumen.
+**Demora ponderada por `(courier, zona, ventana)` × volumen asignado**: se construye observando histórico de
+`(courier, zona, volumen_en_ventana, demora_real_entrega)` y ajustando una curva por zona (regresión polinomial
+o segmentos lineales). Permite al scoring saber cuánto degrada cada courier por zona a medida que se le carga
+volumen.
 
-**Diferencial sobre el informe**: la industria describe el feedback loop SLA-vs-real por courier/zona. **Nacho
-agrega una dimensión más**: SLA-vs-volumen-asignado. Es anti-saturación por diseño — Shipro no concentra en el
-mismo courier aunque sea el más barato, porque sabe que a más volumen peor cumple.
+Infraestructura necesaria (sub-items de la Fase 4.1 del plan §7):
+- Tabla `MetricaDemoraPonderada` o extensión de `MetricaSLA` con columnas `zona` + `ventanaDias` + `volumen` +
+  `demoraRealHoras`.
+- Cron de agregación diario que calcula los puntos de la curva por `(courier, zona)` sobre la ventana rolling.
+- Ajustador de curva (polinomial o lineal por tramos) + consulta eficiente en el scoring.
+
+**Diferencial sobre el informe industria**: la industria describe el feedback loop SLA-vs-real por courier/zona
+como **escalar**. **Nacho agrega 2 dimensiones más**: ventana temporal (no acumulado) + volumen asignado (función,
+no escalar). Es anti-saturación POR ZONA y POR MOMENTO — Shipro no concentra en el mismo courier aunque sea el
+más barato, porque sabe que a más volumen peor cumple **en esa zona, en esta semana**.
 
 **Marcado como**: dimensión AVANZADA, post-datos, pero **registrada aquí como diferencial del motor Shipro
-sobre el estado del arte**. Se encuentra en el framework desde el día 1 como `c_sla_volumen` placeholder; se
-activa cuando la curva empírica tiene datos.
+sobre el estado del arte**. Se encuentra en el framework desde el día 1 como `c_sla_volumen_zona_ventana`
+placeholder; se activa en Fase 4.1 cuando los puntos de las curvas por `(courier, zona)` tengan muestra.
 
 ---
 

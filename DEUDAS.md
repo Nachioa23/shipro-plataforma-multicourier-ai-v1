@@ -4821,7 +4821,7 @@ Fallback conservador si la tabla está vacía: constantes inline $250k/$1M + `co
 
 ## DEUDA 186 — Motor de reglas avanzado + scoring ponderado (ticket to win de la NPMS) — blueprint maestro (ABIERTA 2026-10-08, prioridad ALTA pre-cliente para construcción oculta, scoring real post-datos)
 
-**🗺️ Blueprint consolidado**: ver [`docs/BLUEPRINT-MOTOR-REGLAS.md`](docs/BLUEPRINT-MOTOR-REGLAS.md) — fuente de verdad del diseño (9 secciones: propósito + estado actual Fase 0 + arquitectura 2 capas + catálogo reglas deterministas + fórmula scoring + confiabilidad-curva-por-volumen (aporte Nacho) + métricas 4 bloques + plan 5 fases + decisiones abiertas + relación con deudas).
+**🗺️ Blueprint consolidado**: ver [`docs/BLUEPRINT-MOTOR-REGLAS.md`](docs/BLUEPRINT-MOTOR-REGLAS.md) — fuente de verdad del diseño (10 secciones: propósito + estado actual Fase 0 + arquitectura 2 capas + catálogo reglas deterministas + fórmula scoring + confiabilidad-curva-por-volumen (aporte Nacho) + métricas 4 bloques + plan 5 fases + decisiones abiertas + relación con deudas + **§10 arquitectura de datos del scoring** — fuentes capturadas, liquidaciones como fuente con zona del courier, hipótesis volumen proporcional, gaps day-1, reconciliaciones).
 
 **Qué es**: el motor que elige el courier óptimo para cada pedido combinando (a) reglas deterministas de negocio (CP, peso, valor, SKU, promesa, cut-off, caps) y (b) scoring ponderado multi-dim (costo × confiabilidad × velocidad × capacidad). Es el **diferencial de Shipro sobre el estado del arte de agregadoras logísticas** — automatiza con criterio de dirección comercial + feedback loop de datos reales la decisión que hoy se toma manual o pass-through.
 
@@ -4876,7 +4876,25 @@ Fallback conservador si la tabla está vacía: constantes inline $250k/$1M + `co
 - Cierra: DEUDA 99, DEUDA 100 (en Fase 2). Absorbe: DEUDA 110 (producto, placeholder histórico).
 - Alimenta / se alimenta: DEUDA 39 (Torre — métricas), DEUDA 111 (checkout — eventos), DEUDA 43 (SLA nominal → fallback nivel 4), DEUDA 45 (calibrada vs nominal → feedback loop), DEUDA 140 (volumétrico — gap persistente), DEUDA 129 (failover técnico — ya cubre un sub-caso), DEUDA 138 (stress-test — telemetría del motor bajo carga), DEUDA 173 + DEUDA 50 (estados canónicos — prerequisito de métricas puras), DEUDA 91 (capability filtering — fundación de Capa 1, ya cerrada).
 
-**Status**: ABIERTA. Fase 1 cerrada 2026-10-08 (este registro + blueprint). Fases 2 + 3 pre-cliente. Fases 4+ post-datos.
+**Arquitectura de datos mapeada** (§10 del blueprint, 2026-10-08):
+- **Fuentes ya capturadas** (reusables, "new analysis"): `FinanzasEnvio.costoCourier*` ciclo completo + `tarifaFullCotizada`, `Envio.fechaImpresion→fechaEntrega`, `EventoTracking` secuencias, `promesa-calibrada` P75 fallback 4 niveles, `EncuestaNPS` 7 dimensiones, capability flags.
+- **Liquidaciones como fuente** (input Nacho): la UI de conciliación ya existe + captura tarifa facturada + aforo. Falta capturar `Envio.zonaCourier` del Excel por courier (cada courier tiene sus propias zonas — Andreani 6, Mocis 4, Correo Argentino 4; es la verdad operativa).
+- **Hipótesis volumen proporcional** (input Nacho — método para la curva §5): la carga de Shipro es proporcional al volumen total del courier → observar degradación de SLA vs volumen propio de Shipro = inferir capacidad real del courier. Caveat: hipótesis falsificable, mitigada por shadow mode.
+- **Reconciliaciones del blueprint**: 16 métricas Torre (no 14), `MetricaSLA.avg` vs promesa P75 (inconsistencia), 2 ventanas distintas (impresión→entrega vs colecta→entrega — scoring debe elegir cuál por dimensión).
+
+**Dependencias de captura day-1** (sin ellas el motor en sombra no acumula histórico útil desde el día 1):
+- **CRÍTICAS**:
+  - [[DEUDA 46]] (zona logística propia por rangos CP) — abierta — bloquea granularidad zona en casi todo el scoring.
+  - [[DEUDA 44]] (parser Excel liquidación + `Envio.zonaCourier String?`) — abierta — es la verdad operativa del courier.
+  - **MotorReglaShadowLog** (tabla NUEVA) — no registrada aún como DEUDA separada; cae dentro del alcance de Fase 3 de este blueprint. Columnas: `(cotizacionSnapshotId, winnerActual, winnerShadow, scoreActual, scoreShadow, wᵢ snapshot, cᵢ snapshots, createdAt)`. Sin ella el shadow mode corre pero no acumula evidencia que justifique encenderlo.
+  - **Volumen rolling por `(courier, zona, ventana)`** (cron/counter NUEVO) — no registrada aún como DEUDA separada; cae dentro del alcance de Fase 4.1 de este blueprint. Insumo duro del método §5+§10.C.
+- **ALTAS** (data ya existe, falta análisis):
+  - Delta `costoCourierCotizado` vs `costoCourierFacturado` agregado por `(courier, zona)` — helper nuevo sobre conciliación persistida. Signal fuerte, "new analysis" sin cambios de schema.
+  - Explotación de `EventoTracking` secuencias (visitas fallidas, tiempo entre estados, patrones retroceso) — métricas derivadas sobre data ya guardada.
+- **MEDIA/CROSS-CHAT**:
+  - Extensión del contrato del adapter courier (`CourierInterface.rastrear(): Promise<string>` → objeto con `estado + payloadRaw + fechaReportada`) — prerequisito del índice de actualización §3.0; cross-chat Chat B (6 adapters a tocar). Precedente: ML Flex ya persiste `payloadRaw Json` en `ShipmentFlex` + `NotificacionFlex`.
+
+**Status**: ABIERTA. Fase 1 cerrada 2026-10-08 (este registro + blueprint 10 secciones incluyendo §10 arquitectura de datos). Fases 2 + 3 pre-cliente. Fases 4+ post-datos.
 
 **Origen**: Chat A 2026-10-08. Nacho pidió recon vs informe de rules engines avanzados de la industria. Mapeo Fase 0 confirmó cimientos sólidos (promesa calibrada + MetricaSLA + Torre + DEUDA 91 + failover 129) pero gaps claros (variables/operadores/acciones acotados en el motor actual, scoring single-dim, no feedback loop estructurado). Decisión Nacho: construir AHORA pensando en el día que lleguen los datos del primer cliente. Blueprint consolidado en `docs/BLUEPRINT-MOTOR-REGLAS.md` como SSOT (mirror conceptual de `docs/BLUEPRINT-MEF-FLEX.md` para MEF).
 

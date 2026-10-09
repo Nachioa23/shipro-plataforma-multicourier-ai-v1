@@ -50,7 +50,7 @@ Mapa consolidado del recon 2026-10-08 (vs industry report de rules engines avanz
 | **Winner selection** | `aplicarEstrategia` en `cotizador.ts:745-750` | ordena por single-dim (precio O SLA), no scoring multi-dim |
 | **Promesa calibrada (ASSET CLAVE)** | `calcularPromesaCalibrada` en [lib/utils/promesa-calibrada.ts:116](../lib/utils/promesa-calibrada.ts). **Cuádruple fallback**: (1) P75 por (depósito, courier, provincia) → (2) P75 por (courier, provincia) → (3) `MetricaSLA.slaPromedioHs` → (4) hardcoded por nombre courier. `UMBRAL_MUESTRA_MINIMA = 10`. | ✅ patrón de fallback escalonado **validado en prod** — es el blueprint arquitectural del scoring |
 | **MetricaSLA por (courier, provincia)** | tabla `MetricaSLA` + cron `app/api/cron/metricas-sla` + mapa SLA en Torre | ✅ data existe + se actualiza + se consume |
-| **Torre de Control** | 14 métricas (DEUDA 39), avanzada (13/16 cerradas, 3 pendientes) | ✅ fuente de datos operativa |
+| **Torre de Control** | 16 métricas (DEUDA 39) organizadas en 5 bloques (ver `docs/TORRE-DE-CONTROL.md`), avanzada (13/16 cerradas, 3 pendientes) | ✅ fuente de datos operativa |
 | **Failover técnico "venta nunca se traba"** (DEUDA 129) | contrato de resiliencia + handling de timeouts/4xx en `app/api/envios/route.ts:260-285` | ✅ en prod |
 
 ### Lo que NO existe (gaps a construir)
@@ -307,6 +307,9 @@ Hasta tener histórico ≥ UMBRAL:
 
 Resultado: scoring arranca aproximando "cheapest + fastest" (porque c_sla es constante), luego se refina con data.
 
+> **Infra de datos**: qué fuentes alimentan cada `cᵢ` (costo, c_sla, velocidad, capacidad), qué está ya capturado
+> vs qué falta, y qué es "new analysis" vs "new capture" → ver **§10 Arquitectura de datos del scoring**.
+
 ---
 
 ## 5. 🆕 APORTE NACHO — confiabilidad = demora ponderada POR ZONA × VOLUMEN × VENTANA TEMPORAL
@@ -399,6 +402,10 @@ más barato, porque sabe que a más volumen peor cumple **en esa zona, en esta s
 sobre el estado del arte**. Se encuentra en el framework desde el día 1 como `c_sla_volumen_zona_ventana`
 placeholder; se activa en Fase 4.1 cuando los puntos de las curvas por `(courier, zona)` tengan muestra.
 
+> **Método de cálculo** (hipótesis de proporcionalidad de volumen propio como proxy de volumen total del courier) y
+> **data necesaria** (liquidaciones + zona del courier + volumen rolling) → ver **§10 Arquitectura de datos del
+> scoring**, subsecciones B y C.
+
 ---
 
 ## 6. Métricas que alimentan el motor (link con Torre/Panel — input Nacho)
@@ -434,7 +441,7 @@ Nacho definió **4 bloques** de métricas que alimentan al motor y al monitoreo 
 - `% de reglas aplicadas` (cuántas cotizaciones matchearon una regla deterministra) — telemetría del motor.
 - `% de shadow-mode = producción` (cuándo el scoring real "habría" elegido lo mismo que la selección actual).
 
-### Cruce con las 14 métricas de Torre (DEUDA 39)
+### Cruce con las 16 métricas de Torre (DEUDA 39)
 
 Las métricas de Torre YA diseñadas cubren PARCIALMENTE:
 - Métrica 2.3 (SLA real vs nominal), 3.4 (desvío de peso), 4 (aforo), 1.3 (NPS histórico), promesa calibrada — todo esto se alinea con Bloques A + B.
@@ -583,7 +590,7 @@ Cross-referencias al backlog actual:
 | **100** | Operador `ENTRE` en motor — cierra con Fase 2. |
 | **110** | Motor de optimización de la propuesta logística (producto). **Este blueprint lo ABSORBE / lo precisa** — es el diseño detallado de esa deuda ampliada. 110 pasa a ser el placeholder histórico; 186 es el blueprint maestro. |
 | **111** | Capa de inteligencia del checkout (producto — cimiento de datos). **Alimenta Bloque C de §6**. Captura de eventos del embudo = entrada para `c_sla` + conversión. |
-| **39** | Torre de Control (14 métricas). **Alimenta Bloques A/B/C de §6**. 13/16 cerradas, 3 pendientes — recon dedicado en Fase 2 / 4 para mapear qué nuevas requiere el motor. |
+| **39** | Torre de Control (16 métricas en 5 bloques — `docs/TORRE-DE-CONTROL.md`). **Alimenta Bloques A/B/C de §6**. 13/16 cerradas, 3 pendientes — recon dedicado en Fase 2 / 4 para mapear qué nuevas requiere el motor. |
 | **43** | SLA nominal del courier por zona (contrato declarado). **Entra como Nivel 4 (fallback teórico) del `c_sla`** en §4. |
 | **45** | Comparación calibrada vs nominal — alimenta el feedback loop del scoring. |
 | **129** | Failover técnico "venta nunca se traba". **Ya implementado en el pipeline**; se mantiene como fallback técnico de la Capa 2 (si top-score courier falla, siguiente mejor). |
@@ -596,7 +603,193 @@ Cross-referencias al backlog actual:
 
 ---
 
-## Final: horizonte
+## 10. Arquitectura de datos del scoring (recon Fase 0, 2026-10-08)
+
+Consolidación de la recon de data inventory Chat A (2026-10-08) + 2 inputs nuevos de Nacho (liquidaciones como
+fuente + hipótesis de volumen proporcional como método para la curva de confiabilidad). Esta sección es el
+puente entre el diseño (§2-§5) y la ejecución (§7): dice **de qué data vive cada `cᵢ`**, qué está capturado,
+qué no, y qué hay que empezar a guardar YA para que el motor en sombra acumule histórico desde el día 1.
+
+### A. Fuentes de datos YA capturadas (reusables — "new analysis" no "new capture")
+
+Lo que Shipro ya persiste y que alimenta el scoring sin cambiar el schema:
+
+- **COSTO** — `FinanzasEnvio.costoCourierNativo` + `costoCourierCotizado` + `costoCourierFacturado` + `tarifaFullCotizada`
+  ([prisma/schema.prisma:692-748](../prisma/schema.prisma#L692-L748)). El ciclo "nativo → cotizado → facturado" está
+  completo. `costoCourierFacturado` lo escribe `/api/conciliacion` cuando el operador sube el Excel del courier
+  (DEUDAS-RESUELTAS.md commit `0b1f6b0`). **Alimenta `c_costo` + feedback de calibración**.
+  - **Gap**: nadie agrega todavía el **delta cotizado-vs-facturado por `(courier, zona)`** en forma de helper /
+    endpoint Torre. Es signal fuerte para ajustar el scoring (si Andreani cobra sistemáticamente 15% más que
+    cotizado en zona Patagonia, el scoring tiene que castigarlo). Classification: **PERSISTED BUT UNANALYZED**.
+
+- **TIEMPO REAL DE ENTREGA** — `Envio.fechaImpresion` → `Envio.fechaEntrega`
+  ([prisma/schema.prisma:904-906](../prisma/schema.prisma#L904-L906)), poblado por el cron rastreo
+  ([app/api/cron/rastreo/route.ts:107-112](../app/api/cron/rastreo/route.ts#L107-L112)) al transicionar a
+  `ENTREGADO`. **Alimenta `c_velocidad` + base de `c_sla`**.
+  - Nota de precisión: la timestamp es **wall-clock de ingesta Shipro** (cuando el cron corrió), no el instante
+    que el courier reportó. Para la mayoría de las dimensiones del scoring esto es suficiente; el **índice de
+    actualización de estado** (§3.0) sí requiere la timestamp courier-side (ver gap D).
+
+- **SECUENCIAS DE TRACKING** — `EventoTracking` ([prisma/schema.prisma:1003-1021](../prisma/schema.prisma#L1003-L1021))
+  persiste cada cambio de estado (`estado + estadoCrudoOriginal + observacion + fecha + envioId`). Hoy solo lo
+  consume la Métric 2.2 (`clasificarEfectividad` en
+  [lib/utils/efectividad-primera-visita.ts](../lib/utils/efectividad-primera-visita.ts)). **Gold mine
+  infraexplotado**: `% visitas fallidas`, tiempo entre eventos intermedios, patrones de retroceso, latencia
+  entre `EN_DISTRIBUCION` → `ENTREGADO`, etc. Classification: **PERSISTED BUT UNANALYZED**.
+
+- **PROMESA CALIBRADA** — [lib/utils/promesa-calibrada.ts:116-275](../lib/utils/promesa-calibrada.ts#L116-L275):
+  P75 por `(depósito, courier, provincia)` con fallback 4 niveles + umbral muestra ≥ 10 + ventana 90d. **Es el
+  patrón arquitectural del scoring** (§2) y **ya es consumible por `c_velocidad`** sin cambios.
+  - Granularidad actual: PROVINCIA. Zona finer bloqueado por DEUDA 46.
+
+- **NPS COMPRADOR** — `EncuestaNPS` ([prisma/schema.prisma:1184-1222](../prisma/schema.prisma#L1184-L1222)) con 7
+  dimensiones (`experienciaEntrega`, `slaCumplido`, `cpDestino`, `provincia`, `modalidad`, etc.). Alimentado por
+  `enviarMailEntregadoNPS` desde cron rastreo. Métric 5.1 ya expone. **Sub-componente de `c_sla` percibido**.
+
+- **CAPABILITY FLAGS** — `Courier.puedeEntregarSucursal/Domicilio/...` + `ServicioCourier.capacidadTecnicaMapeada`
+  ([prisma/schema.prisma:296-319, 398](../prisma/schema.prisma#L296-L319)). **Alimenta `c_capacidad` directo** +
+  la Capa 1 determinista (DEUDA 91 cerrada).
+
+### B. 🆕 Liquidaciones como fuente de datos (input Nacho 2026-10-08)
+
+**Observación de Nacho**: la UI de carga de liquidación YA EXISTE (`/api/conciliacion`) y la operación de Shipro
+ya mensualmente procesa el Excel que cada courier emite. **Hoy** captura (tarifa facturada + aforo + peso cobrado).
+**Lo que falta**: capturar la **ZONA DEL COURIER** — la columna del Excel donde el courier declara qué zona
+usó para facturar ese envío.
+
+**Por qué importa la zona del courier (y no solo la zona inferida del CP)**: cada courier tiene **sus propias
+zonas** operativas (su propio mapa comercial):
+- **Andreani**: ~6 zonas en todo el país.
+- **Mocis**: ~4 zonas en AMBA (su área de operación).
+- **Correo Argentino**: ~4 zonas en todo el país.
+- Cada courier futuro: su propio mapa.
+
+La zona que el courier usó para facturar es la **verdad operativa del courier** — es más precisa que una zona
+inferida por Shipro desde el CP, porque es la zona en la que el courier REALMENTE opera, con la que calcula sus
+tarifas y mide su propia performance. Dos envíos al mismo CP pueden terminar en zonas distintas según el courier
+(Andreani lo clasifica como "Interior 2", Correo Argentino como "Patagonia Norte") — y las dos clasificaciones
+son correctas, cada una desde su mapa.
+
+**Aporte al motor**:
+- La liquidación entrega la tupla `(tracking + tarifa facturada + zonaCourier + aforo facturado)` por envío real.
+- Esto alimenta: **COSTO POR ZONA REAL DEL COURIER** (`c_costo` calibrado por zona operativa, no inferida) +
+  **CONFIABILIDAD POR ZONA REAL** (cruzando `fechaEntrega` con `zonaCourier` → tiempo real por zona del courier).
+- Permite que el scoring compare apples-to-apples: "Andreani en su zona Interior 2 vs Correo Argentino en su
+  zona Patagonia Norte, para el mismo CP destino", porque cada uno se juzga en su propia unidad operativa.
+
+**Dependencia técnica**: **DEUDA 44 (ABIERTA)** — parser del Excel de liquidación + nuevo campo
+`Envio.zonaCourier String?`. Cada courier tiene su formato de columnas, por lo tanto el parser es
+courier-specific (normalizador por courier → columna "zona"). DEUDA 44 bloquea DEUDA 45 (comparación calibrada
+vs nominal) y es el input duro para la dimensión confiabilidad por zona del scoring.
+
+### C. 🆕 Hipótesis de volumen proporcional — método para la curva de confiabilidad (input Nacho 2026-10-08)
+
+**El problema**: la §5 define `c_sla(courier, zona, ventana) = f_demora_ponderada(courier, zona, volumen_en_ventana)`.
+Pero Shipro **no es el único player** que le da carga a un courier dado — Andreani también opera para Mercado
+Libre, Fravega, Garbarino, etc. Shipro **no conoce el volumen total diario del courier** — solo conoce **su propio
+volumen asignado**.
+
+**Hipótesis de Nacho**: la carga de Shipro es **proporcional** a la carga general del courier. Si Shipro le da
+el 10% del volumen mensual del courier en un mes de baja estacionalidad, le da **aproximadamente el 10%** en un
+mes de alta estacionalidad. Es decir: Shipro escala con el courier, no contraciclíca.
+
+**Consecuencia metodológica**: Shipro puede medir cómo performó el courier en los meses de **ALTO volumen propio**
+(que son proxy de alto volumen total del courier) vs los meses de **BAJO volumen propio** (proxy de bajo volumen
+total). Al observar la degradación del SLA cuando SU volumen crece, Shipro está infiriendo **la curva de capacidad
+real del courier** — cuántos paquetes puede absorber el courier antes de que su SLA empiece a degradar
+sistemáticamente.
+
+**Cálculo concreto** (método, no fórmula cerrada):
+1. Agregar `(courier, zona, mes, volumen_shipro, demora_real_promedio)` sobre el histórico.
+2. Normalizar el volumen de Shipro a su propio percentil mensual (ej. "mes p25 vs p75 vs p95" del propio Shipro).
+3. Observar la pendiente de demora vs volumen → curva empírica por `(courier, zona)`.
+4. Usar la curva en el scoring: dado `volumen_shipro_asignado_en_ventana + 1`, estimar la demora esperada.
+
+**Caveat explícito**: la proporcionalidad es una **HIPÓTESIS A VALIDAR** con datos reales. Puede no cumplirse si:
+- Shipro crece más rápido que el courier (su share aumenta → la proporcionalidad se rompe hacia arriba).
+- Alguno de los otros grandes del courier le pide una campaña puntual (su share baja → proporcionalidad se rompe
+  hacia abajo).
+- El courier re-dimensiona su capacidad (contrata flota, abre centro de distribución).
+
+Mitigación: el shadow mode (§2) permite comparar scoring con hipótesis vs selección real, y si la hipótesis falla
+sistemáticamente, revisarla antes de encender. Es "falsificable" por diseño.
+
+**Esto convierte un dato que Shipro NO tiene (volumen total del courier) en uno que SÍ tiene (su propio volumen
+en el tiempo)**. Es el **MÉTODO** de la curva de la §5 — sin él, la §5 queda formulada pero inimplementable.
+
+### D. Gaps de captura (lo que falta — clasificado)
+
+| Gap | Classification | Prerequisito/DEUDA | Day-1 priority |
+|---|---|---|---|
+| **Zona sub-provincial propia (ZonaLogistica)** | **MISSING** — no existe modelo | DEUDA 46 abierta | **ALTA** — bloquea granularidad zona de casi todo el scoring |
+| **Zona del courier (`Envio.zonaCourier`) desde Excel liquidación** | **MISSING** — campo no existe, parser no existe | DEUDA 44 abierta | **ALTA** — es la verdad operativa del courier (§B) |
+| **Volumen rolling por `(courier, zona, ventana)`** | **MISSING** — ningún agregado persistido ni cron | Nuevo cron/counter (no hay DEUDA registrada) | **CRÍTICA** — insumo de la curva §5+§C, cada día sin guardar es irrecuperable |
+| **Timestamp courier-reported (payload raw por evento)** | **MISSING** — los 6 adapters descartan el payload, solo guardan el estado traducido | Extender `CourierInterface.rastrear` (cross-chat Chat B) | **ALTA** si se activa índice §3.0; **MEDIA** si se difiere |
+| **MotorReglaShadowLog** (shadow mode log) | **MISSING** — no existe tabla | Decisión §8 abierta — mapear tabla + columnas | **CRÍTICA** — sin ella el motor en sombra no acumula la evidencia que justifica encenderlo |
+
+**Precedente para la captura del payload courier**: Mercado Libre Flex **sí persiste el payload raw**:
+`ShipmentFlex.payloadRaw Json` + `NotificacionFlex.payloadRaw Json`
+([prisma/schema.prisma:2292, 2367](../prisma/schema.prisma#L2292)). **El patrón existe en el codebase** — falta
+replicarlo al contrato de los adapters courier (`rastrear()` devuelve `String` hoy, debería devolver un objeto
+con `estado + payloadRaw + fechaReportada`).
+
+**Clasificación resumen**:
+- **MISSING / NEW CAPTURE** (schema o adapter nuevo): zona logística, zona courier, volumen rolling, shadow log,
+  timestamp courier-reported.
+- **PERSISTED BUT UNANALYZED / NEW ANALYSIS**: delta cotizado-vs-facturado por zona, secuencias EventoTracking
+  completas, `CotizacionSnapshot.opcionesSnapshotJson`, `MetricaCourierLatencia`, `AuditoriaCheckout` outcomes.
+
+### E. Reconciliaciones del blueprint (correcciones encontradas en el recon)
+
+1. **La Torre tiene 16 métricas**, no 14, organizadas en 5 bloques (ver `docs/TORRE-DE-CONTROL.md`). Ya corregido
+   en §1 (línea tabla fundación) + §6 (header "Cruce con las 16 métricas") + §9 (fila DEUDA 39).
+
+2. **`MetricaSLA.slaPromedioHs` guarda `avg Int`**
+   ([prisma/schema.prisma:1302-1318](../prisma/schema.prisma#L1302-L1318)) — mientras que `calcularPromesaCalibrada`
+   usa **P75** directamente ([lib/utils/promesa-calibrada.ts:116](../lib/utils/promesa-calibrada.ts#L116)).
+   **Inconsistencia entre niveles de fallback** (los niveles 1-2 son P75; el nivel 3 cae a avg). A resolver cuando
+   se construya Fase 4: recomputar `MetricaSLA` a P75 (+ P50 + muestra) o replantear la pirámide. Registrado como
+   decisión abierta técnica.
+
+3. **Dos ventanas distintas de "tiempo real de entrega"**:
+   - **`fechaImpresion → fechaEntrega`**: usada por `calcularPromesaCalibrada`. Incluye **tiempo en depósito del
+     cliente** (desde que imprime la etiqueta hasta que la entrega al courier) + tiempo del courier. Es la
+     "promesa al comprador" (el buyer ve en el checkout cuánto tarda total desde que compra).
+   - **`fechaColecta → fechaEntrega`**: usada por el cron `metricas-sla` ([app/api/cron/metricas-sla/route.ts](../app/api/cron/metricas-sla/route.ts)).
+     Solo tiempo del courier (desde que lo retira hasta que lo entrega). Es la "velocidad real del courier".
+
+   **El scoring debe elegir explícitamente cuál mide cada dimensión**:
+   - **`c_velocidad` (velocidad del courier)** → `fechaColecta → fechaEntrega` (es decisión sobre el courier).
+   - **"Promesa al comprador" (lo que ve el buyer)** → `fechaImpresion → fechaEntrega` (incluye tiempo depósito).
+
+   Registrar explícitamente en Fase 3 para que la implementación del helper `scoring.ts` sea no ambigua.
+
+### F. Prioridad DAY-1 (qué empezar a capturar YA para que la sombra tenga histórico)
+
+**CRÍTICAS** (cada día sin captura = histórico irrecuperable):
+1. **`MotorReglaShadowLog`** — tabla nueva con `(cotizacionSnapshotId, winnerActual, winnerShadow, scoreActual,
+   scoreShadow, wᵢ snapshot, cᵢ snapshots, createdAt)`. Sin ella el shadow mode (§2) corre pero no acumula
+   evidencia. **Prerequisito duro de Fase 3**.
+2. **Volumen rolling por `(courier, zona, ventana)`** — nuevo cron de agregación o `MetricaVolumenCourier` persisted
+   (col rolling counter). Prerequisito del método §C (curva volumen proporcional).
+3. **Timestamp courier-reported** (si se activa el índice de actualización §3.0) — extensión del contrato del
+   adapter (6 adapters a tocar, cross-chat Chat B). Si se difiere, también se difiere el índice.
+
+**ALTAS** (data ya existe, solo falta análisis):
+4. **Delta `costoCourierCotizado` vs `costoCourierFacturado` por `(courier, zona)`** — helper nuevo sobre data ya
+   persistida vía conciliación. Signal fuerte y accionable.
+5. **Secuencias EventoTracking agregadas** — más métricas derivadas (visitas fallidas, tiempo entre estados,
+   patrones de retroceso) de la data ya guardada. "New analysis", zero capture change.
+6. **`AuditoriaCheckout` outcomes** (Métric 1.3 pendiente) — cerrar el loop de calibración del auditor con la data
+   ya persistida.
+
+**MEDIAS** (consolidación DEUDAS zonas):
+7. **DEUDA 44** (zona courier liquidación) — es el input duro para que el scoring por zona del courier funcione.
+8. **DEUDA 46** (zona logística propia) — complemento para que Shipro infiera zonas antes de tener la del courier.
+9. **DEUDA 43** (SLA nominal por `(courier, zona)` en `SlaCourier`) — es el **Nivel 4** de fallback de `c_sla`
+   según §4; con `SlaCourier` precargado el scoring arranca con señal razonable incluso sin datos reales.
+
+---
 
 - **Hoy (2026-10-08)**: FASE 1 completa. Blueprint consolidado. Zero código.
 - **Pre-primer-cliente**: FASE 2 + FASE 3 construidas, scoring en sombra loguea sin afectar selección. Reglas

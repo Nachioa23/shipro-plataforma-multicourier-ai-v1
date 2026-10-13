@@ -1,147 +1,180 @@
 # Roadmap Unificado — Shipro 2.0
 
-> **Documento operativo único.** Fecha: 2026-10-05. **META:** primer cliente real operando antes del **31-oct-2026** (~4 semanas).
-> **Fuente de verdad detallada:** `DEUDAS.md` (abiertas) + `DEUDAS-RESUELTAS.md` (histórico, verbatim). Este board **CRUZA**, no reemplaza.
+> **Documento operativo único — living map, no session log.** Reescrito 2026-10-13 verificado contra código (post drift sweep).
+> **Fuente de verdad detallada:** `DEUDAS.md` (abiertas) + `DEUDAS-RESUELTAS.md` (histórico). Este board **cruza**, no reemplaza.
+> **El código es la fuente de verdad.** Si el registry y el código disienten, gana el código.
 
 ---
 
-## Estado general (2026-10-08)
+## META
 
-En prod hoy: **motor de plata FASE 1 rama-aware** (cascada intermediario+Shipro, SMO, Fee, IVA una vez; débito rama-aware) · **modelo de crédito etapa 1** (colchón PREPAGO funcional + editor post-onboarding con audit, DEUDAS 174/175/176) · **MEF Fases 1+2** (OAuth ML + ruteo por zonas, DEUDA 180) · **hub de conexiones** 5 piezas (DEUDA 150) · **consola de tarifa unificada** (DEUDA 170, 4 pantallas viejas jubiladas DEUDA 179) · **tripleta first-mile genérica** (DEUDA 182) · **Intralog Fase 1** activo · **WooCommerce** end-to-end validado · **ownership gates** cerrados en rastreo-manual (DEUDA 126) y métricas cross-tenant (DEUDA 7) · **✅ DEUDA 185 cross-tenant Direccion RESUELTA Y VERIFICADA EN PROD 2026-10-08** (4 etapas: modelo ContactoEmpresa + write + read scoped + LGPD opción B) · **✅ DEUDA 96 recuperación de contraseña RESUELTA Y VERIFICADA EN PROD 2026-10-08** (2 piezas: reset flow con token single-use 2h + invalidación de sesión OWASP; cierra DEUDA 69 audit `password_reset`).
+Objetivo: **primer cliente real operando lo antes posible, con la plataforma probada bajo carga.**
 
-**Lo que falta para el primer cliente real** (actualizado 2026-10-08 — 2 de 4 bloqueantes de Capa 0 cerrados): **169 Fix B** "la venta nunca se pierde" (Fix A ya en prod; Fix B es la degradación a `BLOQUEADO_COURIER_AUSENTE` — decisión producto pendiente, posible bajada a post-cliente) · **108** server viejo de Fran sin firewall (acción externa Nacho→Fran) · cablear credenciales reales de Correo Argentino y el entorno de pruebas de Andreani · pasar el test de estrés mínimo.
+El objetivo original (31-oct-2026) quedó atrás; la nueva ventana la fija Nacho según cuándo caiga el único bloqueante grande vivo (138 Fases B/C/D, stress-test) + la QA de couriers con credenciales reales. Shipro arranca con el primer cliente **sin ML**, **sin homologación formal Tiendanube**, **sin motor de reglas encendido** — todo eso es carril paralelo o post-cliente por diseño.
 
-**4 chats activos en paralelo**: Chat A (núcleo), Chat B (couriers), Chat C (plugins/API externa), Chat D (MEF/ML).
-
----
-
-## Los 4 chats (territorios)
-
-- **Chat A — Núcleo.** `lib/cotizador.ts`, `lib/envios/crear.ts|dispatch.ts|procesar-bloqueados-*.ts`, `prisma/schema.prisma` + migraciones, motor de precios/crédito, cascada de markup, hub de conexiones (`Conexion` + `TokenSetupApiKey`), `lib/auth-context.ts` + `proxy.ts`, APIs admin de tarifa (`admin/consola-tarifa` + `admin/markup-*` + `admin/smo-courier` + `admin/finanzas`), modelos de datos. **Corre las migraciones** en cada deploy.
-- **Chat B — Couriers / Integraciones.** `lib/couriers/*Adapter.ts` + `CourierFactory` + `CourierInterface` + `serviciosSoportados` + `normalizar-courier`, app Tiendanube (`lib/tiendanube/*`, `app/api/tiendanube/*`), empaquetado (`lib/empaquetado/*`, `armarBultoApilado`), SMO per-courier operativo.
-- **Chat C — Plugins / API externa / Docs.** Plugin WooCommerce (repo `shipro-woocommerce`), plugins futuros (Shopify / VTEX / Magento / PrestaShop), contrato OpenAPI (`docs/shipro-api-v1.openapi.yaml`), documentación externa (`docs/shipro-api-v1.html`), homologación Tiendanube.
-- **Chat D — MEF / Mercado Libre.** DEUDA 180 Fases 3+ (enriquecimiento, tracking downstream, excepciones, etiqueta ML), wiring de los 2 crons MEF, handshake webhook real ML.
+Visión que ancla cada decisión: **Shipro es una plataforma de datos.** Toda cotización, débito, cambio de estado, liquidación, evento del comprador final — alimenta el motor que diferencia a Shipro de las agregadoras logísticas convencionales. Lo que no se captura día 1 es histórico irrecuperable.
 
 ---
 
-## CAMINO AL PRIMER CLIENTE (antes del 31-oct) — por capas
+## ESTADO REAL POR CHAT (verificado contra código, 2026-10-13)
 
-### CAPA 0 — Bloqueantes DUROS (sin esto NO se onboardea)
+### CHAT A — Núcleo
 
-**Progreso 2026-10-08**: **2 de 4 cerrados** ✅ + **1 diferido** (169 Fix B → post-cliente). Queda **1 bloqueante vivo**: 108 (acción externa).
+**Pre-cliente de núcleo prácticamente despejado.** Lo money-critical ya aguanta:
 
-| DEUDA | Qué | Chat | Tipo | Estado |
-|---|---|---|---|---|
-| ~~**185**~~ | ~~Leak cross-tenant contactos~~ | Chat A | — | ✅ **RESUELTA EN PROD 2026-10-08** (4 etapas: modelo ContactoEmpresa + write + read scoped + LGPD opción B; verificado "Astelarra" aislado por acceso). Ver DEUDAS-RESUELTAS.md |
-| ~~**96**~~ | ~~Recuperación de contraseña~~ | Chat A | — | ✅ **RESUELTA EN PROD 2026-10-08** (2 piezas: reset flow + invalidación sesión OWASP; cierra DEUDA 69). Ver DEUDAS-RESUELTAS.md |
-| ~~**169 Fix B**~~ | ~~"La venta nunca se pierde"~~ | Chat A + Chat C | — | ⏭ **DIFERIDO POST-CLIENTE (Nacho 2026-10-08)**: Fix A en prod ya cumple contrato no-5xx; Fix B (~9-13h) es robustez de lujo no bloqueante para onboarding controlado. Se retoma post primer cliente si el volumen de plugins con couriers mal formateados lo justifica. |
-| **108** | Server viejo (beta.shipro.pro) sin firewall + 5 clientes reales + logs con ataques SSH | EXTERNO (Nacho → Fran) | acción admin | **ABIERTA** — bloquea onboarding sobre superficie expuesta |
+- ✅ **DEUDA 185** cross-tenant Direccion — en prod 2026-10-08, 4 etapas (modelo `ContactoEmpresa` + write en `crear.ts` + read scoped en `/api/directorio` + LGPD opción B). Verificado con prueba Astelarra.
+- ✅ **DEUDA 96** recuperación de contraseña — en prod 2026-10-08, 2 piezas (reset flow con token single-use 2h + invalidación de sesión OWASP via `passwordChangedAt`). Cierra **DEUDA 69** (audit `password_reset`).
+- ✅ **DEUDA 138 Fase A** — en prod 2026-10-08: **DEUDA 131** (idempotencia atómica con catch `P2002`, commit `2e7e80f`) + **DEUDA 136** (saldo con decremento atómico `{increment}`/`{decrement}` en los 3 writers: `crear.ts` + `/admin/finanzas` + `conciliacion`, commit `206646b`). Lost-update bajo concurrencia cerrado.
+- ✅ **DEUDA 186** motor de reglas + scoring — **blueprint maestro completo** (`docs/BLUEPRINT-MOTOR-REGLAS.md`, 10 secciones incluyendo §10 arquitectura de datos del scoring). Fase 1 diseño cerrada; Fases 2+3 pre-cliente (construcción oculta/shadow mode), Fase 4 post-datos.
+- ✅ **Backlog reconciliado** 2026-10-13 — drift sweep encontró ~9 drifts: 133+144 enteras a RESUELTAS; 36.E Fase 4c/d y 138 Fase A marcadas hechas; status corregido en 39/111/104/130/143/180.
 
-### CAPA 1 — Cobertura de couriers que el cliente va a usar
+### CHAT B — Couriers / Adapters
 
-| DEUDA | Qué | Chat | Depende de |
-|---|---|---|---|
-| **171** | Correo Argentino: 2 bugs pendientes en adapter | Chat B | credenciales + agreement de QA que consigue Nacho (MiCorreo + Paq.ar son 2 cuentas distintas) |
-| **147** | Switch sandbox / producción ausente en AndreaniAdapter (y Mocis) — credenciales de test fallan auth porque el adapter pega siempre a prod | Chat B | credenciales de test de Andreani que consigue Nacho |
+- ✅ **Andreani, Mocis, Intralog** validados e2e en prod. Fase 1 Intralog activa.
+- 🟡 **DEUDA 171** Correo Argentino 2 bugs (Bearer JWT auth + sucursales por provincia con fallback) — **CÓDIGO COMPLETO**, QA pendiente. Nacho ya consiguió credenciales testing + prod.
+- 🟡 **DEUDA 147** switch sandbox/prod Andreani (+ Mocis) — **CÓDIGO COMPLETO** 2026-10-08 (commit `54b1f35`). QA pendiente con credenciales testing que Nacho ya tiene.
+- ⬜ **OCA, Hop Envíos**: adapters construidos, nunca validados e2e por falta de credenciales.
+- ⬜ **DEUDA 165** Hop inconsistencia BD↔registry (sucursal/retiro/drop-off).
+- 🟡 **Pendiente César (Intralog)**: política de `tracking_transporte` con otros couriers (multi-recolector Fase 2 — **DEUDA 167**).
 
-### CAPA 2 — Test de estrés (el "auto a fondo", DESPUÉS de capa 0 + capa 1)
+### CHAT C — Plugins / Tiendanube / WooCommerce
 
-| DEUDA | Qué | Chat |
-|---|---|---|
-| **138** | Escalabilidad y stress-test de BD, APIs y código bajo alta concurrencia | Chat B lidera (toca despachos) + Chat A acompaña (schema + lecturas) |
-| **131** | Race condition en idempotency check de `POST /api/envios` | Chat A (acompaña a 138) |
-| **136** | Verificación de que el bloqueo por saldo negativo se dispara bajo concurrencia (no es pérdida de plata, es confirmar que el bloqueo activa correctamente post-colisión) | Chat A (acompaña a 138) |
+- ✅ **DEUDA 133** webhooks privacidad LGPD (4 handlers + HMAC centralizado) — RESUELTA 2026-10-13 (código completo, QA homologación pendiente, no bloquea).
+- ✅ **DEUDA 144** rates callback Tiendanube (endpoint 300+ líneas + labels generate/cancel/download/admin-link + modelo `TiendaTiendanube` + Modo B wired + `CotizacionSnapshot` persistido) — RESUELTA 2026-10-13.
+- ✅ **Install OAuth Tiendanube** completo (`install/link` + `oauth/callback` + `/tiendanube/instalado`).
+- ✅ **WooCommerce** end-to-end validado en prod.
+- 🟡 **DEUDA 130** homologación Tiendanube (paraguas) — PARCIAL. Piezas pendientes conocidas:
+  - Máquina de estados de labels.
+  - Tracking cap + carrier override.
+  - `/generate` validación e2e.
+  - Reunión de validación formal con Tiendanube (+ Nimbus+Nexo UI si aplica + NubeSDK si aplica).
+- ⬜ **DEUDA 104 OUT** webhooks salientes genéricos Shipro→e-commerce — AUSENTE (grep `model Webhook` + dispatcher = cero). Único OUT existente es `lib/tiendanube/tracking-map.ts` específico a Tiendanube FFO.
 
-### CAPA 3 — Importantes pre-cliente (deberían estar, no estrictamente bloqueantes)
+### CHAT D — MEF (Mercado Envíos Flex)
 
-| DEUDA | Qué | Chat |
-|---|---|---|
-| **125** | Hardening alta `CredencialCourier` — exigir `propietarioTipo` en Rama A (deploy FASE 2 mordió esto) | Chat A |
-| **99** | Regla "Provincia de Destino" opción muerta en motor (bug silencioso) | Chat A |
-| **100** | Operador "ENTRE" opción muerta en motor (bug silencioso) | Chat A |
-| **71** | Guardar credenciales de courier al finalizar wizard — hoy paso 4 activa couriers sin persistir credenciales | Chat B |
-| **173** | `estadoActual` String libre sin centralizar — prerequisito de plugins externos y UX consistente | cross-chat (A+B+C) |
-
----
-
-## EN PARALELO (cada chat su carril — NO bloquean el primer cliente)
-
-**Chat D** — MEF Fases 3+: enriquecimiento del shipment ML, tracking downstream, excepciones, etiqueta ML, wiring de 2 crons MEF (`mef-sincronizar-zonas` + `mef-procesar-notificaciones`), handshake webhook real. Esperando entorno Flex real para validar el shape del payload. Ver DEUDA 180 (Fases 1+2 en RESUELTAS).
-
-**Chat C** — Plugins / Tiendanube / WooCommerce: DEUDA 130 (spec Tiendanube + **PARCIAL paraguas** — código de sub-piezas completo, falta homologación formal con Tiendanube; actualizado 2026-10-13), DEUDA 104 (webhooks salientes Shipro → e-commerce — **PARCIAL**: mitad IN completa, mitad OUT ausente; actualizado 2026-10-13), DEUDA 103 (modelo multi-bulto en API). DEUDAs ya cerradas por drift sweep: 133 (webhooks privacidad LGPD) + 144 (rates callback Tiendanube) → ambas RESUELTAS EN PROD 2026-10-13, código completo con QA de homologación pendiente (no bloquea). DEUDA 129 (resiliencia checkout: circuit breaker + fallback rates) — RESUELTA 2026-08-05.
-
-**PUEDE ESPERAR (post primer cliente)**:
-- Métricas / Torre: 39 (métricas restantes), 43-48 (zonas/SLA), 56, 57, 61, 62, 65, 161, 162.
-- Modelo de crédito etapa 2: **181** (vencimientos POSTPAGO — obra de diseño+desarrollo).
-- Guardarraíl de edición: **183** (tope suave fat-finger `limiteDescubierto`).
-- Producto grande: 42 (estacionalidad operativa), 110 (optimización logística), 111 (inteligencia checkout).
-- UI/UX menor: 54, 55, 59, 60, 80, 82, 83, 86 (typo "dias"), 90, 102, 115, 117, 120, 162.
-- Limpieza: 160 batches restantes (smo* legacy + rewire de `requiereSeguro` + decisión 163 sobre `quiereSeguroCourier`).
-- Couriers menores: 13 (QR Mocis en etiqueta Andreani), 95 (couriers mixtos por depósito), 163 (seguro courier activable), 165 (Hop sucursal/retiro/drop-off), 167 (multi-recolector Intralog Fase 2), 168 (política sub-etiqueta), 177 (Rama A↔B formato credenciales).
+- ✅ **DEUDA 180 Fases 1+2** en prod (OAuth ML + ruteo por zonas, Fase 1 commit → RESUELTAS 2026-09-21, Fase 2 → 2026-09-24).
+- ✅ **Extracción defensiva del payload ML** (`lib/mercadolibre/crear-envio-flex.ts:61-203` con `ReceiverAddressLike` + `payloadRaw`).
+- 🟡 **Crons MEF** (`mef-sincronizar-zonas` + `mef-procesar-notificaciones`): rutas existen, NO wireadas en el crontab del server (bucket de 5 no-wireados).
+- ⬜ **Fase 3** (etiqueta compuesta + entrega al courier downstream + tracking) — **BLOQUEADA**: requiere cuenta ML real con reputación verde. Shipro arranca el primer cliente **sin ML**, no bloquea.
+- ⬜ **Handshake webhook real de ML** — sandbox impracticable, se valida con primer webhook real.
 
 ---
 
-## El portón (recordatorio de disciplina)
+## LO QUE BLOQUEA EL PRIMER CLIENTE (lista corta y honesta)
 
-- **Todo lo money-critical**: recon → diseño → revisión Nacho → deploy gated con foto forense. El motor de precios (`cotizador.ts` / `crear.ts` cascada / `aplicarMarkup`) **no se toca sin cuidado extremo** — un rename mal cascadeado rompe facturación en silencio (ver DEUDA 158 para el patrón `@map` validado y DEUDA 156 fallout como aviso).
-- **Multi-chat**: cada chat su territorio; los cruces (**169** Fix B, **173** estados centralizados, **103** multi-bulto, **104** webhooks salientes, **150** absorción Tiendanube al modelo `Conexion`) se coordinan explícitamente; **ningún chat deploya trabajo de otro chat sin su OK**.
-- **Convención money-safe**: para cambios money-adjacent, **nunca en lote** — uno por sesión con verificación empírica (patrón validado en la campaña de renames DEUDA 158 + la política de débito DEUDA 174).
+1. **[[DEUDA 138]] Fases B/C/D — stress-test real.**
+   - Fase B: generador de carga (k6 / Artillery / script custom; decisión al arrancar). Chat B lidera.
+   - Fase C: métricas + instrumentación (Chat A acompaña — counters/timers sobre `crear.ts` + saldos; Chat B instrumenta adapters).
+   - Fase D: ejecución contra staging + análisis + registro de hallazgos (probablemente generen nuevas deudas de optimización).
+   - **Única obra GRANDE realmente bloqueante.**
+   - Pre-requisito operativo: **Nacho arma la BD de operaciones** (dataset realista: compradores, CPs, pesos, dims, couriers, modalidades, orígenes) para disparar la carga.
+
+2. **QA de couriers reales con credenciales nuevas.**
+   - **DEUDA 171** Correo Argentino — código completo, validar e2e cotizar/despachar/rastrear con credenciales testing+prod que Nacho consiguió.
+   - **DEUDA 147** switch sandbox Andreani (+Mocis) — código completo, validar con credenciales testing que Nacho ya tiene.
+   - No es obra grande, es validación — bloquea el onboarding real porque sin couriers probados contra sus propios ambientes QA no hay confianza para producción.
+
+3. **[[DEUDA 108]] server viejo** — acción externa Nacho↔Fran (Cloud Firewall al server viejo). Baja 1-nov coordinada. No es código.
+
+**Todo lo demás** (motor de reglas 186, MEF Fase 3, homologación formal Tiendanube, estados centralizados 50+173, Torre completa, modelo de crédito etapa 2) es **POST-cliente** o **carril paralelo que no frena el primer onboarding**.
 
 ---
 
-## Reparto de las 4 semanas (quién hace qué)
+## CARRILES PARALELOS (no bloquean el primer cliente — avanzan por chat)
 
-- **Chat A** — Núcleo:
-  - **185** (leak cross-tenant Direccion) — diseño de dos capas (física global + `ContactoEmpresa` por empresa) + recon de callers de `prisma.direccion.*` + migración aditiva + refactor `crear.ts` upsert + refactor `/api/directorio` + refactor wizard autocomplete + verificación empírica (replicar prueba Astelarra). **Prioridad #1.**
-  - **96** (recuperación de contraseña) — flujo de reset con token single-use + email + UI + rate-limit. **Prioridad #2.**
-  - Acompaña Fix B de **169** en lo que toca `crear.ts` (shape del estado bloqueado hacia plugins — coordinar con Chat C).
-  - Acompaña **138** stress-test (lecturas de schema + `$transaction` en el update de saldo).
-  - Como bonus si queda tiempo: **125** + **99** + **100** (bugs chicos de capa 3 que son self-contained).
+Estos corren en paralelo al camino crítico. Cada chat decide velocidad según su bandwidth.
 
-- **Chat B** — Couriers:
-  - **171** (Correo Argentino 2 bugs) + verificación e2e cuando lleguen credenciales de Nacho.
-  - **147** (switch sandbox Andreani+Mocis) — fix de entorno para que las credenciales de test de Andreani funcionen contra sandbox real.
-  - **169 Fix B** mitad del adapter: shape del response cuando el courier no resuelve en el momento.
-  - **138** liderar stress-test: perfil de carga realista (crear + cotizar + dispatch concurrentes), detectar hot-spots.
-  - Si queda aire: **71** (guardar credenciales al finalizar wizard).
+- **Motor de reglas + scoring** (**DEUDA 186**, Chat A). Fase 1 diseño cerrada (blueprint). Fases 2+3 construibles ya (reglas ricas + scoring en sombra) sin esperar datos — zero data dependency, cae a cheapest/fastest con fallback escalonado. Fase 4 encendido cuando el histórico post-primer-cliente tenga umbral.
+- **Captura de datos del motor** (dentro de 186 §10 — nothing-discarded principle). Day-1 raw capture: `EventoTracking.payloadRaw`, `WebhookTiendanubeRaw`, `ConciliacionRun.rawFile`, `MotorReglaShadowLog`, volumen rolling. **Alimenta la Torre y el motor** desde el día 1.
+- **Torre de Control** (**DEUDA 39**, Chat A). PARCIAL: **11/16 métricas completas** 3-of-3 (endpoint + helper + UI card); 1 parcial (1.5 Velocidad Resolución Tickets); 4 MISSING: 1.3 Eficiencia Auditor, 4.2 Salud Couriers, 4.3 Cobertura Postal, 4.4 Salud Financiera. UI integral existe (`torre-de-control/page.tsx`, 3322 líneas). La captura de datos del motor amplía esta Torre.
+- **Plugins / homologación Tiendanube** (**DEUDA 130** paraguas + **DEUDA 104 OUT**, Chat C).
+- **MEF Fase 3+** (**DEUDA 180**, Chat D).
+- **Multi-bulto** (**DEUDA 139 / 142 / 143**, Chat B). 143 Modo B casi completo (consumer en rates wired, falta UI config); Modo A greenfield.
+- **Cluster zonas operativas** (**43 / 44 / 45 / 46 / 48 / 49**, Chat A). Cimiento del scoring por zona real — POST-cliente (motor arranca con fallback a provincia).
 
-- **Chat C** — Plugins:
-  - Pulido final del plugin WooCommerce (DEUDAS 145 timeout vuelve a 5s cuando latencia núcleo < 5s; HMAC si se agrega a `/rastreo-publico`).
-  - **169 Fix B** mitad plugins: cómo WooCommerce (y plugins futuros) manejan el nuevo estado bloqueado sin sorpresas.
-  - Avance progresivo en Tiendanube Momento 3 (tracking-events salientes vía DEUDA 104 OUT) — labels y rates callback ya cerrados por DEUDA 144 (RESUELTA 2026-10-13).
+---
 
-- **Chat D** — MEF:
-  - Fases 3+ cuando Flex real responda. Wiring de los 2 crons MEF en crontab del server coordinado con Chat A (deploy).
-  - Si Flex sigue sin shape → avance en roadmap técnico sin bloquear el primer cliente (que arrancará sin ML).
+## PORTFOLIO REAL — ~11 OBRAS GRANDES ABIERTAS (post drift sweep 2026-10-13)
 
+El inventario anterior listaba ~20; el drift sweep contra código bajó la cifra real a ~11. El resto son PARCIAL con progreso significativo o se desdoblaron en RESUELTAS por `make`.
+
+### CHAT A — Núcleo (8 obras)
+
+- **186** motor de reglas + scoring (diseñado, Fase 1 cerrada; construcción oculta Fases 2+3).
+- **39** Torre de Control (11/16 completas; faltan 1.3, 4.2, 4.3, 4.4 + 1.5 partial).
+- **181** vencimientos POSTPAGO (etapa 2 modelo crédito — obra de diseño+desarrollo).
+- **173 + 50** estados centralizados String→enum + separación 2 planos (sibling; se ejecutan juntas).
+- **42** modelo estacionalidad operativa (`EventoComercial` + alertas pre-evento).
+- **56** fuga vs red completa (Métrica 3.2 Nivel 2 — cotización paralela contra todos los couriers).
+- **111** captura checkout (PARCIAL — 1 writer en rates callback existe; falta `/api/cotizar` + wiring `usadaEnEnvioId`).
+- **36.E** Fase 5 (couriers huérfanos tras cambio de recolector).
+
+### CHAT B — Couriers (4 obras)
+
+- **138** Fases B/C/D stress-test (**ÚNICA bloqueante del primer cliente**).
+- **139** multi-bulto base arquitectónica (foundations hechas; adapters single-bulto todavía).
+- **142** molde multi-bulto (4 escalones en main; Paso 2 adapters emitir N trackings pendiente).
+- **143** motor empaquetado (Modo B casi completo — falta UI config; Modo A greenfield).
+- **95** couriers mixtos por depósito (diseño pendiente — POST-cliente).
+
+### CHAT C — Plugins (3 obras)
+
+- **130** homologación Tiendanube (paraguas PARCIAL — máquina estados labels + tracking cap/override + /generate e2e + reunión validación).
+- **104 OUT** webhooks salientes genéricos (modelo `Webhook` + dispatcher + firma HMAC + reintentos + UI).
+- **103** multi-bulto completo 3 capas (motor reglas + N envíos + agrupación bajo pedido).
+
+### CHAT D — MEF (1 obra)
+
+- **180 Fase 3+** enriquecimiento + tracking downstream + excepciones + etiqueta ML + handshake webhook real + wiring crons.
+
+### CROSS-CUTTING (cluster zonas, 1 obra consolidada)
+
+- **43 + 44 + 45 + 46 + 48 + 49** zonas operativas reales. Encadenadas: 44 bloquea 43+45+46; 48 standalone; 49 PARCIAL (code normalizer done). Alimenta DEUDA 186 Fase 4. POST-primer-cliente.
+
+### UNREGISTERED detectada en recon (2026-10-08)
+
+**"Captura total de datos de entrada / day-1 raw capture"** — agrupa `EventoTracking.payloadRaw`, `WebhookTiendanubeRaw`, `ConciliacionRun.rawFile`, `MotorReglaShadowLog`, volumen rolling por `(courier, zona, ventana)`, extensión contrato `CourierInterface.rastrear`. Hoy sus piezas viven dispersas dentro de 186 §10 + 180 + 58 + 111. Decisión pendiente Nacho: ¿consolidar como DEUDA maestra o dejar dispersa?
+
+---
+
+## REPARTO SUGERIDO PRÓXIMO TRAMO
+
+- **Chat B** (camino crítico): **138 Fase B** (generador de carga) + **QA Correo Argentino (171) + Andreani sandbox (147)** con credenciales que Nacho ya consiguió. Este es el carril que define cuándo arranca el primer cliente.
+- **Chat A** (decisión Nacho): o **empujar el diferencial** (**186** Fase 2+3 — reglas ricas + scoring en sombra; **39** completar las 4 métricas faltantes como cimiento de datos del scoring), **o acompañar el camino crítico** (**138 Fase C** instrumentación sobre `crear.ts`+saldos). No ambas a la vez; una sesión = una obra.
+- **Chat C**: **130 homologación** (3 piezas parciales: máquina estados labels + tracking cap/override + `/generate` validación e2e) + **104 OUT** (empezar diseño del modelo `Webhook` genérico — es el gap más grande para plugins futuros).
+- **Chat D**: **MEF Fase 3** cuando llegue cuenta ML real con reputación verde. Mientras tanto, avance en roadmap técnico sin bloquear.
 - **Nacho** (no-código):
-  - Avisar a Fran para aplicar Cloud Firewall al server viejo (**108**). Confirmación con captura.
-  - Conseguir credenciales de **Correo Argentino** (MiCorreo + Paq.ar) + agreement QA — habilita Chat B para 171.
-  - Conseguir credenciales de **test de Andreani** — habilita Chat B para 147.
-  - Validar UX en el browser (dev server) a medida que Chat A/B/C vayan bajando piezas de capa 0 y 1.
-  - Diseño de producto en 185: confirmar la forma final de `ContactoEmpresa` + política de autocomplete cross-empresa (ver matiz de diseño en el body de la deuda).
+  - BD de operaciones realista para el stress-test (138).
+  - Confirmar credenciales restantes OCA + Hop para activar e2e Chat B.
+  - Avisar a Fran para Cloud Firewall al server viejo (108).
+  - Decidir foco Chat A próxima sesión (diferencial vs camino crítico).
+  - Decisión pendiente: ¿consolidar "captura total raw" como DEUDA maestra?
 
 ---
 
-## Drift reconciliado (2026-10-05)
+## DISCIPLINA (aprendizaje de la sesión 2026-10-13 — anti-drift)
 
-Nota: **8 deudas movidas a RESUELTAS tras cruzar backlog vs código/prod** en dos batches de reconciliación (2026-10-05):
-- Batch 1 (commit `09a1b32`): DEUDAS **126** · **175** · **176** · **179** — en prod via `c1f88a1`.
-- Batch 2 (commit `b6accfa`): DEUDAS **153** · **156** · **158** · **159** — en prod via commits `ac441c6` · `065a403` · campaña `a8cda53`→`14407dc` · `93fc4bf`.
+El backlog acumula **DRIFT** cuando un chat cierra trabajo sin mover la deuda a `RESUELTAS.md`. El recon code-vs-registry de 2026-10-13 encontró ~9 drifts:
 
-El backlog ahora refleja prod. **Pendientes de verificación empírica (no código)**: DEUDAS **121** (destrabe BLOQUEADO_CREDENCIAL vía API) y **136** (bloqueo saldo negativo bajo concurrencia). **Bugs reales abiertos confirmados en código**: **99** (PROVINCIA_DESTINO motor) · **100** (operador ENTRE motor) · **86** (typo "dias" Torre).
+- **Enteros**: DEUDA 133 (LGPD TN) + DEUDA 144 (rates callback TN) → ambas estaban "ABIERTAS" en el registry pero el código mostraba las piezas en main con commits dedicados.
+- **Piezas**: DEUDA 36.E Fase 4c/d (commit `1f0e044`) + DEUDA 138 Fase A (commits `2e7e80f`/`206646b`/`ef6f4a4`) → estaban marcadas "⬜ PENDIENTE" aunque habían deployado.
+- **Status stale**: DEUDA 39 (decía "avanzada", el código muestra 11/16+1 parcial+4 missing) + DEUDA 111 (ignoraba el writer ya existente en rates callback) + DEUDA 104 (ignoraba que mitad IN estaba completa) + DEUDA 130 (paraguas no reflejaba que las sub-piezas estaban hechas) + DEUDA 143 (ignoraba Modo B consumer wired) + DEUDA 180 (listaba pieza (1) extracción defensiva como pendiente, ya en código).
+
+**Regla operativa** (incorporar al runbook de cada chat):
+
+1. **Cada chat mueve su deuda a `RESUELTAS.md` al deployarla** — no solo commitea el código.
+2. Cuando una pieza grande cierra sin cerrar la obra padre (ej. Fase A de 138), **marcar la pieza en el body de la obra padre** con ✅ + commit + fecha en vez de dejar "⬜ PENDIENTE".
+3. **La fuente de verdad es el código**. Si el registry dice "abierta" y el código muestra la feature en main, gana el código. Hacer drift sweep code-vs-registry **al cierre de cada tramo grande** (post-deploy de un batch, post-prod de una obra, cuando se abre un tramo nuevo).
+4. **Commits que cierran deuda incluyen una línea `cierra [[DEUDA ###]]`** en el mensaje. Facilita el sweep ex-post.
+
+Esta sesión aplicó la regla retroactivamente — el próximo sweep debería encontrar cero drift si cada chat la cumple en adelante.
 
 ---
 
-## Histórico (breve)
+## PRINCIPIOS DE EJECUCIÓN
 
-Qué resolvió el proyecto, en orden grueso (ver `DEUDAS-RESUELTAS.md` para el detalle verbatim):
-
-1. **FASE 1 — Motor de plata rama-aware** (deploy prod 2026-07-30, commit `b11f7f8`): fórmula cascada intermediario+Shipro, SMO por courier, Fee neto, IVA una vez al final, débito rama-aware, conciliación aforo↔virtual con snapshot + undo, dos-vías de liquidación. DEUDAS 73/107/10/79/75.
-2. **Config-variables + consola de tarifa** (2026-07-31 → 2026-09-11): tablas de vigencia (`MarkupShiproVigencia`, `SmoCourier`, `OperacionFee`, `MarkupIntermediarioCourier`) + patrón "cerrar+crear" para config editable sin deploy + consola unificada Shipro-only. DEUDAS 157/170 + jubilación de las 4 UIs viejas (179).
-3. **Hub de conexiones** (2026-09-06 → 2026-09-11): 5 piezas en prod — modelo `Conexion` + flujo API Key Opción A + vista/registro manual + registro auto Tiendanube + mandar plugin desde el hub. DEUDA 150.
-4. **Modelo de crédito ETAPA 1** (2026-09-29): colchón `limiteDescubierto` funcional en PREPAGO + editor post-onboarding de `modalidadPago` + `limiteDescubierto` con audit formal. DEUDAS 174/175/176.
-5. **MEF (Mercado Envíos Flex) Fases 1+2** (2026-09-21 + 2026-09-24): data model ML + OAuth + librería de tokens + webhooks + ruteo por zonas + anti-starvation. DEUDA 180.
-6. **Tripleta first-mile genérica** (2026-09-30): contrato `ICourierIntegrator.vincularRecoleccion?` + MocisAdapter encapsula rol recolector + mapa entregador→endpoint + cutover `dispatch.ts` al modelo ancla-primero + recolector best-effort. DEUDA 182.
-7. **Hardening de seguridad** (2026-10-01): ownership gate en `/api/envios/rastreo-manual` + email del destinatario en la ficha. DEUDA 126.
-8. **(Ahora)** **Camino al primer cliente real** — este roadmap.
+- **Money-critical**: recon → diseño → revisión Nacho → deploy gated con foto forense. El motor de precios (`cotizador.ts` / `crear.ts` cascada / `aplicarMarkup`) no se toca sin cuidado extremo — un rename mal cascadeado rompe facturación en silencio (ver DEUDA 158 para el patrón `@map` validado y DEUDA 156 fallout como aviso).
+- **Multi-chat**: cada chat su territorio; los cruces (**173** estados centralizados, **103** multi-bulto, **104** webhooks salientes, **138** stress-test, **186** motor de reglas) se coordinan explícitamente; **ningún chat deploya trabajo de otro chat sin su OK**.
+- **Money-safe en lote**: nunca en lote money-adjacent — uno por sesión con verificación empírica (patrón validado en DEUDA 158 renames + DEUDA 174 política de débito).
+- **"El cliente vende siempre"** (Nacho): el failover técnico de DEUDA 129 ya cubre el caso; mantener la invariante en cualquier cambio de `cotizador.ts` / `crear.ts` / `dispatch.ts`.
+- **Shipro = plataforma de datos**: toda feature nueva se pregunta "¿qué dato captura esto que el motor va a querer después?" Captura raw primero, parseá después (patrón ML Flex `payloadRaw`).

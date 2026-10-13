@@ -120,6 +120,13 @@ export default function TorreDeControl() {
   const [mapaSlaMetrica, setMapaSlaMetrica] = useState<any>(null);
   const [cargandoMapaSla, setCargandoMapaSla] = useState(true);
 
+  // Metrica 4.3 "Cobertura Postal Activa" (DEUDA 39, 2026-10-13 — cierre drift).
+  // Datos del endpoint /api/torre-de-control/cobertura-postal.
+  // Scope-aware. Universo: RegistroCoberturaVacia en ventana 90 dias.
+  // Writer activo en lib/cotizador.ts (fire-and-forget) desde Fase J.
+  const [coberturaPostalMetrica, setCoberturaPostalMetrica] = useState<any>(null);
+  const [cargandoCoberturaPostal, setCargandoCoberturaPostal] = useState(true);
+
   useEffect(() => {
     if (!filtroEmpresaId) return;
     const baseParams = { filtroEmpresa: filtroEmpresaId, page: "1", limit: "1" };
@@ -407,6 +414,22 @@ export default function TorreDeControl() {
       .catch(err => {
         console.error("[Torre de Control] error fetching mapa-sla:", err);
         setCargandoMapaSla(false);
+      });
+  }, [esEquipoShipro]);
+
+  // Torre de Control Metrica 4.3: fetch del endpoint de cobertura-postal.
+  useEffect(() => {
+    if (!esEquipoShipro) return;
+    setCargandoCoberturaPostal(true);
+    fetch("/api/torre-de-control/cobertura-postal")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setCoberturaPostalMetrica(data);
+        setCargandoCoberturaPostal(false);
+      })
+      .catch(err => {
+        console.error("[Torre de Control] error fetching cobertura-postal:", err);
+        setCargandoCoberturaPostal(false);
       });
   }, [esEquipoShipro]);
 
@@ -2934,6 +2957,148 @@ export default function TorreDeControl() {
                 )}
               </div>
 
+            ) : metricaAnalisis === "Cobertura Postal Activa" ? (
+              <div className="flex-1 p-8 overflow-y-auto bg-gray-50 space-y-6">
+                {cargandoCoberturaPostal ? (
+                  <p className="text-sm text-gray-400 font-bold">Cargando…</p>
+                ) : !coberturaPostalMetrica ? (
+                  <p className="text-sm text-gray-400 font-bold">Sin datos.</p>
+                ) : (
+                  <div className="space-y-6">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      <div className="bg-white border border-gray-200 rounded-xl p-5">
+                        <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Cotizaciones sin cobertura</p>
+                        <p className="text-3xl font-black text-gray-800 mt-2">{coberturaPostalMetrica.resumen.totalRegistrosVacios}</p>
+                        <p className="text-[11px] text-gray-500 mt-1">ventana {coberturaPostalMetrica.calidadDatos.ventanaDias} días</p>
+                      </div>
+                      <div className="bg-white border border-gray-200 rounded-xl p-5">
+                        <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">CPs distintos</p>
+                        <p className="text-3xl font-black text-gray-800 mt-2">{coberturaPostalMetrica.resumen.cpsDistintos}</p>
+                        <p className="text-[11px] text-gray-500 mt-1">{coberturaPostalMetrica.resumen.provinciasAfectadas} provincias afectadas</p>
+                      </div>
+                      <div className="bg-white border border-gray-200 rounded-xl p-5">
+                        <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Tasa</p>
+                        {coberturaPostalMetrica.resumen.tasaCoberturaVaciaPct !== null ? (
+                          <>
+                            <p className="text-3xl font-black text-gray-800 mt-2">{coberturaPostalMetrica.resumen.tasaCoberturaVaciaPct}%</p>
+                            <p className="text-[11px] text-gray-500 mt-1">sobre {coberturaPostalMetrica.resumen.totalCotizacionesSnapshot} cotizaciones</p>
+                          </>
+                        ) : (
+                          <>
+                            <p className="text-3xl font-black text-amber-600 mt-2">N/D</p>
+                            <p className="text-[11px] text-amber-600 mt-1">denominador parcial · DEUDA 111</p>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {coberturaPostalMetrica.calidadDatos.notas.length > 0 && (
+                      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-1">
+                        {coberturaPostalMetrica.calidadDatos.notas.map((nota: string, idx: number) => (
+                          <p key={idx} className="text-xs text-amber-800">• {nota}</p>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Top CPs no cubiertos</h4>
+                        {coberturaPostalMetrica.topCps.length === 0 ? (
+                          <p className="text-sm text-gray-400">Sin registros en la ventana.</p>
+                        ) : (
+                          <div className="space-y-2 max-h-96 overflow-y-auto">
+                            {coberturaPostalMetrica.topCps.map((cp: any, idx: number) => (
+                              <div key={idx} className="flex justify-between items-start border-b border-gray-100 pb-2 last:border-0">
+                                <div>
+                                  <p className="text-sm font-black text-gray-800">{cp.cpDestino}</p>
+                                  <p className="text-[11px] text-gray-500">
+                                    {cp.localidad || "Sin catalogar"}{cp.provincia ? ` · ${cp.provincia}` : ""}
+                                  </p>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-sm font-black text-gray-800">{cp.cantidad}</p>
+                                  <p className="text-[10px] text-gray-400">prom. {cp.pesoPromedioKg} kg</p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Por provincia</h4>
+                        {coberturaPostalMetrica.porProvincia.length === 0 ? (
+                          <p className="text-sm text-gray-400">Sin registros en la ventana.</p>
+                        ) : (
+                          <div className="space-y-2 max-h-96 overflow-y-auto">
+                            {coberturaPostalMetrica.porProvincia.map((p: any, idx: number) => (
+                              <div key={idx} className="flex justify-between items-center border-b border-gray-100 pb-2 last:border-0">
+                                <p className="text-sm font-bold text-gray-800">{p.provincia}</p>
+                                <div className="text-right">
+                                  <p className="text-sm font-black text-gray-800">{p.cantidad}</p>
+                                  <p className="text-[10px] text-gray-400">{p.cpsDistintos} CPs</p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Por peso del paquete</h4>
+                        <div className="space-y-3">
+                          {coberturaPostalMetrica.porPeso.map((p: any, idx: number) => {
+                            const total = coberturaPostalMetrica.resumen.totalRegistrosVacios || 1;
+                            const pct = Math.round((p.cantidad / total) * 100);
+                            return (
+                              <div key={idx}>
+                                <div className="flex justify-between text-xs font-bold mb-1">
+                                  <span>{p.rango}</span>
+                                  <span className="text-gray-600">{p.cantidad} ({pct}%)</span>
+                                </div>
+                                <div className="w-full bg-gray-100 rounded-full h-2">
+                                  <div className="bg-slate-700 h-2 rounded-full" style={{ width: `${pct}%` }}></div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Tendencia mensual</h4>
+                        {coberturaPostalMetrica.tendencia.length === 0 ? (
+                          <p className="text-sm text-gray-400">Sin registros en la ventana.</p>
+                        ) : (
+                          <div className="space-y-2">
+                            {coberturaPostalMetrica.tendencia.map((t: any, idx: number) => (
+                              <div key={idx} className="flex justify-between items-center">
+                                <p className="text-sm font-bold text-gray-700">{t.mes}</p>
+                                <p className="text-sm font-black text-gray-800">{t.cantidad}</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {coberturaPostalMetrica.scope === "shipro" && coberturaPostalMetrica.porEmpresa && coberturaPostalMetrica.porEmpresa.length > 0 && (
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Por empresa</h4>
+                        <div className="space-y-2 max-h-64 overflow-y-auto">
+                          {coberturaPostalMetrica.porEmpresa.map((e: any, idx: number) => (
+                            <div key={idx} className="flex justify-between items-center border-b border-gray-100 pb-2 last:border-0">
+                              <p className="text-sm font-bold text-gray-800">{e.empresaNombre}</p>
+                              <p className="text-sm font-black text-gray-800">{e.cantidad}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
             ) : (
               <div className="flex-1 p-8 overflow-y-auto bg-gray-50 flex flex-col items-center justify-center text-center">
                 <BarChart className="w-24 h-24 text-gray-200 mb-4" />
@@ -3247,6 +3412,40 @@ export default function TorreDeControl() {
                   </div>
                 );
               })}
+            </div>
+          </div>
+
+          <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 flex flex-col h-full">
+            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center justify-between"><span className="flex items-center gap-2"><MapPin className="w-4 h-4 text-[#233b6b]" /> 15. Cobertura Postal</span><button onClick={() => abrirAnalisis("Cobertura Postal Activa")} className="p-1.5 bg-gray-50 hover:bg-blue-50 text-gray-500 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
+            <div className="flex-1 flex flex-col justify-center space-y-3">
+              {cargandoCoberturaPostal ? (
+                <p className="text-xs text-gray-400 text-center font-bold">Cargando...</p>
+              ) : !coberturaPostalMetrica ? (
+                <p className="text-xs text-gray-400 text-center font-bold">Sin datos</p>
+              ) : coberturaPostalMetrica.resumen.totalRegistrosVacios === 0 ? (
+                <p className="text-xs text-green-600 text-center font-bold px-2">Sin CPs sin cobertura detectados — buena noticia.</p>
+              ) : (
+                <>
+                  <div className="text-center">
+                    <p className="text-3xl font-black text-gray-800">{coberturaPostalMetrica.resumen.totalRegistrosVacios}</p>
+                    <p className="text-[10px] text-gray-500 uppercase tracking-wider font-bold mt-1">cotizaciones sin cobertura (90d)</p>
+                  </div>
+                  <div className="flex justify-center gap-4 text-[11px] text-gray-600 font-bold border-t border-gray-100 pt-2">
+                    <span>{coberturaPostalMetrica.resumen.cpsDistintos} CPs</span>
+                    <span>·</span>
+                    <span>{coberturaPostalMetrica.resumen.provinciasAfectadas} prov.</span>
+                  </div>
+                  {coberturaPostalMetrica.resumen.tasaCoberturaVaciaPct !== null ? (
+                    <p className="text-[10px] text-center text-gray-400">
+                      {coberturaPostalMetrica.resumen.tasaCoberturaVaciaPct}% de las cotizaciones de la ventana
+                    </p>
+                  ) : (
+                    <p className="text-[10px] text-center text-amber-600">
+                      Tasa N/D (denominador parcial — DEUDA 111)
+                    </p>
+                  )}
+                </>
+              )}
             </div>
           </div>
         </div>

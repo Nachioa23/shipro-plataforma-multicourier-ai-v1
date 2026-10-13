@@ -256,12 +256,14 @@ el cálculo antes de tocar la escritura. Zona sensible: diagnóstico read-only a
 
 ## DEUDA 39 — Torre de Control: sistema integral de metricas estrategicas (DISEÑO COMPLETO 2026-06-04 — **PARCIAL 11/16 completas, 1 parcial, 4 missing — actualizado 2026-10-13 por drift sweep code-vs-registry**)
 
-**Status:** PARCIAL. 11 de 16 métricas completas end-to-end (endpoint + helper + UI card); 1 parcial (1.5 Velocidad Resolución Tickets, dentro de 1.4); 4 MISSING: 1.3 Eficiencia del Auditor, 4.2 Salud de Couriers (modelo `MetricaCourierLatencia` existe sin consumer Torre), 4.3 Cobertura Postal Activa, 4.4 Salud Financiera. UI integral SÍ existe (`app/(dashboard)/torre-de-control/page.tsx`, 3322 líneas, 14 cards + modales por métrica). 3 extras no canónicas en la UI: Anatomía Devolución, Mapa SLA, NPS Cliente Empresa (distinto al 5.1 transaccional).
+**Status:** PARCIAL. **12 de 16 métricas** completas end-to-end (endpoint + helper + UI card); 1 parcial (1.5 Velocidad Resolución Tickets, dentro de 1.4); 3 MISSING: 1.3 Eficiencia del Auditor, 4.2 Salud de Couriers (modelo `MetricaCourierLatencia` existe sin consumer Torre), 4.4 Salud Financiera. UI integral SÍ existe (`app/(dashboard)/torre-de-control/page.tsx`, 3322+ líneas, 15 cards + modales por métrica). 3 extras no canónicas en la UI: Anatomía Devolución, Mapa SLA, NPS Cliente Empresa (distinto al 5.1 transaccional).
 
-**Mapping 2026-10-13 (DRIFT SWEEP):**
-- DONE 3/3: 1.1 Resolver Nomenclador · 1.2 Auditar Checkouts · 1.4 Carga Soporte · 2.1 Tiempos Colecta · 2.2 Efectividad Primera Visita · 2.3 Promesa Calibrada · 3.1 Fuga Ruteo (Nivel 1; Nivel 2 = DEUDA 56) · 3.2 Desvío Peso · 3.3 Modalidades · 4.1 Concentración Courier · 5.1 NPS Transaccional.
+**Mapping 2026-10-13 (DRIFT SWEEP + progreso ese mismo día):**
+- DONE 3/3: 1.1 Resolver Nomenclador · 1.2 Auditar Checkouts · 1.4 Carga Soporte · 2.1 Tiempos Colecta · 2.2 Efectividad Primera Visita · 2.3 Promesa Calibrada · 3.1 Fuga Ruteo (Nivel 1; Nivel 2 = DEUDA 56) · 3.2 Desvío Peso · 3.3 Modalidades · 4.1 Concentración Courier · 5.1 NPS Transaccional · **4.3 Cobertura Postal Activa (commit `2f910a3`, 2026-10-13)**.
 - PARTIAL: 1.5 Velocidad Resolución Tickets (sub-métrica dentro de 1.4, sin desglose propio).
-- MISSING: 1.3 Eficiencia del Auditor · 4.2 Salud Couriers · 4.3 Cobertura Postal · 4.4 Salud Financiera.
+- MISSING: 1.3 Eficiencia del Auditor · 4.2 Salud Couriers · 4.4 Salud Financiera.
+
+**Nota 4.3 Cobertura Postal (2026-10-13)**: helper + endpoint + card EN CÓDIGO (commit `2f910a3`). La **tasa de cobertura vacía queda en N/D** hasta que [[DEUDA 111]] cablee el denominador (`CotizacionSnapshot` writer dual en `/api/cotizar` + `usadaEnEnvioId` en `crear.ts`). El helper `lib/utils/cobertura-postal.ts` ya tolera el upgrade sin cambios — cuando 111 cierre, la tasa se vuelve confiable automáticamente.
 
 **Status original (histórico):** Abierta 2026-06-02. Diseno profesional completo el 2026-06-04 documentado en `docs/TORRE-DE-CONTROL.md`. Implementacion pendiente, sesion dedicada por metrica.
 
@@ -2783,6 +2785,8 @@ oportunidad, bajo estas condiciones, con este impacto económico estimado y este
 ## DEUDA 111 — Capa de Inteligencia del Checkout: captura de eventos del embudo (PRODUCTO — cimiento de datos) (registrada 2026-07-21, scope grande — **PARCIAL — actualizado 2026-10-13 por drift sweep**)
 
 **Status:** PARCIAL. **1 writer de `CotizacionSnapshot` existe** en el rates callback de Tiendanube (`app/api/tiendanube/rates/route.ts:266`, best-effort; capturó parcialmente la pieza que DEUDA 111 pedía como Fase 3). **Falta**: (a) writer en `/api/cotizar` (hoy no persiste snapshot — pierde el 100% del tráfico fuera del rates callback de Tiendanube: dashboard + WooCommerce + API terceros), (b) wiring de `usadaEnEnvioId` en `crear.ts` para cerrar el embudo cotizar→envío (hoy 0 writers de ese campo; grep en app/lib = cero). El análisis sobre los datos capturados sigue pendiente (es la 110/186). Verificado por drift sweep code-vs-registry 2026-10-13.
+
+**IMPACTO EN MÉTRICA 4.3 (Cobertura Postal, [[DEUDA 39]])** (registrado 2026-10-13): hoy el writer de `CotizacionSnapshot` solo corre en el rates callback de Tiendanube. La métrica 4.3 Cobertura Postal Activa (commit `2f910a3`) usa `CotizacionSnapshot` como denominador de la tasa de cobertura vacía — con el writer parcial, la tasa sale **N/D (denominador no confiable)** y el helper lo marca explícitamente (`denominadorConfiable=false` cuando snapshot < 1.5× registros vacíos). Cuando 111 cablee el writer dual en `/api/cotizar` (+ el `usadaEnEnvioId` en `crear.ts`), **la tasa de 4.3 pasa a confiable AUTOMÁTICAMENTE** — el helper `lib/utils/cobertura-postal.ts` ya está preparado para el upgrade, solo mejora el denominador sin tocar la métrica. **Cerrar 111 = completar 4.3 sin tocar código de la métrica.**
 
 **Status original (idea de producto, Nacho 2026-07-21):**
 **Ubicación en el roadmap: la CAPTURA arranca con la Fase 3 (plugins) — ver nota abajo; el análisis

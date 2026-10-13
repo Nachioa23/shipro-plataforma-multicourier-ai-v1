@@ -162,7 +162,7 @@ Mientras se decide, la lógica está protegida por el mismo `resolverContext()` 
 
 **Tipo:** Diseño de producto + UI — ZONA SENSIBLE (ruteo/consolidación, familia DEUDA 29/83).
 **Relación:** Especificación detallada de la DEUDA 36. La 36 describía la cascada en germen; esta la define end-to-end.
-**Estado:** EN CURSO. Fases 1, 4a y 4b CERRADAS y verificadas end-to-end (browser + DB). Quedan la grilla en el wizard de onboarding + el reordenamiento de pasos + pulido.
+**Estado:** EN CURSO. Fases 1, 4a, 4b **y 4c/d** CERRADAS y verificadas end-to-end (browser + DB). Única pieza pendiente: Fase 5 (manejo de couriers huérfanos + pulido). **Actualizado 2026-10-13** por drift sweep code-vs-registry.
 **Prioridad de negocio (Nacho):** ALTA — diferencial de producto para lucir. El momento en que un cliente configura su logística es donde se demuestra la promesa "claridad, no complejidad".
 
 ---
@@ -202,11 +202,8 @@ Mientras se decide, la lógica está protegida por el mismo `resolverContext()` 
   end-to-end (browser + DB): elegir Mocis para el Depósito Central crea recolectorId=2 +
   ficha Andreani recoge=true en una sola transacción.
 
-- **Fase 4c/d — Grilla en el wizard de onboarding + reordenamiento. ⬜ PENDIENTE.**
-  Usar el mismo `CoberturaGrid` en el wizard (`app/onboarding/page.tsx`), insertando un paso nuevo
-  entre "depósito" (paso 3 actual) y "transporte" (paso 4 actual), para lograr la secuencia
-  Depósito → Recolector → Transporte que pidió Nacho. El componente ya es reutilizable; falta el
-  montaje + el re-slicing del wizard (PasoWizard 1|2|3|4 → 1|2|3|4|5).
+- **Fase 4c/d — Grilla en el wizard de onboarding + reordenamiento. ✅ CERRADA — commit `1f0e044`.**
+  `CoberturaGrid` montado en `app/onboarding/page.tsx:581` como Paso 4 del wizard. Secuencia Depósito → Recolector → Transporte implementada. Verificado por drift sweep code-vs-registry 2026-10-13 (registry decía "⬜ PENDIENTE" aunque el commit está en main).
 
 - **Fase 5 — Manejo de couriers huérfanos + pulido. ⬜ PENDIENTE.**
   Cuando el cliente cambia/activa un recolector cuyo hub no cubren couriers ya activos: marcarlos
@@ -257,9 +254,16 @@ destrabar a mano (no crear la ficha por API por la puerta de atrás) sino diseñ
 La Fase 4b (que escribe en el corazón del sistema) se partió en 3 pasos con dry-run primero para verificar
 el cálculo antes de tocar la escritura. Zona sensible: diagnóstico read-only antes de cada cambio.
 
-## DEUDA 39 — Torre de Control: sistema integral de metricas estrategicas (DISEÑO COMPLETO 2026-06-04 — implementacion avanzada: la mayoria de las 16 metricas ya codeadas end-to-end; PENDIENTE confirmar metricas exactas restantes + UI integral — se audita en el carril Torre)
+## DEUDA 39 — Torre de Control: sistema integral de metricas estrategicas (DISEÑO COMPLETO 2026-06-04 — **PARCIAL 11/16 completas, 1 parcial, 4 missing — actualizado 2026-10-13 por drift sweep code-vs-registry**)
 
-**Status:** Abierta 2026-06-02. Diseno profesional completo el 2026-06-04 documentado en `docs/TORRE-DE-CONTROL.md`. Implementacion pendiente, sesion dedicada por metrica.
+**Status:** PARCIAL. 11 de 16 métricas completas end-to-end (endpoint + helper + UI card); 1 parcial (1.5 Velocidad Resolución Tickets, dentro de 1.4); 4 MISSING: 1.3 Eficiencia del Auditor, 4.2 Salud de Couriers (modelo `MetricaCourierLatencia` existe sin consumer Torre), 4.3 Cobertura Postal Activa, 4.4 Salud Financiera. UI integral SÍ existe (`app/(dashboard)/torre-de-control/page.tsx`, 3322 líneas, 14 cards + modales por métrica). 3 extras no canónicas en la UI: Anatomía Devolución, Mapa SLA, NPS Cliente Empresa (distinto al 5.1 transaccional).
+
+**Mapping 2026-10-13 (DRIFT SWEEP):**
+- DONE 3/3: 1.1 Resolver Nomenclador · 1.2 Auditar Checkouts · 1.4 Carga Soporte · 2.1 Tiempos Colecta · 2.2 Efectividad Primera Visita · 2.3 Promesa Calibrada · 3.1 Fuga Ruteo (Nivel 1; Nivel 2 = DEUDA 56) · 3.2 Desvío Peso · 3.3 Modalidades · 4.1 Concentración Courier · 5.1 NPS Transaccional.
+- PARTIAL: 1.5 Velocidad Resolución Tickets (sub-métrica dentro de 1.4, sin desglose propio).
+- MISSING: 1.3 Eficiencia del Auditor · 4.2 Salud Couriers · 4.3 Cobertura Postal · 4.4 Salud Financiera.
+
+**Status original (histórico):** Abierta 2026-06-02. Diseno profesional completo el 2026-06-04 documentado en `docs/TORRE-DE-CONTROL.md`. Implementacion pendiente, sesion dedicada por metrica.
 
 **Documento maestro:** `docs/TORRE-DE-CONTROL.md` (1971 lineas). Contiene:
 - 16 metricas en 5 bloques tematicos con 9 campos de documentacion cada una (Categoria, Definicion operativa, Por que importa, Diferencial competitivo, Fuente de datos, Formula de calculo, Cortes de analisis, Experiencia UI/UX, Verificacion tecnica pendiente).
@@ -1808,9 +1812,11 @@ y los archivos afectados.
 
 ---
 
-## DEUDA 104 — No existe sistema de webhooks salientes (Shipro → e-commerce) (scope grande, prerequisito plugins)
+## DEUDA 104 — No existe sistema de webhooks salientes (Shipro → e-commerce) (scope grande, prerequisito plugins — **PARCIAL — actualizado 2026-10-13 por drift sweep**)
 
-**Status:** ABIERTA. Detectada 2026-07-13. **Es el gap más grande para plugins.**
+**Status:** PARCIAL. **Mitad IN (webhooks entrantes de Tiendanube) COMPLETA** — [[DEUDA 133]] LGPD + [[DEUDA 144]] rates callback cerradas en RESUELTAS (2026-10-13), más handlers de `order` y `fulfillment-order` ya en main; HMAC centralizado en `lib/tiendanube/webhook-handler.ts`. **Mitad OUT (webhooks salientes Shipro→e-commerce) AUSENTE**: no existe modelo `Webhook` genérico ni dispatcher (grep `generarWebhook|dispararWebhook|sendWebhook|outgoing-webhook` en app/lib = cero). Único OUT es `lib/tiendanube/tracking-map.ts` (específico a Tiendanube FFO tracking-events, no genérico). Verificado por drift sweep code-vs-registry 2026-10-13.
+
+**Status original (abierta 2026-07-13):** **Es el gap más grande para plugins.**
 
 **Síntoma:** Shipro no emite eventos hacia sistemas externos. No hay modelo `Webhook`, ni despachador, ni cola
 de reintentos, ni firma de seguridad. Hoy, para saber si un envío cambió de estado (EN_TRANSITO, ENTREGADO),
@@ -1907,9 +1913,11 @@ liviano (sin rebuild completo).
 
 ---
 
-## DEUDA 130 — Plugin Tiendanube: spec de integración + homologación (documento maestro, verificado contra doc oficial 2026-08-06)
+## DEUDA 130 — Plugin Tiendanube: spec de integración + homologación (documento maestro, verificado contra doc oficial 2026-08-06 — **PARCIAL paraguas — actualizado 2026-10-13 por drift sweep**)
 
-**Status:** ABIERTA. Reescrita 2026-08-06 con información verificada contra documentación oficial de Tiendanube (`dev.tiendanube.com` + `tiendanube.github.io`) + cruce en Gemini Notebook con los docs oficiales cargados. Documento maestro del plugin: manda sobre cualquier investigación previa.
+**Status:** PARCIAL (paraguas). **Sub-piezas de código completas en main**: install OAuth (`app/api/tiendanube/install/link/route.ts` + `oauth/callback/route.ts` + `app/tiendanube/instalado/page.tsx`), rates callback ([[DEUDA 144]] RESUELTA 2026-10-13), labels (generate/cancel/download/admin-link), webhooks IN LGPD ([[DEUDA 133]] RESUELTA 2026-10-13), webhooks `order` y `fulfillment-order`. **Pendiente**: homologación formal con Tiendanube (reunión de validación conjunta + Nimbus+Nexo UI si aplica + NubeSDK si aplica — ver cronograma oficial de deprecación debajo). DEUDA 130 queda como documento maestro + checklist de homologación; el código está listo cuando Nacho decida arrancar homologación. Verificado por drift sweep code-vs-registry 2026-10-13.
+
+**Status original (reescrita 2026-08-06):** Verificado contra documentación oficial de Tiendanube (`dev.tiendanube.com` + `tiendanube.github.io`) + cruce en Gemini Notebook con los docs oficiales cargados. Documento maestro del plugin: manda sobre cualquier investigación previa.
 
 ---
 
@@ -2135,24 +2143,7 @@ creado con `replayed: true`. Patrón: try-create → catch P2002 → re-query �
 
 ---
 
-## DEUDA 133 — Webhooks de privacidad de datos obligatorios de Tiendanube (LGPD/GDPR, prerequisito de homologación de CUALQUIER app) (registrada 2026-08-06, scope medio)
-
-**Status:** ABIERTA. Registrada 2026-08-06. Verificado contra doc oficial de Tiendanube.
-
-**Problema:** Tiendanube exige, para homologar CUALQUIER app (no sólo envíos), soporte síncrono de tres webhooks de privacidad de datos. Sin ellos no se homologa.
-
-**Los tres webhooks:**
-- `store/redact` — se dispara tras la desinstalación de la app. Hay que **purgar la info histórica** de esa tienda de nuestras bases. Payload: `{"store_id": 123}`.
-- `customers/redact` — derecho al olvido de un comprador (sin transacciones en los últimos 6 meses). Hay que **anonimizar / borrar** sus datos. Payload: tienda + cliente (id, email, phone, identification) + órdenes a anonimizar.
-- `customers/data_request` — portabilidad de datos de un comprador. Procesar y transmitir al merchant. Payload: cliente + referencias de órdenes / checkouts / draft_orders.
-
-**Seguridad:** validar HMAC-SHA256 (header `x-linkedstore-hmac-sha256`, secret = `client_secret`, sobre raw body, comparación en tiempo constante). Deduplicación obligatoria.
-
-**Relación:** es **transversal a cualquier app Tiendanube**, por eso es deuda propia y no una sub-sección de DEUDA 130. Pero es prerequisito de la homologación del plugin. Comparte el mecanismo HMAC + el sistema de webhooks entrantes que también necesita el plugin.
-
-**Archivos (a futuro):** endpoints nuevos para los tres webhooks + validador HMAC compartido.
-
-**Prioridad:** media. No bloquea el desarrollo del backend de cotización, pero sí la homologación.
+## DEUDA 133 — Webhooks de privacidad de datos obligatorios de Tiendanube (LGPD/GDPR) → **RESUELTA EN PROD, ver DEUDAS-RESUELTAS.md** (código completo 2026-10-13; QA formal de homologación pendiente, no bloquea)
 
 ---
 
@@ -2279,10 +2270,11 @@ No es problema al volumen actual.
 
 **FASES DEL PROCESO (money-critical: toda la concurrencia toca saldos + creación de envíos):**
 
-- **FASE A — Chat A, núcleo (PREREQUISITO del test de carga)**: cerrar las race conditions conocidas del núcleo **antes** de estresar, para que el test mida el sistema y no bugs ya conocidos:
-  - **[[DEUDA 131]]** — idempotencia atómica en `POST /api/envios` (upgrade del `findFirst` + `create` a INSERT con `ON CONFLICT` o unique constraint que haga el gate del idempotency-key atómico).
-  - **[[DEUDA 136]]** — verificar bajo concurrencia que el bloqueo por saldo negativo se dispara correctamente (dos débitos simultáneos → saldo queda negativo coherente → `evaluarSuspension` activa el bloqueo). El reencuadre de Nacho dice que no es pérdida de plata; esta fase lo **demuestra empíricamente**.
-  - Si el stress-test (Fase D) encontrara estas sin arreglarlas, sería **tiempo perdido** (los hallazgos ya los conocemos). Fase A las cierra para que la Fase D mida lo desconocido.
+- **FASE A — Chat A, núcleo (PREREQUISITO del test de carga). ✅ COMPLETA EN PROD 2026-10-08.**
+  - **[[DEUDA 131]]** — ✅ idempotencia atómica en `POST /api/envios` cerrada (catch `P2002` del índice idempotencia → devuelve el envío existente con `replayed:true` en vez de 500). Commit `2e7e80f`.
+  - **[[DEUDA 136]]** — ✅ saldo con decremento/incremento atómico (`{ decrement }`/`{ increment }`) en los 3 writers (`crear.ts` débito + `admin/finanzas` recarga + `conciliacion` aforo) — cierra el lost-update bajo concurrencia. Commit `206646b`.
+  - Documentación del plan 4-fases en commit `ef6f4a4`.
+  - Verificado por drift sweep code-vs-registry 2026-10-13 (registry decía "pendiente de arrancar").
 
 - **FASE B — Chat B lidera (toca despachos)**: diseñar + construir el **generador de carga** + consumir la base de datos de operaciones de Nacho. Decidir herramienta (k6 vs Artillery vs custom), armar los escenarios (burst de cotizaciones, pipeline cotizar→crear→despachar, ramp-up de consultas de estado), parametrizar RPS objetivo. Entregable: script ejecutable + fixture de datos + runbook de ejecución.
 
@@ -2296,7 +2288,7 @@ No es problema al volumen actual.
 
 **Relación**: **[[DEUDA 131]]** + **[[DEUDA 136]]** son **Fase A** de este plan. Insumo de homologación Tiendanube (138 era prerequisito declarado ahí también — ítem Awesome stress-test). [[DEUDA 108]] es independiente (acción externa infra del server).
 
-**Estado**: ABIERTA, PRE-CLIENTE, plan registrado. Pendiente de arrancar por **Fase A (Chat A, 131 + 136)**. Fase B puede empezar en paralelo si Chat B tiene bandwidth, pero el test de carga (Fase D) no corre hasta Fase A cerrada.
+**Estado**: ABIERTA, PRE-CLIENTE. **Fase A COMPLETA EN PROD 2026-10-08**; Fases **B/C/D pendientes** (Chat B lidera B+D, Chat A acompaña C). El test de carga ya puede ejecutarse — pendiente armar el generador. Actualizado 2026-10-13 por drift sweep code-vs-registry.
 
 **Origen plan**: decisión Nacho 2026-10-08 (post-Capa 0: cerrados 185 + 96 + 147; diferido 169 Fix B; vivos quedan 108 + 171 + stress-test).
 
@@ -2454,15 +2446,16 @@ Urbano Express, Hop Envíos, Pickit, Moova, Intralog.
 
 ## DEUDA 143 — Motor de empaquetado (Opción C): Modo B = tarifa fija + Modo A = bin-packing físico (EN CONSTRUCCIÓN, registrada 2026-08-10)
 
-**Status:** EN CONSTRUCCIÓN. Modo B: campos de storage en Empresa ya en `main` (commit 72385da). Falta pantalla de config + consumo en el rates callback. Modo A: futuro, diseño pendiente.
+**Status:** EN CONSTRUCCIÓN. **Modo B casi completo**: campos de storage en Empresa (commit `72385da`) **+ consumer en el rates callback de Tiendanube wired** (`app/api/tiendanube/rates/route.ts:59-110`, commit `2e12e9b`). **Única pieza pendiente de Modo B: pantalla de config** (`EmpaquetadoTab.tsx`, no existe aún — grep cero). **Modo A**: futuro, diseño pendiente. Actualizado 2026-10-13 por drift sweep code-vs-registry.
 
 **Distinción clave (LOCKED, Nacho) — son DOS mecanismos distintos, no dos niveles del mismo:**
 - **Modo B = regla de TARIFA fija (comercial, NO empaquetado físico).** El cliente dice "cobrame siempre como UN bulto de X kg con estas dimensiones, a cualquier destino", sin importar el contenido real del carrito. Es simbólico: fija su tarifa. No hay cálculo. Ejemplo de Nacho: "en una bolsa de un formato dado podés poner 2 kg de plomo pero no 2 kg de plumas; lo que el cliente fija es la tarifa".
 - **Modo A = empaquetado físico calculado (bin-packing).** El cliente carga sus bolsas/cajas reales (chica/mediana/grande) con peso soportado TOTAL (bolsa incluida) y dimensiones. El sistema calcula cómo entran los productos: la suma de pesos ≤ capacidad de la bolsa, y ningún producto puede exceder las dimensiones de la bolsa.
 
 **Modo B — implementación:**
-- Storage: 5 campos en Empresa (commit 72385da): `empaqueModoBActivo` + `empaqueModoBPesoKg/LargoCm/AnchoCm/AltoCm`. Van en Empresa (no tabla) porque es UNA config por cliente. Switch default OFF.
-- Falta: pantalla de config (`EmpaquetadoTab.tsx`, espeja `RuteoTab`, endpoint `POST /api/configuracion/empaquetado`) + el rates callback que lee los campos y arma el bulto fijo.
+- ✅ Storage: 5 campos en Empresa (commit 72385da): `empaqueModoBActivo` + `empaqueModoBPesoKg/LargoCm/AnchoCm/AltoCm`. Van en Empresa (no tabla) porque es UNA config por cliente. Switch default OFF.
+- ✅ Consumer en el rates callback de Tiendanube wired (`app/api/tiendanube/rates/route.ts:59-110`, commit `2e12e9b` "feat(tiendanube): rates callback paso 2 — Modo B tarifa fija (default 2kg)"): el endpoint lee los 5 campos y, si `empaqueModoBActivo`, arma el bulto fijo en vez de usar las dimensiones del carrito.
+- ⬜ Falta: pantalla de config (`EmpaquetadoTab.tsx`, espeja `RuteoTab`, endpoint `POST /api/configuracion/empaquetado`) para que el cliente edite los 5 campos sin tocar Prisma directo.
 
 **Modo A — heurística de Nacho (registrada textual, para cuando se construya):** "Si el cliente tiene bolsas chica/mediana/grande y 4 productos en el carrito: primero elijo el producto más grande y veo en qué bolsa entra sin desperdiciar espacio. Si el más grande entra en la mediana, ya que voy a mandar una mediana sí o sí, intento meter TODOS los productos en la mediana; los que quedan afuera por capacidad física o por peso, los mando a la bolsa chica." Es una heurística pragmática, NO un optimizador perfecto (el bin-packing 3D + peso es NP-hard). Objetivo: resolver bien el ~95% de los carritos reales (pocos productos), no la solución matemática óptima. Requiere un modelo de datos para los tipos de bolsa del cliente (ej. `TipoEmpaque` con capacidad + dims + activo) — diseño pendiente.
 
@@ -2472,24 +2465,7 @@ Urbano Express, Hop Envíos, Pickit, Moova, Intralog.
 
 ---
 
-## DEUDA 144 — Rates callback de Tiendanube: plan de implementación del endpoint (ABIERTA, próxima construcción, registrada 2026-08-10)
-
-**Status:** ABIERTA — próxima pieza grande a construir. La ESPECIFICACIÓN vive en DEUDA 130 sección "Rates callback — cotización en checkout" (contrato del POST de Tiendanube, response `rates[]`, pre-registro de carrier options, caché, `reference`). Esta deuda es el PLAN DE IMPLEMENTACIÓN (los pasos concretos en el código), no re-especifica.
-
-**Qué hace el endpoint (resumen):** recibe POST de Tiendanube con el carrito (items[] con peso+dims), origen y destino → identifica la empresa por `store_id` → convierte items en `paquetes[]` (Modo B si activo, else 1 bulto default) → cotiza con `cotizar()` → mapea a `rates[]` de Tiendanube → todo en < 5s.
-
-**Piezas y orden de construcción (del recon 2026-08-10):**
-1. **Modelo `TiendaTiendanube`** (store↔empresa + accessToken OAuth) — NO existe, PREREQUISITO BLOQUEANTE. Sin él el endpoint no traduce `store_id` → `empresaId`. Mínimo: `storeId @unique`, `empresaId` FK, `accessToken`, `installedAt`, `activo`.
-2. **Endpoint `POST /api/tiendanube/rates`** — clasificado `public` en `proxy.ts` (agregar a `PUBLIC_API_EXACT`); se autoautentica resolviendo `store_id` contra `TiendaTiendanube` (espejo de cómo `/api/envios/corregir` valida su token). ⚠️ tocar `proxy.ts` → deploy requiere rebuild limpio (`rm -rf .next && npm run build`).
-3. **Conversión items→paquetes** — inline al principio (si `empaqueModoBActivo` → 1 bulto con los 4 fijos; else → 1 bulto default). Se refactoriza a helper `armarPaquetes()` cuando llegue Modo A.
-4. **Timeout < 5s** — ver DEUDA 145.
-5. **Persistir `CotizacionSnapshot`** — REQUISITO de DEUDA 111 (captura del embudo del checkout desde el día 1). El endpoint debe guardar el snapshot de cada cotización (opciones mostradas). No es opcional.
-
-**Piezas que YA existen (no bloquean):** `cotizar()` con el contrato correcto, `Paquete` como target shape, los campos `empaqueModoB*` en Empresa (DEUDA 143), el fallback per-courier (DEUDA 129), el motor de couriers SANO (post-fix fetchConTimeout).
-
-**No bloqueante hoy:** OAuth flow + env vars `TIENDANUBE_CLIENT_ID/_SECRET` (el rates callback es autoservicio vía `store_id`; el token OAuth se persiste en el install flow separado, Momento 1 de DEUDA 130). UI de Modo B (los campos se pueden setear por Prisma directo para dogfooding).
-
-**Relación:** DEUDA 130 (spec autoritativa), DEUDA 111 (snapshot obligatorio), DEUDA 143 (Modo B que consume), DEUDA 145 (timeout <8s), DEUDA 129 (resiliencia + fallback que el endpoint hereda de `cotizar()`).
+## DEUDA 144 — Rates callback de Tiendanube → **RESUELTA EN PROD, ver DEUDAS-RESUELTAS.md** (código completo 2026-10-13: endpoint + labels + modelo TiendaTiendanube + Modo B wired + CotizacionSnapshot persistido; QA formal de homologación Tiendanube pendiente, no bloquea)
 
 ---
 
@@ -2804,9 +2780,11 @@ oportunidad, bajo estas condiciones, con este impacto económico estimado y este
 
 ---
 
-## DEUDA 111 — Capa de Inteligencia del Checkout: captura de eventos del embudo (PRODUCTO — cimiento de datos) (registrada 2026-07-21, scope grande)
+## DEUDA 111 — Capa de Inteligencia del Checkout: captura de eventos del embudo (PRODUCTO — cimiento de datos) (registrada 2026-07-21, scope grande — **PARCIAL — actualizado 2026-10-13 por drift sweep**)
 
-**Status:** ABIERTA. Idea de producto (Nacho, 2026-07-21).
+**Status:** PARCIAL. **1 writer de `CotizacionSnapshot` existe** en el rates callback de Tiendanube (`app/api/tiendanube/rates/route.ts:266`, best-effort; capturó parcialmente la pieza que DEUDA 111 pedía como Fase 3). **Falta**: (a) writer en `/api/cotizar` (hoy no persiste snapshot — pierde el 100% del tráfico fuera del rates callback de Tiendanube: dashboard + WooCommerce + API terceros), (b) wiring de `usadaEnEnvioId` en `crear.ts` para cerrar el embudo cotizar→envío (hoy 0 writers de ese campo; grep en app/lib = cero). El análisis sobre los datos capturados sigue pendiente (es la 110/186). Verificado por drift sweep code-vs-registry 2026-10-13.
+
+**Status original (idea de producto, Nacho 2026-07-21):**
 **Ubicación en el roadmap: la CAPTURA arranca con la Fase 3 (plugins) — ver nota abajo; el análisis
 viene después.** Es el cimiento de datos sobre el que se construye la DEUDA 110.
 
@@ -4373,7 +4351,7 @@ Agregar `external_reference: envio.id.toString()` en los 6 adapters (Andreani, M
 
 ---
 
-## DEUDA 180 — Mercado Envíos Flex (MEF): integración con Mercado Libre (registrada 2026-09-13, lidera Chat D, **Fase 1 núcleo RESUELTA 2026-09-21 + Fase 2 ruteo por zonas RESUELTA 2026-09-24 → ver DEUDAS-RESUELTAS.md**; pendientes conocidos explícitos: (1) shape real del payload ML (extracción defensiva; se ajusta con el primer envío real), (2) handshake del webhook real de ML (heredado de Fase 1 — sandbox impracticable; se valida con primer webhook real), (3) wiring de los 2 crons MEF (`mef-sincronizar-zonas` + `mef-procesar-notificaciones`) en el crontab del server — bucket de 5 no-wireados. **DEUDA nginx real-IP** registrada abajo como prerequisito de `ML_WEBHOOK_IP_ENFORCE=true`. Fases 3+ (enriquecimiento, tracking downstream, excepciones, etiqueta ML) las dirige Chat D como pendientes de roadmap, NO como TODOs de Chat A.)
+## DEUDA 180 — Mercado Envíos Flex (MEF): integración con Mercado Libre (registrada 2026-09-13, lidera Chat D, **Fase 1 núcleo RESUELTA 2026-09-21 + Fase 2 ruteo por zonas RESUELTA 2026-09-24 → ver DEUDAS-RESUELTAS.md**; pendientes conocidos explícitos actualizados 2026-10-13 por drift sweep: ~~(1) shape real del payload ML (extracción defensiva)~~ **✅ YA EN CÓDIGO** — `lib/mercadolibre/crear-envio-flex.ts:61-203` tiene `ReceiverAddressLike` + lectura defensiva de `payload?.receiver_address`/`shipping_option`/`shipping_items[]` + `payloadRaw`. Pendientes reales: (2) handshake del webhook real de ML (heredado de Fase 1 — sandbox impracticable; se valida con primer webhook real), (3) wiring de los 2 crons MEF (`mef-sincronizar-zonas` + `mef-procesar-notificaciones`) en el crontab del server — las rutas existen (`app/api/cron/mef-*/route.ts`) pero el comentario interno de cada una dice "NO WIREADO en el crontab" — bucket de 5 no-wireados. **DEUDA nginx real-IP** registrada abajo como prerequisito de `ML_WEBHOOK_IP_ENFORCE=true`. Fases 3+ (enriquecimiento, tracking downstream, excepciones, etiqueta ML) las dirige Chat D como pendientes de roadmap, NO como TODOs de Chat A.)
 
 **Qué es:** integración de Shipro con **Mercado Envíos Flex** — el canal logístico de Mercado Libre para que los sellers ML despachen usando su propia red (o los couriers integrados por Shipro) en vez del courier del sistema Envíos Flex propio de ML. Nuevo canal de ventas para Shipro (paralelo a Tiendanube y WooCommerce). **Alto valor de negocio** — ML es el mayor marketplace de la región y Flex es su rail logístico para sellers medianos/grandes.
 

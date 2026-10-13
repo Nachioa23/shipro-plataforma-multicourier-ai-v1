@@ -2109,3 +2109,56 @@ un bug de facturación que ya existe hoy. NO bloquea el desarrollo del plugin de
 
 ---
 
+## DEUDA 133 — Webhooks de privacidad de datos obligatorios de Tiendanube (LGPD/GDPR, prerequisito de homologación de CUALQUIER app) (registrada 2026-08-06 — RESUELTA EN PROD por drift sweep 2026-10-13; QA formal de homologación Tiendanube pendiente, no bloquea el código)
+
+**Status:** CÓDIGO COMPLETO EN PROD. Verificado 2026-10-13 por sweep code-vs-registry (prior status del registry decía "ABIERTA"; el código muestra los 4 handlers end-to-end desde el momento de los commits dedicados).
+
+**Qué se cerró en código** (los 4 handlers LGPD + HMAC centralizado):
+- `app/api/tiendanube/webhooks/store-redact/route.ts` — commit `f0b64de feat(tiendanube): webhook store/redact`.
+- `app/api/tiendanube/webhooks/customers-redact/route.ts` — commit `f68bb2b feat(tiendanube): webhook customers/redact`.
+- `app/api/tiendanube/webhooks/customers-data-request/route.ts` — commit `25695ac feat(tiendanube): webhook customers/data_request`.
+- `app/api/tiendanube/webhooks/app-uninstalled/route.ts` (incluido en commits dedicados del clúster plugin Tiendanube).
+- Validación HMAC-SHA256 centralizada en `lib/tiendanube/webhook-handler.ts:52` (header `x-linkedstore-hmac-sha256`, secret = `client_secret`, comparación en tiempo constante, deduplicación obligatoria).
+
+**Problema (original — verificado contra doc oficial Tiendanube 2026-08-06):** Tiendanube exige, para homologar CUALQUIER app (no sólo envíos), soporte síncrono de tres webhooks de privacidad de datos. Sin ellos no se homologa.
+
+**Los tres webhooks:**
+- `store/redact` — se dispara tras la desinstalación de la app. Hay que **purgar la info histórica** de esa tienda de nuestras bases. Payload: `{"store_id": 123}`.
+- `customers/redact` — derecho al olvido de un comprador (sin transacciones en los últimos 6 meses). Hay que **anonimizar / borrar** sus datos. Payload: tienda + cliente (id, email, phone, identification) + órdenes a anonimizar.
+- `customers/data_request` — portabilidad de datos de un comprador. Procesar y transmitir al merchant. Payload: cliente + referencias de órdenes / checkouts / draft_orders.
+
+**Relación:** es **transversal a cualquier app Tiendanube**, por eso es deuda propia y no una sub-sección de DEUDA 130. Pero es prerequisito de la homologación del plugin. Comparte el mecanismo HMAC + el sistema de webhooks entrantes que también necesita el plugin.
+
+**Pendiente no bloqueante (QA/homologación)**: la **homologación formal con Tiendanube** (reunión de validación + Nimbus+Nexo UI si aplica) sigue pendiente — es parte de DEUDA 130 como paraguas y no bloquea el código. Los 4 handlers están en main y en prod listos para que Tiendanube los pruebe cuando llegue el momento de la homologación.
+
+**Origen cierre**: drift sweep Chat A 2026-10-13 — recon code-vs-registry confirmó los 3 commits dedicados + los 4 handlers en main con HMAC centralizado. Decisión: mover a RESUELTAS como "código completo" espejo del patrón ya usado por DEUDA 171 Correo Argentino.
+
+---
+
+## DEUDA 144 — Rates callback de Tiendanube: plan de implementación del endpoint (registrada 2026-08-10 — RESUELTA EN PROD por drift sweep 2026-10-13; QA formal de homologación Tiendanube pendiente, no bloquea)
+
+**Status:** CÓDIGO COMPLETO. Verificado 2026-10-13 por sweep code-vs-registry (prior status del registry decía "ABIERTA, próxima construcción"; el código muestra el endpoint construido end-to-end con las 5 piezas del plan + el ecosistema de labels completo).
+
+**Qué se cerró en código**:
+- **Endpoint `POST /api/tiendanube/rates`** completo en `app/api/tiendanube/rates/route.ts` (300+ líneas): resuelve `store_id` → `empresaId` vía `TiendaTiendanube`, convierte `items[]` → `paquetes[]` (Modo B o default), cotiza con `cotizar()`, expande sucursales (pickup), mapea a `rates[]` de Tiendanube, timeout respetado, `CotizacionSnapshot` persistido (commit `2e12e9b` incluye Modo B wiring).
+- **Modelo `TiendaTiendanube`** (store↔empresa + accessToken OAuth) persistido en schema.
+- **Labels ecosystem**: `app/api/tiendanube/labels/{generate,cancel,download,admin-link}/route.ts` — generación + anulación + descarga + admin link para el merchant.
+- **Install OAuth**: `app/api/tiendanube/install/link/route.ts` + `app/api/tiendanube/oauth/callback/route.ts` + `app/tiendanube/instalado/page.tsx`.
+
+**Qué hace el endpoint:** recibe POST de Tiendanube con el carrito (items[] con peso+dims), origen y destino → identifica la empresa por `store_id` → convierte items en `paquetes[]` (Modo B si activo, else 1 bulto default) → cotiza con `cotizar()` → mapea a `rates[]` de Tiendanube → todo en < 5s. Lo que la DEUDA proponía como "piezas y orden de construcción" quedó todo construido.
+
+**Piezas del plan original — status:**
+1. ✅ Modelo `TiendaTiendanube` persistido.
+2. ✅ Endpoint `POST /api/tiendanube/rates` clasificado public + resolución `store_id` → `empresaId`.
+3. ✅ Conversión items→paquetes inline (helper `armarBultoApilado()` en `lib/empaquetado/armar-bulto.ts`).
+4. ✅ Timeout respetado (DEUDA 145 cerrada por separado).
+5. ✅ Persistir `CotizacionSnapshot` — writer en `rates/route.ts:266` (parcial sobre DEUDA 111; el writer dual en `/api/cotizar` + wiring de `usadaEnEnvioId` siguen abiertos como parte de 111, pero la pieza específica del rates callback que la 111 pedía está cerrada).
+
+**Pendiente no bloqueante (QA/homologación)**: la **homologación formal con Tiendanube** (reunión de validación + Nimbus+Nexo UI si aplica) sigue pendiente — paraguas en DEUDA 130. El código del rates callback + labels está en main y listo para producción.
+
+**Relación:** DEUDA 130 (paraguas), DEUDA 111 (snapshot — pieza del rates callback cerrada, writers restantes abiertos en 111), DEUDA 143 (Modo B consumer wired, falta UI de config), DEUDA 145 (timeout cerrada), DEUDA 129 (resiliencia + fallback — RESUELTA 2026-08-05, heredada por el endpoint via `cotizar()`).
+
+**Origen cierre**: drift sweep Chat A 2026-10-13 — recon code-vs-registry confirmó endpoint completo + labels + install + modelo. El registry quedó stale desde el momento en que se construyó, probablemente por el bucket de commits del plugin Tiendanube que no actualizó DEUDAS.md.
+
+---
+

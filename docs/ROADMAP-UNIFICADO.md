@@ -68,7 +68,7 @@ En prod hoy: **motor de plata FASE 1 rama-aware** (cascada intermediario+Shipro,
 
 **Chat D** — MEF Fases 3+: enriquecimiento del shipment ML, tracking downstream, excepciones, etiqueta ML, wiring de 2 crons MEF (`mef-sincronizar-zonas` + `mef-procesar-notificaciones`), handshake webhook real. Esperando entorno Flex real para validar el shape del payload. Ver DEUDA 180 (Fases 1+2 en RESUELTAS).
 
-**Chat C** — Plugins / Tiendanube / WooCommerce: DEUDA 130 (spec Tiendanube + homologación), DEUDA 133 (webhooks de privacidad obligatorios), DEUDA 144 (rates callback Tiendanube), DEUDA 104 (webhooks salientes Shipro → e-commerce), DEUDA 103 (modelo multi-bulto en API), DEUDA 129 (resiliencia checkout: circuit breaker + fallback rates).
+**Chat C** — Plugins / Tiendanube / WooCommerce: DEUDA 130 (spec Tiendanube + **PARCIAL paraguas** — código de sub-piezas completo, falta homologación formal con Tiendanube; actualizado 2026-10-13), DEUDA 104 (webhooks salientes Shipro → e-commerce — **PARCIAL**: mitad IN completa, mitad OUT ausente; actualizado 2026-10-13), DEUDA 103 (modelo multi-bulto en API). DEUDAs ya cerradas por drift sweep: 133 (webhooks privacidad LGPD) + 144 (rates callback Tiendanube) → ambas RESUELTAS EN PROD 2026-10-13, código completo con QA de homologación pendiente (no bloquea). DEUDA 129 (resiliencia checkout: circuit breaker + fallback rates) — RESUELTA 2026-08-05.
 
 **PUEDE ESPERAR (post primer cliente)**:
 - Métricas / Torre: 39 (métricas restantes), 43-48 (zonas/SLA), 56, 57, 61, 62, 65, 161, 162.
@@ -108,7 +108,7 @@ En prod hoy: **motor de plata FASE 1 rama-aware** (cascada intermediario+Shipro,
 - **Chat C** — Plugins:
   - Pulido final del plugin WooCommerce (DEUDAS 145 timeout vuelve a 5s cuando latencia núcleo < 5s; HMAC si se agrega a `/rastreo-publico`).
   - **169 Fix B** mitad plugins: cómo WooCommerce (y plugins futuros) manejan el nuevo estado bloqueado sin sorpresas.
-  - Avance progresivo en Tiendanube Momento 3 (labels/tracking/webhooks) — DEUDA 144.
+  - Avance progresivo en Tiendanube Momento 3 (tracking-events salientes vía DEUDA 104 OUT) — labels y rates callback ya cerrados por DEUDA 144 (RESUELTA 2026-10-13).
 
 - **Chat D** — MEF:
   - Fases 3+ cuando Flex real responda. Wiring de los 2 crons MEF en crontab del server coordinado con Chat A (deploy).

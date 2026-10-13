@@ -2957,6 +2957,134 @@ export default function TorreDeControl() {
                 )}
               </div>
 
+            ) : metricaAnalisis === "Velocidad Resolución Tickets" ? (
+              <div className="flex-1 p-8 overflow-y-auto bg-gray-50 space-y-6">
+                {cargandoTicketsMesaAyuda ? (
+                  <p className="text-sm text-gray-400 font-bold">Cargando…</p>
+                ) : !ticketsMesaAyudaMetrica ? (
+                  <p className="text-sm text-gray-400 font-bold">Sin datos.</p>
+                ) : (ticketsMesaAyudaMetrica.resumen?.muestraCerrados ?? 0) === 0 ? (
+                  <div className="bg-white border border-gray-200 rounded-xl p-10 text-center">
+                    <Timer className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                    <p className="text-sm font-bold text-gray-600">Necesitamos al menos 1 ticket cerrado en la ventana para medir velocidad.</p>
+                    <p className="text-xs text-gray-400 mt-2">Pre-cliente real esto es lo esperado — se poblará desde el primer ticket cerrado.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-6">
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                      <div className="bg-white border border-gray-200 rounded-xl p-5">
+                        <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">% en SLA ({ticketsMesaAyudaMetrica.resumen.umbralSlaHoras}h)</p>
+                        <p className={`text-3xl font-black mt-2 ${
+                          (ticketsMesaAyudaMetrica.resumen.tasaEnSlaPct ?? 0) >= 90 ? 'text-green-600' :
+                          (ticketsMesaAyudaMetrica.resumen.tasaEnSlaPct ?? 0) >= 70 ? 'text-amber-600' : 'text-red-600'
+                        }`}>{ticketsMesaAyudaMetrica.resumen.tasaEnSlaPct ?? '--'}%</p>
+                        <p className="text-[11px] text-gray-500 mt-1">
+                          {ticketsMesaAyudaMetrica.velocidadResolucion.dentroSla} dentro · {ticketsMesaAyudaMetrica.velocidadResolucion.fueraSla} fuera
+                        </p>
+                      </div>
+                      <div className="bg-white border border-gray-200 rounded-xl p-5">
+                        <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Mediana</p>
+                        <p className="text-3xl font-black text-gray-800 mt-2">{ticketsMesaAyudaMetrica.resumen.tiempoMedianoResolucion ?? '--'}<span className="text-lg text-gray-400 font-bold"> d</span></p>
+                        <p className="text-[11px] text-gray-500 mt-1">días hasta cerrar</p>
+                      </div>
+                      <div className="bg-white border border-gray-200 rounded-xl p-5">
+                        <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Promedio</p>
+                        <p className="text-3xl font-black text-gray-800 mt-2">{ticketsMesaAyudaMetrica.resumen.tiempoPromedioResolucion ?? '--'}<span className="text-lg text-gray-400 font-bold"> d</span></p>
+                        <p className="text-[11px] text-gray-500 mt-1">muestra {ticketsMesaAyudaMetrica.resumen.muestraCerrados}</p>
+                      </div>
+                      <div className="bg-white border border-gray-200 rounded-xl p-5">
+                        <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">P95</p>
+                        <p className="text-3xl font-black text-gray-800 mt-2">{ticketsMesaAyudaMetrica.resumen.tiempoP95Resolucion ?? '--'}<span className="text-lg text-gray-400 font-bold"> d</span></p>
+                        <p className="text-[11px] text-gray-500 mt-1">peor 5% supera esto</p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Por motivo</h4>
+                        {ticketsMesaAyudaMetrica.velocidadResolucion.porMotivo.length === 0 ? (
+                          <p className="text-sm text-gray-400">Sin tickets cerrados.</p>
+                        ) : (
+                          <div className="space-y-2 max-h-80 overflow-y-auto">
+                            {ticketsMesaAyudaMetrica.velocidadResolucion.porMotivo.map((m: any, idx: number) => (
+                              <div key={idx} className="flex justify-between items-start border-b border-gray-100 pb-2 last:border-0">
+                                <div className="flex-1 pr-2">
+                                  <p className="text-sm font-bold text-gray-800 truncate" title={m.motivo}>{m.motivo}</p>
+                                  <p className="text-[11px] text-gray-500">{m.cantidad} cerrados</p>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-sm font-black text-gray-800">{m.duracionPromedioDias ?? '--'}d</p>
+                                  <p className="text-[10px] text-gray-400">P95 {m.duracionP95Dias ?? '--'}d</p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Por usuario que cerró</h4>
+                        {ticketsMesaAyudaMetrica.velocidadResolucion.porUsuarioCierre.length === 0 ? (
+                          <p className="text-sm text-gray-400">Sin acciones de cierre registradas en auditoría.</p>
+                        ) : (
+                          <div className="space-y-2 max-h-80 overflow-y-auto">
+                            {ticketsMesaAyudaMetrica.velocidadResolucion.porUsuarioCierre.map((u: any, idx: number) => (
+                              <div key={idx} className="flex justify-between items-start border-b border-gray-100 pb-2 last:border-0">
+                                <div className="flex-1 pr-2">
+                                  <p className="text-sm font-bold text-gray-800 truncate" title={u.usuarioEmail}>{u.usuarioEmail}</p>
+                                  <p className="text-[11px] text-gray-500">{u.cantidad} tickets cerrados</p>
+                                </div>
+                                <p className="text-sm font-black text-gray-800">{u.duracionPromedioDias ?? '--'}d</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Por hora de apertura</h4>
+                        <div className="grid grid-cols-6 sm:grid-cols-8 gap-1.5">
+                          {ticketsMesaAyudaMetrica.velocidadResolucion.porHora.map((h: any, idx: number) => {
+                            const max = Math.max(...ticketsMesaAyudaMetrica.velocidadResolucion.porHora.map((x: any) => x.cantidad), 1);
+                            const altura = max > 0 ? (h.cantidad / max) * 100 : 0;
+                            return (
+                              <div key={idx} className="flex flex-col items-center" title={`${h.hora}:00 · ${h.cantidad} tickets · prom ${h.duracionPromedioDias ?? '--'}d`}>
+                                <div className="w-full h-12 bg-gray-100 rounded relative overflow-hidden flex items-end">
+                                  <div className="w-full bg-indigo-500 rounded" style={{ height: `${altura}%` }}></div>
+                                </div>
+                                <p className="text-[9px] text-gray-500 mt-1 font-bold">{h.hora}</p>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Por día de la semana</h4>
+                        <div className="space-y-2">
+                          {["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"].map((nombre, dia) => {
+                            const d = ticketsMesaAyudaMetrica.velocidadResolucion.porDiaSemana[dia];
+                            const max = Math.max(...ticketsMesaAyudaMetrica.velocidadResolucion.porDiaSemana.map((x: any) => x.cantidad), 1);
+                            const pct = max > 0 ? Math.round((d.cantidad / max) * 100) : 0;
+                            return (
+                              <div key={dia}>
+                                <div className="flex justify-between text-xs font-bold mb-1">
+                                  <span>{nombre}</span>
+                                  <span className="text-gray-600">{d.cantidad}{d.duracionPromedioDias !== null && ` · ${d.duracionPromedioDias}d prom`}</span>
+                                </div>
+                                <div className="w-full bg-gray-100 rounded-full h-2">
+                                  <div className="bg-indigo-500 h-2 rounded-full" style={{ width: `${pct}%` }}></div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
             ) : metricaAnalisis === "Cobertura Postal Activa" ? (
               <div className="flex-1 p-8 overflow-y-auto bg-gray-50 space-y-6">
                 {cargandoCoberturaPostal ? (
@@ -3286,6 +3414,32 @@ export default function TorreDeControl() {
               <p className="text-xs font-bold text-gray-500 uppercase mb-2 flex items-center gap-1.5"><Headset className="text-orange-500" /> 7. Carga de Soporte</p>
               <h3 className="text-3xl font-black mb-1">{ticketsMesaAyudaMetrica?.resumen?.tasaSoporte ?? 0}%</h3>
               <button onClick={() => abrirAnalisis("Tasa de Tickets de Mesa de Ayuda")} className="w-full py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold mt-auto hover:bg-blue-50">Desglosar</button>
+            </div>
+            <div className={`bg-white p-5 rounded-xl border shadow-sm flex flex-col h-full ${
+              ticketsMesaAyudaMetrica?.resumen?.tasaEnSlaPct !== null && ticketsMesaAyudaMetrica?.resumen?.tasaEnSlaPct !== undefined && ticketsMesaAyudaMetrica.resumen.tasaEnSlaPct < 70 ? 'border-red-300' : 'border-gray-200'
+            }`}>
+              <p className="text-xs font-bold text-gray-500 uppercase mb-2 flex items-center gap-1.5"><Timer className="text-indigo-500" /> 16. Velocidad Resolución Tickets</p>
+              {cargandoTicketsMesaAyuda ? (
+                <h3 className="text-3xl font-black mb-1 text-gray-300"><Loader2 className="w-6 h-6 animate-spin inline" /></h3>
+              ) : (ticketsMesaAyudaMetrica?.resumen?.muestraCerrados ?? 0) === 0 ? (
+                <>
+                  <h3 className="text-3xl font-black mb-1 text-gray-400">--</h3>
+                  <p className="text-[10px] text-gray-400 mb-1">Necesitamos al menos 1 ticket cerrado en la ventana</p>
+                </>
+              ) : (
+                <>
+                  <h3 className="text-3xl font-black mb-1">
+                    {ticketsMesaAyudaMetrica.resumen.tasaEnSlaPct ?? '--'}<span className="text-lg font-bold text-gray-400">%</span>
+                  </h3>
+                  <p className="text-[10px] text-gray-500 mb-1">
+                    dentro SLA {ticketsMesaAyudaMetrica.resumen.umbralSlaHoras}h · P95 {ticketsMesaAyudaMetrica.resumen.tiempoP95Resolucion ?? '--'}d · prom. {ticketsMesaAyudaMetrica.resumen.tiempoPromedioResolucion ?? '--'}d
+                  </p>
+                  <p className="text-[10px] text-gray-400 mb-1">
+                    muestra {ticketsMesaAyudaMetrica.resumen.muestraCerrados} cerrados
+                  </p>
+                </>
+              )}
+              <button onClick={() => abrirAnalisis("Velocidad Resolución Tickets")} className="w-full py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold mt-auto hover:bg-blue-50">Desglosar</button>
             </div>
             <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm flex flex-col h-full">
               <p className="text-xs font-bold text-gray-500 uppercase mb-2 flex items-center gap-1.5"><TrendingDown className="text-blue-500" /> 8. Tiempos Colecta</p>

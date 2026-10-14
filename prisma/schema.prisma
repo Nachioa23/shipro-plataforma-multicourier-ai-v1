@@ -1285,7 +1285,12 @@ model ReglaRuteo {
   condicionVariable String // Ej: "VALOR_CARRITO", "PESO_PAQUETE", "PROVINCIA_DESTINO"
   condicionOperador String // Ej: "MAYOR_A", "MENOR_A", "ENTRE", "IGUAL_A"
   condicionValor1   Float? // Ej: 80000
-  condicionValor2   Float? // Ej: 200000 
+  condicionValor2   Float? // Ej: 200000
+  // DEUDA 186 Fase 2 pieza 2 (2026-10-14) — valor de condición para variables categóricas/string
+  // (PROVINCIA_DESTINO; futuras ZONA/SKU). Numéricas siguen con condicionValor1/2. Nullable + sin
+  // default: reglas existentes quedan null (backward-compat). El canónico guardado matchea el
+  // output de normalizarProvincia (lib/constants/normalizar-provincia.ts).
+  condicionValorTexto String?
 
   accionTipo  String // Ej: "PRIORIZAR_SLA", "TOPE_COSTO_PORCENTAJE", "FORZAR_COURIER"
   accionValor String? // Ej: "10" o "1" 

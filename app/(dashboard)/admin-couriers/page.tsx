@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import CourierDrawer, { CourierEditable } from "@/components/admin-couriers/CourierDrawer";
 import IntegrarCourierDrawer from "@/components/admin-couriers/IntegrarCourierDrawer";
+import { PROVINCIAS_AR } from "@/lib/constants/provincias-ar";
 
 export default function AdminCouriersMaestro() {
   const { data: session } = useSession();
@@ -43,6 +44,8 @@ export default function AdminCouriersMaestro() {
   const [condicionOperador, setCondicionOperador] = useState("MAYOR_A");
   const [condicionValor1, setCondicionValor1] = useState("");
   const [condicionValor2, setCondicionValor2] = useState("");
+  // DEUDA 186 Fase 2 pieza 2 — valor categórico (PROVINCIA_DESTINO; futuras ZONA/SKU).
+  const [condicionValorTexto, setCondicionValorTexto] = useState("");
   const [accionTipo, setAccionTipo] = useState("FORZAR_COURIER");
   const [accionValor, setAccionValor] = useState("");
 
@@ -99,16 +102,25 @@ export default function AdminCouriersMaestro() {
 
   // ================= FUNCIONES: REGLAS =================
   const crearRegla = async () => {
-    if (!nombreRegla || !condicionValor1 || !accionValor) return alert("Completá los campos obligatorios");
+    // DEUDA 186 Fase 2 pieza 2 — validación específica por variable: PROVINCIA_DESTINO exige
+    // condicionValorTexto (dropdown PROVINCIAS_AR); el resto exige condicionValor1 (numérico).
+    const esProvincia = condicionVariable === "PROVINCIA_DESTINO";
+    if (!nombreRegla || !accionValor) return alert("Completá los campos obligatorios");
+    if (esProvincia && !condicionValorTexto) return alert("Elegí una provincia");
+    if (!esProvincia && !condicionValor1) return alert("Completá los campos obligatorios");
     setGuardando(true);
     await fetch('/api/admin/reglas', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        nombre: nombreRegla, condicionVariable, condicionOperador, condicionValor1, condicionValor2, accionTipo, accionValor
+        nombre: nombreRegla, condicionVariable, condicionOperador,
+        condicionValor1: esProvincia ? null : condicionValor1,
+        condicionValor2: esProvincia ? null : condicionValor2,
+        condicionValorTexto: esProvincia ? condicionValorTexto : null,
+        accionTipo, accionValor
       })
     });
-    setNombreRegla(""); setCondicionValor1(""); setCondicionValor2(""); setAccionValor("");
+    setNombreRegla(""); setCondicionValor1(""); setCondicionValor2(""); setCondicionValorTexto(""); setAccionValor("");
     await cargarTodo();
     setGuardando(false);
     mostrarMensaje("Regla creada exitosamente", "ok");
@@ -322,9 +334,21 @@ export default function AdminCouriersMaestro() {
                           <option value="ENTRE">Está Entre</option>
                         </select>
                         <div className="flex gap-2">
-                          <input type="text" placeholder="Valor 1" className="w-full border border-gray-300 rounded-lg text-sm p-2 outline-none" value={condicionValor1} onChange={e => setCondicionValor1(e.target.value)} />
-                          {condicionOperador === "ENTRE" && (
-                            <input type="text" placeholder="Valor 2" className="w-full border border-gray-300 rounded-lg text-sm p-2 outline-none" value={condicionValor2} onChange={e => setCondicionValor2(e.target.value)} />
+                          {/* DEUDA 186 Fase 2 pieza 2 — PROVINCIA_DESTINO usa dropdown canónico
+                              (reusa PROVINCIAS_AR, match 24/24 con normalizarProvincia); el resto
+                              usa input numérico como antes. */}
+                          {condicionVariable === "PROVINCIA_DESTINO" ? (
+                            <select className="w-full border border-gray-300 rounded-lg text-sm p-2 outline-none" value={condicionValorTexto} onChange={e => setCondicionValorTexto(e.target.value)}>
+                              <option value="">Elegí una provincia</option>
+                              {PROVINCIAS_AR.map(p => <option key={p} value={p}>{p}</option>)}
+                            </select>
+                          ) : (
+                            <>
+                              <input type="text" placeholder="Valor 1" className="w-full border border-gray-300 rounded-lg text-sm p-2 outline-none" value={condicionValor1} onChange={e => setCondicionValor1(e.target.value)} />
+                              {condicionOperador === "ENTRE" && (
+                                <input type="text" placeholder="Valor 2" className="w-full border border-gray-300 rounded-lg text-sm p-2 outline-none" value={condicionValor2} onChange={e => setCondicionValor2(e.target.value)} />
+                              )}
+                            </>
                           )}
                         </div>
                       </div>

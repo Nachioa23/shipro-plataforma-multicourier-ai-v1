@@ -12,6 +12,7 @@ import {
 } from "@/lib/utils/resolvers-tarifa";
 import type { Paquete } from "@/lib/couriers/CourierInterface";
 import { IVA_AR_MULTIPLIER } from "@/lib/constants/iva";
+import { normalizarProvincia } from "@/lib/constants/normalizar-provincia";
 
 export interface CotizarInput {
   empresaId: number | null;
@@ -747,6 +748,22 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
       valorEval >= regla.condicionValor1 &&
       valorEval <= regla.condicionValor2
     ) condicionCumplida = true;
+
+    // DEUDA 186 Fase 2 pieza 2 — variable PROVINCIA_DESTINO (cierra DEUDA 99, opción muerta: UI
+    // la ofrecía, motor no la ejecutaba). Comparación de nombre canónico vía normalizarProvincia:
+    // zanja la ambigüedad CABA vs Buenos Aires provincia (son 2 canónicos distintos). Doble
+    // normalización (input + regla) para tolerar cualquier formato en provinciaDestino + proteger
+    // reglas legacy o edits manuales de DB. Operadores distintos de IGUAL_A no aplican acá
+    // (EN_LISTA / COINCIDE_REGEX vendrán en piezas futuras).
+    if (
+      regla.condicionVariable === "PROVINCIA_DESTINO" &&
+      regla.condicionOperador === "IGUAL_A" &&
+      regla.condicionValorTexto
+    ) {
+      const provInput = normalizarProvincia(provinciaDestino);
+      const provRegla = normalizarProvincia(regla.condicionValorTexto);
+      if (provInput && provRegla && provInput === provRegla) condicionCumplida = true;
+    }
 
     if (condicionCumplida) { reglaAplicada = regla; break; }
   }

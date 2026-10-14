@@ -38,6 +38,9 @@ export async function POST(request: Request) {
         condicionOperador: body.condicionOperador,
         condicionValor1: body.condicionValor1 ? parseFloat(body.condicionValor1) : null,
         condicionValor2: body.condicionValor2 ? parseFloat(body.condicionValor2) : null,
+        // DEUDA 186 Fase 2 pieza 2 — valor categórico (PROVINCIA_DESTINO; futuras ZONA/SKU).
+        // Numéricas quedan null acá; categóricas quedan null en condicionValor1/2. Aditivo.
+        condicionValorTexto: body.condicionValorTexto || null,
         accionTipo: body.accionTipo,
         accionValor: body.accionValor || null,
         activa: true,

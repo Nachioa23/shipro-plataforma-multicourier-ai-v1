@@ -2,6 +2,39 @@ import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { resolverContext } from "@/lib/auth-context";
 
+// DEUDA 186 Fase 2 (2026-10-14) — audit log de cambios de reglas del cliente.
+// Best-effort (fire-and-forget con .catch); nunca rompe la operación.
+function auditarReglaRuteoCliente(
+  request: Request,
+  data: {
+    reglaRuteoId: number | null;
+    empresaId: number;
+    accion: "CREADA" | "EDITADA_VALOR" | "ACTIVADA" | "DESACTIVADA" | "ELIMINADA";
+    valorNuevo?: string | null;
+    motivo?: string | null;
+  }
+): void {
+  const usuarioEmail = request.headers.get("x-usuario-email");
+  const rolUsuario = request.headers.get("x-rol");
+  const ipOrigen = request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip");
+  void prisma.auditoriaReglaRuteo
+    .create({
+      data: {
+        usuarioEmail,
+        rolUsuario,
+        ipOrigen,
+        empresaId: data.empresaId,
+        reglaRuteoId: data.reglaRuteoId,
+        accion: data.accion,
+        valorNuevo: data.valorNuevo ?? null,
+        motivo: data.motivo ?? null,
+      },
+    })
+    .catch((err) => {
+      console.warn("[audit][reglaRuteo cliente] best-effort falló:", err);
+    });
+}
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -58,6 +91,24 @@ export async function POST(request: Request) {
         where: { id: reglaExistente.id },
         data: { condicionValor1: parseFloat(condicionValor1) || 0, condicionValor2: valor2Parseado, accionValor, activa }
       });
+      // DEUDA 186 Fase 2 — audit cliente: ACTIVADA/DESACTIVADA si el flag cambió,
+      // o EDITADA_VALOR si solo cambió el valor manteniendo el estado.
+      const accion: "ACTIVADA" | "DESACTIVADA" | "EDITADA_VALOR" =
+        reglaExistente.activa !== actualizada.activa
+          ? (actualizada.activa ? "ACTIVADA" : "DESACTIVADA")
+          : "EDITADA_VALOR";
+      auditarReglaRuteoCliente(request, {
+        reglaRuteoId: actualizada.id,
+        empresaId,
+        accion,
+        valorNuevo: JSON.stringify({
+          condicionValor1: actualizada.condicionValor1,
+          condicionValor2: actualizada.condicionValor2,
+          accionValor: actualizada.accionValor,
+          activa: actualizada.activa,
+        }),
+        motivo: `Cliente actualizó regla "${actualizada.nombre}"`,
+      });
       return NextResponse.json(actualizada);
     } else {
       const nueva = await prisma.reglaRuteo.create({
@@ -69,6 +120,22 @@ export async function POST(request: Request) {
           accionTipo, accionValor, activa,
           prioridad: 1
         }
+      });
+      auditarReglaRuteoCliente(request, {
+        reglaRuteoId: nueva.id,
+        empresaId,
+        accion: "CREADA",
+        valorNuevo: JSON.stringify({
+          nombre: nueva.nombre,
+          condicionVariable: nueva.condicionVariable,
+          condicionOperador: nueva.condicionOperador,
+          condicionValor1: nueva.condicionValor1,
+          condicionValor2: nueva.condicionValor2,
+          accionTipo: nueva.accionTipo,
+          accionValor: nueva.accionValor,
+          activa: nueva.activa,
+        }),
+        motivo: `Cliente activó regla "${nueva.nombre}" (desde plantilla maestra)`,
       });
       return NextResponse.json(nueva);
     }

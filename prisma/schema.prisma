@@ -1293,11 +1293,60 @@ model ReglaRuteo {
   condicionValorTexto String?
 
   accionTipo  String // Ej: "PRIORIZAR_SLA", "TOPE_COSTO_PORCENTAJE", "FORZAR_COURIER"
-  accionValor String? // Ej: "10" o "1" 
+  accionValor String? // Ej: "10" o "1"
 
   activa             Boolean  @default(false) // Por defecto apagadas para que el cliente decida
   fechaCreacion      DateTime @default(now())
   fechaActualizacion DateTime @updatedAt
+}
+
+// =============================================================================
+// AuditoriaReglaRuteo — DEUDA 186 Fase 2 (2026-10-14)
+//
+// Audit log dedicado a cambios de reglas de ruteo. Modelo nuevo (no reusa
+// AuditoriaConfiguracion) porque:
+//   - AuditoriaConfiguracion exige empresaId Int NOT NULL — no puede registrar
+//     cambios sobre PLANTILLAS MAESTRAS (ReglaRuteo con empresaId=null que crea
+//     el admin shipro como catálogo global).
+//   - Separación conceptual: config money-crítica (markups, SMO, fee, límites,
+//     credenciales) vs config de ruteo (selección de courier). Scopes y
+//     retención distintas; no mezclar.
+//
+// Shape espeja AuditoriaConfiguracion (quién/qué/cuándo/motivo) pero con:
+//   - empresaId NULLABLE (plantilla maestra = null; regla cliente = empresa.id).
+//   - reglaRuteoId NULLABLE (null tras un DELETE — el id queda como registro
+//     histórico aunque la regla ya no exista).
+//   - accion enumerada en string (CREADA|EDITADA_VALOR|ACTIVADA|DESACTIVADA|ELIMINADA).
+//
+// Writes best-effort (fire-and-forget) desde los 2 endpoints de reglas; nunca
+// deben romper la operación de la regla si el audit falla.
+// =============================================================================
+model AuditoriaReglaRuteo {
+  id    Int      @id @default(autoincrement())
+  fecha DateTime @default(now())
+
+  // Quién hizo el cambio (del AuthContext / headers del proxy).
+  usuarioEmail String?
+  rolUsuario   String?
+  ipOrigen     String?
+
+  // A quién afecta — nullable para cubrir plantillas maestras globales.
+  empresaId Int?
+
+  // Referencia a la regla (nullable: tras DELETE, el id queda como registro histórico).
+  reglaRuteoId Int?
+
+  // Qué cambió.
+  accion        String  // "CREADA" | "EDITADA_VALOR" | "ACTIVADA" | "DESACTIVADA" | "ELIMINADA"
+  campo         String? // Para EDITADA_VALOR: cuál campo cambió (ej. "condicionValor1", "accionValor").
+  valorAnterior String?
+  valorNuevo    String?
+
+  // Contexto adicional (ej. "Admin creó plantilla maestra 'Protección de Margen'").
+  motivo String?
+
+  @@index([empresaId, fecha])
+  @@index([reglaRuteoId, fecha])
 }
 
 // ==========================================

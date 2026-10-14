@@ -1,6 +1,45 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
+// DEUDA 186 Fase 2 (2026-10-14) — audit log de cambios de reglas de ruteo.
+// Best-effort (fire-and-forget con .catch); nunca rompe la operación si el
+// insert falla. empresaId=null porque este endpoint maneja PLANTILLAS MAESTRAS
+// GLOBALES del admin shipro — las per-empresa viven en /api/empresa/reglas.
+function auditarReglaRuteo(
+  request: Request,
+  data: {
+    reglaRuteoId: number | null;
+    accion: "CREADA" | "EDITADA_VALOR" | "ACTIVADA" | "DESACTIVADA" | "ELIMINADA";
+    campo?: string | null;
+    valorAnterior?: string | null;
+    valorNuevo?: string | null;
+    motivo?: string | null;
+    empresaId?: number | null;
+  }
+): void {
+  const usuarioEmail = request.headers.get("x-usuario-email");
+  const rolUsuario = request.headers.get("x-rol");
+  const ipOrigen = request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip");
+  void prisma.auditoriaReglaRuteo
+    .create({
+      data: {
+        usuarioEmail,
+        rolUsuario,
+        ipOrigen,
+        empresaId: data.empresaId ?? null,
+        reglaRuteoId: data.reglaRuteoId,
+        accion: data.accion,
+        campo: data.campo ?? null,
+        valorAnterior: data.valorAnterior ?? null,
+        valorNuevo: data.valorNuevo ?? null,
+        motivo: data.motivo ?? null,
+      },
+    })
+    .catch((err) => {
+      console.warn("[audit][reglaRuteo] best-effort falló:", err);
+    });
+}
+
 export async function GET(request: Request) {
   // DEUDA 87 FAMILIA 3: gate de rol (defense-in-depth).
   const rol = request.headers.get("x-rol") || "";
@@ -30,7 +69,7 @@ export async function POST(request: Request) {
 
     // Calculamos la prioridad: la nueva regla va al final de la cola
     const cantidadActual = await prisma.reglaRuteo.count();
-    
+
     const nuevaRegla = await prisma.reglaRuteo.create({
       data: {
         nombre: body.nombre,
@@ -46,6 +85,22 @@ export async function POST(request: Request) {
         activa: true,
         prioridad: cantidadActual + 1
       }
+    });
+    // DEUDA 186 Fase 2 — audit CREADA (plantilla maestra, empresaId=null).
+    auditarReglaRuteo(request, {
+      reglaRuteoId: nuevaRegla.id,
+      accion: "CREADA",
+      valorNuevo: JSON.stringify({
+        nombre: nuevaRegla.nombre,
+        condicionVariable: nuevaRegla.condicionVariable,
+        condicionOperador: nuevaRegla.condicionOperador,
+        condicionValor1: nuevaRegla.condicionValor1,
+        condicionValor2: nuevaRegla.condicionValor2,
+        condicionValorTexto: nuevaRegla.condicionValorTexto,
+        accionTipo: nuevaRegla.accionTipo,
+        accionValor: nuevaRegla.accionValor,
+      }),
+      motivo: `Admin creó plantilla maestra "${nuevaRegla.nombre}"`,
     });
     return NextResponse.json(nuevaRegla);
   } catch (error: any) {
@@ -67,9 +122,21 @@ export async function PUT(request: Request) {
 
     // Si pasamos 'activa', actualizamos el estado
     if (activa !== undefined) {
+      // DEUDA 186 Fase 2 — leer el estado anterior para el audit (best-effort,
+      // query extra tolerable para un endpoint admin de baja frecuencia).
+      const prev = await prisma.reglaRuteo.findUnique({ where: { id: Number(id) }, select: { activa: true, nombre: true, empresaId: true } });
       const actualizada = await prisma.reglaRuteo.update({
         where: { id: Number(id) },
         data: { activa }
+      });
+      auditarReglaRuteo(request, {
+        reglaRuteoId: actualizada.id,
+        empresaId: actualizada.empresaId,
+        accion: activa ? "ACTIVADA" : "DESACTIVADA",
+        campo: "activa",
+        valorAnterior: prev ? String(prev.activa) : null,
+        valorNuevo: String(activa),
+        motivo: `Admin ${activa ? "activó" : "desactivó"} regla "${actualizada.nombre}"`,
       });
       return NextResponse.json(actualizada);
     }
@@ -90,10 +157,19 @@ export async function DELETE(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get("id");
-    
+
     if (!id) return NextResponse.json({ error: "Falta el ID" }, { status: 400 });
 
+    // DEUDA 186 Fase 2 — leer la regla pre-delete para preservar su snapshot en el audit.
+    const prev = await prisma.reglaRuteo.findUnique({ where: { id: Number(id) } });
     await prisma.reglaRuteo.delete({ where: { id: Number(id) } });
+    auditarReglaRuteo(request, {
+      reglaRuteoId: Number(id), // id queda como breadcrumb histórico aunque la fila ya no exista.
+      empresaId: prev?.empresaId ?? null,
+      accion: "ELIMINADA",
+      valorAnterior: prev ? JSON.stringify(prev) : null,
+      motivo: `Admin eliminó regla ${prev?.nombre ? `"${prev.nombre}"` : `id=${id}`}`,
+    });
     return NextResponse.json({ success: true });
   } catch (error: any) {
     return NextResponse.json({ error: "Error al eliminar" }, { status: 500 });

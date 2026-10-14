@@ -737,6 +737,16 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
     if (regla.condicionOperador === "MAYOR_A" && valorEval > (regla.condicionValor1 || 0)) condicionCumplida = true;
     if (regla.condicionOperador === "MENOR_A" && valorEval < (regla.condicionValor1 || 0)) condicionCumplida = true;
     if (regla.condicionOperador === "IGUAL_A" && valorEval === (regla.condicionValor1 || 0)) condicionCumplida = true;
+    // DEUDA 186 Fase 2 pieza 1 — operador ENTRE (cierra DEUDA 100, opción muerta: UI lo ofrecía, motor no lo
+    // ejecutaba). Rango inclusivo [v1, v2] sobre variables numéricas (VALOR_CARRITO, PESO_PAQUETE). Si falta
+    // condicionValor2 (regla mal cargada) → no matchea (fallback false explícito, no crash).
+    if (
+      regla.condicionOperador === "ENTRE" &&
+      regla.condicionValor1 != null &&
+      regla.condicionValor2 != null &&
+      valorEval >= regla.condicionValor1 &&
+      valorEval <= regla.condicionValor2
+    ) condicionCumplida = true;
 
     if (condicionCumplida) { reglaAplicada = regla; break; }
   }

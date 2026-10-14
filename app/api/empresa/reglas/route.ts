@@ -30,7 +30,16 @@ export async function POST(request: Request) {
     }
     const empresaId = ctx.empresaId;
 
-    const { nombre, condicionVariable, condicionOperador, condicionValor1, accionTipo, accionValor, activa } = body;
+    const { nombre, condicionVariable, condicionOperador, condicionValor1, condicionValor2, accionTipo, accionValor, activa } = body;
+
+    // DEUDA 186 Fase 2 pieza 1 — side-fix (bug lateral detectado por recon):
+    // antes el update/create del cliente no incluía condicionValor2 → al activar/editar una regla ENTRE
+    // (traída de la plantilla maestra), el segundo valor se perdía y ENTRE nunca funcionaba end-to-end.
+    // Ahora se parsea igual que condicionValor1; para reglas sin ENTRE queda null (backward-compat).
+    const valor2Parseado =
+      condicionValor2 == null || condicionValor2 === ""
+        ? null
+        : (parseFloat(condicionValor2) || null);
 
     // MAGIA: Si el cliente está PRENDIENDO esta regla, apagamos todas las demás de su empresa.
     if (activa) {
@@ -47,7 +56,7 @@ export async function POST(request: Request) {
     if (reglaExistente) {
       const actualizada = await prisma.reglaRuteo.update({
         where: { id: reglaExistente.id },
-        data: { condicionValor1: parseFloat(condicionValor1) || 0, accionValor, activa }
+        data: { condicionValor1: parseFloat(condicionValor1) || 0, condicionValor2: valor2Parseado, accionValor, activa }
       });
       return NextResponse.json(actualizada);
     } else {
@@ -56,6 +65,7 @@ export async function POST(request: Request) {
           empresaId,
           nombre, condicionVariable, condicionOperador,
           condicionValor1: parseFloat(condicionValor1) || 0,
+          condicionValor2: valor2Parseado,
           accionTipo, accionValor, activa,
           prioridad: 1
         }

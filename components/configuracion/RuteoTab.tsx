@@ -38,6 +38,10 @@ export default function RuteoTab({ empresaActivaId }: Props) {
         if (Array.isArray(maestras)) {
           const dinamicas = maestras.map((m: any) => {
             const rCliente = Array.isArray(clienteReglas) ? clienteReglas.find((rc: any) => rc.nombre === m.nombre) : null;
+            // DEUDA 186 Fase 2 pieza 1 — hereda condicionValor2 (si existe) desde la plantilla maestra
+            // o desde la regla del cliente ya persistida. Null-safe.
+            const fallbackV2 = m && m.condicionValor2 != null ? m.condicionValor2 : null;
+            const v2 = rCliente && rCliente.condicionValor2 != null ? rCliente.condicionValor2 : fallbackV2;
             return {
               idMaestra: m.id,
               nombre: m.nombre,
@@ -46,6 +50,7 @@ export default function RuteoTab({ empresaActivaId }: Props) {
               accionTipo: m.accionTipo,
               activa: rCliente ? rCliente.activa : false,
               condicionValor1: rCliente && rCliente.condicionValor1 ? rCliente.condicionValor1.toString() : "",
+              condicionValor2: v2 != null ? v2.toString() : "",
               accionValor: rCliente && rCliente.accionValor ? rCliente.accionValor : ""
             };
           });
@@ -90,6 +95,8 @@ export default function RuteoTab({ empresaActivaId }: Props) {
   const guardarRegla = async (regla: any) => {
     if (regla.activa) {
       if (regla.condicionVariable !== "PROVINCIA_DESTINO" && !regla.condicionValor1) return alert("Ingresá el valor de la condición.");
+      // DEUDA 186 Fase 2 pieza 1 — ENTRE requiere ambos valores.
+      if (regla.condicionOperador === "ENTRE" && !regla.condicionValor2) return alert("Ingresá el segundo valor del rango.");
       if (regla.accionTipo === "FORZAR_COURIER" && !regla.accionValor) return alert("Ingresá el ID del Courier a forzar.");
     }
 
@@ -104,6 +111,7 @@ export default function RuteoTab({ empresaActivaId }: Props) {
           condicionVariable: regla.condicionVariable,
           condicionOperador: regla.condicionOperador,
           condicionValor1: regla.condicionValor1,
+          condicionValor2: regla.condicionValor2,
           accionTipo: regla.accionTipo,
           accionValor: regla.accionValor,
           activa: regla.activa
@@ -168,8 +176,16 @@ export default function RuteoTab({ empresaActivaId }: Props) {
                     <div className="flex gap-2">
                       <div className="flex-1">
                         <label className="text-[10px] font-bold text-gray-400 uppercase">{regla.condicionVariable.replace('_', ' ')} {regla.condicionOperador.replace('_', ' ')}</label>
-                        <input type="text" placeholder="Tu Valor..." disabled={!regla.activa} value={regla.condicionValor1} onChange={(e) => handleReglaChange(regla.nombre, 'condicionValor1', e.target.value)} className="w-full mt-1 border border-gray-300 rounded-lg p-2 text-sm disabled:bg-gray-100 outline-none focus:border-purple-500" />
+                        <input type="text" placeholder={regla.condicionOperador === "ENTRE" ? "Mínimo" : "Tu Valor..."} disabled={!regla.activa} value={regla.condicionValor1} onChange={(e) => handleReglaChange(regla.nombre, 'condicionValor1', e.target.value)} className="w-full mt-1 border border-gray-300 rounded-lg p-2 text-sm disabled:bg-gray-100 outline-none focus:border-purple-500" />
                       </div>
+
+                      {/* DEUDA 186 Fase 2 pieza 1 — input de condicionValor2 condicional al operador ENTRE */}
+                      {regla.condicionOperador === "ENTRE" && (
+                        <div className="flex-1">
+                          <label className="text-[10px] font-bold text-gray-400 uppercase">Hasta</label>
+                          <input type="text" placeholder="Máximo" disabled={!regla.activa} value={regla.condicionValor2 ?? ""} onChange={(e) => handleReglaChange(regla.nombre, 'condicionValor2', e.target.value)} className="w-full mt-1 border border-gray-300 rounded-lg p-2 text-sm disabled:bg-gray-100 outline-none focus:border-purple-500" />
+                        </div>
+                      )}
 
                       {regla.accionTipo === "FORZAR_COURIER" && (
                         <div className="w-1/3">

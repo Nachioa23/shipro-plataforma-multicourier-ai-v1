@@ -2810,6 +2810,26 @@ oportunidad, bajo estas condiciones, con este impacto económico estimado y este
 
 **IMPACTO EN MÉTRICA 4.3 (Cobertura Postal, [[DEUDA 39]])** (registrado 2026-10-13): hoy el writer de `CotizacionSnapshot` solo corre en el rates callback de Tiendanube. La métrica 4.3 Cobertura Postal Activa (commit `2f910a3`) usa `CotizacionSnapshot` como denominador de la tasa de cobertura vacía — con el writer parcial, la tasa sale **N/D (denominador no confiable)** y el helper lo marca explícitamente (`denominadorConfiable=false` cuando snapshot < 1.5× registros vacíos). Cuando 111 cablee el writer dual en `/api/cotizar` (+ el `usadaEnEnvioId` en `crear.ts`), **la tasa de 4.3 pasa a confiable AUTOMÁTICAMENTE** — el helper `lib/utils/cobertura-postal.ts` ya está preparado para el upgrade, solo mejora el denominador sin tocar la métrica. **Cerrar 111 = completar 4.3 sin tocar código de la métrica.**
 
+**APORTE NACHO (2026-10-14) — captura del comportamiento del comprador en el checkout** (es el corazón del embudo):
+
+Durante la cotización, capturar datos del comprador (sesión / email / sessionId del carrito / lo que llegue del plugin) para medir qué le pasa después de ver la tarifa:
+- **¿Terminó comprando o abandonó?** Correlacionar `CotizacionSnapshot` → `Envio` (vía `usadaEnEnvioId` cuando se cierra el write) → identificar los snapshots sin envío = carritos abandonados. Universo de medición: cotización-vs-compra.
+- **¿Cuánto tardó en decidir?** Delta entre `CotizacionSnapshot.createdAt` y `Envio.fechaImpresion` (o un evento de "cliqueó comprar" si se captura). Timing distribution: histograma de "tiempo hasta comprar", percentiles.
+- **Herramientas accionables para el vendedor** sobre este dato:
+  - **Cupón de descuento a los que dudan**: si el buyer vio la tarifa pero no compró en N minutos, el vendedor puede mandar un cupón automático (feature del cliente, no de Shipro — pero Shipro provee el disparo). Métrica: % recuperación con cupón.
+  - **Lectura del comportamiento**: segmentos de carritos por tiempo de decisión + tasa de abandono por rango de tarifa (correlacionar con [[DEUDA 188]] shipping cap — ¿donde abandona más, un cap subsidiado mejoraría conversión?).
+  - **Feed del motor de reglas ([[DEUDA 186]])**: si una zona/producto tiene abandono > X%, regla automática "en esa zona ofrecer cap subsidiado" o "priorizar velocidad".
+
+**Esto ES el corazón de la 111** — más allá del snapshot de la opción mostrada (parte técnica), lo que capta valor es el **embudo cotización → compra**: cuántos cotizaron, cuántos compraron, cuánto tardaron, qué los frenó. Sin eso, el motor de reglas (186) opera a ciegas sobre la conversión real.
+
+**⚠️ PRIVACIDAD — Flag crítico (precedente [[DEUDA 185]])**: capturar PII del comprador (email, teléfono, tal vez identificador de sesión) en la cotización tiene implicaciones serias de datos personales. **DEUDA 185 (leak cross-tenant de contactos) costó 4 etapas de refactor** (modelo `ContactoEmpresa` + write + read scoped + LGPD opción B) porque el modelo original de `Direccion` compartida mezclaba PII entre empresas. **El diseño de 111 debe incluir desde el ARRANQUE**:
+- **Scoping per-empresa**: la data del embudo del comprador en el checkout de la empresa A no puede verla la empresa B — ni siquiera si es el mismo buyer. Mismo patrón `ContactoEmpresa` o estricto `empresaId` scope en `CotizacionSnapshot` extensiones.
+- **Retención**: ¿cuánto tiempo guardamos el PII del comprador asociado a una cotización que nunca terminó en compra? Decisión LGPD. Default conservador: 6 meses + anonimización.
+- **LGPD opcional**: los 3 webhooks de privacidad TN que Shipro ya tiene cableados (DEUDA 133) definen el patrón. 111 debe conectar su data a esos webhooks para que `customers/redact` del plugin elimine también los snapshots del comprador anonimizado.
+- **Opción B del fix de 185**: capa física (dato canónico mínimo compartido) + capa agenda (per-empresa). El equivalente en 111 sería: datos del embudo (snapshot + timing + outcome) estrictamente scopeados per-empresa; identidad del comprador capturada como referencia a `ContactoEmpresa` (que ya está scopeada post-185), no como PII crudo.
+
+**No hacer esto antes = repetir el error de 185 con un modelo nuevo que capture PII cross-tenant por diseño ingenuo.** El tratamiento de privacidad va en el recon inicial, no como pieza posterior.
+
 **Status original (idea de producto, Nacho 2026-07-21):**
 **Ubicación en el roadmap: la CAPTURA arranca con la Fase 3 (plugins) — ver nota abajo; el análisis
 viene después.** Es el cimiento de datos sobre el que se construye la DEUDA 110.
@@ -4956,6 +4976,78 @@ Ambos actores siguen; **lo que cambia es la UX de revalidación**: el usuario ve
 3. Construir con decisión de provider primero (Google Address Validation vs alternativas AR), luego piloto en un flujo (checkout o `/corregir`), luego full rollout.
 
 **Origen**: idea de producto Nacho 2026-10-14. Nacho identificó la limitación del auditor rústico actual mientras discutía la métrica 1.3 Eficiencia del Auditor (que medía el proceso rústico sin poder evaluarlo bien). Decisión: elevar el proceso **antes** de medirlo con la métrica — "si vas a medir, medí la versión buena del proceso, no la rústica". Alineado con el estado del arte de address verification de los grandes marketplaces (Shopify, Google).
+
+---
+
+## DEUDA 188 — Shipping cap subsidiado: tope de envío al comprador con diferencia absorbida por el cliente (PRODUCTO money-crítico, ABIERTA 2026-10-14, prioridad a definir)
+
+**Status**: ABIERTA — idea de producto Nacho 2026-10-14. **MONEY-CRÍTICA**. Obra de pricing propia, NO parte de FASE 2 de selección de reglas (que es money-safe). Requiere recon + diseño + revisión Nacho + deploy gated dedicados.
+
+**Idea Nacho (2026-10-14)**: regla donde si el costo de envío supera `X%` del valor del carrito (`X` fijado por el cliente, ejemplo típico: 10%), al comprador se le **publica solo ese `X%`** (precio tope para el buyer), y la **diferencia** (`costo_real − tope`) la absorbe el cliente/vendedor. **La venta nunca se corta** — el cliente subsidia esa diferencia con tal de no perder la conversión. Al cliente/vendedor se le debita el **100% del costo real**; al comprador se le cobra solo el tope.
+
+Mismo patrón conceptual que la **tarifa de respaldo / fallback** (precedente money-crítico ya en prod): el cliente acepta sacrificar margen antes que perder la venta. Nacho redescubre la convención del mercado — Shopify "shipping cap", Amazon "free shipping threshold" — pero con el twist de que la diferencia la paga explícitamente el vendedor y queda registrada.
+
+### ⚠️ Por qué es money-crítica (y por qué NO es FASE 2)
+
+Las reglas de FASE 2 (**ENTRE / PROVINCIA_DESTINO / EXCLUIR_COURIER / etc.**) solo **eligen qué courier gana** o **filtran el set de opciones** — zero toque al cálculo de precio (`aplicarMarkup` + cascada intermediario/Shipro/SMO/fee + IVA quedan intactos). Son 100% money-safe por diseño.
+
+**Shipping cap subsidiado NO**: la regla **modifica el precio publicado al comprador** + **crea una diferencia que alguien absorbe** + **afecta el ledger de débito**. Toca:
+- `aplicarMarkup` o un wrapper (donde vive el `precioFinal` que ve el comprador).
+- `aplicarDescuentoCliente` o un paralelo (patrón ya existente de ajuste buyer-facing).
+- `crear.ts` paso de débito (debe cobrar el costo REAL, no el tope publicado).
+- `MovimientoFinanciero` ledger (debe reflejar el subsidio como línea separada o como campo del débito — decisión producto).
+
+Es **obra de pricing** separada; se construye con el cuidado money-crítico habitual (recon + diseño + revisión Nacho + verificación empírica + rebuild limpio).
+
+### Reemplaza TOPE_COSTO_PORCENTAJE "soft" de FASE 2
+
+El recon de FASE 2 (2026-10-14) había identificado `TOPE_COSTO_PORCENTAJE` como posible acción simple de **filtro/despriorización** (descarta la opción si `op.precioFinal / valorCarrito > X%`). **Esa variante soft queda DESCARTADA** a favor del shipping cap subsidiado — la idea de Nacho la supera porque:
+- La soft "descarta la opción" podía dejar al comprador sin cotización (y cae el fallback de coberturaVacia) o forzaba una opción peor silenciosamente.
+- La shipping cap SUBSIDIADA mantiene el 100% de las ventas visibles al comprador con un trade-off explícito del vendedor.
+- La shipping cap TAMBIÉN resuelve el caso soft: si el cliente no quiere subsidiar, pone `X=100%` (cap inactivo) o configura un umbral alto.
+
+El `TOPE_COSTO_PORCENTAJE` comment en el schema de `ReglaRuteo` ([schema.prisma:1297](prisma/schema.prisma)) queda como breadcrumb histórico; la implementación real vive en esta deuda money-crítica, probablemente con un modelo o campo propio por su naturaleza (ver preguntas de diseño abajo).
+
+### Preguntas de diseño pendientes (recon dedicado)
+
+Antes de construir código, el recon tiene que resolver:
+
+1. **Cómo se publica el tope al comprador**: ¿`precioFinal` forzado al valor del cap (y el cliente ve el real en su panel + ledger), o un descuento explícito "`descuento_shipping_cap`" que el cotizador aplica tras calcular el real? Precedente: `aplicarDescuentoCliente` ([cotizador.ts:171-188](lib/cotizador.ts#L171-L188)) ya tiene el patrón de "ajuste buyer-facing".
+2. **Cómo se debita el 100% del costo real**: ¿el débito en `crear.ts` lee el `costoReal` (interno) en vez del `precioFinal` (publicado)? ¿Qué pasa si cambia entre cotización y creación del envío? Idempotencia.
+3. **Dónde se registra el subsidio** (cuánto absorbió el cliente): ¿`FinanzasEnvio.subsidioClientePorShippingCap: Decimal`? ¿`MovimientoFinanciero` línea separada "DEBITO_SUBSIDIO_SHIPPING_CAP"? Para que la Torre de Control pueda medirlo (métrica derivada: "cuánto sacrifica cada cliente en subsidios para no perder conversión").
+4. **Interacción con otros términos del precio**: ¿se aplica el cap después del markup Shipro + SMO + fee operación + IVA (sobre el precio final al comprador)? ¿Cómo convive con `aplicarDescuentoCliente` existente?
+5. **Rama A vs Rama B**: ¿afecta solo a modelo A (markup Shipro sobre credencial propia / intermediario), B (operacion fee), ambas? Probable: ambas, con la diferencia absorbida en el flujo de débito del cliente.
+6. **Captura analítica**: ¿se guarda el subsidio como señal para el motor de reglas 186 (feedback: "esta zona requiere subsidio del Z% para convertir") o solo como contable? Posible feed del scoring.
+7. **Convivencia con FASE 2**: ¿la regla shipping cap convive con reglas de selección (ENTRE/PROVINCIA/etc.) o es exclusiva? Si una selección fuerza un courier y ese courier supera el cap, ¿se aplica el cap igual o se degrada a otro courier?
+8. **UI**: ¿umbral per-cliente (campo Empresa) o per-regla (ReglaRuteo con acción nueva `SHIPPING_CAP_SUBSIDIADO` + umbral)? Probablemente lo segundo para permitir reglas condicionales (ej. "en provincia X aplicar cap 15%, en el resto 10%").
+
+### Blast radius grueso (confirmable con recon)
+
+- Schema: nuevo campo (`FinanzasEnvio.subsidioShippingCap` o similar) + probable extensión de `ReglaRuteo` (nueva acción + umbral).
+- Migración aditiva (puro ADD COLUMN nullable).
+- `cotizador.ts`: nuevo paso de pricing post-markup pre-publish, con toggle según regla.
+- `crear.ts`: separación entre `costoRealParaDebito` y `precioFinalPublicado` en el paso de débito.
+- `MovimientoFinanciero`: nuevo tipo de ledger line O extensión del `DEBITO_ENVIO` con desglose (decisión producto).
+- Torre: métrica nueva de "subsidio total por cliente / mes".
+- UI admin: campo nuevo en `ReglaRuteo` wizard O config per-empresa (según decisión 8).
+
+### Precedentes money-críticos aplicables
+
+- **DEUDA 158** (renames `@map` validados): patrón de deploys money-crítico con foto forense + rebuild limpio.
+- **DEUDA 174** (política de débito): patrón de money-safe en lote (uno por sesión).
+- **Tarifa de respaldo / fallback** ([CredencialCourier.tarifaPlanaRespaldoCourier](prisma/schema.prisma)): precedente del "cliente vende siempre con sacrificio de margen aceptado explícitamente".
+- **`aplicarDescuentoCliente`** ([cotizador.ts:171-188](lib/cotizador.ts#L171-L188)): patrón de ajuste buyer-facing sin tocar el cálculo del costo interno.
+
+### Relación con otras deudas
+
+- **[[DEUDA 186]]** (motor de reglas): el shipping cap se dispara desde el motor (como acción de regla), pero su efecto es de pricing — es una excepción al principio "las reglas de FASE 2 no tocan precio". Documentado así en 186 §4 cuando se arranque esta obra.
+- **[[DEUDA 129]]** (resiliencia checkout — fallback rate): precedente del "venta nunca se corta + cliente acepta trade-off". Reusa el principio pero con un twist money-explícito.
+- **[[DEUDA 111]]** (inteligencia checkout): el subsidio capturado alimenta la métrica de conversión + señal del motor de reglas.
+- **DEUDA 156** (descuento estático): este shipping cap es una forma de descuento condicional (triggered by cost ratio), complementario al descuento estático.
+
+**Status**: ABIERTA. Prioridad **a definir por Nacho** — probable POST-primer-cliente (como feature de retención/conversión; antes de tener compradores reales la métrica no se activa). Puede subir prioridad si el primer cliente trae segmentos con costo de envío alto vs AOV bajo (ej. productos chicos de alto turnover a zonas lejanas).
+
+**Origen**: idea de producto Nacho 2026-10-14 mientras discutía la pieza 3 de FASE 2 (originalmente `TOPE_COSTO_PORCENTAJE` soft). Nacho redescubrió el patrón "free-shipping threshold" del mercado grande y lo adaptó al modelo Shipro — subsidio explícito registrable como signal + guardarraíl de conversión. Decisión implícita: la variante soft (filtro simple) queda descartada; el valor real está en el subsidio registrado.
 
 ---
 

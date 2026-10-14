@@ -54,6 +54,8 @@ model Empresa {
   depositos           Deposito[] // DEUDA 4: depósitos físicos del cliente
   tiendasTiendanube   TiendaTiendanube[] // DEUDA 144: tiendas Tiendanube vinculadas (1 empresa → N tiendas)
   tokensVinculacionTiendanube TokenVinculacionTiendanube[] // Tokens de un solo uso para el link de instalación OAuth (Momento 1)
+  tiendasShopify              TiendaShopify[] // Shopify Fase 1 (2026-10-14): tiendas Shopify vinculadas (1 empresa → N tiendas), espejo de tiendasTiendanube.
+  tokensVinculacionShopify    TokenVinculacionShopify[] // Shopify Fase 1: tokens de un solo uso para el link OAuth de Shopify (espejo de tokensVinculacionTiendanube).
   conexiones          Conexion[] // DEUDA 150 Pieza 1: hub de conexiones per (empresa, plataforma).
   tokensSetupApiKey   TokenSetupApiKey[] // DEUDA 150 Pieza 2: tokens de un solo uso para el link de setup de la API Key.
   cuentaMercadoLibre  CuentaMercadoLibre? // DEUDA 180 (MEF Fase 1): cuenta ML del cliente (1 por empresa en v1; @unique en la FK).
@@ -2049,6 +2051,105 @@ model TokenVinculacionTiendanube {
   // Single-use: NULL hasta que el callback lo consume; entonces se setea al timestamp de uso. Un
   // token ya usado no vincula de nuevo. (A diferencia del correccionToken, que se auto-invalida por
   // estado, este token NO tiene un estado análogo → necesita el campo explícito.)
+  usadoEn DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([empresaId])
+}
+
+// =============================================================================
+// Shopify Fase 1 (2026-10-14) — persistencia per-plataforma
+// =============================================================================
+// Espejo byte-a-byte del par TiendaTiendanube + TokenVinculacionTiendanube. Shape
+// final consensuado Chat B + GN (verificación contra la doc oficial de Shopify):
+//   - Token offline permanente: Shopify entrega un `access_token` sin TTL para
+//     apps públicas; NO hay refresh_token ni ganchos de rotación en Fase 1.
+//   - `shopDomain` como identificador estable e inmutable (`*.myshopify.com`),
+//     análogo de `TiendaTiendanube.storeId`. @unique: un domain = una tienda.
+//   - `carrierServiceId` dentro del modelo pero null hasta Fase 2 (cuando se
+//     construya el flujo que llama `POST /carrier_services` y persiste el id).
+//   - Fuera de Fase 1 (difieren a fases posteriores): currency, timezone,
+//     fulfillmentServiceId, scopes concedidos. No se agregan como columnas
+//     hasta tener el flow que las consume.
+// Nota de cifrado: `accessToken` nace null y Chat B lo guarda cifrado con
+// `encryptSecret()` (lib/utils/secret-crypto.ts) desde el callback OAuth; el
+// modelo es String? crudo (igual que TiendaTiendanube — el cifrado vive en el
+// escritor, no en el modelo).
+model TiendaShopify {
+  id Int @id @default(autoincrement())
+
+  empresaId Int
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  // Identificador estable del shop (`<handle>.myshopify.com`). @unique: un
+  // shopDomain pertenece a UNA sola empresa. Una empresa puede tener varias
+  // tiendas (raro pero permitido): Empresa 1—N TiendaShopify. Análogo de
+  // TiendaTiendanube.storeId (allá Int, acá String por la naturaleza del id).
+  shopDomain String @unique
+
+  // accessToken OAuth offline permanente. Nace NULL (Fase 1 solo persistencia;
+  // el callback OAuth que lo escribe lo construye Chat B en Fase 2+). Cuando se
+  // llene, se guarda ENCRIPTADO (encryptSecret de lib/utils/secret-crypto.ts).
+  // NUNCA en texto plano.
+  accessToken String?
+
+  // Dominio público custom de la tienda (ej. "mi-tienda-prod.com") — distinto
+  // del shopDomain técnico. Best-effort post-OAuth vía GET /shop (Fase 2).
+  // Nullable: si la llamada falla, la tienda igual queda vinculada.
+  dominio String?
+
+  // Nombre de la tienda post-GET /shop (Fase 2). Nullable (best-effort).
+  nombre String?
+
+  // ID del CarrierService registrado en la tienda (POST /carrier_services).
+  // Nace null; se llena en Fase 2 cuando se registre el carrier dinámico.
+  // Análogo de TiendaTiendanube.shippingCarrierId.
+  carrierServiceId String?
+
+  // Lifecycle: "instalada" | "desinstalada" | "suspendida". Shopify envía
+  // webhook APP_UNINSTALLED (y variantes) que actualizan este flag. String
+  // (consistente con el estilo del schema; mismo criterio que
+  // TiendaTiendanube.estado).
+  estado String @default("instalada")
+
+  instaladaEn    DateTime  @default(now())
+  desinstaladaEn DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([empresaId])
+  @@index([estado])
+}
+
+// Token de un solo uso para el link de instalación OAuth de Shopify. Mismo
+// patrón que TokenVinculacionTiendanube: el operador Shipro genera un link
+// pre-vinculado a una empresa; el callback valida existe+no expiró+no usado.
+model TokenVinculacionShopify {
+  id Int @id @default(autoincrement())
+
+  empresaId Int
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  // Token aleatorio que viaja en el `state` del OAuth de Shopify. Se genera cuando
+  // el operador Shipro crea el link de instalación para una empresa (antes de que
+  // exista la tienda/shopDomain). El callback lo valida: existe + no expiró (expira)
+  // + no se usó (usadoEn == null). @unique para lookup O(1) en el callback.
+  token String @unique
+
+  // shopDomain para el que se emitió el link (ej. "mi-tienda.myshopify.com").
+  // Se valida en el callback contra el `shop` param que llega del authorize de
+  // Shopify — defensa anti-link-hijack: si el token se filtra, solo sirve para
+  // vincular ESE shop a ESA empresa, no otro.
+  shopDomain String
+
+  // Vencimiento del link de instalación (lo setea el endpoint que genera el link).
+  // Un link vencido no vincula (defensa si el link se filtra o queda viejo).
+  expira DateTime
+
+  // Single-use: NULL hasta que el callback lo consume; entonces se setea al
+  // timestamp de uso. Un token ya usado no vincula de nuevo.
   usadoEn DateTime?
 
   createdAt DateTime @default(now())

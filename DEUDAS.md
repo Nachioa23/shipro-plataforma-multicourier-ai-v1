@@ -266,14 +266,18 @@ el cálculo antes de tocar la escritura. Zona sensible: diagnóstico read-only a
 
 **Nota 4.4 Salud Financiera (2026-10-13)**: helper **read-only** (grep confirmado: `.create|.update|.delete|.upsert` = 0 matches; solo `findMany + groupBy`). Proyección días-hasta-agotamiento maneja división por cero (consumo=0 → N/D) + saldo agotado (saldo+límite ≤ 0 → 0 días). Riesgo clasificado contra el umbral real de suspensión (`MULTIPLICADOR_SUSPENSION = 1.5` importado de `lib/utils/suspension-cuenta.ts`). Scope-aware: cliente ve su empresa, Shipro global ve lista + agregado.
 
-**Las 2 que QUEDAN abiertas (motivo explícito, 2026-10-13):**
+**Las 2 que QUEDAN abiertas (motivo explícito, actualizado 2026-10-14):**
 
-- **1.3 Eficiencia del Auditor de Checkout** — **BLOCKED de diseño, requiere decisión de producto Nacho antes de código**. 4 problemas acumulados:
-  (a) **No hay join path** `AuditoriaCheckout` → `Envio` ([schema.prisma:1113](prisma/schema.prisma#L1113) no tiene `envioId` ni correlation ID — candidata: heurística de match por `(comprador + email + cp + ventana temporal)` contra la dirección corregida).
-  (b) Los checkouts **APROBADOS no se persisten** ([app/api/checkouts/evaluar/route.ts:47](app/api/checkouts/evaluar/route.ts#L47) solo escribe `AuditoriaCheckout` cuando `score<80`) → **imposible medir falsos negativos**. Censura por diseño; requiere capture adicional.
-  (c) El **resolver pisa la dirección sin guardar diff** ([app/api/checkouts/resolver/route.ts:12](app/api/checkouts/resolver/route.ts#L12)) → imposible medir "corrección mínima vs profunda".
-  (d) El **score es interno** (deducciones vs tabla `codigoPostal`, umbral hardcoded ≥80), NO Google Maps como asumía el spec. Reconciliar primero.
-  Relación: DEUDA 41 (sensibilidad configurable del auditor) interactúa — ambas se deciden juntas cuando Nacho defina política.
+- **1.3 Eficiencia del Auditor de Checkout** — **REFRAME 2026-10-14 (Nacho): no espera decisión de producto para construirse, pero su construcción se difiere POST-[[DEUDA 186]] (motor de reglas)**. Fue reencuadrada:
+  - **Qué mide realmente**: el **FENÓMENO de las correcciones de dirección** — cuántas etiquetas vinieron con dato postal malo y hubo que corregir, independiente de CÓMO se detecte o corrija. Tiene valor propio y es **PUBLICABLE al cliente**: muestra el "trabajo sucio" que la plataforma hace por él ("de N etiquetas, X se corrigieron — Y automáticas, Z confirmadas por operador/comprador, W manuales"). No es solo precision/recall del auditor; es "cuánta mala-calidad de datos filtra la plataforma".
+  - **Secuencia**: se construye **POST-186** (motor de reglas) con **TODOS los datos que la plataforma capture para entonces**. En particular, si para esa altura ya existe [[DEUDA 187]] (validación + normalización inteligente de direcciones), la métrica incorpora el flag de escenario (silenciosa / confirmada por humano / manual) + actor que confirmó como dimensiones del desglose.
+  - **Los 4 bloqueos de diseño del recon siguen vigentes como decisiones a tomar al construirla**, pero **se resuelven naturalmente dentro del scope de 187**:
+    (a) **Join path `AuditoriaCheckout` → `Envio`** → DEUDA 187 agrega `envioId` o correlation ID + persiste APROBADOS.
+    (b) **Checkouts APROBADOS no persistidos** ([app/api/checkouts/evaluar/route.ts:47](app/api/checkouts/evaluar/route.ts#L47) solo escribe `AuditoriaCheckout` cuando `score<80`) → DEUDA 187 cambia el writer a "siempre que haya resultado del provider".
+    (c) **Resolver pisa dirección sin guardar diff** ([app/api/checkouts/resolver/route.ts:12](app/api/checkouts/resolver/route.ts#L12)) → DEUDA 187 persiste el input original + la sugerencia + el resultado.
+    (d) **Score interno vs Google Maps** → DEUDA 187 reconcilia: `score` pasa a ser confianza del provider (Google Address Validation), no deducciones internas.
+  - **Conclusión**: 1.3 **NO se difiere indefinidamente**, se hace **después del motor** con los datos disponibles, como métrica del fenómeno de correcciones. Si DEUDA 187 ya está construida al llegar a 1.3, los 4 bloqueos están resueltos. Si no, 1.3 toma la decisión de diseño sobre los 4 puntos como parte de su propia construcción (fallback plan).
+  - Relación: DEUDA 41 (sensibilidad configurable del auditor) y DEUDA 187 (validación inteligente) son las 2 que interactúan con 1.3 — todas se mueven juntas en la secuencia POST-cliente.
 
 - **4.2 Salud de Couriers (latencia + confiabilidad técnica)** — **BLOCKED de captura, cross-chat con Chat B**. El modelo `MetricaCourierLatencia` ([schema.prisma:1575](prisma/schema.prisma#L1575)) existe diseñado y vacío: `grep metricaCourierLatencia.create` en app/lib = **0 writers**. Para que la métrica tenga datos, **Chat B debe instrumentar los 6 adapters** (Andreani, Mocis, OCA, Correo Argentino, Hop Envíos, Intralog) + dispatch — patrón sugerido: wrapper centralizado en `CourierFactory` que envuelve `cotizar/despachar/tracking/etiqueta` midiendo start/end y persistiendo fire-and-forget (mismo molde que [cotizador.ts:779](lib/cotizador.ts#L779) para `RegistroCoberturaVacia`). Decisión previa: vocabulario de `status` (distinguir 5xx-courier vs 4xx-integración). Consumer analítico (helper + endpoint + UI card) es Chat A y se construye cuando Chat B cablee la captura (step 2 natural de 2 PRs).
 
@@ -4897,6 +4901,61 @@ Fallback conservador si la tabla está vacía: constantes inline $250k/$1M + `co
 **Status**: ABIERTA. Fase 1 cerrada 2026-10-08 (este registro + blueprint 10 secciones incluyendo §10 arquitectura de datos). Fases 2 + 3 pre-cliente. Fases 4+ post-datos.
 
 **Origen**: Chat A 2026-10-08. Nacho pidió recon vs informe de rules engines avanzados de la industria. Mapeo Fase 0 confirmó cimientos sólidos (promesa calibrada + MetricaSLA + Torre + DEUDA 91 + failover 129) pero gaps claros (variables/operadores/acciones acotados en el motor actual, scoring single-dim, no feedback loop estructurado). Decisión Nacho: construir AHORA pensando en el día que lleguen los datos del primer cliente. Blueprint consolidado en `docs/BLUEPRINT-MOTOR-REGLAS.md` como SSOT (mirror conceptual de `docs/BLUEPRINT-MEF-FLEX.md` para MEF).
+
+---
+
+## DEUDA 187 — Validación + normalización inteligente de direcciones (Google Maps como fuente canónica + UI de confirmación humana) — PRODUCTO, diferencial operativo (ABIERTA 2026-10-14, idea producto Nacho, prioridad POST-cliente a confirmar)
+
+**Status**: ABIERTA — idea de producto registrada. Scope grande (producto + arquitectura). Prioridad POST-cliente probablemente (el auditor actual con reglas sobre `CodigoPostal` ya funciona; esto eleva la calidad, no desbloquea el primer cliente).
+
+**Visión Nacho (2026-10-14)**: elevar el proceso de dirección postal de "detectar dato raro y pedir corrección manual" (rústico actual) a **validación/normalización inteligente contra Google Maps**, con **3 escenarios bien separados**:
+
+1. **Match perfecto / typo trivial** (ej. "Avnida" → "Avenida", "Caliee" → "Calle") → **corrección automática silenciosa**, no molesta al humano. Alta confianza del provider.
+2. **Discrepancia con sugerencia fuerte** (Google encontró algo muy probable pero no idéntico) → **UI de COMPARACIÓN lado a lado** ("vos pusiste X / encontramos Y", diferencias resaltadas) + **confirmación de UN CLIC**. Preselecciona la sugerida. **Este es el salto de calidad** sobre el proceso actual (hoy no se sugiere, solo se marca "está mal" y se pide re-ingresar a ciegas).
+3. **Ambigüedad real o dato no encontrado** (ej. dos calles "Perón" en la misma ciudad, altura inválida, calle inexistente) → **pide corrección manual + confirmación humana** (equivalente al proceso rústico actual).
+
+**PRINCIPIO DE DISEÑO LOCKED (Nacho 2026-10-14)**: **la confirmación humana es IMPRESCINDIBLE en los escenarios 2 y 3**. Corrección automática ciega **SOLO en el escenario 1** (alta confianza). Esto neutraliza el riesgo del falso-positivo clásico ("Perón" como Juan Domingo vs Eva, "San Martín" como el General vs un barrio, etc.): en los ambiguos **nunca corrige solo, el humano decide**. El riesgo ~1/100.000 solo aplicaría si se automatizara el escenario 2 — lo cual **NO se hace** por decisión explícita.
+
+**Patrón de mercado**: es el estándar "address verification con sugerencia confirmable" (Shopify Address Validation, Google Address Validation API, Loqate / Smarty / Melissa Data). Nacho lo redescubrió desde producto; **se alinea con el estado del arte** sin tener que inventar la rueda.
+
+**DATOS QUE CAPTURA** (política plataforma de datos — Shipro no desperdicia señal):
+- **lat / long** de la dirección resuelta (geocoding real) → se guarda en `Direccion` o modelo asociado. Esto es el input directo de **[[DEUDA 52]]** (geocoding real pendiente).
+- **Dirección canónica normalizada** que devuelve Google (`formattedAddress`, componentes separados) → se guarda y se usa como fuente de verdad post-validación.
+- **Zona fina sub-provincial** (barrio / localidad / partido) derivada de los componentes → alimenta **[[DEUDA 46]]** (ZonaLogística por rangos CP + componentes geo) → feed del scoring por zona del motor **[[DEUDA 186]]**.
+- **El "antes de la corrección"**: se guarda **solo como backup** (bajo valor analítico — sentido común Nacho: lo que vale es la dirección correcta final + el fenómeno de corrección como contador, no el detalle de cada typo).
+- **Flag del escenario** (1 silenciosa / 2 confirmada por humano / 3 manual) + actor que confirmó (comprador vía `/corregir` vs vendedor/cliente en el admin) → alimenta **[[DEUDA 39]] métrica 1.3** (fenómeno de correcciones).
+
+**Quién corrige hoy** (sin cambio en los actores, cambio en la experiencia):
+- **Comprador vía link `/corregir`**: el buyer que recibe un mail "corregí tu dirección" edita a ciegas sin ver sugerencia. El nuevo proceso le muestra la comparación lado a lado con sugerencia preseleccionada.
+- **Vendedor / cliente** desde el panel admin (modal de destrabe Paso 4 cuando el envío nace `BLOQUEADO_DATOS_PAQUETE` o cuando ve la auditoría frenada). Idem: ve comparación + sugerencia + 1 clic.
+
+Ambos actores siguen; **lo que cambia es la UX de revalidación**: el usuario ve qué cambió **antes de que la etiqueta se imprima**, con la sugerencia ya resuelta por Google.
+
+**Scope técnico** (recon de implementación cuando se arranque):
+- **Integración Google Address Validation API** (o alternativa — Loqate / Smarty — decisión al arrancar según costo y licencia). Env vars + rate limiting + cache por `(cp + calle + altura)` para no quemar presupuesto.
+- **Modelo de datos**: campos nuevos en `Direccion` (`lat`, `lng`, `formattedCanonico`, `confianzaProvider`, `escenarioValidacion` enum, `componentesJson`) + backup del input original en `AuditoriaCheckout` o modelo asociado.
+- **Nueva UI de comparación**: componente reusable `ComparadorDireccion` que renderiza side-by-side + diferencias resaltadas + botón "Confirmar sugerencia / Mantener mía" (default: confirmar sugerencia).
+- **Flujo `/corregir`** (DEUDA 106 pieza 2) + flujo admin modal destrabe: ambos consumen el comparador.
+- **Writer de `AuditoriaCheckout`**: cambia de "solo FRENADO" ([app/api/checkouts/evaluar/route.ts:47](app/api/checkouts/evaluar/route.ts#L47)) a "siempre que haya resultado del provider" + persiste el flag del escenario + diff pre/post (esto cierra el bloqueo de diseño (b) y (c) de métrica 1.3).
+- **Join path** `AuditoriaCheckout` → `Envio` (nuevo campo `envioId` o correlation ID + persistir checkouts APROBADOS) → cierra bloqueo (a) de métrica 1.3.
+- **Score reconciliado**: `AuditoriaCheckout.score` migra de "deducciones vs tabla interna `CodigoPostal`" a "confianza del provider Google" (0-100 directo del API) → cierra bloqueo (d) de métrica 1.3.
+
+**Impacto sobre DEUDA 39 métrica 1.3** (Eficiencia del Auditor): esta deuda **cierra los 4 bloqueos de diseño** registrados en 1.3 porque introduce exactamente los datos que la métrica necesita (join path al envío, persistencia de aprobados, diff pre/post, score reconciliado con el provider). La métrica 1.3 pasa a construirse **después** de este sub-producto, midiendo el fenómeno con los datos ya disponibles (ver nota reframe en DEUDA 39).
+
+**Relación con otras deudas**:
+- **[[DEUDA 41]]** (sensibilidad configurable del auditor de checkout) — se consume dentro de este producto como "umbrales del provider" (ej. "confianza > 95% = silenciosa, 70-95% = confirmable, <70% = manual"). 41 se integra o se absorbe.
+- **[[DEUDA 52]]** (geocoding real de `Direccion`) — directamente alimentada: la lat/lng que este producto captura es la entrada de 52. 52 queda consumida como sub-pieza (o absorbida).
+- **[[DEUDA 46]]** (ZonaLogística sub-provincial) — alimentada por los componentes geo del provider (barrio / partido). Puede acelerar 46 si el provider devuelve directamente la zona.
+- **[[DEUDA 186]]** (motor de reglas + scoring) — feed del scoring por zona del courier (dirección canónica + lat/lng = input duro).
+- **[[DEUDA 39]] métrica 1.3** — **unblocked** por este producto. 1.3 se construye POST-187.
+- **DEUDA 106 pieza 2** (`/corregir` flow) — se extiende con el nuevo comparador.
+
+**Secuencia sugerida**:
+1. POST-primer-cliente (prioridad baja hasta no tener data real para dimensionar el beneficio).
+2. Si el primer cliente trae problemas frecuentes de dirección (medible por el frecuencia-de-corrección en producción), subir prioridad.
+3. Construir con decisión de provider primero (Google Address Validation vs alternativas AR), luego piloto en un flujo (checkout o `/corregir`), luego full rollout.
+
+**Origen**: idea de producto Nacho 2026-10-14. Nacho identificó la limitación del auditor rústico actual mientras discutía la métrica 1.3 Eficiencia del Auditor (que medía el proceso rústico sin poder evaluarlo bien). Decisión: elevar el proceso **antes** de medirlo con la métrica — "si vas a medir, medí la versión buena del proceso, no la rústica". Alineado con el estado del arte de address verification de los grandes marketplaces (Shopify, Google).
 
 ---
 

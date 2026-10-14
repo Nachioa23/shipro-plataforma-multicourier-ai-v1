@@ -6,20 +6,13 @@ import Link from "next/link";
 import * as XLSX from "xlsx";
 import { Search, Package, Clock, Inbox, Download, Loader2, Calendar, DollarSign, ChevronLeft, ChevronRight, CheckSquare, Square, Building2, AlertTriangle, MapPin, SearchCode, X, Check, SlidersHorizontal, ChevronDown, Truck, LifeBuoy, MessageSquare, Wallet, Warehouse, Lock, Unlock } from 'lucide-react';
 import AccionesEnvio from '@/components/AccionesEnvio';
+import { PROVINCIAS_AR } from "@/lib/constants/provincias-ar";
 
 declare global {
   interface Window {
     google: any;
   }
 }
-
-// Las 24 Provincias Oficiales de Argentina
-const PROVINCIAS_ARGENTINA = [
-  "Buenos Aires", "CABA", "Catamarca", "Chaco", "Chubut", "Córdoba", "Corrientes", 
-  "Entre Ríos", "Formosa", "Jujuy", "La Pampa", "La Rioja", "Mendoza", "Misiones", 
-  "Neuquén", "Río Negro", "Salta", "San Juan", "San Luis", "Santa Cruz", 
-  "Santa Fe", "Santiago del Estero", "Tierra del Fuego", "Tucumán"
-];
 
 export default function BandejaPedidos() {
   const { data: session } = useSession();
@@ -852,7 +845,7 @@ export default function BandejaPedidos() {
                   <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-1.5"><MapPin className="w-3 h-3"/> Provincia de Destino</label>
                   <select value={filtroProvincia} onChange={(e) => handleFiltroChange(setFiltroProvincia, e.target.value)} className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none cursor-pointer">
                     <option value="Todas">Todas las provincias</option>
-                    {PROVINCIAS_ARGENTINA.map(p => <option key={p} value={p}>{p}</option>)}
+                    {PROVINCIAS_AR.map(p => <option key={p} value={p}>{p}</option>)}
                   </select>
                 </div>
 

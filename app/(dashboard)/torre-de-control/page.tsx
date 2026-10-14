@@ -127,6 +127,13 @@ export default function TorreDeControl() {
   const [coberturaPostalMetrica, setCoberturaPostalMetrica] = useState<any>(null);
   const [cargandoCoberturaPostal, setCargandoCoberturaPostal] = useState(true);
 
+  // Metrica 4.4 "Salud Financiera" (DEUDA 39, 2026-10-13 — cierre drift).
+  // Datos del endpoint /api/torre-de-control/salud-financiera.
+  // Scope-aware. READ-ONLY: lee Empresa.saldoActivo + MovimientoFinanciero
+  // (débitos 7d/30d) para proyectar días-hasta-agotamiento.
+  const [saludFinancieraMetrica, setSaludFinancieraMetrica] = useState<any>(null);
+  const [cargandoSaludFinanciera, setCargandoSaludFinanciera] = useState(true);
+
   useEffect(() => {
     if (!filtroEmpresaId) return;
     const baseParams = { filtroEmpresa: filtroEmpresaId, page: "1", limit: "1" };
@@ -430,6 +437,22 @@ export default function TorreDeControl() {
       .catch(err => {
         console.error("[Torre de Control] error fetching cobertura-postal:", err);
         setCargandoCoberturaPostal(false);
+      });
+  }, [esEquipoShipro]);
+
+  // Torre de Control Metrica 4.4: fetch del endpoint de salud-financiera.
+  useEffect(() => {
+    if (!esEquipoShipro) return;
+    setCargandoSaludFinanciera(true);
+    fetch("/api/torre-de-control/salud-financiera")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setSaludFinancieraMetrica(data);
+        setCargandoSaludFinanciera(false);
+      })
+      .catch(err => {
+        console.error("[Torre de Control] error fetching salud-financiera:", err);
+        setCargandoSaludFinanciera(false);
       });
   }, [esEquipoShipro]);
 
@@ -2957,6 +2980,153 @@ export default function TorreDeControl() {
                 )}
               </div>
 
+            ) : metricaAnalisis === "Salud Financiera" ? (
+              <div className="flex-1 p-8 overflow-y-auto bg-gray-50 space-y-6">
+                {cargandoSaludFinanciera ? (
+                  <p className="text-sm text-gray-400 font-bold">Cargando…</p>
+                ) : !saludFinancieraMetrica ? (
+                  <p className="text-sm text-gray-400 font-bold">Sin datos.</p>
+                ) : (
+                  <div className="space-y-6">
+                    {saludFinancieraMetrica.calidadDatos.notas.length > 0 && (
+                      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-1">
+                        {saludFinancieraMetrica.calidadDatos.notas.map((nota: string, idx: number) => (
+                          <p key={idx} className="text-xs text-amber-800">• {nota}</p>
+                        ))}
+                      </div>
+                    )}
+
+                    {saludFinancieraMetrica.scope === "shipro" && (
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="bg-white border border-gray-200 rounded-xl p-5">
+                          <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Total empresas</p>
+                          <p className="text-3xl font-black text-gray-800 mt-2">{saludFinancieraMetrica.agregado.totalEmpresas}</p>
+                          <p className="text-[11px] text-gray-500 mt-1">{saludFinancieraMetrica.agregado.empresasPrepago} PREPAGO · {saludFinancieraMetrica.agregado.empresasPostpago} POSTPAGO</p>
+                        </div>
+                        <div className="bg-white border border-red-200 rounded-xl p-5">
+                          <p className="text-[10px] text-red-500 uppercase tracking-widest font-bold">Riesgo crítico</p>
+                          <p className="text-3xl font-black text-red-600 mt-2">{saludFinancieraMetrica.agregado.empresasEnRiesgoCritico}</p>
+                          <p className="text-[11px] text-gray-500 mt-1">≤3 días proyectados</p>
+                        </div>
+                        <div className="bg-white border border-amber-200 rounded-xl p-5">
+                          <p className="text-[10px] text-amber-600 uppercase tracking-widest font-bold">En atención</p>
+                          <p className="text-3xl font-black text-amber-600 mt-2">{saludFinancieraMetrica.agregado.empresasEnAtencion}</p>
+                          <p className="text-[11px] text-gray-500 mt-1">≤10 días proyectados</p>
+                        </div>
+                        <div className="bg-white border border-gray-200 rounded-xl p-5">
+                          <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Suspendidas</p>
+                          <p className="text-3xl font-black text-gray-800 mt-2">{saludFinancieraMetrica.agregado.empresasSuspendidas}</p>
+                          <p className="text-[11px] text-gray-500 mt-1">cruzaron umbral de suspensión</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {saludFinancieraMetrica.scope === "shipro" && (
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="bg-white border border-gray-200 rounded-xl p-5">
+                          <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Saldo total positivo</p>
+                          <p className="text-2xl font-black text-green-700 mt-2">${saludFinancieraMetrica.agregado.saldoTotalPositivo.toLocaleString('es-AR')}</p>
+                        </div>
+                        <div className="bg-white border border-gray-200 rounded-xl p-5">
+                          <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Deuda total (saldos negativos)</p>
+                          <p className="text-2xl font-black text-red-700 mt-2">${saludFinancieraMetrica.agregado.deudaTotalNegativa.toLocaleString('es-AR')}</p>
+                        </div>
+                        <div className="bg-white border border-gray-200 rounded-xl p-5">
+                          <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Consumo diario agregado</p>
+                          <p className="text-2xl font-black text-gray-800 mt-2">${saludFinancieraMetrica.agregado.consumoDiarioAgregado.toLocaleString('es-AR')}</p>
+                          <p className="text-[11px] text-gray-500 mt-1">prom. últimos 30 días</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {saludFinancieraMetrica.scope === "cliente" ? (
+                      <div className="bg-white border border-gray-200 rounded-xl p-6 space-y-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <h4 className="text-lg font-black text-gray-800">{saludFinancieraMetrica.empresa.empresaNombre}</h4>
+                            <p className="text-xs text-gray-500 mt-1">{saludFinancieraMetrica.empresa.modalidadPago}{saludFinancieraMetrica.empresa.suspendida ? " · SUSPENDIDA" : ""}</p>
+                          </div>
+                          <span className={`px-3 py-1 rounded-full text-xs font-black uppercase ${
+                            saludFinancieraMetrica.empresa.riesgo === "suspendida" ? "bg-red-200 text-red-800" :
+                            saludFinancieraMetrica.empresa.riesgo === "critico" ? "bg-red-100 text-red-700" :
+                            saludFinancieraMetrica.empresa.riesgo === "atencion" ? "bg-amber-100 text-amber-700" :
+                            "bg-green-100 text-green-700"
+                          }`}>{saludFinancieraMetrica.empresa.riesgo}</span>
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 border-t border-gray-100 pt-4">
+                          <div>
+                            <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Saldo actual</p>
+                            <p className={`text-xl font-black mt-1 ${saludFinancieraMetrica.empresa.saldoActivo < 0 ? "text-red-600" : "text-gray-800"}`}>${saludFinancieraMetrica.empresa.saldoActivo.toLocaleString('es-AR')}</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Límite descubierto</p>
+                            <p className="text-xl font-black text-gray-800 mt-1">${saludFinancieraMetrica.empresa.limiteDescubierto.toLocaleString('es-AR')}</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Consumo 7d / 30d</p>
+                            <p className="text-xl font-black text-gray-800 mt-1">${saludFinancieraMetrica.empresa.consumo7d.toLocaleString('es-AR')}</p>
+                            <p className="text-[10px] text-gray-400">${saludFinancieraMetrica.empresa.consumo30d.toLocaleString('es-AR')} (30d)</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Días proyectados</p>
+                            <p className="text-xl font-black text-gray-800 mt-1">
+                              {saludFinancieraMetrica.empresa.diasHastaAgotamiento === null ? "N/D" : saludFinancieraMetrica.empresa.diasHastaAgotamiento}
+                            </p>
+                            <p className="text-[10px] text-gray-400">prom. ${saludFinancieraMetrica.empresa.consumoDiarioPromedio.toLocaleString('es-AR')}/día</p>
+                          </div>
+                        </div>
+                        <div className="border-t border-gray-100 pt-3 text-xs text-gray-500">
+                          <p>Umbral de suspensión: ${saludFinancieraMetrica.empresa.umbralSuspension.toLocaleString('es-AR')} · Distancia al umbral: <span className={saludFinancieraMetrica.empresa.distanciaAlUmbral <= 0 ? "text-red-600 font-black" : "font-bold"}>${saludFinancieraMetrica.empresa.distanciaAlUmbral.toLocaleString('es-AR')}</span></p>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="bg-white border border-gray-200 rounded-xl p-6">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Empresas (ordenadas por riesgo)</h4>
+                        {saludFinancieraMetrica.empresas.length === 0 ? (
+                          <p className="text-sm text-gray-400">Sin empresas en el scope.</p>
+                        ) : (
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                              <thead>
+                                <tr className="text-[10px] text-gray-400 uppercase tracking-widest font-bold border-b border-gray-200">
+                                  <th className="text-left pb-2">Empresa</th>
+                                  <th className="text-left pb-2">Modal.</th>
+                                  <th className="text-right pb-2">Saldo</th>
+                                  <th className="text-right pb-2">Límite</th>
+                                  <th className="text-right pb-2">Cons. 30d</th>
+                                  <th className="text-right pb-2">Días proy.</th>
+                                  <th className="text-right pb-2">Riesgo</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {saludFinancieraMetrica.empresas.map((e: any) => (
+                                  <tr key={e.empresaId} className="border-b border-gray-100 last:border-0">
+                                    <td className="py-2 font-bold text-gray-800">{e.empresaNombre}</td>
+                                    <td className="py-2 text-xs text-gray-500">{e.modalidadPago}</td>
+                                    <td className={`py-2 text-right font-bold ${e.saldoActivo < 0 ? "text-red-600" : "text-gray-800"}`}>${e.saldoActivo.toLocaleString('es-AR')}</td>
+                                    <td className="py-2 text-right text-gray-700">${e.limiteDescubierto.toLocaleString('es-AR')}</td>
+                                    <td className="py-2 text-right text-gray-700">${e.consumo30d.toLocaleString('es-AR')}</td>
+                                    <td className="py-2 text-right font-bold text-gray-800">{e.diasHastaAgotamiento === null ? "N/D" : e.diasHastaAgotamiento}</td>
+                                    <td className="py-2 text-right">
+                                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase ${
+                                        e.riesgo === "suspendida" ? "bg-red-200 text-red-800" :
+                                        e.riesgo === "critico" ? "bg-red-100 text-red-700" :
+                                        e.riesgo === "atencion" ? "bg-amber-100 text-amber-700" :
+                                        "bg-green-100 text-green-700"
+                                      }`}>{e.riesgo}</span>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
             ) : metricaAnalisis === "Velocidad Resolución Tickets" ? (
               <div className="flex-1 p-8 overflow-y-auto bg-gray-50 space-y-6">
                 {cargandoTicketsMesaAyuda ? (
@@ -3566,6 +3736,61 @@ export default function TorreDeControl() {
                   </div>
                 );
               })}
+            </div>
+          </div>
+
+          <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 flex flex-col h-full">
+            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-6 flex items-center justify-between"><span className="flex items-center gap-2"><Wallet className="w-4 h-4 text-[#233b6b]" /> 17. Salud Financiera</span><button onClick={() => abrirAnalisis("Salud Financiera")} className="p-1.5 bg-gray-50 hover:bg-blue-50 text-gray-500 rounded-md transition-colors"><ZoomIn className="w-4 h-4" /></button></h3>
+            <div className="flex-1 flex flex-col justify-center space-y-3">
+              {cargandoSaludFinanciera ? (
+                <p className="text-xs text-gray-400 text-center font-bold">Cargando...</p>
+              ) : !saludFinancieraMetrica ? (
+                <p className="text-xs text-gray-400 text-center font-bold">Sin datos</p>
+              ) : saludFinancieraMetrica.scope === "shipro" ? (
+                <>
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    <div>
+                      <p className="text-2xl font-black text-red-600">{saludFinancieraMetrica.agregado.empresasEnRiesgoCritico}</p>
+                      <p className="text-[9px] text-gray-500 uppercase tracking-wider font-bold mt-1">Críticas</p>
+                    </div>
+                    <div>
+                      <p className="text-2xl font-black text-amber-600">{saludFinancieraMetrica.agregado.empresasEnAtencion}</p>
+                      <p className="text-[9px] text-gray-500 uppercase tracking-wider font-bold mt-1">Atención</p>
+                    </div>
+                    <div>
+                      <p className="text-2xl font-black text-gray-800">{saludFinancieraMetrica.agregado.empresasSuspendidas}</p>
+                      <p className="text-[9px] text-gray-500 uppercase tracking-wider font-bold mt-1">Suspendidas</p>
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-center text-gray-400 border-t border-gray-100 pt-2">
+                    {saludFinancieraMetrica.agregado.totalEmpresas} empresas · {saludFinancieraMetrica.agregado.empresasConConsumoReciente} con consumo 30d
+                  </p>
+                </>
+              ) : (
+                <>
+                  <div className="text-center">
+                    <p className={`text-3xl font-black ${
+                      saludFinancieraMetrica.empresa.riesgo === "critico" || saludFinancieraMetrica.empresa.riesgo === "suspendida" ? "text-red-600" :
+                      saludFinancieraMetrica.empresa.riesgo === "atencion" ? "text-amber-600" : "text-gray-800"
+                    }`}>
+                      {saludFinancieraMetrica.empresa.diasHastaAgotamiento === null
+                        ? "N/D"
+                        : saludFinancieraMetrica.empresa.diasHastaAgotamiento === 0
+                          ? "0"
+                          : saludFinancieraMetrica.empresa.diasHastaAgotamiento}
+                      {saludFinancieraMetrica.empresa.diasHastaAgotamiento !== null && (
+                        <span className="text-lg font-bold text-gray-400"> d</span>
+                      )}
+                    </p>
+                    <p className="text-[10px] text-gray-500 uppercase tracking-wider font-bold mt-1">
+                      {saludFinancieraMetrica.empresa.diasHastaAgotamiento === null ? "sin consumo reciente" : "proyectados"}
+                    </p>
+                  </div>
+                  <p className="text-[10px] text-center text-gray-400 border-t border-gray-100 pt-2">
+                    saldo ${Math.round(saludFinancieraMetrica.empresa.saldoActivo).toLocaleString('es-AR')} · {saludFinancieraMetrica.empresa.modalidadPago}
+                  </p>
+                </>
+              )}
             </div>
           </div>
 

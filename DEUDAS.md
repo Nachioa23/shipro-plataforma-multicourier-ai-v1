@@ -2575,6 +2575,8 @@ pm2 restart shipro
 
 **Regla operativa incorporada:** cualquier futuro cambio en el clasificador del proxy (agregar/quitar rutas de `PUBLIC_API_EXACT`, `DUAL_EXACT`, `API_KEY_EXACT`) o en el schema Prisma (nuevas columnas, tablas, índices, o cualquier cosa que altere el shape del client generado) dispara este checklist de rebuild limpio. Añadir al runbook de deploy cuando se materialice como documento propio.
 
+→ **Runbook completo materializado en [`docs/DEPLOY.md`](docs/DEPLOY.md) (2026-10-14)** — 8 pasos verificados en el deploy del batch FASE 2 motor de reglas; conexión al server, decisión rebuild limpio vs incremental, verificación post-deploy, errores benignos conocidos (Andreani/Server Action), señales de alerta, gaps pendientes de automatización (script de deploy, rollback formal, backup pre-migración, health check, deploy log).
+
 **Cross-reference:** DEUDA 106 pieza 2 (arriba).
 
 ---

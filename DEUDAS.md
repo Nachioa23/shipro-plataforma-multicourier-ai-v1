@@ -254,16 +254,34 @@ destrabar a mano (no crear la ficha por API por la puerta de atrás) sino diseñ
 La Fase 4b (que escribe en el corazón del sistema) se partió en 3 pasos con dry-run primero para verificar
 el cálculo antes de tocar la escritura. Zona sensible: diagnóstico read-only antes de cada cambio.
 
-## DEUDA 39 — Torre de Control: sistema integral de metricas estrategicas (DISEÑO COMPLETO 2026-06-04 — **PARCIAL 11/16 completas, 1 parcial, 4 missing — actualizado 2026-10-13 por drift sweep code-vs-registry**)
+## DEUDA 39 — Torre de Control: sistema integral de metricas estrategicas (DISEÑO COMPLETO 2026-06-04 — **PARCIAL 14/16 — actualizado 2026-10-13: construidas 4.3 Cobertura Postal (commit `2f910a3`), 1.5 Velocidad Resolución Tickets (`5e3a1a7`), 4.4 Salud Financiera (`0b1c1ed`)**)
 
-**Status:** PARCIAL. **12 de 16 métricas** completas end-to-end (endpoint + helper + UI card); 1 parcial (1.5 Velocidad Resolución Tickets, dentro de 1.4); 3 MISSING: 1.3 Eficiencia del Auditor, 4.2 Salud de Couriers (modelo `MetricaCourierLatencia` existe sin consumer Torre), 4.4 Salud Financiera. UI integral SÍ existe (`app/(dashboard)/torre-de-control/page.tsx`, 3322+ líneas, 15 cards + modales por métrica). 3 extras no canónicas en la UI: Anatomía Devolución, Mapa SLA, NPS Cliente Empresa (distinto al 5.1 transaccional).
+**Status:** PARCIAL. **14 de 16 métricas** completas end-to-end (endpoint + helper + UI card). 2 MISSING con motivo explícito: 1.3 Eficiencia del Auditor (BLOCKED de diseño), 4.2 Salud de Couriers (BLOCKED de captura — Chat B). UI integral existe (`app/(dashboard)/torre-de-control/page.tsx`, 17 cards + modales por métrica). 3 extras no canónicas en la UI: Anatomía Devolución, Mapa SLA, NPS Cliente Empresa (distinto al 5.1 transaccional).
 
-**Mapping 2026-10-13 (DRIFT SWEEP + progreso ese mismo día):**
-- DONE 3/3: 1.1 Resolver Nomenclador · 1.2 Auditar Checkouts · 1.4 Carga Soporte · 2.1 Tiempos Colecta · 2.2 Efectividad Primera Visita · 2.3 Promesa Calibrada · 3.1 Fuga Ruteo (Nivel 1; Nivel 2 = DEUDA 56) · 3.2 Desvío Peso · 3.3 Modalidades · 4.1 Concentración Courier · 5.1 NPS Transaccional · **4.3 Cobertura Postal Activa (commit `2f910a3`, 2026-10-13)**.
-- PARTIAL: 1.5 Velocidad Resolución Tickets (sub-métrica dentro de 1.4, sin desglose propio).
-- MISSING: 1.3 Eficiencia del Auditor · 4.2 Salud Couriers · 4.4 Salud Financiera.
+**Mapping 2026-10-13 (DRIFT SWEEP + sesión de cierre):**
+- DONE 3/3 (14 métricas): 1.1 Resolver Nomenclador · 1.2 Auditar Checkouts · 1.4 Carga Soporte · **1.5 Velocidad Resolución Tickets (commit `5e3a1a7`, 2026-10-13 — promedio + P95 + %SLA 24h + desgloses por motivo/usuario/hora; helper tickets-mesa-ayuda extendido aditivo, 1.4 intacta)** · 2.1 Tiempos Colecta · 2.2 Efectividad Primera Visita · 2.3 Promesa Calibrada · 3.1 Fuga Ruteo (Nivel 1; Nivel 2 = DEUDA 56) · 3.2 Desvío Peso · 3.3 Modalidades · 4.1 Concentración Courier · **4.3 Cobertura Postal Activa (commit `2f910a3`, 2026-10-13 — helper + endpoint + card scope-aware; lee `RegistroCoberturaVacia`)** · **4.4 Salud Financiera (commit `0b1c1ed`, 2026-10-13 — helper read-only + endpoint + card; saldo + consumo 7d/30d + proyección días-hasta-agotamiento + distancia al umbral de suspensión; PREPAGO/POSTPAGO diferenciado)** · 5.1 NPS Transaccional.
+- MISSING: 1.3 Eficiencia del Auditor · 4.2 Salud Couriers.
 
 **Nota 4.3 Cobertura Postal (2026-10-13)**: helper + endpoint + card EN CÓDIGO (commit `2f910a3`). La **tasa de cobertura vacía queda en N/D** hasta que [[DEUDA 111]] cablee el denominador (`CotizacionSnapshot` writer dual en `/api/cotizar` + `usadaEnEnvioId` en `crear.ts`). El helper `lib/utils/cobertura-postal.ts` ya tolera el upgrade sin cambios — cuando 111 cierre, la tasa se vuelve confiable automáticamente.
+
+**Nota 4.4 Salud Financiera (2026-10-13)**: helper **read-only** (grep confirmado: `.create|.update|.delete|.upsert` = 0 matches; solo `findMany + groupBy`). Proyección días-hasta-agotamiento maneja división por cero (consumo=0 → N/D) + saldo agotado (saldo+límite ≤ 0 → 0 días). Riesgo clasificado contra el umbral real de suspensión (`MULTIPLICADOR_SUSPENSION = 1.5` importado de `lib/utils/suspension-cuenta.ts`). Scope-aware: cliente ve su empresa, Shipro global ve lista + agregado.
+
+**Las 2 que QUEDAN abiertas (motivo explícito, 2026-10-13):**
+
+- **1.3 Eficiencia del Auditor de Checkout** — **BLOCKED de diseño, requiere decisión de producto Nacho antes de código**. 4 problemas acumulados:
+  (a) **No hay join path** `AuditoriaCheckout` → `Envio` ([schema.prisma:1113](prisma/schema.prisma#L1113) no tiene `envioId` ni correlation ID — candidata: heurística de match por `(comprador + email + cp + ventana temporal)` contra la dirección corregida).
+  (b) Los checkouts **APROBADOS no se persisten** ([app/api/checkouts/evaluar/route.ts:47](app/api/checkouts/evaluar/route.ts#L47) solo escribe `AuditoriaCheckout` cuando `score<80`) → **imposible medir falsos negativos**. Censura por diseño; requiere capture adicional.
+  (c) El **resolver pisa la dirección sin guardar diff** ([app/api/checkouts/resolver/route.ts:12](app/api/checkouts/resolver/route.ts#L12)) → imposible medir "corrección mínima vs profunda".
+  (d) El **score es interno** (deducciones vs tabla `codigoPostal`, umbral hardcoded ≥80), NO Google Maps como asumía el spec. Reconciliar primero.
+  Relación: DEUDA 41 (sensibilidad configurable del auditor) interactúa — ambas se deciden juntas cuando Nacho defina política.
+
+- **4.2 Salud de Couriers (latencia + confiabilidad técnica)** — **BLOCKED de captura, cross-chat con Chat B**. El modelo `MetricaCourierLatencia` ([schema.prisma:1575](prisma/schema.prisma#L1575)) existe diseñado y vacío: `grep metricaCourierLatencia.create` en app/lib = **0 writers**. Para que la métrica tenga datos, **Chat B debe instrumentar los 6 adapters** (Andreani, Mocis, OCA, Correo Argentino, Hop Envíos, Intralog) + dispatch — patrón sugerido: wrapper centralizado en `CourierFactory` que envuelve `cotizar/despachar/tracking/etiqueta` midiendo start/end y persistiendo fire-and-forget (mismo molde que [cotizador.ts:779](lib/cotizador.ts#L779) para `RegistroCoberturaVacia`). Decisión previa: vocabulario de `status` (distinguir 5xx-courier vs 4xx-integración). Consumer analítico (helper + endpoint + UI card) es Chat A y se construye cuando Chat B cablee la captura (step 2 natural de 2 PRs).
+
+**Cierre de parte de núcleo de la Torre (2026-10-13)**: **parte de núcleo COMPLETA (14/16)**. Las 2 restantes no dependen de Chat A ahora — **4.2 es Chat B (captura)**, **1.3 es decisión de producto Nacho**. Las 3 construidas hoy (4.3 Cobertura Postal + 1.5 Velocidad Resolución Tickets + 4.4 Salud Financiera) son **cimiento de datos del motor de reglas ([[DEUDA 186]])**:
+- 4.3 → regla "exposición comercial por CP crítico sin cobertura".
+- 4.4 → regla "cliente con proyección <N días → alerta de bloqueo inminente".
+- 1.5 → regla "ticket estancado > 2× P95 actual".
+Cuando 4.2 cierre, se suma la regla "courier degradado → rotación/sugerencia alternativa".
 
 **Status original (histórico):** Abierta 2026-06-02. Diseno profesional completo el 2026-06-04 documentado en `docs/TORRE-DE-CONTROL.md`. Implementacion pendiente, sesion dedicada por metrica.
 

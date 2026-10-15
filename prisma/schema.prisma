@@ -2107,6 +2107,15 @@ model TiendaShopify {
   // Análogo de TiendaTiendanube.shippingCarrierId.
   carrierServiceId String?
 
+  // Shopify Fase 2 — HASH (HMAC-SHA256, APIKEY_HMAC_SECRET) del token opaco que
+  // va en la callbackUrl del CarrierService. Es la ÚNICA auth del endpoint de
+  // rates (Shopify no firma esas requests ni manda el shop domain). Nace null;
+  // Chat B genera el plain al registrar el carrier, guarda SOLO el hash acá,
+  // pone el plain en la callbackUrl. El plain NUNCA se persiste (patrón
+  // apiKeyHash). Validación: hashear el token incoming + findUnique por
+  // rateCallbackTokenHash. Rotación = nuevo plain + re-registrar CarrierService.
+  rateCallbackTokenHash String? @unique
+
   // Lifecycle: "instalada" | "desinstalada" | "suspendida". Shopify envía
   // webhook APP_UNINSTALLED (y variantes) que actualizan este flag. String
   // (consistente con el estilo del schema; mismo criterio que

@@ -91,6 +91,16 @@ export interface CrearEnvioInput {
   mercadolibreShipmentId?: string | null;
   mercadolibreOrderId?: string | null;
 
+  // Shopify Fase 3 (2026-10-15) — vínculo directo al Fulfillment Order. Los
+  // pasa el worker Shopify (Chat B) para trazabilidad + idempotencia (el
+  // request manda shopifyFulfillmentOrderId también como idempotencyKey →
+  // @@unique([empresaId, idempotencyKey]) ya enforced).
+  // Opcionales: sólo el flujo Shopify los manda; el resto los deja undefined.
+  // ⚠️ MONEY-SAFE: SOLO plumbing. NO tocan rama/SMO/montoDebito/cotización.
+  shopifyOrderId?: string | null;
+  shopifyFulfillmentOrderId?: string | null;
+  tiendaShopifyId?: number | null;
+
   // DEUDA 128: clave de idempotencia. La produce el plugin (Idempotency-Key header),
   // se persiste en Envio.idempotencyKey. El check de duplicados vive en la ruta
   // (POST /api/envios); acá sólo se almacena. Null → creación sin clave (dashboard
@@ -121,6 +131,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
     valorDeclarado, costoEnvio, costoProveedor, numeroOrden,
     tiendanubeStoreId, tiendanubeFulfillmentOrderId, tiendanubeOrderId,
     mercadolibreShipmentId, mercadolibreOrderId,
+    shopifyOrderId, shopifyFulfillmentOrderId, tiendaShopifyId,
     idempotencyKey,
     tipoOrigen, sucursalOrigenId, sucursalDestinoId
   } = input;
@@ -1100,6 +1111,17 @@ export async function crearEnvio(input: CrearEnvioInput) {
         // [[DEUDA 180]] MEF Fase 2.3.c — persist del vínculo ML.
         mercadolibreShipmentId: mercadolibreShipmentId ?? null,
         mercadolibreOrderId: mercadolibreOrderId ?? null,
+        // Shopify Fase 3 (2026-10-15) — persist del vínculo Shopify (pure plumbing,
+        // mismo mold que mercadolibre* y tiendanube*). Los 4 campos de estado del
+        // push (shopifyFulfillmentPushEstado/Id/Error/At) nacen null acá; Chat B
+        // los setea post-crearEnvio en el flujo del Fulfillment API.
+        // tiendaShopifyId tiene relation con TiendaShopify → se persiste via nested
+        // connect en el checked EnvioCreateInput (undefined si null, sino connect).
+        shopifyOrderId: shopifyOrderId ?? null,
+        shopifyFulfillmentOrderId: shopifyFulfillmentOrderId ?? null,
+        ...(tiendaShopifyId != null
+          ? { tiendaShopify: { connect: { id: tiendaShopifyId } } }
+          : {}),
         // DEUDA 128: persistir la clave del plugin para que la ruta pueda
         // detectar reintentos y devolver la etiqueta existente sin re-crear.
         idempotencyKey: idempotencyKey ?? null,

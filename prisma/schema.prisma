@@ -869,6 +869,39 @@ model Envio {
   mercadolibreShipmentId String?
   mercadolibreOrderId    String?
 
+  // ===========================================================================
+  // Vínculo Shopify (Fase 3, 2026-10-15) — mismo mold pure-plumbing que
+  // tiendanube*/mercadolibre* arriba. Branch 1 (sin FulfillmentService):
+  // Shopify NO hostea la etiqueta (merchant imprime desde la NPMS via
+  // /api/etiquetas/masiva); Shipro empuja tracking via Fulfillment API cuando
+  // el envío tiene trackingNumber real. Idempotencia ancla en
+  // shopifyFulfillmentOrderId (Chat B lo pasa también como idempotencyKey del
+  // request → @@unique([empresaId, idempotencyKey]) ya en schema protege).
+  //
+  // Los 3 campos de VÍNCULO (shopifyOrderId / shopifyFulfillmentOrderId /
+  // tiendaShopifyId) los pasa Chat B en CrearEnvioInput — pure-plumbing (no
+  // tocan rama/SMO/montoDebito/cotización). Los 4 campos de ESTADO DEL PUSH
+  // (shopifyFulfillmentPushEstado / shopifyFulfillmentId /
+  // shopifyFulfillmentPushError / shopifyFulfillmentPushedAt) los escribe Chat B
+  // POST-crearEnvio en el flujo del push; nacen NULL, nunca se tocan en
+  // lib/envios/crear.ts.
+  //
+  // Decisión opción (b): sin tabla EtiquetaShopify. Shopify no replica el
+  // ciclo PDF-hosted de Tiendanube; relación es 1:1 (un Envío ↔ un fulfillment
+  // push); tabla separada con mayoría de campos NULL sería YAGNI. Si en el
+  // futuro Shopify agregara un flujo donde Shipro hostee un asset, migrar a
+  // EtiquetaShopify sin bloqueos.
+  // ===========================================================================
+  shopifyOrderId               String?
+  shopifyFulfillmentOrderId    String?
+  tiendaShopifyId              Int?
+  tiendaShopify                TiendaShopify? @relation(fields: [tiendaShopifyId], references: [id])
+  // Estado del push a Shopify (Chat B escribe post-crearEnvio).
+  shopifyFulfillmentPushEstado String?   // "PENDING" | "PUSHED" | "FAILED" | "RETRYING" | "CANCELED"
+  shopifyFulfillmentId         String?   // GID del Fulfillment creado en Shopify (resultado del push)
+  shopifyFulfillmentPushError  String?   // último error del push (texto corto, auditoría)
+  shopifyFulfillmentPushedAt   DateTime?
+
   // DEUDA 128: clave de idempotencia por plugin. Enviada como header Idempotency-Key.
   // Scope per-empresa: @@unique([empresaId, idempotencyKey]) previene duplicados
   // dentro de la misma empresa. NULL = creado sin clave (dashboard manual, no plugin).
@@ -992,6 +1025,10 @@ model Envio {
   // [[DEUDA 180]] MEF Fase 2.3.c — guard idempotente del worker Flex por
   // mercadolibreShipmentId (mirror del patrón tiendanubeFulfillmentOrderId).
   @@index([mercadolibreShipmentId])
+
+  // Shopify Fase 3 (2026-10-15) — lookup por fulfillmentOrderId para
+  // idempotencia de reintentos (mirror del patrón TN/ML).
+  @@index([shopifyFulfillmentOrderId])
 
   // DEUDA 128: idempotencia per-empresa. Postgres permite múltiples NULL bajo la
   // unique constraint (cada NULL cuenta como distinto), así que envíos sin clave
@@ -2127,6 +2164,9 @@ model TiendaShopify {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // Shopify Fase 3 (2026-10-15) — envíos creados desde esta tienda Shopify.
+  envios Envio[]
 
   @@index([empresaId])
   @@index([estado])

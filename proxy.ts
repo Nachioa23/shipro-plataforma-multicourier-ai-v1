@@ -17,6 +17,7 @@ const PUBLIC_API_EXACT = [
   "/api/tiendanube/rates",       // Rates callback de Tiendanube — self-auth via store_id (DEUDA 144).
   "/api/tiendanube/oauth/callback", // Callback OAuth de Tiendanube — self-auth via token de vinculación en state (DEUDA 144).
   "/api/shopify/oauth/callback", // Callback OAuth de Shopify — self-auth via HMAC (SHOPIFY_API_SECRET) + token de vinculación en state + shop-match (Shopify Fase 1, 2026-10-14). NOTA: /api/shopify/install/link queda SESSION-AUTHED (solo admin_shipro/operador_shipro); nunca agregarlo acá.
+  "/api/shopify/rates", // Rates callback de Shopify — self-auth via token opaco hasheado en query (?token=...) → hashApiKey → TiendaShopify.rateCallbackTokenHash @unique (Shopify Fase 2, 2026-10-14). Shopify no firma estas requests ni manda shop; el token es la ÚNICA auth.
   "/api/mercadolibre/oauth/callback", // Callback OAuth de Mercado Libre — self-auth via token de vinculación en state (DEUDA 180 MEF Fase 1 step 3).
   "/api/tiendanube/labels/generate", // Labels callback de Tiendanube — self-auth via store_id (DEUDA 144 Momento 3).
   "/api/tiendanube/labels/download", // Descarga del PDF de etiqueta — self-auth via downloadToken (DEUDA 144 Momento 3).

@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
+import { randomBytes } from "crypto";
 import prisma from "@/lib/prisma";
 import { exchangeCodeForTokenShopify } from "@/lib/shopify/oauth";
 import { isValidShopDomain, verifyShopifyOAuthHmac } from "@/lib/shopify/oauth-verify";
 import { encryptSecret } from "@/lib/utils/secret-crypto";
+import { hashApiKey } from "@/lib/utils/apikey-hash";
 import { getAppUrlOrThrow } from "@/lib/utils/app-url";
+import { registrarCarrierServiceShopify } from "@/lib/shopify/carrier-service";
 
 // Shopify Fase 1 — Callback OAuth (espejo del callback de Tiendanube + deltas Shopify).
 //
@@ -179,8 +182,101 @@ export async function GET(request: Request) {
 
     // TODO Fase 2: enriquecer nombre + dominio via GET /shop (best-effort,
     // mismo patrón que obtenerDatosTienda de TN).
-    // TODO Fase 2: registrar CarrierService (POST /carrier_services) +
-    // persistir carrierServiceId.
+
+    // Shopify Fase 2 — Registrar/update CarrierService (rates callback).
+    // Best-effort: NUNCA debe romper el install. En reinstall siempre se regenera
+    // el token (el hash viejo se pisa) + se re-registra el CarrierService con la
+    // nueva callbackUrl. Si falla por plan insuficiente u otro error, la tienda
+    // queda vinculada igual; el fallo va a AuditoriaConfiguracion para que el
+    // equipo Shipro lo vea y acompañe al merchant con el upgrade de plan.
+    try {
+      const rateCallbackTokenPlano =
+        "shipro_shopify_rates_" + randomBytes(24).toString("base64url");
+      const rateCallbackTokenHash = hashApiKey(rateCallbackTokenPlano);
+
+      // Persistir SOLO el hash antes de llamar a Shopify. Si el registro del
+      // CarrierService fallara, el hash viejo queda pisado — el merchant tendrá
+      // que reintentar (regenerar). Alternativa: persistir después → riesgo de
+      // dejar el CarrierService en Shopify apuntando a un token que no
+      // podemos validar. Mejor "token huérfano del lado nuestro" que "callback
+      // activo sin side-match".
+      await prisma.tiendaShopify.update({
+        where: { shopDomain: shop },
+        data: { rateCallbackTokenHash },
+      });
+
+      const resultadoCarrier = await registrarCarrierServiceShopify({
+        shop,
+        accessTokenCifrado: accessTokenEnc,
+        rateCallbackTokenPlano,
+        carrierServiceIdPrevio: tiendaExistente?.carrierServiceId ?? null,
+      });
+
+      if (resultadoCarrier.ok) {
+        await prisma.tiendaShopify.update({
+          where: { shopDomain: shop },
+          data: { carrierServiceId: resultadoCarrier.carrierServiceId },
+        });
+        console.log(
+          `[/api/shopify/oauth/callback] carrier OK shop=${shop} creado=${resultadoCarrier.creado} id=${resultadoCarrier.carrierServiceId}`,
+        );
+      } else {
+        // motivo: "plan" — la tienda está en Basic / Starter y no puede activar
+        // CarrierService. No es un bug nuestro — queda registrado para que el
+        // equipo Shipro acompañe al merchant con el upgrade.
+        console.warn(
+          `[/api/shopify/oauth/callback] carrier NO disponible (plan) shop=${shop}: ${resultadoCarrier.detalle}`,
+        );
+        await prisma.auditoriaConfiguracion
+          .create({
+            data: {
+              empresaId,
+              campo: "shopify:carrier_register_failed",
+              valorAnterior: JSON.stringify({ shop, motivo: "plan" }),
+              valorNuevo: JSON.stringify({ detalle: resultadoCarrier.detalle.slice(0, 500) }),
+              motivo:
+                "Tienda vinculada pero el CarrierService no se pudo registrar (plan Shopify Basic/Starter no soporta CarrierService). El merchant debe upgradear a Advanced/Plus.",
+              ipOrigen:
+                request.headers.get("x-forwarded-for") ??
+                request.headers.get("x-real-ip") ??
+                null,
+            },
+          })
+          .catch((auditErr) =>
+            console.error(
+              "[/api/shopify/oauth/callback] no se pudo registrar el fallo del carrier (plan):",
+              auditErr,
+            ),
+          );
+      }
+    } catch (e) {
+      console.error(
+        "[/api/shopify/oauth/callback] registro CarrierService best-effort falló (la tienda quedó vinculada igual):",
+        e,
+      );
+      await prisma.auditoriaConfiguracion
+        .create({
+          data: {
+            empresaId,
+            campo: "shopify:carrier_register_failed",
+            valorAnterior: JSON.stringify({ shop }),
+            valorNuevo: JSON.stringify({ error: e instanceof Error ? e.message.slice(0, 500) : String(e).slice(0, 500) }),
+            motivo:
+              "Tienda vinculada pero el registro del CarrierService en Shopify falló. Reintentar desde el panel.",
+            ipOrigen:
+              request.headers.get("x-forwarded-for") ??
+              request.headers.get("x-real-ip") ??
+              null,
+          },
+        })
+        .catch((auditErr) =>
+          console.error(
+            "[/api/shopify/oauth/callback] no se pudo registrar el fallo del carrier:",
+            auditErr,
+          ),
+        );
+    }
+
     // TODO Fase 4: registrar webhooks (APP_UNINSTALLED, orders/*, etc.).
 
     // Redirect a la página de éxito. Usar getAppUrlOrThrow(), NO request.url:

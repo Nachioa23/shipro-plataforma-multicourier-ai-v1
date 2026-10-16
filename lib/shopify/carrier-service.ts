@@ -48,13 +48,13 @@ const MUTATION_CREATE = `
     }
   }
 `;
-// NOTA (Chat B 2026-10-14): firma documentada por GN — `id` como argumento
-// SEPARADO del input (vs embebido). Si al introspectar el schema real en la
-// primera prueba de reinstall resultara que el id va dentro del input, se
-// revierte. Confirmamos empíricamente contra Shopify.
+// NOTA (Chat B 2026-10-15): firma CONFIRMADA empíricamente contra prod + doc
+// oficial — el `id` va DENTRO del `input` (NO como argumento separado). La
+// hipótesis previa de GN (id como arg separado) resultó incorrecta; se revirtió
+// tras el error de la primera prueba de reinstall.
 const MUTATION_UPDATE = `
-  mutation carrierServiceUpdate($id: ID!, $input: DeliveryCarrierServiceUpdateInput!) {
-    carrierServiceUpdate(id: $id, input: $input) {
+  mutation carrierServiceUpdate($input: DeliveryCarrierServiceUpdateInput!) {
+    carrierServiceUpdate(input: $input) {
       carrierService { id }
       userErrors { field message }
     }
@@ -92,25 +92,30 @@ export async function registrarCarrierServiceShopify(
 
   const esReinstall = !!input.carrierServiceIdPrevio;
 
-  // Shape del input de la mutation — mismos campos en create/update. En update
-  // el `id` va como argumento SEPARADO (no dentro del input) según firma GN —
-  // ver NOTA sobre MUTATION_UPDATE arriba.
-  const inputGQL: Record<string, unknown> = {
-    name: "Shipro",
-    callbackUrl,
-    active: true,
-    supportsServiceDiscovery: true,
-  };
-
-  const variables: Record<string, unknown> = esReinstall
-    ? { id: input.carrierServiceIdPrevio, input: inputGQL }
-    : { input: inputGQL };
+  // Shape del input de la mutation:
+  //   - CREATE: incluye `supportsServiceDiscovery: true` (necesario al dar de alta).
+  //   - UPDATE: incluye `id` dentro del input (firma confirmada 2026-10-15 vs
+  //     prod + doc). Omite `supportsServiceDiscovery` — el carrier ya lo tiene
+  //     del create; pasarlo acá no hace falta y mantiene el input mínimo.
+  const inputGQL: Record<string, unknown> = esReinstall
+    ? {
+        id: input.carrierServiceIdPrevio,
+        name: "Shipro",
+        callbackUrl,
+        active: true,
+      }
+    : {
+        name: "Shipro",
+        callbackUrl,
+        active: true,
+        supportsServiceDiscovery: true,
+      };
 
   const data = await shopifyGraphQL<Record<string, unknown>>(
     input.shop,
     accessToken,
     esReinstall ? MUTATION_UPDATE : MUTATION_CREATE,
-    variables
+    { input: inputGQL }
   );
 
   const resultado: any = esReinstall

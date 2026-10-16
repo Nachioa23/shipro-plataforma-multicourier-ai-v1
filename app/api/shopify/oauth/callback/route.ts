@@ -7,6 +7,7 @@ import { encryptSecret } from "@/lib/utils/secret-crypto";
 import { hashApiKey } from "@/lib/utils/apikey-hash";
 import { getAppUrlOrThrow } from "@/lib/utils/app-url";
 import { registrarCarrierServiceShopify } from "@/lib/shopify/carrier-service";
+import { registrarWebhooksShopify } from "@/lib/shopify/webhooks-registro";
 
 // Shopify Fase 1 — Callback OAuth (espejo del callback de Tiendanube + deltas Shopify).
 //
@@ -277,7 +278,77 @@ export async function GET(request: Request) {
         );
     }
 
-    // TODO Fase 4: registrar webhooks (APP_UNINSTALLED, orders/*, etc.).
+    // Shopify Fase 3 — Registrar webhooks (ORDERS_PAID por ahora; APP_UNINSTALLED
+    // y otros vendrán en fases posteriores). Best-effort: NUNCA debe romper el
+    // install. Patrón idéntico al carrier register de arriba.
+    try {
+      const resultadoWebhooks = await registrarWebhooksShopify({
+        shop,
+        accessTokenCifrado: accessTokenEnc,
+      });
+      if (resultadoWebhooks.ok) {
+        console.log(
+          `[/api/shopify/oauth/callback] webhooks OK shop=${shop} registrados=[${resultadoWebhooks.registrados.join(",")}] duplicados=[${resultadoWebhooks.duplicados.join(",")}]`,
+        );
+      } else {
+        console.warn(
+          `[/api/shopify/oauth/callback] webhooks fallaron shop=${shop}: ${resultadoWebhooks.detalle}`,
+        );
+        await prisma.auditoriaConfiguracion
+          .create({
+            data: {
+              empresaId,
+              campo: "shopify:webhook_register_failed",
+              valorAnterior: JSON.stringify({ shop }),
+              valorNuevo: JSON.stringify({
+                detalle: resultadoWebhooks.detalle.slice(0, 500),
+              }),
+              motivo:
+                "Tienda vinculada pero el registro de webhooks en Shopify falló. Reintentar desde el panel.",
+              ipOrigen:
+                request.headers.get("x-forwarded-for") ??
+                request.headers.get("x-real-ip") ??
+                null,
+            },
+          })
+          .catch((auditErr) =>
+            console.error(
+              "[/api/shopify/oauth/callback] no se pudo registrar el fallo de webhooks:",
+              auditErr,
+            ),
+          );
+      }
+    } catch (e) {
+      console.error(
+        "[/api/shopify/oauth/callback] registro webhooks best-effort falló (la tienda quedó vinculada igual):",
+        e,
+      );
+      await prisma.auditoriaConfiguracion
+        .create({
+          data: {
+            empresaId,
+            campo: "shopify:webhook_register_failed",
+            valorAnterior: JSON.stringify({ shop }),
+            valorNuevo: JSON.stringify({
+              error: e instanceof Error ? e.message.slice(0, 500) : String(e).slice(0, 500),
+            }),
+            motivo:
+              "Tienda vinculada pero el registro de webhooks en Shopify falló (throw). Reintentar desde el panel.",
+            ipOrigen:
+              request.headers.get("x-forwarded-for") ??
+              request.headers.get("x-real-ip") ??
+              null,
+          },
+        })
+        .catch((auditErr) =>
+          console.error(
+            "[/api/shopify/oauth/callback] no se pudo registrar el fallo de webhooks (throw):",
+            auditErr,
+          ),
+        );
+    }
+
+    // TODO Fase 4+: APP_UNINSTALLED webhook + orders/cancelled + fulfillments/update.
 
     // Redirect a la página de éxito. Usar getAppUrlOrThrow(), NO request.url:
     // detrás de nginx el host de request.url es localhost:3000.

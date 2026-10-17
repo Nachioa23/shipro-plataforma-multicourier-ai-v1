@@ -49,6 +49,14 @@ export async function shopifyGraphQL<T = unknown>(
     },
     body: JSON.stringify({ query, variables: variables ?? {} }),
   });
+  // Diagnóstico para soporte Shopify — el x-request-id es la referencia que
+  // pide Shopify para investigar una llamada. Logeamos SIEMPRE (incluyendo
+  // casos con userErrors que no throwean, como el reinstall del
+  // carrierServiceUpdate o el webhookSubscriptionCreate duplicado).
+  const reqId = res.headers.get("x-request-id");
+  console.log(
+    `[shopifyGraphQL] shop=${shop} x-request-id=${reqId} op=${query.trim().slice(0, 60).replace(/\s+/g, " ")}`,
+  );
   const body: ShopifyGraphQLResponse<T> | null = await res.json().catch(() => null);
   if (!res.ok || !body) {
     const detalle = body ? JSON.stringify(body).slice(0, 500) : `status ${res.status}`;

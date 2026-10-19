@@ -29,9 +29,13 @@
 //      "Av. Corrientes 1234 Piso 5" → strip "Piso 5" → "Av. Corrientes 1234"
 //      Sin strip, la regex trailing-number tomaría "5" (el piso) en vez de
 //      "1234" (la altura real). Keywords manejados: Piso / PB / Planta Baja /
-//      Depto / Dpto / Dep / Of / Oficina / Casa / Torre / Unidad / Apto / Apt
-//      / Bloque / Edif(icio) — cada uno seguido opcionalmente de un
+//      Depto / Dpto / Dto / Dep / Of / Oficina / Casa / Torre / Unidad / Apto
+//      / Apt / Bloque / Edif(icio) — cada uno seguido opcionalmente de un
 //      identificador (número o combo alfanumérico tipo "4B").
+//      Además se cubre la notación compacta con marcador de grado "°"/"º" SIN
+//      keyword (muy común en AR): "4° B", "5°", "2°A". Ambos regex se aplican
+//      en el mismo loop para soportar inputs con 2 suffixes concatenados
+//      ("Av. X 1234 4° B Piso 2" → strip "Piso 2" y "4° B" → altura "1234").
 //
 //   4. Extraer el último grupo de dígitos consecutivos como altura candidata.
 //      Si no hay ningún dígito → altura null.
@@ -97,7 +101,13 @@ const PALABRAS_GENERICAS_CALLE = new Set<string>([
 // Regex para detectar suffix de piso/depto al final del string. Match:
 // espacio + keyword + espacio opcional + identificador opcional (alfanum + "-")
 // hasta fin de string. Case-insensitive.
-const REGEX_SUFFIX_PISO_DEPTO = /\s+(piso|pb|planta\s+baja|depto?|dpto|dep|of\.?|oficina|casa|torre|unidad|apto|apt|bloque|block|edif(?:icio)?)\.?(?:\s+[\wáéíóúñ0-9-]+)?\s*$/i;
+const REGEX_SUFFIX_PISO_DEPTO = /\s+(piso|pb|planta\s+baja|depto?|dpto|dto|dep|of\.?|oficina|casa|torre|unidad|apto|apt|bloque|block|edif(?:icio)?)\.?(?:\s+[\wáéíóúñ0-9-]+)?\s*$/i;
+
+// Regex para detectar notación compacta de piso con marcador de grado SIN
+// keyword (uso muy frecuente en AR): "4° B", "5°", "2°A", "3º C". Soporta
+// tanto "°" (U+00B0) como "º" (U+00BA, letra ordinal masculina — mal usada
+// pero ubicua) y un identificador alfanumérico opcional después.
+const REGEX_SUFFIX_PISO_GRADO = /\s+\d+\s*[°º]\s*[a-záéíóúñ0-9-]*\.?\s*$/i;
 
 // Regex para detectar "S/N" o "sin número". Boundary + variantes.
 const REGEX_SIN_NUMERO = /\b(?:s\/?n\.?|sin\s+n[uú]mero)\b/i;
@@ -137,10 +147,14 @@ export function parseAltura(calleInput: string): ParsedDireccion {
   }
 
   // Regla 3: strip de suffix piso/depto/etc. Iterativo por si el input tiene
-  // dos suffixes (raro pero posible, ej. "Av. X 100 Piso 5 Depto B").
+  // dos suffixes (raro pero posible, ej. "Av. X 100 Piso 5 Depto B" o
+  // "Av. X 1234 4° B Piso 2"). Se aplican AMBAS regex (keyword-based y marcador
+  // de grado "°/º") en cada iteración; tope 4 para dejar margen a inputs con
+  // sufijos concatenados mezclando ambas formas.
   let sinSuffix = trimmed;
-  for (let i = 0; i < 3; i++) {
-    const next = sinSuffix.replace(REGEX_SUFFIX_PISO_DEPTO, "").trim();
+  for (let i = 0; i < 4; i++) {
+    let next = sinSuffix.replace(REGEX_SUFFIX_PISO_DEPTO, "").trim();
+    next = next.replace(REGEX_SUFFIX_PISO_GRADO, "").trim();
     if (next === sinSuffix) break;
     sinSuffix = next;
   }

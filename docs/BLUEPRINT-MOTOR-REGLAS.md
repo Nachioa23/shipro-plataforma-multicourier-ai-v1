@@ -408,6 +408,163 @@ placeholder; se activa en Fase 4.1 cuando los puntos de las curvas por `(courier
 
 ---
 
+## 5.bis — CAPTURA DE CONFIABILIDAD REAL (mise en place — decisiones fundamentadas, 2026-10-20)
+
+### Principio (aporte Nacho — "mise en place")
+
+La captura de datos de confiabilidad va **ANTES** de construir el scoring, no después. Cada envío creado sin guardar
+su promesa es un dato de on-time irrecuperable. Esto **corrige el orden del plan de fases** original: la captura (lo
+que vivía dentro de Fase 4) se adelanta porque **"cada día cuenta"** — un día sin persistir la promesa es un día
+cuyo on-time no se puede reconstruir.
+
+Analogía culinaria: la *mise en place* es tener todo cortado y pesado antes de prender la hornalla. Acá: tener el
+histórico de "qué prometí vs qué entregué" ya acumulado el día que se encienda el scoring real, no empezar a juntarlo
+después de encenderlo.
+
+### El huevo-y-la-gallina, resuelto (el fallback escalonado que ya existe)
+
+**Problema aparente**: para scorear por confiabilidad hace falta histórico; para tener histórico hace falta operar
+sin scorear por confiabilidad.
+
+**Resolución**: la promesa arranca con el **SLA declarado del courier** (Nivel 4 de `calcularPromesaCalibrada`) y
+se reemplaza automáticamente por la **evidencia real** (Niveles 1-3) a medida que se acumulan envíos. La transición
+es automática — no hay que decidir cuándo cambiar: el fallback escalonado lo hace según haya muestra ≥ umbral.
+Intuición de Nacho que re-derivó el diseño que ya está en código ([`lib/utils/promesa-calibrada.ts`](../lib/utils/promesa-calibrada.ts)).
+
+### Qué se mide (OTD — On-Time Delivery, el estándar de la industria)
+
+**Métrica principal — % on-time**:
+
+```
+% on-time = entregas dentro de la ventana prometida / total de entregas
+```
+
+Es la métrica **#1 de logística** en la industria. Benchmarks mundiales:
+- **UPS**: 97.5% OTD global.
+- **FedEx**: 95.2% OTD global.
+- **>95%** se considera excelente; **<85%** indica un problema operativo serio.
+
+**Definición de "cumplir"**: llegó **en o antes** de la fecha prometida (estándar OTD). "Antes" cuenta como on-time
+(cliente contento). Estricto al inicio, **sin margen de tolerancia extra**; se ajusta si la data real lo justifica
+(ej. si el P90 de "retraso" es +2hs sistemáticamente, mover el umbral de tolerancia +2hs no deforma la métrica, la
+calibra).
+
+**DOS desgloses de tiempo** (ambos se capturan, miden cosas distintas):
+
+| Desglose | Ventana | Para qué sirve |
+|---|---|---|
+| **Promesa al comprador (OTD end-to-end)** | `fechaImpresion → fechaEntrega` | % on-time real que ve el buyer ("desde que compré hasta que recibí"). Incluye tiempo en depósito del seller + courier. **Aporte Nacho**: es lo que importa comercialmente. |
+| **Velocidad del courier (comparación entre couriers)** | `fechaColecta → fechaEntrega` | Tiempo puro del courier, independiente del handling del seller. Para `c_velocidad` del scoring (es decisión sobre el courier, no sobre el seller). |
+
+Reconcilia la ambigüedad flaggeada en §10.E: ambas ventanas se persisten; cada métrica elige la suya.
+
+**Métrica derivada — Delivery Estimation Accuracy** (aporte Nacho — "medir lo prometido vs lo sucedido"):
+
+```
+gap_promedio(courier, zona) = avg(fechaEntrega - fechaPrometida)   # en horas, puede ser negativo
+```
+
+El **gap promedio** entre promesa y realidad (ej. "+8hs a Córdoba") NO solo el sí/no binario del on-time. Más
+accionable:
+- `gap_promedio = +8h` → "sistémicamente llegamos 8hs tarde a Córdoba" → ajustar la promesa, no reemplazar al courier.
+- `gap_promedio = -12h` → "llegamos 12hs antes de lo prometido" → la promesa es conservadora, se puede ajustar hacia
+  abajo para mejor UX de checkout.
+
+Es la **Delivery Estimation Accuracy** de la industria. Mismo dato que el OTD, otro cálculo — se capturan juntas sin
+costo adicional de query.
+
+### Decisiones fundamentadas
+
+#### UMBRAL DE MUESTRA = 30
+
+Estándar estadístico de la industria para que un % sea **confiable** (teorema del límite central, mínimo para que la
+distribución de la proporción muestral se aproxime a normal). Por debajo de 30, el ratio es ruido estadístico
+("50% on-time sobre 4 envíos" ≠ "50% on-time sobre 400"). Por debajo del umbral, el helper cae al fallback
+escalonado hasta llegar al Nivel 4 (SLA declarado del courier).
+
+**Nota**: distinto del `UMBRAL_MUESTRA_MINIMA = 10` de `calcularPromesaCalibrada` ([`lib/utils/promesa-calibrada.ts:42`](../lib/utils/promesa-calibrada.ts#L42)).
+Ese umbral es para un **promedio de tiempo** (menos sensible estadísticamente que un %). El de confiabilidad es más
+alto (30) por rigor estadístico sobre proporciones.
+
+#### VENTANAS CANÓNICAS = 90 / 180 / 270 / 360 días
+
+Precomputar las 4; la empresa elige cuál lee via `Empresa.ventanaConfiabilidadDias Int @default(90)` (constraint `∈
+{90, 180, 270, 360}`). El cron computa las 4 por combinación `(courier, provincia)`, lookup O(1) desde el helper.
+
+**Justificación**:
+- 90 días = cuartil operativo (lo que la industria llama "SLA trimestral").
+- 180 días = semestral — aísla picos de temporada corta.
+- 270/360 = aísla estacionalidad anual completa (ej. "Black Friday + Reyes" quedan dentro de la ventana solo con
+  360d).
+- El "reset configurable" de Nacho = aislar períodos donde la realidad cambió (nuevo depósito, nuevo contrato con el
+  courier, cambio de carrier regional). Ventana corta = post-cambio; ventana larga = antes del cambio.
+
+#### POR ZONA, NO GLOBAL
+
+La confiabilidad de un courier **cambia radicalmente por zona** — ningún courier es "el mejor" en absoluto. Validación
+foros AR:
+- Correo Argentino llega al pueblo del interior donde Andreani no entrega.
+- Andreani confiable en CABA, falla en el interior profundo.
+- OCA fuerte en provincia de Buenos Aires, dispar en Cuyo.
+
+Un ranking global ("Andreani > Correo") es engañoso para el 60% del territorio. El scoring por confiabilidad **por
+zona** es exactamente lo que permite elegir el courier correcto PARA ESA ZONA.
+
+**Granularidad inicial = provincia** (lo que ya hay en `Envio.destino.provincia`); se refina a zona fina cuando
+cierre **DEUDA 46** (modelo `ZonaLogistica`) y/o **DEUDA 44** (zona courier desde liquidación).
+
+### Validación de mercado (foros AR — por qué el scoring-por-zona ES el diferencial)
+
+El mercado argentino **ya pide** exactamente lo que resuelve el scoring de Shipro: "no te cases con un solo correo,
+elegí según la zona". Evidencia:
+
+- **Trustpilot AR 2024-2026** (reviews de couriers argentinos):
+  - OCA: 1.5 ⭐ (volumen alto, muchas quejas por interior).
+  - Correo Argentino: 1.0 ⭐ (cobertura amplia pero tiempos erráticos).
+  - Andreani: mejor rating pero quejas específicas de zonas rurales.
+- **Comparativas sector (tiendli, shoperly, blog de e-commerce AR)**: artículos recurrentes "qué courier usar para
+  CABA vs provincia vs Patagonia", confirmando que la decisión es **zona-dependiente**, no absoluta.
+- **Benchmark OTD** (sourceday, cargoson, nshift): la métrica estándar global es % on-time, por lane / zona /
+  destino. No por courier global.
+
+**Conclusión**: Shipro NO está inventando una métrica — está construyendo **la métrica estándar de la industria**,
+aplicada a la realidad **zona-dependiente** del mercado AR. Es el diferencial comercial.
+
+### Plan de piezas (corrige el orden Fase 3/4)
+
+El orden original (Fase 3 = framework scoring; Fase 4 = encender scoring + capturar confiabilidad) se **corrige**:
+la captura va primero, el scoring puede andar en shadow con fallback mientras la captura acumula.
+
+| # | Pieza | Dependencias | Estado |
+|---|---|---|---|
+| **0** | **Persist promesa al crear envío** (`Envio.slaPromesaHs Int?` + `Envio.slaPromesaNivel Int?`). | Schema aditivo (migración nullable). Money-safe (campo nuevo, zero touch de débito/precio). | **URGENTE** — cada día sin esto = dato irrecuperable. |
+| **1** | **Schema `MetricaConfiabilidad`** + **`Empresa.ventanaConfiabilidadDias`**. | Schema aditivo. | Construible YA. |
+| **2** | **Cron `metricas-confiabilidad`**. Agrega 4 ventanas canónicas por `(courierId, provinciaDestino, ventanaDias)`, computa % on-time + gap_promedio + muestra. Upsert full-replace (mismo patrón `metricas-sla`). | Prereq: Pieza 0 populando `slaPromesaHs`. | Construible YA, resultados reales llegan post-captura (volumen → tiempo). |
+| **3** | **Helper `calcularConfiabilidad(courierId, provincia, ventanaDias)`**. Fallback escalonado: `(courier, provincia, ventana)` → `(courier, provincia, siguiente ventana más grande)` → `(courier, global)` → `SlaCourier` teórico (Nivel 4). Umbral de muestra = 30. Devuelve `{pOnTime, gap, muestra, nivel}`. | Pieza 1 + 2. | Construible YA (el fallback a Nivel 4 arranca con lo declarado). |
+| **4+** | **Granularidad fina por zona**: agregar `zonaLogisticaId Int?` (DEUDA 46) y/o `zonaCourier String?` (DEUDA 44) a `MetricaConfiabilidad`. | DEUDA 46 (modelo nuevo) **o** DEUDA 44 (parser liquidación). | ESPERA — se agrega sin romper el pipeline (upsert full-replace soporta cambios de granularidad). |
+
+**Nota de orden operativo**: aunque la Pieza 4 depende de DEUDA 46/44, las Piezas 0-3 **NO** la bloquean — se puede
+arrancar la captura con granularidad provincia hoy y refinar después. Es la mise en place pragmática: empezar YA con
+lo que hay, refinar con lo que venga.
+
+### Money-safety
+
+Todas las piezas son **read-only sobre el flujo monetario**:
+- Pieza 0: escribe campos nuevos en `Envio`, no toca `precioFinal`, `MovimientoFinanciero`, `saldoActivo`.
+- Piezas 1-3: zero mutations fuera de `MetricaConfiabilidad` (tabla nueva, nadie más la lee para débito).
+- Lecturas: `Envio.slaPromesaHs`, `fechaImpresion`, `fechaColecta`, `fechaEntrega`. Zero touch de money.
+
+### Decisiones pendientes antes de arrancar la construcción
+
+1. **Umbral de muestra**: ratificar 30 (recomendación acá) vs 10 (como promesa-calibrada) — ya decidido en esta
+   sección pero vale una pasada final.
+2. **Qué define "cumplir"**: `fechaEntrega ≤ fechaImpresion + slaPromesaHs` estricto, o margen (+1h / +4h) desde el
+   inicio. Recomendación: estricto; calibrar después con observación.
+3. **Legacy pre-captura**: envíos entregados antes de persistir `slaPromesaHs` → **excluidos** del cómputo (lo
+   contrario introduce leakage temporal al recalcular con el histórico de hoy).
+
+---
+
 ## 6. Métricas que alimentan el motor (link con Torre/Panel — input Nacho)
 
 Nacho definió **4 bloques** de métricas que alimentan al motor y al monitoreo del negocio:

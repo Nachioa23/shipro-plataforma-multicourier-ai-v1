@@ -29,10 +29,14 @@ export type RegistrarWebhooksShopifyResult =
   | { ok: true; registrados: string[]; duplicados: string[] }
   | { ok: false; detalle: string };
 
-// Topics a registrar en Fase 3. Agregar más acá (ORDERS_CANCELLED,
-// FULFILLMENTS_UPDATE, APP_UNINSTALLED, etc.) cuando se construyan sus flows.
+// Topics a registrar vía API (webhookSubscriptionCreate). Agregar más acá
+// (ORDERS_CANCELLED, FULFILLMENTS_UPDATE, etc.) cuando se construyan sus flows.
+// NOTA: los 3 webhooks de compliance GDPR (customers/data_request,
+// customers/redact, shop/redact) NO van acá — se configuran por URL fija en el
+// Dev Dashboard (no son registrables por API).
 const TOPICS = [
-  { topic: "ORDERS_PAID", path: "/api/shopify/webhooks/orders-paid" },
+  { topic: "ORDERS_PAID", path: "/api/shopify/webhooks/orders-paid" }, // Fase 3
+  { topic: "APP_UNINSTALLED", path: "/api/shopify/webhooks/app-uninstalled" }, // Fase 4
 ];
 
 const MUTATION_CREATE = `

@@ -6,6 +6,7 @@ import { hashApiKey } from "@/lib/utils/apikey-hash";
 const PUBLIC_API_PREFIXES = [
   "/api/auth/",
   "/api/tiendanube/webhooks/", // Webhooks Tiendanube — self-auth via HMAC x-linkedstore-hmac-sha256 (DEUDA 104).
+  "/api/shopify/webhooks/", // Webhooks Shopify — self-auth via HMAC-SHA256 base64 (SHOPIFY_API_SECRET) sobre raw body + x-shopify-shop-domain. Cubre orders-paid (Fase 3) + app-uninstalled y los 3 de GDPR (Fase 4).
 ];
 const PUBLIC_API_EXACT = [
   "/api/nps",

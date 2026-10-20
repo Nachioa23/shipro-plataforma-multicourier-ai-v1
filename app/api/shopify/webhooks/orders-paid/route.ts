@@ -181,6 +181,41 @@ export async function POST(request: Request) {
       }
       const foId = fulfillmentOrders[0].id;
 
+      // DEUDA #3 — Multi-FO: si Shopify partió el pedido en varias fulfillment
+      // orders (multi-depósito / multi-location), HOY sólo cumplimos la primera.
+      // NO construimos el despacho multi-FO completo (edge poco común + semántica
+      // ambigua sin un payload real que observar), pero tampoco descartamos las
+      // demás en silencio: lo logueamos fuerte + auditoría para que un operador
+      // lo maneje a mano. Best-effort: si la auditoría falla, NO corta el flujo
+      // del primer FO (el despacho —lo importante— sigue igual).
+      if (fulfillmentOrders.length > 1) {
+        const foIdsRestantes = fulfillmentOrders.slice(1).map((f) => f.id);
+        console.warn(
+          `[/api/shopify/webhooks/orders-paid] MULTI-FO: order ${orderGid} tiene ${fulfillmentOrders.length} fulfillment orders; se procesa SOLO la primera (${foId}). FOs sin procesar: ${foIdsRestantes.join(", ")}`,
+        );
+        try {
+          await prisma.auditoriaConfiguracion.create({
+            data: {
+              empresaId,
+              courierId: null,
+              campo: "shopify:multi_fulfillment_order",
+              valorAnterior: null,
+              valorNuevo: `order=${orderGid} fos=${fulfillmentOrders.length} procesado=${foId} sin_procesar=[${foIdsRestantes.join(", ")}]`,
+              motivo:
+                "Pedido Shopify con múltiples fulfillment orders: se cumplió solo la primera. Revisar y despachar las restantes a mano.",
+              usuarioEmail: null,
+              rolUsuario: "system",
+              ipOrigen: null,
+            },
+          });
+        } catch (e) {
+          console.error(
+            "[/api/shopify/webhooks/orders-paid] no se pudo registrar auditoría MULTI-FO (no corta el flujo):",
+            e,
+          );
+        }
+      }
+
       // b. Idempotencia: si ya existe Envio con (empresaId, idempotencyKey=foId),
       //    skip. El @@unique([empresaId, idempotencyKey]) ya en schema protege;
       //    el chequeo acá evita entrar al débito antes del throw.

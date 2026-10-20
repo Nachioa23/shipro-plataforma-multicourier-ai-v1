@@ -840,6 +840,16 @@ model Envio {
   // DEUDA 29: trackingFirstMile eliminado. La info ahora vive en TramoEnvio.
   // Verificado pre-refactor: 0 envíos productivos referenciaban este campo.
   diasPrometidosCheckout Int?
+
+  // DEUDA 186 PIEZA 0 (mise en place, 2026-10-20) — promesa cruda al crear envío,
+  // para medir on-time con granularidad fina. Puramente informativo (zero touch de
+  // money); diasPrometidosCheckout queda intacto (sla.ts lo sigue usando). Legacy
+  // pre-PIEZA 0 queda null → se saltan en el cómputo de confiabilidad (sin leakage
+  // temporal — primer dato real = primer envío post-deploy).
+  slaPromesaHs      Int? // promesa calibrada en HORAS crudas (fuente: promesaCalibrada.slaHoras).
+  slaPromesaNivel   Int? // nivel del fallback que produjo la promesa. 1=calibrado (depósito, courier, provincia); 2=(courier, provincia); 3=promedio MetricaSLA; 4=SLA teórico hardcoded. Mide la CONFIANZA del propio dato (on-time medido contra Nivel 4 vale menos que contra Nivel 1).
+  slaPromesaMuestra Int? // cantidad de envíos en la muestra que calibró la promesa; null en Nivel 4 (sin muestra). Audita la fuerza del dato ("por qué Nivel 4 si había 50 envíos a Córdoba").
+
   numeroOrden            String?
 
   // DEUDA 144 (Momento 3 labels) — puente 1:1 al fulfillment order de Tiendanube.

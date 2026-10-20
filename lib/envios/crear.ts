@@ -1101,6 +1101,11 @@ export async function crearEnvio(input: CrearEnvioInput) {
       data: {
         trackingNumber: trackingOficial,
         diasPrometidosCheckout: diasPrometidosCalculados,
+        // DEUDA 186 PIEZA 0 (mise en place): persistir la promesa cruda + nivel + muestra para medir on-time con
+        // granularidad horas. Puramente informativo (zero touch de money). Legacy pre-PIEZA 0 queda null.
+        slaPromesaHs: promesaCalibrada.slaHoras,
+        slaPromesaNivel: promesaCalibrada.nivel,
+        slaPromesaMuestra: promesaCalibrada.cantidadMuestra,
         // TODO DEUDA 29 Sub-fase 3: tracking del first-mile ahora vive en TramoEnvio.trackingExterno.
         numeroOrden: numeroOrden || null,
         // Vínculo Tiendanube: persistido al crear para que el webhook fulfillment_order

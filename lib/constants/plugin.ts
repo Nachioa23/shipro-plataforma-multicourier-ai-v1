@@ -21,3 +21,8 @@ export const ZIP_PLUGIN_WOOCOMMERCE_URL =
   "https://github.com/Nachioa23/shipro-woocommerce/releases/download/v0.1.0/shipro-woocommerce-0.1.0.zip";
 
 export const GUIA_PLUGIN_WOOCOMMERCE_URL = process.env.GUIA_PLUGIN_WOOCOMMERCE_URL ?? "";
+
+// Guía de instalación de Shopify para el cliente (DEUDA — Chat C coordina el PDF).
+// Si está vacía, el mail del link se manda igual sin la guía (degrada con gracia),
+// igual que GUIA_PLUGIN_WOOCOMMERCE_URL.
+export const GUIA_SHOPIFY_URL = process.env.GUIA_SHOPIFY_URL ?? "";

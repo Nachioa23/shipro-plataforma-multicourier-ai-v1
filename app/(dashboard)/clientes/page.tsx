@@ -59,6 +59,11 @@ export default function GestionClientes() {
   // tener más de una conexión WooCommerce, cada una con su estado UI).
   const [enviandoPluginId, setEnviandoPluginId] = useState<number | null>(null);
   const [mensajePlugin, setMensajePlugin] = useState<Record<number, { texto: string; tipo: 'ok' | 'error' }>>({});
+  // Shopify — verbo "enviar link de instalación" (espejo del plugin WooCommerce).
+  // Estados per-conexión. shopDomainShopify guarda lo tipeado en el input por-conexión.
+  const [enviandoLinkShopifyId, setEnviandoLinkShopifyId] = useState<number | null>(null);
+  const [mensajeLinkShopify, setMensajeLinkShopify] = useState<Record<number, { texto: string; tipo: 'ok' | 'error'; url?: string }>>({});
+  const [shopDomainShopify, setShopDomainShopify] = useState<Record<number, string>>({});
 
   // DEUDA 150 Pieza 1: hub de conexiones per-empresa. Se carga al abrir el drawer
   // (via useEffect abajo). Muestra las Conexion rows + tiendas Tiendanube (read-only,
@@ -688,6 +693,60 @@ export default function GestionClientes() {
                                   <p className={`mt-2 text-[11px] font-medium px-2 py-1.5 rounded ${mensajePlugin[c.id].tipo === 'ok' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
                                     {mensajePlugin[c.id].texto}
                                   </p>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Shopify — verbo "enviar link de instalación" (espejo WooCommerce).
+                                Pide shopDomain porque el link OAuth se construye contra la tienda. */}
+                            {c.plataforma === "SHOPIFY" && (
+                              <div className="mt-2 pt-2 border-t border-gray-100 space-y-2">
+                                <input
+                                  type="text"
+                                  value={shopDomainShopify[c.id] ?? ""}
+                                  onChange={(e) => setShopDomainShopify((s) => ({ ...s, [c.id]: e.target.value }))}
+                                  placeholder="mitienda.myshopify.com"
+                                  disabled={enviandoLinkShopifyId !== null}
+                                  className="w-full text-[11px] border border-gray-300 rounded-md px-2 py-1.5 bg-white disabled:opacity-50"
+                                />
+                                <button
+                                  onClick={async () => {
+                                    const shopDomain = (shopDomainShopify[c.id] ?? "").trim();
+                                    if (!clienteSeleccionado || enviandoLinkShopifyId !== null || shopDomain === "") return;
+                                    setEnviandoLinkShopifyId(c.id);
+                                    setMensajeLinkShopify((m) => { const { [c.id]: _drop, ...rest } = m; return rest; });
+                                    try {
+                                      const res = await fetch(`/api/admin/empresas/${clienteSeleccionado.id}/enviar-link-shopify`, {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({ shopDomain }),
+                                      });
+                                      const data = await res.json().catch(() => ({}));
+                                      if (res.ok) {
+                                        const guiaTxt = data?.incluyeGuia ? " (con guía)" : " (guía por separado)";
+                                        setMensajeLinkShopify((m) => ({ ...m, [c.id]: { texto: `Link enviado a ${data?.enviadoA ?? "el gerente del cliente"}${guiaTxt}.`, tipo: 'ok', url: data?.url } }));
+                                      } else {
+                                        setMensajeLinkShopify((m) => ({ ...m, [c.id]: { texto: data?.error || `Error HTTP ${res.status}`, tipo: 'error' } }));
+                                      }
+                                    } catch {
+                                      setMensajeLinkShopify((m) => ({ ...m, [c.id]: { texto: "Error de red. Reintentá.", tipo: 'error' } }));
+                                    } finally {
+                                      setEnviandoLinkShopifyId(null);
+                                    }
+                                  }}
+                                  disabled={enviandoLinkShopifyId !== null || (shopDomainShopify[c.id] ?? "").trim() === ""}
+                                  className="w-full flex items-center justify-center gap-2 px-3 py-1.5 text-[11px] font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-md disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                                >
+                                  {enviandoLinkShopifyId === c.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                                  {enviandoLinkShopifyId === c.id ? "Enviando…" : "Enviar link de Shopify al cliente"}
+                                </button>
+                                {mensajeLinkShopify[c.id] && (
+                                  <div className={`mt-2 text-[11px] font-medium px-2 py-1.5 rounded ${mensajeLinkShopify[c.id].tipo === 'ok' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+                                    <p>{mensajeLinkShopify[c.id].texto}</p>
+                                    {mensajeLinkShopify[c.id].url && (
+                                      <p className="mt-1 break-all font-mono text-[10px] text-gray-700 select-all">{mensajeLinkShopify[c.id].url}</p>
+                                    )}
+                                  </div>
                                 )}
                               </div>
                             )}

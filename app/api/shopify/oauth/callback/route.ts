@@ -210,7 +210,6 @@ export async function GET(request: Request) {
         shop,
         accessTokenCifrado: accessTokenEnc,
         rateCallbackTokenPlano,
-        carrierServiceIdPrevio: tiendaExistente?.carrierServiceId ?? null,
       });
 
       if (resultadoCarrier.ok) {

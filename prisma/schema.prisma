@@ -2204,11 +2204,39 @@ model TiendaShopify {
   // TiendaTiendanube.storeId (allá Int, acá String por la naturaleza del id).
   shopDomain String @unique
 
-  // accessToken OAuth offline permanente. Nace NULL (Fase 1 solo persistencia;
-  // el callback OAuth que lo escribe lo construye Chat B en Fase 2+). Cuando se
-  // llene, se guarda ENCRIPTADO (encryptSecret de lib/utils/secret-crypto.ts).
-  // NUNCA en texto plano.
+  // accessToken OAuth offline. Nace NULL (Fase 1 solo persistencia; el callback
+  // OAuth que lo escribe lo construye Chat B en Fase 2+). Cuando se llene, se
+  // guarda ENCRIPTADO (encryptSecret de lib/utils/secret-crypto.ts). NUNCA en
+  // texto plano.
+  //
+  // NOTA (2026-10-21, Shopify app pública): la app pasó de CUSTOM (token
+  // permanente, pre-2025) a PÚBLICA ("Shipro Flow Clientes"). Shopify exige
+  // tokens offline EXPIRANTES + refresh para apps públicas nuevas (confirmado
+  // oficial + 403 reproducido en prod). El token hoy no es permanente — expira
+  // (~1h) y se refresca con `refreshToken` abajo. accessTokenExpira lleva el
+  // vencimiento; el caller (getShopifyAccessToken, patrón lib/mercadolibre/
+  // tokens.ts, lo cablea Chat B) refresca antes de cada llamada si está vencido.
+  // Las instalaciones custom legacy pueden tener accessTokenExpira=null (token
+  // permanente, no aplica el chequeo) — distinguible por el flag null/not-null.
   accessToken String?
+
+  // refresh token de Shopify (app pública). Se guarda CIFRADO (encryptSecret),
+  // mismo patrón que accessToken — NUNCA en texto plano. Shopify ROTA el refresh
+  // en cada operación de refresh (devuelve un refresh nuevo junto al nuevo
+  // access): el caller debe persistir AMBOS a la vez (patrón ML). Null en apps
+  // custom legacy (token permanente, no aplica el flujo refresh).
+  refreshToken String?
+
+  // Expiración del accessToken (install: now + expires_in, típicamente ~1h). El
+  // caller chequea esto antes de cada llamada a Shopify y refresca si expiró.
+  // Null = token permanente (install custom legacy) o pre-feature — en ese caso
+  // se saltea el chequeo y se usa el access tal cual.
+  accessTokenExpira DateTime?
+
+  // Expiración del refresh token (~90d). Si expira, la tienda necesita
+  // reinstalación (OAuth desde cero). El cron de refresh (Chat B) puede alertar
+  // antes de que llegue a ese punto. Null en apps custom legacy.
+  refreshTokenExpira DateTime?
 
   // Dominio público custom de la tienda (ej. "mi-tienda-prod.com") — distinto
   // del shopDomain técnico. Best-effort post-OAuth vía GET /shop (Fase 2).

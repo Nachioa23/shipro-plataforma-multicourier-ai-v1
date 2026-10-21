@@ -32,6 +32,14 @@ model Empresa {
 
   ordenamientoDefault String @default("PRECIO_ASC") // PRECIO_ASC, SLA, HISTORICO
 
+  // DEUDA 186 PIEZA 1 (2026-10-21) — ventana de histórico que el motor de reglas
+  // usa para scorear confiabilidad. Valores canónicos: 90/180/270/360 (validados
+  // por CHECK constraint en SQL de la migración; Prisma no lo expresa nativo).
+  // Permite aislar estacionalidad / cambios operativos (el "reset configurable"
+  // de Nacho — ventana corta post-cambio, ventana larga antes del cambio).
+  // Default 90 = cuartil operativo.
+  ventanaConfiabilidadDias Int @default(90)
+
   // Modo B — política de empaquetado de TARIFA FIJA (no es empaquetado físico real).
   // Si empaqueModoBActivo=true, todos los envíos de la empresa cotizan como UN bulto con
   // estos parámetros fijos, sin importar el contenido real del carrito. Es una regla
@@ -326,8 +334,9 @@ model Courier {
   envios        Envio[]
   nomencladores Nomenclador[]
   encuestasNPS  EncuestaNPS[]
-  metricasSLA   MetricaSLA[]
-  slas          SlaCourier[]
+  metricasSLA           MetricaSLA[]
+  metricasConfiabilidad MetricaConfiabilidad[] // DEUDA 186 PIEZA 1
+  slas                  SlaCourier[]
 
   // --- DEUDA 29: Relaciones nuevas ---
   sucursales                    SucursalCourier[]
@@ -1418,6 +1427,66 @@ model MetricaSLA {
 
   // Evitamos que haya dos métricas para el mismo courier y destino
   @@unique([courierId, provinciaDestino])
+}
+
+// DEUDA 186 PIEZA 1 (2026-10-21) — captura de confiabilidad real por courier/
+// provincia/ventana (mise en place pre-scoring). Mide % on-time end-to-end
+// (fechaImpresion→fechaEntrega vs slaPromesaHs persistido en PIEZA 0) + Delivery
+// Estimation Accuracy (gap promesa-vs-real avg/P50/P90).
+//
+// Coexiste con MetricaSLA — miden cosas DISTINTAS:
+//   - MetricaSLA         → avg(fechaColecta→fechaEntrega) = VELOCIDAD del courier (c_velocidad del scoring).
+//   - MetricaConfiabilidad → % on-time end-to-end            = CONFIABILIDAD del courier (c_sla del scoring).
+// No reemplaza, se complementan.
+//
+// esGlobal = fila agregada de TODAS las provincias del courier (Nivel 3 del
+// fallback escalonado del helper calcularConfiabilidad). Es flag limpio (no
+// string "GLOBAL" en provinciaDestino) para no contaminar el espacio de
+// provincias reales.
+//
+// muestraSuficiente = muestra ≥ 30 (umbral estadístico industria para
+// confiabilidad de proporciones; distinto del UMBRAL_MUESTRA_MINIMA=10 de
+// promesa-calibrada que mide promedios, menos sensible). El helper lo lee y
+// cae a fallback (otra ventana / global / Nivel 4) si false.
+//
+// NIVEL 4 (fallback teórico) NO vive en esta tabla — está asumido como c_sla=1.0
+// constante en el helper (PIEZA 3). Razón: la tasa de cumplimiento del courier
+// NO existe (ni declarada ni por API — recon 2026-10-22 confirmó: adapters no
+// la traen, SlaCourier.diasPactados solo tiene PLAZO no tasa, ninguna API courier
+// la devuelve). Esta tabla solo guarda confiabilidad MEDIDA sobre datos propios.
+//
+// Granularidad inicial = provincia (lo que ya hay en Envio.destino.provincia).
+// Refina a zona fina cuando DEUDA 46 (ZonaLogistica) cierre — se agrega columna
+// aditiva sin romper (upsert full-replace del cron soporta cambios de granularidad).
+model MetricaConfiabilidad {
+  id Int @id @default(autoincrement())
+
+  courierId Int
+  courier   Courier @relation(fields: [courierId], references: [id], onDelete: Cascade)
+
+  provinciaDestino String  // raw (consistente con MetricaSLA); "" cuando esGlobal=true
+  esGlobal         Boolean @default(false) // true = fila agregada cross-provincia (Nivel 3 fallback). Flag es la fuente de verdad; provincia es placeholder "" en ese caso.
+
+  ventanaDias      Int     // 90|180|270|360 — validado por CHECK en SQL (Prisma no lo expresa nativo)
+
+  // --- % on-time ---
+  muestra           Int     // total de envíos considerados en la combinación
+  cumplieron        Int     // envíos donde fechaEntrega ≤ fechaImpresion + slaPromesaHs (estricto, end-to-end)
+  porcentajeOnTime  Decimal @db.Decimal(5, 2) // 0.00-100.00 (cumplieron/muestra*100)
+
+  // --- Delivery Estimation Accuracy (gap promesa-vs-real, aporte Nacho) ---
+  // Positivo = llegó tarde en promedio; negativo = llegó antes.
+  gapPromedioHs    Decimal @db.Decimal(10, 2) // avg(horasReales - slaPromesaHs)
+  gapP50Hs         Decimal @db.Decimal(10, 2) // mediana del gap (robustez vs outliers del avg)
+  gapP90Hs         Decimal @db.Decimal(10, 2) // P90 del gap — los peores 10%
+
+  // --- flag de significancia ---
+  muestraSuficiente Boolean // true si muestra ≥ 30 (umbral industria); false → helper cae a fallback
+
+  fechaActualizacion DateTime @default(now()) @updatedAt
+
+  @@unique([courierId, provinciaDestino, esGlobal, ventanaDias])
+  @@index([courierId, provinciaDestino])
 }
 
 model Feriado {

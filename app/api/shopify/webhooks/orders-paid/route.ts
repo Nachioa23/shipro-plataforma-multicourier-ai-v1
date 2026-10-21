@@ -10,7 +10,7 @@ import {
   pushFulfillmentShopify,
 } from "@/lib/shopify/fulfillment";
 import { resolverOpcionElegida } from "@/lib/shopify/resolver-servicio";
-import { decryptSecret } from "@/lib/utils/secret-crypto";
+import { getShopifyAccessToken } from "@/lib/shopify/tokens";
 import { getAppUrlOrThrow } from "@/lib/utils/app-url";
 
 // Shopify Fase 3 — Webhook orders/paid.
@@ -115,7 +115,6 @@ export async function POST(request: Request) {
   // retener el payload completo + la tienda completa en memoria).
   const empresaId = tienda.empresaId;
   const tiendaShopifyId = tienda.id;
-  const accessTokenCifrado = tienda.accessToken; // null si no hay OAuth cerrado — defensa abajo
   const shopDomain = shop!;
   const orderIdNumerico = String(payload?.id ?? "");
   const orderGid = orderIdNumerico ? `gid://shopify/Order/${orderIdNumerico}` : "";
@@ -149,9 +148,21 @@ export async function POST(request: Request) {
         console.warn("[/api/shopify/webhooks/orders-paid] order id ausente, skip");
         return;
       }
-      if (!accessTokenCifrado) {
+
+      // Resolver accessToken PLAINTEXT via getShopifyAccessToken — hace el
+      // refresh lazy si expiró (patrón ML tokens.ts). Si falla (tienda sin
+      // token, estado != "instalada", refresh muerto) → log + skip; NO
+      // rompemos el webhook (mismo espíritu que el skip anterior cuando faltaba
+      // el accessToken crudo). Si funciona, reusamos el plaintext para las dos
+      // llamadas (obtenerFO + push) — getShopifyAccessToken es idempotente y
+      // vuelve a hacer refresh si lo volvieran a llamar.
+      let accessTokenPlano: string;
+      try {
+        accessTokenPlano = await getShopifyAccessToken(shopDomain);
+      } catch (e) {
         console.warn(
-          "[/api/shopify/webhooks/orders-paid] accessToken ausente en TiendaShopify, skip",
+          "[/api/shopify/webhooks/orders-paid] getShopifyAccessToken falló, skip:",
+          { shopDomain, err: e instanceof Error ? e.message : String(e) },
         );
         return;
       }
@@ -159,7 +170,6 @@ export async function POST(request: Request) {
       // a. FulfillmentOrders con CREATE_FULFILLMENT.
       let fulfillmentOrders;
       try {
-        const accessTokenPlano = decryptSecret(accessTokenCifrado);
         fulfillmentOrders = await obtenerFulfillmentOrders(
           shopDomain,
           accessTokenPlano,
@@ -385,7 +395,7 @@ export async function POST(request: Request) {
       try {
         const push = await pushFulfillmentShopify({
           shop: shopDomain,
-          accessTokenCifrado,
+          accessTokenPlano,
           fulfillmentOrderId: foId,
           trackingCompany: opcion.courier,
           trackingNumber,

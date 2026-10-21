@@ -39,7 +39,7 @@ import {
   obtenerFulfillmentOrders,
   pushFulfillmentShopify,
 } from "@/lib/shopify/fulfillment";
-import { decryptSecret } from "@/lib/utils/secret-crypto";
+import { getShopifyAccessToken } from "@/lib/shopify/tokens";
 import { getAppUrlOrThrow } from "@/lib/utils/app-url";
 
 export const runtime = "nodejs";
@@ -125,11 +125,10 @@ export async function GET() {
           where: { id: tiendaShopifyId },
           select: {
             shopDomain: true,
-            accessToken: true,
             estado: true,
           },
         });
-        if (!tienda || tienda.estado !== "instalada" || !tienda.accessToken) {
+        if (!tienda || tienda.estado !== "instalada") {
           await prisma.envio.update({
             where: { id: envio.id },
             data: {
@@ -164,7 +163,45 @@ export async function GET() {
           );
           continue;
         }
-        const accessTokenPlano = decryptSecret(tienda.accessToken);
+        // Token PLAINTEXT via getShopifyAccessToken (refresh lazy, patrón ML).
+        // Si falla: LOG + SKIP (NO marcar FAILED, NO cambiar estado del envío).
+        // Razones:
+        //   (a) fallo transitorio de red en el refresh no debe marcar terminal
+        //       un envío que sigue siendo pusheable;
+        //   (b) si el refresh está muerto, doRefresh ya setea
+        //       TiendaShopify.estado="token_expirado" y el guard al inicio del
+        //       loop (tienda.estado !== "instalada") lo saltea en el próximo
+        //       tick → self-healing: si reinstalan, el envío sigue en
+        //       PENDING/RETRYING y se pushea solo cuando la tienda vuelva a
+        //       "instalada".
+        // IMPORTANTE: el claim atómico ya pasó este envío de PENDING/FAILED a
+        // RETRYING. Un skip acá lo deja en RETRYING indefinido hasta que algo
+        // más lo revise. Mitigación: lo volvemos a PENDING antes del skip,
+        // para que el próximo tick lo pueda re-claim normalmente.
+        let accessTokenPlano: string;
+        try {
+          accessTokenPlano = await getShopifyAccessToken(tienda.shopDomain);
+        } catch (e) {
+          const errMsg = e instanceof Error ? e.message.slice(0, 500) : String(e).slice(0, 500);
+          console.warn(
+            `[cron/shopify-reconciliar-fulfillment] envío ${envio.id}: getShopifyAccessToken falló (skip, se reintenta en el próximo tick):`,
+            { shop: tienda.shopDomain, err: errMsg },
+          );
+          // Deshacer el claim para que el próximo tick lo tome.
+          await prisma.envio
+            .update({
+              where: { id: envio.id },
+              data: { shopifyFulfillmentPushEstado: "PENDING" },
+            })
+            .catch((unclaimErr) =>
+              console.error(
+                `[cron/shopify-reconciliar-fulfillment] envío ${envio.id}: no se pudo deshacer el claim RETRYING→PENDING:`,
+                unclaimErr,
+              ),
+            );
+          continue;
+        }
+
         const fos = await obtenerFulfillmentOrders(
           tienda.shopDomain,
           accessTokenPlano,
@@ -192,7 +229,7 @@ export async function GET() {
         const trackingUrl = `${getAppUrlOrThrow()}/s/${trackingNumber}`;
         const push = await pushFulfillmentShopify({
           shop: tienda.shopDomain,
-          accessTokenCifrado: tienda.accessToken,
+          accessTokenPlano,
           fulfillmentOrderId: foIdVigente,
           trackingCompany: envio.courier?.nombre ?? "Shipro",
           trackingNumber,

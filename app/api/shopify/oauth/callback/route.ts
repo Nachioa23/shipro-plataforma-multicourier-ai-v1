@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { randomBytes } from "crypto";
 import prisma from "@/lib/prisma";
-import { exchangeCodeForTokenShopify } from "@/lib/shopify/oauth";
+import { exchangeCodeForTokenShopify } from "@/lib/shopify/tokens";
 import { isValidShopDomain, verifyShopifyOAuthHmac } from "@/lib/shopify/oauth-verify";
 import { encryptSecret } from "@/lib/utils/secret-crypto";
 import { hashApiKey } from "@/lib/utils/apikey-hash";
@@ -90,7 +90,7 @@ export async function GET(request: Request) {
         { status: 502 },
       );
     }
-    const { accessToken } = exchange;
+    const { accessToken, refreshToken, expiresIn, refreshTokenExpiresIn } = exchange;
 
     // Cruce: ¿la tienda ya existe asociada a otra empresa? Rechazar + registrar,
     // NO cambiar nada, NO quemar el link. La reasignación legítima se hace a
@@ -131,14 +131,24 @@ export async function GET(request: Request) {
     }
 
     // Camino feliz: guardar la tienda + quemar el link, atómico (ambos o
-    // ninguno). El token se cifra con secret-crypto antes de persistirse.
+    // ninguno). access + refresh se cifran con secret-crypto antes de
+    // persistirse. 2026-10-21: tokens EXPIRANTES (app pública) → persistimos
+    // también refreshToken + ambas fechas de expiración; getShopifyAccessToken
+    // (lib/shopify/tokens.ts) hace el refresh lazy a partir de acá.
     const accessTokenEnc = encryptSecret(accessToken);
+    const refreshTokenEnc = encryptSecret(refreshToken);
+    const nowMs = Date.now();
+    const accessTokenExpira = new Date(nowMs + expiresIn * 1000);
+    const refreshTokenExpira = new Date(nowMs + refreshTokenExpiresIn * 1000);
     await prisma.$transaction([
       prisma.tiendaShopify.upsert({
         where: { shopDomain: shop },
         update: {
           empresaId,
           accessToken: accessTokenEnc,
+          refreshToken: refreshTokenEnc,
+          accessTokenExpira,
+          refreshTokenExpira,
           estado: "instalada",
           desinstaladaEn: null,
         },
@@ -146,6 +156,9 @@ export async function GET(request: Request) {
           shopDomain: shop,
           empresaId,
           accessToken: accessTokenEnc,
+          refreshToken: refreshTokenEnc,
+          accessTokenExpira,
+          refreshTokenExpira,
           estado: "instalada",
         },
       }),

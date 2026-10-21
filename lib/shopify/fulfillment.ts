@@ -15,7 +15,6 @@
 // =============================================================================
 
 import { shopifyGraphQL } from "@/lib/shopify/graphql";
-import { decryptSecret } from "@/lib/utils/secret-crypto";
 
 export interface FulfillmentOrderNode {
   id: string; // GID
@@ -77,7 +76,12 @@ export async function obtenerFulfillmentOrders(
 
 export interface PushFulfillmentShopifyInput {
   shop: string;
-  accessTokenCifrado: string;
+  // 2026-10-21: token EN PLAINTEXT (consistente con obtenerFulfillmentOrders y
+  // graphql.ts). El caller llama getShopifyAccessToken (lib/shopify/tokens) que
+  // hace el refresh lazy + devuelve plano. Antes era cifrado — se migró a plano
+  // para unificar el patrón y evitar que distintos consumers decrypten en lugares
+  // distintos.
+  accessTokenPlano: string;
   fulfillmentOrderId: string; // GID del FO a cumplir
   trackingCompany: string; // nombre del courier (ej. "Andreani")
   trackingNumber: string;
@@ -111,7 +115,7 @@ const MUTATION_FULFILLMENT_CREATE = `
 export async function pushFulfillmentShopify(
   arg: PushFulfillmentShopifyInput,
 ): Promise<PushFulfillmentShopifyResult> {
-  const accessToken = decryptSecret(arg.accessTokenCifrado);
+  const accessToken = arg.accessTokenPlano;
   const input = {
     lineItemsByFulfillmentOrder: [{ fulfillmentOrderId: arg.fulfillmentOrderId }],
     trackingInfo: {

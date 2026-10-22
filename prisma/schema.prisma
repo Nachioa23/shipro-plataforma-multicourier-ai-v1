@@ -40,6 +40,23 @@ model Empresa {
   // Default 90 = cuartil operativo.
   ventanaConfiabilidadDias Int @default(90)
 
+  // DEUDA 186 FASE 3 PIEZA 1 (2026-10-22) — pesos del scoring ponderado del
+  // motor de reglas. Defaults del blueprint §4: 40/30/20/10 (costo/sla/
+  // velocidad/capacidad). Cada empresa puede ajustarlos según su dirección
+  // comercial (ej. empresa en fase liquidación → w_costo=0.70). CHECK en SQL
+  // garantiza que los 4 sumen EXACTAMENTE 1.00 (Prisma no expresa CHECK nativo).
+  pesoCostoScoring     Decimal @default(0.40) @db.Decimal(3, 2)
+  pesoSlaScoring       Decimal @default(0.30) @db.Decimal(3, 2)
+  pesoVelocidadScoring Decimal @default(0.20) @db.Decimal(3, 2)
+  pesoCapacidadScoring Decimal @default(0.10) @db.Decimal(3, 2)
+
+  // DEUDA 186 FASE 3 PIEZA 1 — flag opt-in del scoring en SOMBRA (default off).
+  // true = el enganche en el cotizador computa qué habría elegido el scoring y
+  // persiste MotorReglaShadowLog, SIN afectar la selección real. Nacho decide
+  // qué empresas lo prenden (pilotos). ENV global MOTOR_REGLAS_SHADOW_ON pisa
+  // esto para apagar todo el shadow sin redeploy.
+  motorReglasShadow Boolean @default(false)
+
   // Modo B — política de empaquetado de TARIFA FIJA (no es empaquetado físico real).
   // Si empaqueModoBActivo=true, todos los envíos de la empresa cotizan como UN bulto con
   // estos parámetros fijos, sin importar el contenido real del carrito. Es una regla
@@ -65,6 +82,7 @@ model Empresa {
   tiendasShopify              TiendaShopify[] // Shopify Fase 1 (2026-10-14): tiendas Shopify vinculadas (1 empresa → N tiendas), espejo de tiendasTiendanube.
   tokensVinculacionShopify    TokenVinculacionShopify[] // Shopify Fase 1: tokens de un solo uso para el link OAuth de Shopify (espejo de tokensVinculacionTiendanube).
   conexiones          Conexion[] // DEUDA 150 Pieza 1: hub de conexiones per (empresa, plataforma).
+  shadowLogs          MotorReglaShadowLog[] // DEUDA 186 FASE 3 PIEZA 1: scoring en sombra.
   tokensSetupApiKey   TokenSetupApiKey[] // DEUDA 150 Pieza 2: tokens de un solo uso para el link de setup de la API Key.
   cuentaMercadoLibre  CuentaMercadoLibre? // DEUDA 180 (MEF Fase 1): cuenta ML del cliente (1 por empresa en v1; @unique en la FK).
   tokensVinculacionMercadoLibre TokenVinculacionMercadoLibre[] // MEF Fase 1: tokens de un solo uso para el link OAuth de Mercado Libre.
@@ -336,6 +354,8 @@ model Courier {
   encuestasNPS  EncuestaNPS[]
   metricasSLA           MetricaSLA[]
   metricasConfiabilidad MetricaConfiabilidad[] // DEUDA 186 PIEZA 1
+  shadowLogsWinnerActual MotorReglaShadowLog[] @relation("ShadowLogWinnerActual") // DEUDA 186 FASE 3 PIEZA 1
+  shadowLogsWinnerShadow MotorReglaShadowLog[] @relation("ShadowLogWinnerShadow") // DEUDA 186 FASE 3 PIEZA 1
   slas                  SlaCourier[]
 
   // --- DEUDA 29: Relaciones nuevas ---
@@ -1049,6 +1069,12 @@ model Envio {
   // idempotencia de reintentos (mirror del patrón TN/ML).
   @@index([shopifyFulfillmentOrderId])
 
+  // DEUDA 186 FASE 3 PIEZA 1 (2026-10-22) — shadow logs cuyo envío real es
+  // este (backfill: cuando crear.ts produce un envío desde una cotización que
+  // había disparado shadow, se linkea acá para que FASE 4 pueda cruzar
+  // "shadow eligió X" vs "el envío real de ese flow con courier Y entregó on-time?").
+  shadowLogs MotorReglaShadowLog[] @relation("ShadowLogEnvioReal")
+
   // DEUDA 128: idempotencia per-empresa. Postgres permite múltiples NULL bajo la
   // unique constraint (cada NULL cuenta como distinto), así que envíos sin clave
   // no colisionan entre sí; sólo empresas que mandan clave la ven enforced.
@@ -1356,6 +1382,8 @@ model ReglaRuteo {
   activa             Boolean  @default(false) // Por defecto apagadas para que el cliente decida
   fechaCreacion      DateTime @default(now())
   fechaActualizacion DateTime @updatedAt
+
+  shadowLogs MotorReglaShadowLog[] // DEUDA 186 FASE 3 PIEZA 1 — logs del shadow donde esta regla fue la Capa 1 activa.
 }
 
 // =============================================================================
@@ -1487,6 +1515,87 @@ model MetricaConfiabilidad {
 
   @@unique([courierId, provinciaDestino, esGlobal, ventanaDias])
   @@index([courierId, provinciaDestino])
+}
+
+// DEUDA 186 FASE 3 PIEZA 1 (2026-10-22) — scoring ponderado del motor de reglas,
+// corriendo en MODO SOMBRA (hidden pero funcionando). El scoring computa qué
+// courier HABRÍA elegido (costo + confiabilidad + velocidad + capacidad con los
+// pesos de la empresa) y persiste acá la comparación vs lo que el motor real
+// eligió. NUNCA afecta la selección ni el precio — el envío real sigue el
+// camino actual (aplicarEstrategia single-dim).
+//
+// APORTES DE NEGOCIO DE NACHO (los 3 que hacen la data accionable):
+//   (a) envioRealId — enlace al envío despachado. Permite cruzar en FASE 4
+//       con el on-time real: "el scoring eligió Andreani, se despachó con OCA
+//       que no cumplió; el scoring habría acertado". Nullable: la cotización
+//       no siempre deriva en envío (el comprador puede no comprar). Se
+//       backfillea cuando crear.ts produce el Envio desde esa cotización
+//       (FASE 3.5 opcional, Chat A pendiente).
+//   (b) precio/sobrecosto — el RIESGO ECONÓMICO de encender el scoring. Si el
+//       shadow elige un courier más caro consistentemente, Nacho ve "cuánto
+//       más plata gastaría" antes de activar FASE 4. precioActual +
+//       precioShadow + sobrecostoShadow (shadow - actual; positivo = más caro).
+//   (c) provinciaDestino indexada — para encender el motor POR ZONA en FASE 4.
+//       Argentina es heterogénea: el scoring puede ganar en CABA y perder en
+//       Patagonia. El índice permite el análisis zona-por-zona + habilitar el
+//       scoring real solo en las zonas donde el shadow convence a Nacho.
+//
+// COMPONENTES Y PESOS SNAPSHOT: por qué este par de columnas Json es la clave
+// de la explicabilidad. componentesSnapshot guarda por cada courier evaluado
+// {cCosto, cSla, cVelocidad, cCapacidad, score, nivelSla, etiquetaSla} —
+// permite reproducir el score sin re-correr nada, ver qué dimension inclinó
+// la decisión, auditar el nivelSla predominante (si cae mayormente a Nivel 4
+// teórico, los números hoy no son defendibles aún).
+model MotorReglaShadowLog {
+  id Int @id @default(autoincrement())
+
+  empresaId Int
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  // Contexto de la decisión.
+  provinciaDestino String  // raw del input (consistente con cotizador; granularidad para FASE 4 por zona).
+  tipoEntrega      String  // "domicilio" | "sucursal"
+
+  // Ganador REAL (lo que el motor actual eligió) vs ganador SHADOW (lo que el
+  // scoring habría elegido). Nullable: si coberturaVacia o shadow sin opciones,
+  // queda null. onDelete en Courier: SetNull (no borrar el log si borran courier).
+  winnerActualCourierId Int?
+  winnerActualCourier   Courier? @relation("ShadowLogWinnerActual", fields: [winnerActualCourierId], references: [id], onDelete: SetNull)
+
+  winnerShadowCourierId Int?
+  winnerShadowCourier   Courier? @relation("ShadowLogWinnerShadow", fields: [winnerShadowCourierId], references: [id], onDelete: SetNull)
+
+  coinciden Boolean // winnerActualCourierId === winnerShadowCourierId (ambos no-null).
+
+  // Scores y delta — para el reporte "cuánto habría cambiado el score si
+  // encendiéramos el motor".
+  scoreActual Decimal @db.Decimal(6, 4)
+  scoreShadow Decimal @db.Decimal(6, 4)
+  deltaScore  Decimal @db.Decimal(6, 4) // scoreShadow - scoreActual; positivo = shadow puntuó mejor.
+
+  // APORTE NACHO (a) — enlace al envío real despachado (backfill).
+  envioRealId Int?
+  envioReal   Envio? @relation("ShadowLogEnvioReal", fields: [envioRealId], references: [id], onDelete: SetNull)
+
+  // APORTE NACHO (b) — riesgo económico.
+  precioActual     Decimal @db.Decimal(12, 2) // precioFinal del ganador real.
+  precioShadow     Decimal @db.Decimal(12, 2) // precioFinal del ganador shadow.
+  sobrecostoShadow Decimal @db.Decimal(12, 2) // precioShadow - precioActual; positivo = el scoring es más caro.
+
+  // Snapshots para auditar/explicar la decisión.
+  pesosSnapshot       Json // { costo, sla, velocidad, capacidad } usados en esta corrida.
+  componentesSnapshot Json // por courier: { cCosto, cSla, cVel, cCap, score, nivelSla, etiquetaSla }.
+
+  // Contexto de regla Capa 1 (si hubo).
+  reglaAplicadaId     Int?
+  reglaAplicada       ReglaRuteo? @relation(fields: [reglaAplicadaId], references: [id], onDelete: SetNull)
+  reglaAplicadaNombre String? // snapshot del nombre (la regla puede editarse después).
+
+  createdAt DateTime @default(now())
+
+  @@index([empresaId, createdAt])
+  @@index([coinciden, createdAt])        // para el "% match" del reporte.
+  @@index([provinciaDestino, createdAt]) // APORTE NACHO (c) — análisis por zona para encendido parcial en FASE 4.
 }
 
 model Feriado {

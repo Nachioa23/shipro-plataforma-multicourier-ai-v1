@@ -13,6 +13,10 @@ import {
 import type { Paquete } from "@/lib/couriers/CourierInterface";
 import { IVA_AR_MULTIPLIER } from "@/lib/constants/iva";
 import { normalizarProvincia } from "@/lib/constants/normalizar-provincia";
+// DEUDA 186 FASE 3 PIEZA 3 — scoring en sombra. Imports del helper puro
+// (lib/cotizador/scoring.ts) + del tipo de ventana (lib/utils/confiabilidad.ts).
+import { calcularScoring } from "@/lib/cotizador/scoring";
+import type { VentanaConfiabilidad } from "@/lib/utils/confiabilidad";
 
 export interface CotizarInput {
   empresaId: number | null;
@@ -793,6 +797,134 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
       finalDomicilio = finalDomicilio.filter((op) => op.courier === nombreEsperado);
       finalSucursal = finalSucursal.filter((op) => op.courier === nombreEsperado);
     }
+  }
+
+  // ==========================================================================
+  // DEUDA 186 FASE 3 PIEZA 3 (2026-10-22) — SCORING EN SOMBRA.
+  //
+  // Calcula qué courier HABRÍA elegido el scoring ponderado (costo + confiabilidad
+  // + velocidad + capacidad con los pesos de la empresa) y persiste la comparación
+  // vs lo que el motor real eligió. NUNCA afecta la selección ni el precio.
+  //
+  // GUARD: default OFF (empresa.motorReglasShadow + ENV ambos false por default).
+  // Dormido hasta que Nacho prenda un cliente piloto. Zero impacto en prod si no
+  // se activa.
+  //
+  // READ-ONLY STRICT (verificado por greps post-commit):
+  //   - NO reasigna finalDomicilio/finalSucursal (solo lee [0]).
+  //   - NO muta OpcionTarifa.precioFinal (solo .toNumber() que devuelve copia).
+  //   - NO cambia el return.
+  //   - Scoring recibe COPIAS defensivas ([...finalX]).
+  //   - Persist fire-and-forget (.catch warn) — mismo patrón que
+  //     registroCoberturaVacia. Si falla, NO rompe la cotización.
+  // ==========================================================================
+  const shadowOn =
+    (empresa?.motorReglasShadow ?? false) ||
+    process.env.MOTOR_REGLAS_SHADOW_ON === "true";
+  if (shadowOn && (finalDomicilio.length > 0 || finalSucursal.length > 0)) {
+    // Copias defensivas — el scoring NUNCA toca los arrays reales.
+    const opcionesShadowDom = [...finalDomicilio];
+    const opcionesShadowSuc = [...finalSucursal];
+
+    // Mapa upper-case dedicado: el mapaCourierIds existente (L355) usa el
+    // nombre canónico sin uppercase; las OpcionTarifa.courier están uppercase
+    // (L605/L651). Construimos uno nuevo para evitar el mismatch de case.
+    const mapaCourierIdsUpper = new Map<string, number>(
+      couriersReales.map((c) => [c.nombre.toUpperCase(), c.id]),
+    );
+
+    const pesos = {
+      costo: empresa!.pesoCostoScoring.toNumber(),
+      sla: empresa!.pesoSlaScoring.toNumber(),
+      velocidad: empresa!.pesoVelocidadScoring.toNumber(),
+      capacidad: empresa!.pesoCapacidadScoring.toNumber(),
+    };
+    const ventanaDias = empresa!.ventanaConfiabilidadDias as VentanaConfiabilidad;
+    const reglaIdSnap = reglaAplicada?.id ?? null;
+    const reglaNombreSnap = reglaAplicada?.nombre ?? null;
+    const provinciaSnap = provinciaDestino ?? "";
+
+    // Fire-and-forget: NO se awaitea. Si falla el scoring o la persistencia,
+    // el .catch final loggea un warn y la cotización sigue intacta.
+    Promise.all([
+      opcionesShadowDom.length > 0
+        ? calcularScoring(
+            opcionesShadowDom,
+            mapaCourierIdsUpper,
+            { provinciaDestino, ventanaDias },
+            pesos,
+          )
+        : Promise.resolve(null),
+      opcionesShadowSuc.length > 0
+        ? calcularScoring(
+            opcionesShadowSuc,
+            mapaCourierIdsUpper,
+            { provinciaDestino, ventanaDias },
+            pesos,
+          )
+        : Promise.resolve(null),
+    ])
+      .then(async ([resDom, resSuc]) => {
+        const persistirLado = async (
+          tipoEntrega: "domicilio" | "sucursal",
+          opcionesReal: OpcionTarifa[],
+          resultado: Awaited<ReturnType<typeof calcularScoring>> | null,
+        ): Promise<void> => {
+          if (!resultado || opcionesReal.length === 0) return;
+          // winnerReal = SOLO LECTURA de [0]; cero mutación del array.
+          const winnerReal = opcionesReal[0];
+          const winnerRealCourierId =
+            mapaCourierIdsUpper.get(winnerReal.courier) ?? null;
+          const precioActual = winnerReal.precioFinal.toNumber();
+          const scoreActual =
+            resultado.componentes.find(
+              (c) => c.courierId === winnerRealCourierId,
+            )?.score ?? 0;
+          const precioShadow = resultado.ganador?.precioFinal ?? 0;
+          const scoreShadow = resultado.ganador?.score ?? 0;
+          const winnerShadowCourierId =
+            resultado.ganador?.courierId ?? null;
+          const coinciden =
+            winnerRealCourierId != null &&
+            winnerShadowCourierId != null &&
+            winnerRealCourierId === winnerShadowCourierId;
+
+          await prisma.motorReglaShadowLog.create({
+            data: {
+              empresaId: empresaId!,
+              provinciaDestino: provinciaSnap,
+              tipoEntrega,
+              winnerActualCourierId: winnerRealCourierId,
+              winnerShadowCourierId,
+              coinciden,
+              scoreActual: scoreActual.toFixed(4),
+              scoreShadow: scoreShadow.toFixed(4),
+              deltaScore: (scoreShadow - scoreActual).toFixed(4),
+              // FASE 3 inicial: envioRealId null — el cotizador no sabe qué
+              // envío se creará. Backfill queda para FASE 3.5 (pieza separada).
+              envioRealId: null,
+              precioActual: precioActual.toFixed(2),
+              precioShadow: precioShadow.toFixed(2),
+              sobrecostoShadow: (precioShadow - precioActual).toFixed(2),
+              pesosSnapshot: pesos,
+              // componentesSnapshot: por courier, para explicar el "por qué"
+              // del score (nivelSla, etiquetaSla, cᵢ por dimensión).
+              componentesSnapshot: resultado.componentes as unknown as Prisma.InputJsonValue,
+              reglaAplicadaId: reglaIdSnap,
+              reglaAplicadaNombre: reglaNombreSnap,
+            },
+          });
+        };
+
+        await persistirLado("domicilio", finalDomicilio, resDom);
+        await persistirLado("sucursal", finalSucursal, resSuc);
+      })
+      .catch((err) => {
+        console.warn(
+          "[cotizador] shadow log falló (no rompe cotización):",
+          err,
+        );
+      });
   }
 
   // DEUDA 32+37 (Fase J): deteccion de cobertura vacia (ningun courier pudo

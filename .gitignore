@@ -66,3 +66,10 @@ prisma/dev.db.backup*
 .claude/
 # Session context snapshots (kept on disk, not tracked)
 docs/CONTEXTO-*.md
+
+# Scripts de prueba local del shadow scoring (DEUDA 186 FASE 3) — descartables
+# de dev, no van a prod. Quedan en la raíz localmente por si hay que re-probar.
+/probar-shadow.ts
+/ver-shadow-log.ts
+/limpiar-shadow.ts
+/prueba-ab.ts

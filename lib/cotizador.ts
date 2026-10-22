@@ -874,7 +874,7 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
           // winnerReal = SOLO LECTURA de [0]; cero mutación del array.
           const winnerReal = opcionesReal[0];
           const winnerRealCourierId =
-            mapaCourierIdsUpper.get(winnerReal.courier) ?? null;
+            mapaCourierIdsUpper.get(winnerReal.courier.toUpperCase()) ?? null;
           const precioActual = winnerReal.precioFinal.toNumber();
           const scoreActual =
             resultado.componentes.find(

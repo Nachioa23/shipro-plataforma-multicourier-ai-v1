@@ -54,8 +54,13 @@ export const UMBRAL_MUESTRA_CONFIABILIDAD = 30;
 const VENTANAS_CANONICAS = [90, 180, 270, 360] as const;
 export type VentanaConfiabilidad = typeof VENTANAS_CANONICAS[number];
 
-// Niveles del fallback en orden de preferencia (1 = mejor, 4 = teórico).
-export type NivelConfiabilidad = 1 | 2 | 3 | 4;
+// Niveles del fallback en orden de preferencia:
+//   0 = (courier, zoneIdMl Flex, ventana) — DEUDA 186 Flex PIEZA 3, el más específico (requiere zoneIdMl).
+//   1 = (courier, provincia, ventana) — más específico sin zoneIdMl.
+//   2 = (courier, provincia, ventana mayor).
+//   3 = (courier, GLOBAL, cualquier ventana).
+//   4 = teórico 100%.
+export type NivelConfiabilidad = 0 | 1 | 2 | 3 | 4;
 
 export interface ConfiabilidadResult {
   /** Porcentaje on-time 0-100. En Nivel 4 (teórico) es 100 constante. */
@@ -143,8 +148,42 @@ export async function calcularConfiabilidad(
   ventanaDias: VentanaConfiabilidad,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   courierNombre: string,
+  // DEUDA 186 Flex PIEZA 3 (2026-10-23) — zona ML opcional. Si viene, se intenta
+  // Nivel 0 (más específico que provincia) ANTES del Nivel 1. Si no hay muestra
+  // suficiente en la zona, cae al Nivel 1 provincia como siempre. Callers que
+  // no pasan zoneIdMl (ej. el scoring general de cotización) saltan Nivel 0 —
+  // comportamiento IDÉNTICO al actual, cero regresión.
+  zoneIdMl?: string | null,
 ): Promise<ConfiabilidadResult> {
   const provNorm = normalizarProvincia(provinciaDestino);
+
+  // ========================================================================
+  // NIVEL 0 — (courier, zoneIdMl Flex, ventana pedida). DEUDA 186 Flex PIEZA 3.
+  // Requiere zoneIdMl. Lee las filas Flex que puebla el cron PIEZA 2 (filtro:
+  // provinciaDestino="", esGlobal=false, zoneIdMl != null). Si no hay muestra
+  // suficiente, fallthrough a Nivel 1.
+  // ========================================================================
+  if (zoneIdMl) {
+    const nivel0 = await prisma.metricaConfiabilidad.findFirst({
+      where: {
+        courierId,
+        provinciaDestino: "",
+        esGlobal: false,
+        ventanaDias,
+        zoneIdMl,
+      },
+      select: {
+        muestra: true,
+        porcentajeOnTime: true,
+        gapPromedioHs: true,
+        muestraSuficiente: true,
+      },
+    });
+    if (nivel0 && nivel0.muestraSuficiente) {
+      return toResult(nivel0, 0, "Confiabilidad por zona Flex");
+    }
+    // Sin muestra suficiente en zona → cae a Nivel 1 (provincia).
+  }
 
   // ========================================================================
   // NIVEL 1 — (courier, provincia, esGlobal=false, ventana pedida).

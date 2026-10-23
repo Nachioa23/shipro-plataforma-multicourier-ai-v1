@@ -40,6 +40,13 @@ model Empresa {
   // Default 90 = cuartil operativo.
   ventanaConfiabilidadDias Int @default(90)
 
+  // DEUDA 186 Flex PIEZA 4 (2026-10-23) — piso de on-time por zona Flex (meta ML
+  // = 97%). Default general del cliente. AsignacionCourierZonaFlex puede
+  // overridear per-zona (campo metaOnTimeFlexPct nullable allá). La precedencia
+  // vive en lib/utils/meta-flex.resolverMetaOnTimeFlex — UN solo lugar para que
+  // UI y scoring usen la misma regla.
+  metaOnTimeFlexPct Decimal @default(97.00) @db.Decimal(5, 2)
+
   // DEUDA 186 FASE 3 PIEZA 1 (2026-10-22) — pesos del scoring ponderado del
   // motor de reglas. Defaults del blueprint §4: 40/30/20/10 (costo/sla/
   // velocidad/capacidad). Cada empresa puede ajustarlos según su dirección
@@ -2625,6 +2632,12 @@ model AsignacionCourierZonaFlex {
 
   courierId Int
   courier   Courier @relation(fields: [courierId], references: [id])
+
+  // DEUDA 186 Flex PIEZA 4 (2026-10-23) — override opcional de la meta on-time
+  // per-zona. null = usar la de Empresa.metaOnTimeFlexPct. Para clientes que
+  // exigen metas distintas por zona (ej. CABA 97%, Patagonia 90%). La
+  // precedencia zona→empresa vive en lib/utils/meta-flex.resolverMetaOnTimeFlex.
+  metaOnTimeFlexPct Decimal? @db.Decimal(5, 2)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

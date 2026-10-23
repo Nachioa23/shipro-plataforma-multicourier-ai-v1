@@ -28,12 +28,34 @@ import {
   CircleAlert,
 } from "lucide-react";
 
+type EstadoSemaforo = "midiendo" | "verde" | "amarillo" | "rojo";
+
+type Performance = {
+  onTime: number;
+  muestra: number;
+  nivel: 0 | 1 | 2 | 3 | 4;
+  esMuestraReal: boolean;
+};
+
+type Recomendacion = {
+  courierRecomendadoId: number;
+  courierRecomendado: string;
+  suOnTime: number;
+  suMuestra: number;
+  mejoraPuntos: number;
+};
+
 type Zona = {
   id: number;
   zoneIdMl: string;
   nombre: string;
   enabled: boolean;
   asignacion: { courierId: number; courierNombre: string } | null;
+  // MEF scoring Flex (2026-10-23) — performance + semáforo + recomendación.
+  performance: Performance | null;
+  metaEfectiva: number | null;
+  estadoSemaforo: EstadoSemaforo | null;
+  recomendacion: Recomendacion | null;
 };
 
 type Courier = { id: number; nombre: string };
@@ -208,6 +230,66 @@ export default function ConfiguracionCouriersFlexPage() {
                           )}
                         </div>
                         <p className="text-xs text-gray-400 font-mono">zone_id ML: {z.zoneIdMl}</p>
+
+                        {/* MEF scoring Flex (2026-10-23) — bloque de performance del asignado.
+                            3 estados: midiendo (caption gris), semáforo sin recomendación (pill),
+                            rojo/amarillo CON recomendación (alert ámbar + botón reasignar). */}
+                        {asignado && z.performance && z.estadoSemaforo && (
+                          <div className="mt-2">
+                            {z.estadoSemaforo === "midiendo" && (
+                              <p className="text-[10px] text-gray-400">
+                                Midiendo confiabilidad — {z.performance.muestra} de 30 entregas
+                              </p>
+                            )}
+
+                            {z.estadoSemaforo !== "midiendo" && !z.recomendacion && (
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span
+                                  className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded border ${
+                                    z.estadoSemaforo === "verde"
+                                      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                      : z.estadoSemaforo === "amarillo"
+                                        ? "bg-amber-50 text-amber-800 border-amber-200"
+                                        : "bg-rose-50 text-rose-700 border-rose-200"
+                                  }`}
+                                >
+                                  {z.performance.onTime.toFixed(1)}% a tiempo
+                                </span>
+                                <span className="text-[10px] text-gray-400">
+                                  {z.performance.muestra} entregas · meta {z.metaEfectiva?.toFixed(0)}%
+                                </span>
+                              </div>
+                            )}
+
+                            {z.recomendacion && (
+                              <div className="flex items-start gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 mt-2">
+                                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                                <div className="flex-1">
+                                  <p className="font-bold">
+                                    {z.asignacion!.courierNombre}: {z.performance.onTime.toFixed(1)}% a tiempo,
+                                    por debajo de tu meta de {z.metaEfectiva?.toFixed(0)}% — pone en riesgo tu “Llega hoy”.
+                                  </p>
+                                  <p className="text-xs mt-1">
+                                    Mejor opción: <strong>{z.recomendacion.courierRecomendado}</strong>,{" "}
+                                    {z.recomendacion.suOnTime.toFixed(1)}% ({z.recomendacion.suMuestra} entregas).
+                                  </p>
+                                  <button
+                                    onClick={() =>
+                                      asignar(z.zoneIdMl, z.recomendacion!.courierRecomendadoId)
+                                    }
+                                    disabled={guardando === z.zoneIdMl}
+                                    className="mt-2 inline-flex items-center gap-2 px-4 py-1.5 bg-[#233b6b] hover:bg-blue-900 text-white text-xs font-bold rounded-lg transition-colors shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                                  >
+                                    {guardando === z.zoneIdMl ? (
+                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    ) : null}
+                                    Reasignar a {z.recomendacion.courierRecomendado}
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
 
                       <div className="shrink-0">

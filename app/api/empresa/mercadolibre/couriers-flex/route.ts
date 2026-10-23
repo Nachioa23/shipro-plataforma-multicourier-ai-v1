@@ -1,9 +1,21 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getToken } from "next-auth/jwt";
 import prisma from "@/lib/prisma";
+import {
+  calcularConfiabilidad,
+  type VentanaConfiabilidad,
+  UMBRAL_MUESTRA_CONFIABILIDAD,
+} from "@/lib/utils/confiabilidad";
+import { resolverMetaOnTimeFlex } from "@/lib/utils/meta-flex";
+import { resolverProvinciaDesdeCP } from "@/lib/geo/resolver-cp";
 
 // ============================================================================
 // MEF Fase 2.2 (2026-09-22) — Config "Couriers Flex" per cliente. [[DEUDA 180]]
+//
+// MEF scoring Flex (2026-10-23): el GET devuelve además performance + semáforo
+// + recomendación por zona asignada. Pure analytics read-only consumiendo los
+// helpers de núcleo (calcularConfiabilidad + resolverMetaOnTimeFlex); zero
+// write, zero auto-asignación. El único write sigue siendo el PUT manual.
 //
 // Session-scoped en ambos verbos: empresaId SIEMPRE del JWT firmado NextAuth,
 // NUNCA del body/query. Mirror del twin /api/empresa/mercadolibre/{connect,conexion}.
@@ -12,7 +24,8 @@ import prisma from "@/lib/prisma";
 //   CuentaMercadoLibre) + su asignación courier si existe (join lógico por
 //   zoneIdMl contra AsignacionCourierZonaFlex). Además devuelve la lista de
 //   couriers disponibles = CredencialCourier activo del cliente resuelto a
-//   { courierId, courierNombre }.
+//   { courierId, courierNombre }. Por cada zona asignada agrega performance
+//   (onTime, muestra, nivel), metaEfectiva, estadoSemaforo y recomendación.
 //
 // PUT: body { zoneIdMl, courierId }. Verifica (defense-in-depth):
 //   (a) el zoneIdMl viene EXCLUSIVAMENTE del pool de zonas de la cuenta ML de
@@ -31,6 +44,21 @@ import prisma from "@/lib/prisma";
 
 const ROLES_LECTURA = ["gerente_cliente", "operador_cliente"];
 const ROLES_ESCRITURA = ["gerente_cliente", "operador_cliente"];
+
+// MEF scoring Flex — umbrales nombrados (ver DEUDA 186 blueprint).
+// Muestra mínima = la del núcleo (helper ya la usa internamente para
+// esMuestraReal; acá la referenciamos para el estado "midiendo").
+const UMBRAL_AMARILLO = 95; // onTime < meta pero >= 95 → amarillo (borderline).
+const MEJORA_PUNTOS_MINIMA = 3; // delta mínimo para recomendar reasignar.
+
+type EstadoSemaforo = "midiendo" | "verde" | "amarillo" | "rojo";
+
+function clasificarSemaforo(onTime: number, muestra: number, meta: number): EstadoSemaforo {
+  if (muestra < UMBRAL_MUESTRA_CONFIABILIDAD) return "midiendo";
+  if (onTime >= meta) return "verde";
+  if (onTime >= UMBRAL_AMARILLO) return "amarillo";
+  return "rojo";
+}
 
 // ----------------------------------------------------------------------------
 // GET — devuelve zonas + asignaciones actuales + couriers disponibles.
@@ -110,18 +138,153 @@ export async function GET(request: NextRequest) {
     asignaciones.map((a) => [a.zoneIdMl, a]),
   );
 
-  const zonas = zonasVigentes.map((z) => {
-    const asig = asignacionesPorZoneIdMl.get(z.zoneIdMl);
-    return {
-      id: z.id,
-      zoneIdMl: z.zoneIdMl,
-      nombre: z.nombre,
-      enabled: z.enabled,
-      asignacion: asig
-        ? { courierId: asig.courierId, courierNombre: asig.courier.nombre }
-        : null,
-    };
+  // MEF scoring Flex — ventana per-empresa para calcularConfiabilidad.
+  const empresa = await prisma.empresa.findUnique({
+    where: { id: empresaId },
+    select: { ventanaConfiabilidadDias: true },
   });
+  const ventanaDias = (empresa?.ventanaConfiabilidadDias ?? 90) as VentanaConfiabilidad;
+
+  // Para cada zona vigente, en paralelo: performance del asignado + candidatos
+  // operables + meta efectiva. Zero write.
+  const zonas = await Promise.all(
+    zonasVigentes.map(async (z) => {
+      const asig = asignacionesPorZoneIdMl.get(z.zoneIdMl);
+      const base = {
+        id: z.id,
+        zoneIdMl: z.zoneIdMl,
+        nombre: z.nombre,
+        enabled: z.enabled,
+        asignacion: asig
+          ? { courierId: asig.courierId, courierNombre: asig.courier.nombre }
+          : null,
+      };
+
+      if (!asig) {
+        // Zona sin asignación → no hay performance que mostrar; UI muestra
+        // "acción requerida" como hoy. Zero scoring.
+        return {
+          ...base,
+          performance: null,
+          metaEfectiva: null,
+          estadoSemaforo: null,
+          recomendacion: null,
+        };
+      }
+
+      // Derivación de provincia de la zona (Opción B — provincia limpia o
+      // global, decisión Chat A+D 2026-10-23): resolvemos los CPs de la zona
+      // vía resolverProvinciaDesdeCP; si TODOS los CPs resueltos (no-null)
+      // caen en UNA sola provincia → esa es la provincia de la zona (habilita
+      // el fallback Nivel 1 del helper mientras la zona junta sus 30 envíos).
+      // Si la zona cruza 2+ provincias (ej. AMBA = CABA + Buenos Aires) → null
+      // y log informativo (analytics: cuántas zonas de clientes son cross-
+      // provincia). Si 0 resueltos (CPs sin match en el nomenclador) → null.
+      const cpsZona = await prisma.cuentaMercadoLibreZonaCp.findMany({
+        where: { zonaId: z.id },
+        select: { codigoPostal: true },
+      });
+      const resoluciones = await Promise.all(
+        cpsZona.map((c) => resolverProvinciaDesdeCP(c.codigoPostal)),
+      );
+      const provinciasResueltas = new Set(
+        resoluciones.filter((r): r is NonNullable<typeof r> => r !== null && !!r.provincia)
+          .map((r) => r.provincia),
+      );
+      let provinciaDeZona: string | null = null;
+      if (provinciasResueltas.size === 1) {
+        provinciaDeZona = [...provinciasResueltas][0];
+      } else if (provinciasResueltas.size >= 2) {
+        console.log(
+          `[couriers-flex] zona ${z.zoneIdMl} (empresaId=${empresaId}) cross-provincia: toca ${provinciasResueltas.size} provincias (${[...provinciasResueltas].join(", ")}) — provincia=null, cae a global del courier.`,
+        );
+      }
+      // provinciasResueltas.size === 0 → null (0 resueltos) sin log.
+
+      // Performance del courier asignado + meta efectiva + candidatos
+      // operables (couriersDisponibles — ya resueltos arriba), todo lectura.
+      const [perfAsignado, meta, perfCandidatos] = await Promise.all([
+        calcularConfiabilidad(
+          asig.courierId,
+          provinciaDeZona, // null si cross-provincia o sin resueltos; sino la provincia de la zona.
+          ventanaDias,
+          asig.courier.nombre,
+          z.zoneIdMl,
+        ),
+        resolverMetaOnTimeFlex(empresaId, z.zoneIdMl),
+        Promise.all(
+          couriersDisponibles
+            .filter((c) => c.id !== asig.courierId)
+            .map(async (c) => ({
+              courierId: c.id,
+              courierNombre: c.nombre,
+              result: await calcularConfiabilidad(
+                c.id,
+                provinciaDeZona,
+                ventanaDias,
+                c.nombre,
+                z.zoneIdMl,
+              ),
+            })),
+        ),
+      ]);
+
+      const estadoSemaforo = clasificarSemaforo(
+        perfAsignado.porcentajeOnTime,
+        perfAsignado.muestra,
+        meta,
+      );
+
+      // Recomendación: SOLO si asignado está por debajo de la meta (semáforo
+      // amarillo o rojo) Y existe otro candidato que (a) cumple la meta con
+      // muestra suficiente y (b) tiene mejora ≥ MEJORA_PUNTOS_MINIMA puntos.
+      let recomendacion:
+        | null
+        | {
+            courierRecomendadoId: number;
+            courierRecomendado: string;
+            suOnTime: number;
+            suMuestra: number;
+            mejoraPuntos: number;
+          } = null;
+
+      if (estadoSemaforo === "amarillo" || estadoSemaforo === "rojo") {
+        const elegibles = perfCandidatos
+          .filter((c) => c.result.esMuestraReal) // muestra suficiente real.
+          .filter((c) => c.result.porcentajeOnTime >= meta)
+          .map((c) => ({
+            ...c,
+            mejoraPuntos: c.result.porcentajeOnTime - perfAsignado.porcentajeOnTime,
+          }))
+          .filter((c) => c.mejoraPuntos >= MEJORA_PUNTOS_MINIMA)
+          .sort((a, b) => b.mejoraPuntos - a.mejoraPuntos);
+
+        if (elegibles.length > 0) {
+          const mejor = elegibles[0];
+          recomendacion = {
+            courierRecomendadoId: mejor.courierId,
+            courierRecomendado: mejor.courierNombre,
+            suOnTime: mejor.result.porcentajeOnTime,
+            suMuestra: mejor.result.muestra,
+            mejoraPuntos: mejor.mejoraPuntos,
+          };
+        }
+      }
+
+      return {
+        ...base,
+        performance: {
+          onTime: perfAsignado.porcentajeOnTime,
+          muestra: perfAsignado.muestra,
+          nivel: perfAsignado.nivel,
+          esMuestraReal: perfAsignado.esMuestraReal,
+        },
+        metaEfectiva: meta,
+        estadoSemaforo,
+        recomendacion,
+      };
+    }),
+  );
 
   return NextResponse.json({
     cuentaConectada: cuenta.estado === "activa",

@@ -5053,3 +5053,63 @@ Antes de construir código, el recon tiene que resolver:
 
 ---
 
+## DEUDA 189 — Componentes de diseño reutilizables (`<Card>` / `<Badge>` / `<Button>` compartidos) (ABIERTA 2026-10-23, prioridad BAJA / post-cliente, transversal)
+
+### Observación
+
+La NPMS no tiene un sistema de componentes de diseño compartidos. Cada pantalla del dashboard arma su UI inline copiando-pegando clases Tailwind (card, badge de estado, botón primario). Confirmado en el **recon de diseño del scoring Flex (2026-10-23)**: grep de `export.*function.*Card` en todo el repo devuelve **cero hits**. `components/` solo contiene componentes de dominio (`AccionesEnvio.tsx`, `CotizadorModal.tsx`), ninguno de UI primitives.
+
+### Molde "oculto" que ya existe (de hecho)
+
+El recon mapeó los moldes consistentes que se repiten en N pantallas:
+- **KPI card**: `bg-white border border-gray-200 rounded-xl p-5` + `text-xs text-gray-500 mb-1` (label) + `text-2xl font-black text-gray-900` (valor) + `text-[10px] text-gray-400 mt-1` (detalle). Repetido 5+ veces en [app/(dashboard)/torre-de-control/page.tsx:582+](app/(dashboard)/torre-de-control/page.tsx#L582).
+- **Panel lista**: `bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden` + `divide-y divide-gray-100` + rows `flex items-start justify-between gap-4 px-5 py-4`.
+- **Badge pill**: `inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded border bg-{color}-50 text-{color}-700 border-{color}-200`. Variantes: `emerald` (OK), `rose` (alerta), `amber` (warning), `gray` (inactivo).
+- **Botón primario brand**: `flex items-center gap-2 px-5 py-2 bg-[#233b6b] hover:bg-blue-900 text-white text-sm font-bold rounded-lg transition-colors shadow-sm`.
+- **Estado vacío**: `flex items-start gap-2 text-sm text-gray-700 bg-white border border-gray-200 rounded-lg px-4 py-3` + icono gris + `p.font-bold` + `p.text-xs mt-1`.
+- **Brand color**: `#233b6b` declarado inline como `const BRAND = "#233b6b"` o `const brandColor = '#233b6b'` en cada archivo que lo necesita. **No hay archivo central de tokens** (grep de `theme`/`tokens`/`colors`/`brandColor` → ningún archivo centralizador).
+
+### Costo del status quo
+
+- **Cada pantalla nueva arranca con copy-paste** de 5-10 moldes de otras pantallas.
+- **Cambio de paleta/radius/sombras requiere sweep manual repo-wide** — un rediseño chico (ej. "las cards ahora son `rounded-2xl` en vez de `rounded-xl`") implica tocar N pantallas con regex-replace y revisar visualmente cada una.
+- **Riesgo de drift silencioso**: nada evita que una pantalla nueva use `bg-emerald-100 text-emerald-700` cuando el resto del dashboard usa `bg-emerald-50 text-emerald-700 border-emerald-200`. Las variantes conviven sin alerta.
+- **Costo cognitivo del desarrollador**: cada nueva pantalla requiere revisar otras para "qué molde usan los otros" en vez de importar un componente tipado.
+
+### Scope propuesto
+
+**Extraer componentes compartidos a `components/ui/`**:
+- `<Card>` con variantes (`default`, `kpi`, `panel-lista`) y props (`title`, `value`, `caption`, `tone`).
+- `<Badge variant="emerald|rose|amber|gray|blue">` + prop `icon` para los lucide icons.
+- `<Button variant="brand|indigo|outline" size="sm|md|lg">` con loading state + icon.
+- `<EmptyState variant="neutro|amber|rose">` con `icon` + `title` + `description`.
+- `lib/theme.ts` (o similar) con la constante `BRAND = "#233b6b"` + helpers de clases Tailwind si hace falta (`toneClasses(tone: 'emerald'|'rose'|...)` → string de clases consistente).
+- Doc en `components/ui/README.md` con ejemplos de uso + variantes disponibles.
+
+**Patrón sugerido**: shadcn-like (componentes "copy-in" tipados vs librería externa) para no agregar deps + mantener control total del CSS. Alternativa: `class-variance-authority` (`cva`) para variantes tipadas si el equipo lo prefiere.
+
+### Blast radius
+
+- **Alto en número de archivos** (todas las pantallas del dashboard = ~30 páginas), pero **cero riesgo money** — es puro refactor de presentación.
+- Rollout gradual posible: crear los componentes nuevos + migrar pantalla por pantalla cuando toque editarlas por otro motivo. Sin big-bang obligatorio.
+- Testing: visual (screenshots pre/post) + manual click-through. Zero touch de la lógica de datos.
+
+### Prerequisito blando
+
+**Estabilidad de la paleta actual**. Hoy los moldes son consistentes (variación chica entre pantallas). Un refactor prematuro antes de que el equipo esté 100% convencido de la paleta final = retrabajo. Un sweep tardío cuando ya hay 50 pantallas = más fricción. El punto justo es cuando la paleta esté validada por el primer cliente real + el equipo esté por entrar a un ciclo de alto volumen de pantallas nuevas (ej. Torre expansion, admin pricing, etc.).
+
+### Relación con otras deudas
+
+- **No bloquea ninguna fase actual**. Flex, scoring, LGPD, Shopify — todos pueden seguir con el patrón inline existente.
+- **Puede surgir como oportunidad** cuando se construya una pantalla con muchas variantes (ej. dashboard de scoring Flex con N zonas + estados complejos de meta vs real + semáforos per-zona + histograma de gap). Si al construirla el equipo nota que el copy-paste supera el valor del tiempo, puede ser el momento de extraer.
+
+### Status y prioridad
+
+- **Prioridad: BAJA / post-cliente**. Deuda de mantenibilidad, no bloqueante. Es una obra transversal que impacta estética y velocidad de desarrollo futura, no una capacidad ni un bug.
+- **Transversal**: NO es parte de Flex ni de ninguna fase actual. Surgió trabajando el scoring Flex (recon de diseño del Chat D) pero afecta el dashboard entero.
+- Decisión abierta de prioridad: Nacho + Chat D cuando crucen un umbral de "cuántas pantallas más antes de refactor".
+
+**Origen**: observación del Chat D durante el recon de diseño del scoring Flex (2026-10-23). Pedido explícito de trazar la deuda sin bloquear Flex ni meterla dentro de 186. Chat A registra acá como transversal.
+
+---
+

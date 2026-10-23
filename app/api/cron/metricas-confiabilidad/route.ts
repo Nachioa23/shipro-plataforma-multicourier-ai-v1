@@ -59,7 +59,10 @@ function calcularPercentil(arr: number[], p: number): number {
 
 interface AgregadoGrupo {
   courierId: number;
-  provinciaNorm: string; // normalizada (lowercase+trim)
+  provinciaNorm: string; // normalizada (lowercase+trim); "" para global y zona Flex
+  // DEUDA 186 Flex PIEZA 2 — zona ML cuando el grupo es "por zona Flex".
+  // null en grupos por provincia / global (mantiene comportamiento original).
+  zoneIdMl?: string | null;
   muestra: number;
   cumplieron: number;
   gaps: number[];
@@ -73,6 +76,7 @@ export async function GET() {
       enviosAnalizados: number;
       combinacionesPorProvincia: number;
       combinacionesGlobal: number;
+      combinacionesPorZonaFlex: number; // DEUDA 186 Flex PIEZA 2
       filasUpserted: number;
     }>,
     totalFilasUpserted: 0,
@@ -96,13 +100,19 @@ export async function GET() {
           slaPromesaHs: true,
           fechaImpresion: true,
           fechaEntrega: true,
+          // DEUDA 186 Flex PIEZA 2 — zona ML snapshot (PIEZA 1); null en envíos
+          // no-Flex. Alimenta el tercer agregador porZonaFlex.
+          zoneIdMl: true,
           destino: { select: { provincia: true } },
         },
       });
 
-      // 2. Agrega en memoria. Dos mapas: por provincia + global por courier.
+      // 2. Agrega en memoria. Tres mapas: por provincia + global por courier +
+      // por zona Flex (DEUDA 186 Flex PIEZA 2). Un envío Flex (zoneIdMl != null)
+      // cuenta en LAS 3 agregaciones — son vistas distintas del mismo dato.
       const porProvincia = new Map<string, AgregadoGrupo>(); // key: "courierId|provinciaNorm"
       const porGlobal = new Map<number, AgregadoGrupo>();    // key: courierId
+      const porZonaFlex = new Map<string, AgregadoGrupo>();  // key: "courierId|zoneIdMl"
 
       for (const e of envios) {
         if (!e.fechaEntrega || !e.slaPromesaHs) continue;
@@ -133,10 +143,24 @@ export async function GET() {
         glb.muestra++;
         if (cumplio) glb.cumplieron++;
         glb.gaps.push(gap);
+
+        // Agregado por zona Flex (solo envíos con zoneIdMl persistido — PIEZA 1).
+        if (e.zoneIdMl) {
+          const keyZona = `${e.courierId}|${e.zoneIdMl}`;
+          let zna = porZonaFlex.get(keyZona);
+          if (!zna) {
+            zna = { courierId: e.courierId, provinciaNorm: "", zoneIdMl: e.zoneIdMl, muestra: 0, cumplieron: 0, gaps: [] };
+            porZonaFlex.set(keyZona, zna);
+          }
+          zna.muestra++;
+          if (cumplio) zna.cumplieron++;
+          zna.gaps.push(gap);
+        }
       }
 
-      // Envíos sin provincia también cuentan en el global — recorremos otra vez
-      // solo para esos (sin agregarlos al mapa de provincia).
+      // Envíos sin provincia también cuentan en el global + en su zona Flex si
+      // tienen zoneIdMl — recorremos otra vez solo para esos (ya saltamos el
+      // mapa de provincia en el loop de arriba por continue).
       for (const e of envios) {
         if (!e.fechaEntrega || !e.slaPromesaHs) continue;
         const provNorm = normalizarProvincia(e.destino?.provincia);
@@ -154,14 +178,31 @@ export async function GET() {
         glb.muestra++;
         if (cumplio) glb.cumplieron++;
         glb.gaps.push(gap);
+
+        // Zona Flex: igual que arriba, también aplica a envíos sin provincia.
+        if (e.zoneIdMl) {
+          const keyZona = `${e.courierId}|${e.zoneIdMl}`;
+          let zna = porZonaFlex.get(keyZona);
+          if (!zna) {
+            zna = { courierId: e.courierId, provinciaNorm: "", zoneIdMl: e.zoneIdMl, muestra: 0, cumplieron: 0, gaps: [] };
+            porZonaFlex.set(keyZona, zna);
+          }
+          zna.muestra++;
+          if (cumplio) zna.cumplieron++;
+          zna.gaps.push(gap);
+        }
       }
 
       // 3. Upsert por grupo (por-provincia + global).
       let filasUpserted = 0;
 
+      // DEUDA 186 Flex PIEZA 2 — el upsertGrupo ahora recibe {esGlobal, zoneIdMl}
+      // porque el @@unique de MetricaConfiabilidad se amplió a (courierId,
+      // provincia, esGlobal, ventana, zoneIdMl). Los grupos provincia/global
+      // pasan zoneIdMl:null explícito; el grupo zona Flex pasa el zoneIdMl real.
       const upsertGrupo = async (
         grupo: AgregadoGrupo,
-        esGlobal: boolean,
+        tipo: { esGlobal: boolean; zoneIdMl: string | null },
       ): Promise<void> => {
         const porcentajeOnTime = (grupo.cumplieron / grupo.muestra) * 100;
         const sumGap = grupo.gaps.reduce((a, b) => a + b, 0);
@@ -170,48 +211,63 @@ export async function GET() {
         const gapP90 = calcularPercentil(grupo.gaps, 0.9);
         const muestraSuficiente = grupo.muestra >= UMBRAL_MUESTRA;
 
-        const provincia = esGlobal ? "" : grupo.provinciaNorm;
+        // Provincia: "" en global y zona Flex (la zona ES la granularidad; no
+        // mezclar con provincia). Las filas provincia tienen provincia != "".
+        const provincia = tipo.esGlobal || tipo.zoneIdMl != null ? "" : grupo.provinciaNorm;
 
-        await prisma.metricaConfiabilidad.upsert({
+        // Upsert manual (findFirst + update|create) porque Prisma tipea el
+        // zoneIdMl del compound unique como `string` strict aunque el schema
+        // lo declare nullable. Pasar null explícito al where del findUnique
+        // da error de tipos; findFirst sí acepta null directo.
+        const existente = await prisma.metricaConfiabilidad.findFirst({
           where: {
-            courierId_provinciaDestino_esGlobal_ventanaDias: {
-              courierId: grupo.courierId,
-              provinciaDestino: provincia,
-              esGlobal,
-              ventanaDias,
-            },
-          },
-          update: {
-            muestra: grupo.muestra,
-            cumplieron: grupo.cumplieron,
-            porcentajeOnTime: porcentajeOnTime.toFixed(2),
-            gapPromedioHs: gapPromedio.toFixed(2),
-            gapP50Hs: gapP50.toFixed(2),
-            gapP90Hs: gapP90.toFixed(2),
-            muestraSuficiente,
-          },
-          create: {
             courierId: grupo.courierId,
             provinciaDestino: provincia,
-            esGlobal,
+            esGlobal: tipo.esGlobal,
             ventanaDias,
-            muestra: grupo.muestra,
-            cumplieron: grupo.cumplieron,
-            porcentajeOnTime: porcentajeOnTime.toFixed(2),
-            gapPromedioHs: gapPromedio.toFixed(2),
-            gapP50Hs: gapP50.toFixed(2),
-            gapP90Hs: gapP90.toFixed(2),
-            muestraSuficiente,
+            zoneIdMl: tipo.zoneIdMl, // null para provincia/global, string para zona Flex
           },
+          select: { id: true },
         });
+        const dataComun = {
+          muestra: grupo.muestra,
+          cumplieron: grupo.cumplieron,
+          porcentajeOnTime: porcentajeOnTime.toFixed(2),
+          gapPromedioHs: gapPromedio.toFixed(2),
+          gapP50Hs: gapP50.toFixed(2),
+          gapP90Hs: gapP90.toFixed(2),
+          muestraSuficiente,
+        };
+        if (existente) {
+          await prisma.metricaConfiabilidad.update({
+            where: { id: existente.id },
+            data: dataComun,
+          });
+        } else {
+          await prisma.metricaConfiabilidad.create({
+            data: {
+              courierId: grupo.courierId,
+              provinciaDestino: provincia,
+              esGlobal: tipo.esGlobal,
+              ventanaDias,
+              zoneIdMl: tipo.zoneIdMl,
+              ...dataComun,
+            },
+          });
+        }
         filasUpserted++;
       };
 
       for (const grp of porProvincia.values()) {
-        await upsertGrupo(grp, false);
+        await upsertGrupo(grp, { esGlobal: false, zoneIdMl: null });
       }
       for (const glb of porGlobal.values()) {
-        await upsertGrupo(glb, true);
+        await upsertGrupo(glb, { esGlobal: true, zoneIdMl: null });
+      }
+      for (const zna of porZonaFlex.values()) {
+        // zoneIdMl != null (se setea al crear el grupo); esGlobal=false
+        // (la zona ES la granularidad, no es un global cross-provincia).
+        await upsertGrupo(zna, { esGlobal: false, zoneIdMl: zna.zoneIdMl ?? null });
       }
 
       resumen.ventanas.push({
@@ -219,6 +275,7 @@ export async function GET() {
         enviosAnalizados: envios.length,
         combinacionesPorProvincia: porProvincia.size,
         combinacionesGlobal: porGlobal.size,
+        combinacionesPorZonaFlex: porZonaFlex.size,
         filasUpserted,
       });
       resumen.totalFilasUpserted += filasUpserted;

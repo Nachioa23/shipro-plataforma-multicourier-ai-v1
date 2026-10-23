@@ -1521,9 +1521,20 @@ model MetricaConfiabilidad {
   // --- flag de significancia ---
   muestraSuficiente Boolean // true si muestra ≥ 30 (umbral industria); false → helper cae a fallback
 
+  // DEUDA 186 Flex PIEZA 2 (2026-10-23) — dimensión nueva: zona ML Flex.
+  //   null = fila "por provincia" o "global" (comportamiento anterior intacto).
+  //   not null = fila "por zona Flex" (provinciaDestino="" + esGlobal=false +
+  //     zoneIdMl != null). Postgres trata NULL como distinto en unique, así
+  //     que las filas provincia/global existentes (zoneIdMl=null) siguen
+  //     cumpliendo el @@unique ampliado sin conflicto.
+  // Coexiste con provincia/global: un envío Flex entra en LAS 3 agregaciones
+  // (su provincia, el global del courier, y su zona Flex) — vistas distintas
+  // del mismo dato.
+  zoneIdMl String?
+
   fechaActualizacion DateTime @default(now()) @updatedAt
 
-  @@unique([courierId, provinciaDestino, esGlobal, ventanaDias])
+  @@unique([courierId, provinciaDestino, esGlobal, ventanaDias, zoneIdMl])
   @@index([courierId, provinciaDestino])
 }
 

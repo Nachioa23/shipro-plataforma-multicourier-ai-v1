@@ -150,15 +150,20 @@ export async function calcularConfiabilidad(
   // NIVEL 1 — (courier, provincia, esGlobal=false, ventana pedida).
   // Requiere provincia.
   // ========================================================================
+  // DEUDA 186 Flex PIEZA 2 (2026-10-23) — el @@unique de MetricaConfiabilidad
+  // ahora incluye zoneIdMl. Prisma tipea el campo nullable del compound unique
+  // como `string` strict en findUnique, por lo que para pasar null (filas
+  // provincia/global) usamos findFirst con el where plano. La semántica no
+  // cambia — es el mismo lookup; filtra zoneIdMl=null explícito para separar
+  // de las filas Flex (zoneIdMl != null).
   if (provNorm) {
-    const nivel1 = await prisma.metricaConfiabilidad.findUnique({
+    const nivel1 = await prisma.metricaConfiabilidad.findFirst({
       where: {
-        courierId_provinciaDestino_esGlobal_ventanaDias: {
-          courierId,
-          provinciaDestino: provNorm,
-          esGlobal: false,
-          ventanaDias,
-        },
+        courierId,
+        provinciaDestino: provNorm,
+        esGlobal: false,
+        ventanaDias,
+        zoneIdMl: null,
       },
       select: {
         muestra: true,
@@ -176,14 +181,13 @@ export async function calcularConfiabilidad(
     // real a costa de menos frescura). Probar en orden las ventanas mayores.
     // ======================================================================
     for (const vMayor of ventanasMayores(ventanaDias)) {
-      const nivel2 = await prisma.metricaConfiabilidad.findUnique({
+      const nivel2 = await prisma.metricaConfiabilidad.findFirst({
         where: {
-          courierId_provinciaDestino_esGlobal_ventanaDias: {
-            courierId,
-            provinciaDestino: provNorm,
-            esGlobal: false,
-            ventanaDias: vMayor,
-          },
+          courierId,
+          provinciaDestino: provNorm,
+          esGlobal: false,
+          ventanaDias: vMayor,
+          zoneIdMl: null,
         },
         select: {
           muestra: true,
@@ -207,14 +211,13 @@ export async function calcularConfiabilidad(
     ...ventanasMayores(ventanaDias),
   ];
   for (const v of ventanasAIntentarGlobal) {
-    const nivel3 = await prisma.metricaConfiabilidad.findUnique({
+    const nivel3 = await prisma.metricaConfiabilidad.findFirst({
       where: {
-        courierId_provinciaDestino_esGlobal_ventanaDias: {
-          courierId,
-          provinciaDestino: "",
-          esGlobal: true,
-          ventanaDias: v,
-        },
+        courierId,
+        provinciaDestino: "",
+        esGlobal: true,
+        ventanaDias: v,
+        zoneIdMl: null,
       },
       select: {
         muestra: true,

@@ -151,12 +151,14 @@ async function llamarCrearEnvioFlex(params: {
   mlOrderId: string | null;
   cpDestino: string;
   nombreCourier: string;
+  // DEUDA 186 Flex PIEZA 1 — zona ML del resolverCourierPorCpFlex (snapshot inmutable).
+  zoneIdMl: string;
   payload: any;
 }): Promise<
   | { ok: true; envioId: number }
   | { ok: false; causaDatos: CausaNotificacionFlexKey; contexto: Record<string, unknown> }
 > {
-  const { empresaId, shipmentId, mlOrderId, cpDestino, nombreCourier, payload } = params;
+  const { empresaId, shipmentId, mlOrderId, cpDestino, nombreCourier, zoneIdMl, payload } = params;
 
   const receiver: ReceiverAddressLike | undefined =
     payload?.receiver_address && typeof payload.receiver_address === "object"
@@ -213,6 +215,8 @@ async function llamarCrearEnvioFlex(params: {
     idempotencyKey: `mef-${shipmentId}`,
     mercadolibreShipmentId: shipmentId,
     mercadolibreOrderId: mlOrderId,
+    // DEUDA 186 Flex PIEZA 1 — zona ML snapshot inmutable al create.
+    zoneIdMl,
     // E-commerce contract: si falta depósito/credencial/operatividad/saldo,
     // el motor bloquea con su estado BLOQUEADO_* legacy y SHP-* tracking
     // (procesarEnviosBloqueados* lo destraba). Ese es un Envío REAL con
@@ -353,6 +357,8 @@ export async function procesarNotificacionFlex(
       mlOrderId,
       cpDestino: shipment.cpDestino,
       nombreCourier: resolucion.courierNombre,
+      // DEUDA 186 Flex PIEZA 1 — snapshot zona al create (resolucion.ok=true acá).
+      zoneIdMl: resolucion.zoneIdMl,
       payload: shipment.payloadRaw,
     });
     if (!result.ok) {

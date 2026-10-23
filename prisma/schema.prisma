@@ -908,6 +908,16 @@ model Envio {
   mercadolibreShipmentId String?
   mercadolibreOrderId    String?
 
+  // DEUDA 186 Flex PIEZA 1 (2026-10-23) — snapshot inmutable de la zona ML al
+  // momento del create (populated por crear-envio-flex vía
+  // resolverCourierPorCpFlex). Las zonas del cliente cambian; medir un envío
+  // viejo contra las de hoy mediría MAL en silencio. Nullable (solo Flex). No
+  // FK (zoneIdMl es pivot lógico, consistente con AsignacionCourierZonaFlex).
+  // Índice parcial (solo WHERE zoneIdMl IS NOT NULL) va a mano en la migración
+  // — Prisma no expresa índices parciales nativos.
+  // MONEY-SAFE: pure plumbing, zero touch del débito/precio/finanzas.
+  zoneIdMl String?
+
   // ===========================================================================
   // Vínculo Shopify (Fase 3, 2026-10-15) — mismo mold pure-plumbing que
   // tiendanube*/mercadolibre* arriba. Branch 1 (sin FulfillmentService):

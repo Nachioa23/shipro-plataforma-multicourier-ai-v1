@@ -91,6 +91,11 @@ export interface CrearEnvioInput {
   mercadolibreShipmentId?: string | null;
   mercadolibreOrderId?: string | null;
 
+  // DEUDA 186 Flex PIEZA 1 — zona ML snapshot. Solo el flujo Flex lo pasa
+  // (crear-envio-flex.ts vía resolverCourierPorCpFlex). MONEY-SAFE: pure
+  // plumbing, NO toca rama/precio/débito.
+  zoneIdMl?: string | null;
+
   // Shopify Fase 3 (2026-10-15) — vínculo directo al Fulfillment Order. Los
   // pasa el worker Shopify (Chat B) para trazabilidad + idempotencia (el
   // request manda shopifyFulfillmentOrderId también como idempotencyKey →
@@ -130,7 +135,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
     calle: calleRaw, altura: alturaRaw, piso, dpto, dni, email, telefono, localidad, modalidad,
     valorDeclarado, costoEnvio, costoProveedor, numeroOrden,
     tiendanubeStoreId, tiendanubeFulfillmentOrderId, tiendanubeOrderId,
-    mercadolibreShipmentId, mercadolibreOrderId,
+    mercadolibreShipmentId, mercadolibreOrderId, zoneIdMl,
     shopifyOrderId, shopifyFulfillmentOrderId, tiendaShopifyId,
     idempotencyKey,
     tipoOrigen, sucursalOrigenId, sucursalDestinoId
@@ -1116,6 +1121,8 @@ export async function crearEnvio(input: CrearEnvioInput) {
         // [[DEUDA 180]] MEF Fase 2.3.c — persist del vínculo ML.
         mercadolibreShipmentId: mercadolibreShipmentId ?? null,
         mercadolibreOrderId: mercadolibreOrderId ?? null,
+        // DEUDA 186 Flex — snapshot zona al create (nulo en no-Flex).
+        zoneIdMl: zoneIdMl ?? null,
         // Shopify Fase 3 (2026-10-15) — persist del vínculo Shopify (pure plumbing,
         // mismo mold que mercadolibre* y tiendanube*). Los 4 campos de estado del
         // push (shopifyFulfillmentPushEstado/Id/Error/At) nacen null acá; Chat B

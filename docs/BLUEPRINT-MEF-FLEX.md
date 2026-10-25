@@ -122,7 +122,7 @@ precios existente (Flex entra sin cambios, cobra por rama).
 
 ---
 
-## PARTE 7 — Estado real (2026-09)
+## PARTE 7 — Estado real (2026-09 / actualizado 2026-10-23)
 
 - **Fase 1 (conexión) — construida + en prod.** OAuth self-service, tokens con refresh lazy,
   receiver corregido. VALIDADO: la conexión OAuth (un test user se conectó, token guardado
@@ -131,6 +131,63 @@ precios existente (Flex entra sin cambios, cobra por rama).
   worker. PENDIENTE de validar: con datos de un envío Flex real.
 - Ventas no ruteables NO crean envío falso: quedan en el buzón (NotificacionFlex) con causa,
   re-escaneables (o estancadas si no se resuelven solas), y se rutean cuando se destraban.
+
+### 🚀 Scoring de couriers Flex (recomendación) — CONSTRUIDO + EN PROD (deployado 2026-10-23)
+
+**Primer "ticket to win" de Flex implementado — inteligencia sobre el ruteo, no solo vincular
+courier.** La pantalla **Couriers Flex** (`/configuracion/couriers-flex`) ahora muestra, por cada
+zona asignada:
+
+- **On-time del courier asignado** con semáforo contra la meta de la empresa:
+  - 🟢 **Verde**: on-time ≥ meta.
+  - 🟡 **Amarillo**: on-time ≥ 95% pero < meta (borderline).
+  - 🔴 **Rojo**: on-time < 95% (riesgo real).
+  - ⚪ **Midiendo**: muestra < 30 envíos (umbral industria para proporción confiable).
+- **Recomendación automática** cuando el asignado está bajo meta Y existe otro courier operable
+  del cliente que (a) cumple la meta con muestra suficiente real y (b) tiene **mejora ≥ 3 puntos
+  on-time**. Si se cumplen las dos condiciones, aparece un alert ámbar con el courier recomendado +
+  botón **"Reasignar a {courierRecomendado}"**. El cliente decide con un click; **nada se
+  auto-asigna**. El reasignar reusa el PUT manual existente.
+
+**Reusa el motor del núcleo DEUDA 186**:
+- `calcularConfiabilidad(courierId, provincia, ventana, nombre, zoneIdMl)` — helper con fallback
+  escalonado 5 niveles (zona Flex → provincia → ventana mayor → global del courier → teórico 100%).
+- `resolverMetaOnTimeFlex(empresaId, zoneIdMl)` — helper único de precedencia zona→empresa (UI y
+  scoring usan la misma regla, no divergen).
+- `MetricaConfiabilidad` extendida con `zoneIdMl` + el cron `metricas-confiabilidad` ahora agrega
+  por `(courier, zona Flex)` además de por provincia y global.
+
+**Metas on-time configurables (dos niveles con precedencia)**:
+- **`Empresa.metaOnTimeFlexPct`** — piso general del cliente. Default **97%** = meta ML.
+- **`AsignacionCourierZonaFlex.metaOnTimeFlexPct`** — override opcional por zona (null = usa la de
+  empresa). Para clientes que exigen metas distintas por zona (ej. CABA 97%, Patagonia 90%).
+
+**Pendientes conocidos (explícitos — no bloquean el deploy, bloquean data real)**:
+
+1. **Nace "midiendo"** — sin operación Flex real, todas las zonas muestran `caption gris "Midiendo
+   confiabilidad — 0 de 30 entregas"`. El fallback cae al Nivel 4 teórico (100% constante) hasta
+   que haya envíos entregados que alimenten la tabla.
+2. ⚠️ **El cron `metricas-confiabilidad` NO está wireado en el crontab del server** — la tabla de
+   performance NO se puebla sola; hay que agendar ese cron cuando haya primer cliente operando, o
+   el scoring queda en "midiendo" incluso con operación real. Mismo bucket operativo que
+   `mef-sincronizar-zonas` + `mef-procesar-notificaciones` (los 3 crons MEF relevantes están sin
+   wirear — tracked en DEUDA 180).
+3. **Validación e2e** del scoring (que las zonas pasen de midiendo → verde/amarillo/rojo según
+   on-time real) depende del mismo prerequisito que el resto de Fase 2+: operación Flex real + cron
+   agendado.
+
+**Alcance de la pieza (deploy conjunto 2026-10-23, confirmado contra server: migrate status
+up-to-date, 62 migraciones aplicadas)**:
+- Núcleo (Chat A): `Envio.zoneIdMl` + `MetricaConfiabilidad.zoneIdMl` + cron 3er agregador +
+  `calcularConfiabilidad` Nivel 0 + metas on-time + helper `resolverMetaOnTimeFlex` (commits
+  `3d1f18d`, `e589710`, `17594fe`).
+- MEF (Chat D): endpoint `GET /api/empresa/mercadolibre/couriers-flex` extendido con performance +
+  semáforo + recomendación; pantalla extendida con bloque de performance per-zona + CTA reasignar
+  (commit `3c8ab31`).
+
+**Zero riesgo money confirmado**: analytics + recomendación read-only. El `zoneIdMl` en `Envio` es
+pure plumbing (snapshot al create). El único write del endpoint es el PUT manual de reasignación
+que ya existía antes. **No auto-asigna, no mueve plata, no cambia el motor del cotizador**.
 
 ---
 

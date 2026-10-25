@@ -563,6 +563,52 @@ Todas las piezas son **read-only sobre el flujo monetario**:
 3. **Legacy pre-captura**: envíos entregados antes de persistir `slaPromesaHs` → **excluidos** del cómputo (lo
    contrario introduce leakage temporal al recalcular con el histórico de hoy).
 
+### 🚀 Extensión MEF Flex DEPLOYADA en prod (2026-10-23)
+
+La captura de confiabilidad se extendió a MEF Flex como **scoring por zona ML** (recomendación de courier por zona
+del vendedor en Mercado Envíos Flex). **Deployada en prod 2026-10-23** — confirmado contra el server: `prisma
+migrate status` reporta "Database schema is up to date!" con 62 migraciones aplicadas; HEAD del server incluye
+`3c8ab31`; la pantalla `/configuracion/couriers-flex` carga + la cotización general sigue intacta.
+
+#### Piezas núcleo (DEUDA 186, construidas por Chat A)
+
+| Pieza | Qué construye | Commit |
+|---|---|---|
+| **Flex PIEZA 1** | `Envio.zoneIdMl` (snapshot inmutable de la zona ML al create, populated por `crear-envio-flex` vía `resolverCourierPorCpFlex`) | `3d1f18d` |
+| **Flex PIEZA 2** | `MetricaConfiabilidad.zoneIdMl` + 3er agregador `porZonaFlex` en el cron `metricas-confiabilidad` (coexiste con provincia + global) | `e589710` |
+| **Flex PIEZAS 3+4** | `calcularConfiabilidad(courierId, provincia, ventana, nombre, zoneIdMl?)` extendido con **Nivel 0** (zona Flex → fallback zona → provincia → global → teórico); `Empresa.metaOnTimeFlexPct` (default 97 = meta ML) + `AsignacionCourierZonaFlex.metaOnTimeFlexPct` (override per-zona nullable) + helper único `resolverMetaOnTimeFlex` (precedencia zona→empresa, UI+scoring misma regla) | `17594fe` |
+
+#### Pieza MEF (endpoint + UI, por pedido del Chat D)
+
+| Pieza | Qué construye | Commit |
+|---|---|---|
+| **MEF scoring recomendación** | `GET /api/empresa/mercadolibre/couriers-flex` extendido: por zona asignada computa `performance` (onTime, muestra, nivel), `metaEfectiva`, `estadoSemaforo` (midiendo / verde / amarillo / rojo con `UMBRAL_AMARILLO=95`, `UMBRAL_MUESTRA_MINIMA=30`) y `recomendación` opcional (si asignado < meta Y existe otro cumpliendo con mejora ≥ 3 puntos). Pantalla `/configuracion/couriers-flex` extendida con bloque de performance per-zona + CTA **"Reasignar a {courierRecomendado}"** que reusa el PUT manual existente. Analytics read-only — el único write sigue siendo el PUT manual (reasignar courier a zona), zero auto-asignación. Provincia derivada de los CPs de la zona SOLO si single-provincia; cross-provincia → null + log informativo (Opción B). | `3c8ab31` |
+
+#### Estado post-deploy
+
+- **Nace en "MIDIENDO"**: sin operación Flex real, todas las zonas asignadas muestran `caption gris "Midiendo
+  confiabilidad — 0 de 30 entregas"`. El fallback escalonado del helper cae al Nivel 4 teórico (100% constante)
+  hasta que haya envíos entregados.
+- **Zero riesgo money confirmado**: ni el schema ni el endpoint tocan débito/precio/selección del motor. El `zoneIdMl`
+  en `Envio` es pure plumbing (snapshot al create, mold de `mercadolibreShipmentId`). El scoring Flex es analytics
+  + recomendación read-only.
+- **Fallback de provincia (decisión Opción B)**: si la zona ML cae 100% en una provincia (ej. una zona CABA pura o
+  Córdoba pura) → `calcularConfiabilidad` recibe esa provincia y puede usar los Niveles 1-2 mientras la zona junta
+  sus 30. Si la zona cruza provincias (AMBA mezclando CABA + Buenos Aires) → provincia `null` y log informativo;
+  el fallback salta directo al global del courier (Nivel 3) — honesto, no se contamina con un dato de provincia
+  que no representaría la zona.
+
+#### Pendiente conocido (NO bloquea el deploy, pero bloquea data real)
+
+**El cron `metricas-confiabilidad` NO está wireado en el crontab del server todavía** — se dispara a mano. La tabla
+`MetricaConfiabilidad` NO se puebla sola hasta que se agende. Mismo bucket del tracking de crons no-wireados que
+afectan a MEF (ver DEUDA 180 §crons MEF: `mef-sincronizar-zonas` + `mef-procesar-notificaciones` tampoco wireados —
+`metricas-confiabilidad` se suma a ese pendiente operativo). Pre-primer-cliente este gap no duele; cuando empiece
+operación Flex real + el cron se agende, la data arranca a acumularse automáticamente.
+
+**Nota de territorio**: la actualización del BLUEPRINT MEF (doc del canal, dueño Chat D) corre por cuenta del
+Chat D — acá se registra solo la parte del **motor de confiabilidad** (dueño Chat A) que se extendió para alimentarlo.
+
 ---
 
 ## 6. Métricas que alimentan el motor (link con Torre/Panel — input Nacho)

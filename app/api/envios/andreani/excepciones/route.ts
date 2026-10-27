@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import prisma from "@/lib/prisma";
+import { FUENTE_EVENTO } from "@/lib/constants/fuente-evento";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 import { obtenerCredencialCourier } from "@/lib/couriers/normalizar";
 import { resolverContext } from "@/lib/auth-context";
@@ -138,7 +139,8 @@ export async function POST(request: Request) {
           data: {
             estado: "EXCEPCION_SOLICITADA",
             observacion: `Cambio de domicilio solicitado: ${datosNuevos.direccion} ${datosNuevos.numero}, ${datosNuevos.localidad}`,
-            envioId: envio.id
+            envioId: envio.id,
+            fuente: FUENTE_EVENTO.OPERADOR,
           }
         });
 

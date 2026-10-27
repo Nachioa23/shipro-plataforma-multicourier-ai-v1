@@ -1,6 +1,7 @@
 import prisma from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { despacharCourier } from "@/lib/envios/dispatch";
+import { FUENTE_EVENTO } from "@/lib/constants/fuente-evento";
 import { enviarMailCreacion } from "@/lib/mailer";
 import { getAppUrl } from "@/lib/utils/app-url";
 import { debitoAplicadoEnvio } from "@/lib/finanzas/debito-aplicado";
@@ -107,7 +108,8 @@ export async function procesarEnviosBloqueados(empresaId: number): Promise<Proce
         data: {
           estado: "BLOQUEADO_SALDO",
           observacion: `Reintento post-recarga falló: credencial de ${envio.courier.nombre} no encontrada para esta empresa.`,
-          envioId: envio.id
+          envioId: envio.id,
+          fuente: FUENTE_EVENTO.SISTEMA,
         }
       });
       fallados++;
@@ -131,7 +133,8 @@ export async function procesarEnviosBloqueados(empresaId: number): Promise<Proce
         data: {
           estado: "BLOQUEADO_SALDO",
           observacion: `Reintento post-recarga falló: envío sin destino cargado.`,
-          envioId: envio.id
+          envioId: envio.id,
+          fuente: FUENTE_EVENTO.SISTEMA
         }
       });
       fallados++;
@@ -223,7 +226,8 @@ export async function procesarEnviosBloqueados(empresaId: number): Promise<Proce
             data: {
               estado: "BLOQUEADO_PARCIAL",
               observacion: `Reintento post-recarga falló: ${dispatchResult.error || "courier no devolvió tracking"}. Tramos persistidos: ${dispatchResult.tramos.length}. El operador debe resolver la falla manualmente.`,
-              envioId: envio.id
+              envioId: envio.id,
+              fuente: FUENTE_EVENTO.SISTEMA,
             }
           });
         });
@@ -290,7 +294,8 @@ export async function procesarEnviosBloqueados(empresaId: number): Promise<Proce
           data: {
             estado: "Pendiente",
             observacion: `Desbloqueado post-recarga. Tracking real: ${trackingReal}.`,
-            envioId: envio.id
+            envioId: envio.id,
+            fuente: FUENTE_EVENTO.SISTEMA,
           }
         });
       });
@@ -324,7 +329,8 @@ export async function procesarEnviosBloqueados(empresaId: number): Promise<Proce
         data: {
           estado: "BLOQUEADO_SALDO",
           observacion: `Tracking ${trackingReal} generado en courier pero falló persistencia: ${txErr?.message || "Error de BD"}. Revisar manualmente.`,
-          envioId: envio.id
+          envioId: envio.id,
+          fuente: FUENTE_EVENTO.SISTEMA,
         }
       });
       fallados++;

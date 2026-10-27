@@ -1,5 +1,6 @@
 import { NextResponse, after } from "next/server";
 import prisma from "@/lib/prisma";
+import { FUENTE_EVENTO } from "@/lib/constants/fuente-evento";
 import { cancelarTramosEnCourier } from "@/lib/tiendanube/cancelar-tramos";
 import { aplicarCancelacionFinanciera } from "@/lib/finanzas/cancelacion-financiera";
 
@@ -246,6 +247,7 @@ export async function POST(request: Request) {
             // Marcamos sync como YA sincronizado con Tiendanube: la cancelación viene
             // DE Tiendanube; no hay que empujársela de vuelta a su timeline.
             sincronizadoTiendanubeEn: ahora,
+            fuente: FUENTE_EVENTO.SISTEMA,
           },
         });
         await aplicarCancelacionFinanciera(tx, envioId, trackingNumber);

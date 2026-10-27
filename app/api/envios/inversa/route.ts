@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { FUENTE_EVENTO } from "@/lib/constants/fuente-evento";
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
@@ -139,7 +140,8 @@ export async function POST(request: Request) {
       data: {
         estado: "IMPRESO",
         observacion: `Etiqueta de ${tipoAccion} generada a partir del envío ${trackingOriginal}.`,
-        envioId: nuevoEnvio.id
+        envioId: nuevoEnvio.id,
+        fuente: FUENTE_EVENTO.OPERADOR,
       }
     });
 

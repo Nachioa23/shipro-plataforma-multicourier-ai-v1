@@ -4,6 +4,7 @@ import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
 import { resolverContext } from "@/lib/auth-context";
+import { FUENTE_EVENTO } from "@/lib/constants/fuente-evento";
 
 export async function POST(request: Request) {
   try {
@@ -47,7 +48,12 @@ export async function POST(request: Request) {
         if (nuevoEstadoCrudo && nuevoEstadoCrudo !== envio.estadoActual) {
           await prisma.envio.update({ where: { id: envio.id }, data: { estadoActual: nuevoEstadoCrudo } });
           await prisma.eventoTracking.create({
-            data: { estado: nuevoEstadoCrudo, observacion: "Actualización manual forzada", envioId: envio.id }
+            data: {
+              estado: nuevoEstadoCrudo,
+              observacion: "Actualización manual forzada",
+              envioId: envio.id,
+              fuente: FUENTE_EVENTO.COURIER, // dato del adapter del courier (el disparo fue manual, el DATO es del courier)
+            }
           });
           mensaje = "¡Estado actualizado desde el Courier!";
           envio.estadoActual = nuevoEstadoCrudo; 

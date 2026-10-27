@@ -11,6 +11,7 @@ import { parseAltura } from "@/lib/utils/parse-direccion";
 import { despacharCourier } from "@/lib/envios/dispatch";
 import { cotizar } from "@/lib/cotizador";
 import { calcularPromesaCalibrada } from "@/lib/utils/promesa-calibrada";
+import { FUENTE_EVENTO } from "@/lib/constants/fuente-evento";
 import { inferirModalidad } from "@/lib/utils/modalidades";
 import { validarOperatividadPar } from "@/lib/depositos/operatividad";
 import { getAppUrl } from "@/lib/utils/app-url";
@@ -1354,24 +1355,24 @@ export async function crearEnvio(input: CrearEnvioInput) {
     }
 
     if (bloqueadoPorTramoFallido) {
-      await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_PARCIAL", observacion: `Bloqueado por falla en despacho del courier: ${errorTramo}. Tramos persistidos: ${dispatchTramos.length}. El operador debe resolver la falla manualmente.`, envioId: envioCreado.id } });
+      await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_PARCIAL", observacion: `Bloqueado por falla en despacho del courier: ${errorTramo}. Tramos persistidos: ${dispatchTramos.length}. El operador debe resolver la falla manualmente.`, envioId: envioCreado.id, fuente: FUENTE_EVENTO.SISTEMA } });
     } else if (bloqueadoPorDeposito) {
-      await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_DEPOSITO", observacion: `Bloqueado: la empresa no tiene depósito predeterminado configurado. Se desbloqueará automáticamente cuando se configure uno en /configuracion/depositos.`, envioId: envioCreado.id } });
+      await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_DEPOSITO", observacion: `Bloqueado: la empresa no tiene depósito predeterminado configurado. Se desbloqueará automáticamente cuando se configure uno en /configuracion/depositos.`, envioId: envioCreado.id, fuente: FUENTE_EVENTO.SISTEMA } });
     } else if (bloqueadoPorDatosPaquete) {
-      await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_DATOS_PAQUETE", observacion: "Bloqueado: faltan datos del paquete (peso y/o dimensiones). Completá peso, largo, ancho y alto en la NPMS para poder despacharlo.", envioId: envioCreado.id } });
+      await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_DATOS_PAQUETE", observacion: "Bloqueado: faltan datos del paquete (peso y/o dimensiones). Completá peso, largo, ancho y alto en la NPMS para poder despacharlo.", envioId: envioCreado.id, fuente: FUENTE_EVENTO.SISTEMA } });
     } else if (bloqueadoPorCredencial) {
-      await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_CREDENCIAL", observacion: `Credencial de ${courierReal.nombre} es Rama A pero no tiene dueño configurado. Se desbloqueará automáticamente cuando admin_shipro asigne el dueño en /configuracion/transportes.`, envioId: envioCreado.id } });
+      await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_CREDENCIAL", observacion: `Credencial de ${courierReal.nombre} es Rama A pero no tiene dueño configurado. Se desbloqueará automáticamente cuando admin_shipro asigne el dueño en /configuracion/transportes.`, envioId: envioCreado.id, fuente: FUENTE_EVENTO.SISTEMA } });
     } else if (bloqueadoPorOperatividad) {
-      await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_OPERATIVIDAD", observacion: `Par (depósito × courier) no operativo. Motivos: ${motivosOperatividad.join(", ")}. Detalle: ${detalleOperatividad.join("; ")}. Configurá el par en /configuracion/depositos.`, envioId: envioCreado.id } });
+      await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_OPERATIVIDAD", observacion: `Par (depósito × courier) no operativo. Motivos: ${motivosOperatividad.join(", ")}. Detalle: ${detalleOperatividad.join("; ")}. Configurá el par en /configuracion/depositos.`, envioId: envioCreado.id, fuente: FUENTE_EVENTO.SISTEMA } });
     } else if (bloqueadoPorSaldo) {
       // DEUDA 175 fix: `disponible` = saldo + colchón (mismo criterio que el gate,
       // aplicable a AMBAS modalidades — el colchón es adelanto plano en las dos).
       const saldoDisponible = (empresaData?.saldoActivo ?? new Prisma.Decimal(0)).add(empresaData?.limiteDescubierto ?? new Prisma.Decimal(0));
-      await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_SALDO", observacion: `Bloqueado por saldo insuficiente. Costo $${montoDebito.toFixed(2)}, disponible $${saldoDisponible.toFixed(2)} (${tipoCuentaEfectivo}). Se desbloqueará al recargar saldo.`, envioId: envioCreado.id } });
+      await tx.eventoTracking.create({ data: { estado: "BLOQUEADO_SALDO", observacion: `Bloqueado por saldo insuficiente. Costo $${montoDebito.toFixed(2)}, disponible $${saldoDisponible.toFixed(2)} (${tipoCuentaEfectivo}). Se desbloqueará al recargar saldo.`, envioId: envioCreado.id, fuente: FUENTE_EVENTO.SISTEMA } });
     } else if (falloPorPeaje) {
-      await tx.eventoTracking.create({ data: { estado: "RETENIDO", observacion: `Retenido en Peaje: ${motivoRetencion}`, envioId: envioCreado.id } });
+      await tx.eventoTracking.create({ data: { estado: "RETENIDO", observacion: `Retenido en Peaje: ${motivoRetencion}`, envioId: envioCreado.id, fuente: FUENTE_EVENTO.SISTEMA } });
     } else {
-      await tx.eventoTracking.create({ data: { estado: "Pendiente", observacion: "Envío registrado en plataforma y etiqueta generada.", envioId: envioCreado.id } });
+      await tx.eventoTracking.create({ data: { estado: "Pendiente", observacion: "Envío registrado en plataforma y etiqueta generada.", envioId: envioCreado.id, fuente: FUENTE_EVENTO.SISTEMA } });
     }
 
     // DEUDA 22: si el debit cruzo umbral, marcar suspensionPendiente fuera de tx.

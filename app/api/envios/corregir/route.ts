@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { FUENTE_EVENTO } from "@/lib/constants/fuente-evento";
 import { Prisma } from "@prisma/client";
 import { getToken } from "next-auth/jwt";
 import { obtenerCredencialCourier } from "@/lib/couriers/normalizar";
@@ -486,6 +487,7 @@ export async function POST(request: Request) {
               observacion: esCorreccionDatosPaquete
                 ? `Datos del paquete completados. Tracking oficial asignado: ${dispatchResult.tracking}.`
                 : `Dirección corregida. Tracking oficial asignado: ${dispatchResult.tracking}.`,
+              fuente: FUENTE_EVENTO.OPERADOR,
             },
           });
         });
@@ -530,6 +532,7 @@ export async function POST(request: Request) {
               envioId: envio.id,
               estado: "BLOQUEADO_PARCIAL",
               observacion: `Dirección corregida pero re-despacho parcial: ${dispatchResult.error || "courier no devolvió tracking"}. Tramos huérfanos persistidos: ${dispatchResult.tramos.length}. El operador debe resolver la falla manualmente.`,
+              fuente: FUENTE_EVENTO.OPERADOR,
             },
           });
         });
@@ -558,6 +561,7 @@ export async function POST(request: Request) {
           envioId: envio.id,
           estado: "BLOQUEADO_DATOS_PAQUETE",
           observacion: `Datos del paquete completados pero el courier rechazó la etiqueta: ${dispatchResult.error || "no devolvió tracking"}. El envío sigue en BLOQUEADO_DATOS_PAQUETE; reintentá con datos distintos.`,
+          fuente: FUENTE_EVENTO.OPERADOR,
         },
       });
 
@@ -571,6 +575,7 @@ export async function POST(request: Request) {
         envioId: envio.id,
         estado: "RETENIDO",
         observacion: `Intento de corrección falló en el courier: ${dispatchResult.error || "courier no devolvió tracking"}. El envío sigue en RETENIDO; el cliente puede reintentar con datos distintos.`,
+        fuente: FUENTE_EVENTO.OPERADOR,
       },
     });
 

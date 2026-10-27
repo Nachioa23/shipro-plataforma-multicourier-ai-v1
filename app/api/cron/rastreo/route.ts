@@ -8,6 +8,7 @@ import { getAppUrlOrThrow } from "@/lib/utils/app-url";
 import { ESTADOS_COURIER_REPETIBLES, DIAS_MAXIMO_RASTREO, displayCourier } from "@/lib/utils/estados";
 import { pushTrackingEvent } from "@/lib/tiendanube/tracking-api";
 import { estadoTiendanube, MAPEO_ESTADO_TIENDANUBE } from "@/lib/tiendanube/tracking-map";
+import { FUENTE_EVENTO } from "@/lib/constants/fuente-evento";
 import { decryptSecret } from "@/lib/utils/secret-crypto";
 
 export async function GET(request: Request) {
@@ -126,7 +127,8 @@ export async function GET(request: Request) {
                 estado: estadoShiproLimpio,
                 estadoCrudoOriginal: nuevoEstadoCrudo,
                 observacion: `El courier reportó: ${nuevoEstadoCrudo}`,
-                envioId: envio.id
+                envioId: envio.id,
+                fuente: FUENTE_EVENTO.COURIER, // dato pulled del adapter del courier
               }
             });
 

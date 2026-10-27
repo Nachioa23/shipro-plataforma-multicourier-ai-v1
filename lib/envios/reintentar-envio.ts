@@ -52,6 +52,7 @@
 import prisma from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { despacharCourier } from "@/lib/envios/dispatch";
+import { FUENTE_EVENTO } from "@/lib/constants/fuente-evento";
 import { obtenerCredencialCourier } from "@/lib/couriers/normalizar";
 import { debitoAplicadoEnvio } from "@/lib/finanzas/debito-aplicado";
 import { MAX_REINTENTOS } from "@/lib/envios/reintentable";
@@ -338,6 +339,7 @@ export async function reintentarUnEnvio(envioId: number): Promise<ReintentoResul
           envioId,
           estado: "Pendiente",
           observacion: `Reintento exitoso post-BLOQUEADO_PARCIAL. Tracking real: ${trackingReal}.`,
+          fuente: FUENTE_EVENTO.SISTEMA,
         },
       });
     });
@@ -356,6 +358,7 @@ export async function reintentarUnEnvio(envioId: number): Promise<ReintentoResul
           envioId,
           estado: "REINTENTANDO",
           observacion: `[CRÍTICO reintento] Dispatch al courier OK (tracking=${trackingReal}) pero commit del estado falló (${causa}). El envío NO se revirtió a BLOQUEADO_PARCIAL para evitar doble dispatch. El operator debe: (a) verificar el estado real del envío en el courier, (b) actualizar manualmente estadoActual y trackingNumber, (c) revisar si corresponde debitar.`,
+          fuente: FUENTE_EVENTO.SISTEMA,
         },
       });
     } catch (evErr) {
@@ -403,6 +406,7 @@ async function revertirClaim(envioId: number, motivo: string): Promise<void> {
         envioId,
         estado: "BLOQUEADO_PARCIAL",
         observacion: `Reintento falló: ${motivo}. Se revirtió a BLOQUEADO_PARCIAL; próximo retry podrá reintentar si el cap no está alcanzado.`,
+        fuente: FUENTE_EVENTO.SISTEMA,
       },
     });
   } catch (err) {

@@ -1112,6 +1112,15 @@ model EventoTracking {
   observacion         String?
   fecha               DateTime @default(now())
 
+  // ORIGEN DEL DATO (no quién hizo la acción física — eso vive en observacion).
+  // Valores: "ML" | "COURIER" | "SISTEMA" | "OPERADOR" — ver constante
+  // lib/constants/fuente-evento.FUENTE_EVENTO (fuente de verdad del enum).
+  // Nullable backward-compat: eventos legacy pre-feature quedan NULL (Nacho
+  // limpia la DB pre-primer-cliente; no se backfillea).
+  // Pedido Chat D (2026-10-27) para timeline unificado de la etiqueta virtual
+  // Flex. Núcleo compartido — beneficia TN/Woo/Shopify/Flex por igual.
+  fuente String?
+
   // DEUDA 104 (Movimiento 2/3) — timestamp de cuándo este evento se empujó al timeline de Tiendanube
   // (POST tracking-events). NULL = no se pusheó todavía (o el envío no es de Tiendanube, o el push falló y
   // espera el barrido de reintento del Movimiento 3). Idempotencia: el push sólo corre si esto es NULL.

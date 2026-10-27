@@ -1,6 +1,7 @@
 import prisma from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { despacharCourier } from "@/lib/envios/dispatch";
+import { FUENTE_EVENTO } from "@/lib/constants/fuente-evento";
 import { enviarMailCreacion } from "@/lib/mailer";
 import { getAppUrl } from "@/lib/utils/app-url";
 import { debitoAplicadoEnvio } from "@/lib/finanzas/debito-aplicado";
@@ -92,6 +93,7 @@ export async function procesarEnviosBloqueadosPorDeposito(empresaId: number): Pr
           estado: "BLOQUEADO_DEPOSITO",
           observacion: `Reintento post-configuración de depósito falló: credencial de ${envio.courier.nombre} no encontrada para esta empresa.`,
           envioId: envio.id,
+          fuente: FUENTE_EVENTO.SISTEMA,
         },
       });
       fallados++;
@@ -104,6 +106,7 @@ export async function procesarEnviosBloqueadosPorDeposito(empresaId: number): Pr
           estado: "BLOQUEADO_DEPOSITO",
           observacion: `Reintento post-configuración de depósito falló: envío sin destino cargado.`,
           envioId: envio.id,
+          fuente: FUENTE_EVENTO.SISTEMA,
         },
       });
       fallados++;
@@ -152,6 +155,7 @@ export async function procesarEnviosBloqueadosPorDeposito(empresaId: number): Pr
               estado: "BLOQUEADO_SALDO",
               observacion: `Depósito configurado y asignado, pero saldo insuficiente. Costo $${monto.toFixed(2)}, disponible $${saldoDisponible.toFixed(2)} (${tipoCuentaEfectivo}). Se desbloqueará al recargar saldo.`,
               envioId: envio.id,
+              fuente: FUENTE_EVENTO.SISTEMA,
             },
           });
         });
@@ -271,6 +275,7 @@ export async function procesarEnviosBloqueadosPorDeposito(empresaId: number): Pr
               estado: "BLOQUEADO_PARCIAL",
               observacion: `Reintento post-configuración de depósito falló: ${dispatchResult.error || "courier no devolvió tracking"}. Tramos persistidos: ${dispatchResult.tramos.length}. El operador debe resolver la falla manualmente.`,
               envioId: envio.id,
+              fuente: FUENTE_EVENTO.SISTEMA,
             },
           });
         });
@@ -355,6 +360,7 @@ export async function procesarEnviosBloqueadosPorDeposito(empresaId: number): Pr
             estado: "Pendiente",
             observacion: `Desbloqueado post-configuración de depósito. Tracking real: ${trackingReal}.`,
             envioId: envio.id,
+            fuente: FUENTE_EVENTO.SISTEMA,
           },
         });
       });
@@ -388,6 +394,7 @@ export async function procesarEnviosBloqueadosPorDeposito(empresaId: number): Pr
           estado: "BLOQUEADO_DEPOSITO",
           observacion: `Tracking ${trackingReal} generado en courier pero falló persistencia: ${txErr?.message || "Error de BD"}. Revisar manualmente.`,
           envioId: envio.id,
+          fuente: FUENTE_EVENTO.SISTEMA,
         },
       });
       fallados++;

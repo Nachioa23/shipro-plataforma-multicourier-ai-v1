@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { FUENTE_EVENTO } from "@/lib/constants/fuente-evento";
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 import { obtenerCredencialCourier, normalizarParaComparacion } from "@/lib/couriers/normalizar";
@@ -118,6 +119,7 @@ export async function POST(request: Request) {
           estado: "CANCELADO",
           observacion: `${observacionEvento} ${financiero.motivo}`.trim(),
           envioId: envio.id,
+          fuente: FUENTE_EVENTO.OPERADOR,
         },
       });
 

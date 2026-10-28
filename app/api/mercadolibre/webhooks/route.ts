@@ -7,6 +7,7 @@ import {
   ESTADOS_NOTIFICACION_FLEX,
   type EstadoNotificacionFlexKey,
 } from "@/lib/utils/estados";
+import { emitirEventoActualMlBestEffort } from "@/lib/mercadolibre/estado-crudo";
 
 // ============================================================================
 // MEF Fase 1 step 4 (fix seguridad 2026-09-21) — Receiver de webhooks ML.
@@ -319,6 +320,13 @@ export async function POST(request: Request) {
           shipmentId,
           empresaId,
           mlUserIdBig,
+          body: shipmentBody,
+        });
+        // Volcado al timeline unificado (fuente=ML). Si no existe el Envio
+        // todavía, el helper hace skip silencioso — el worker catchup lo cubre
+        // al crear el Envio (emitirEventosCatchupMlBestEffort).
+        await emitirEventoActualMlBestEffort({
+          shipmentId,
           body: shipmentBody,
         });
       }

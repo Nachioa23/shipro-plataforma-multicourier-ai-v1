@@ -37,6 +37,7 @@
 import prisma from "@/lib/prisma";
 import { crearEnvio, type CrearEnvioInput } from "@/lib/envios/crear";
 import { resolverCourierPorCpFlex } from "@/lib/mercadolibre/resolver-courier-zona";
+import { emitirEventosCatchupMlBestEffort } from "@/lib/mercadolibre/estado-crudo";
 import {
   ESTADOS_BLOQUEO_FLEX,
   esCausaReescaneable,
@@ -367,6 +368,16 @@ export async function procesarNotificacionFlex(
       return { ok: true, motivo: "accion_requerida", causa: result.causaDatos };
     }
     await marcarProcesada(notif.id);
+    // Catchup del timeline unificado (fuente=ML): emitir los eventos del
+    // status_history del body guardado para cubrir webhooks que llegaron
+    // antes de que existiera el Envio interno. Best-effort — nunca falla
+    // el worker (anti-duplicado por (envioId, estadoCrudoOriginal,
+    // fechaOrigen, fuente=ML) protege re-runs).
+    await emitirEventosCatchupMlBestEffort({
+      envioId: result.envioId,
+      shipmentId,
+      body: shipment.payloadRaw,
+    });
     return { ok: true, envioId: result.envioId, motivo: "creado" };
   } catch (e) {
     console.error(

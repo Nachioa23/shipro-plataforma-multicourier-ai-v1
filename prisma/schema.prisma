@@ -1112,6 +1112,13 @@ model EventoTracking {
   observacion         String?
   fecha               DateTime @default(now())
 
+  // Hora REAL en que ocurrió el evento según la FUENTE (lo que ML/courier reporta), distinta de `fecha` (hora de
+  // inserción en nuestra base). fechaOrigen para MEDIR (on-time, tiempos reales — resuelve el skew del cron que usa
+  // hora de inserción); fecha para AUDITAR cuándo nos enteramos. Nullable: eventos legacy + los que no traen hora de
+  // origen quedan null → el lector cae a `fecha`. La llena ML (date del evento, lo engancha Chat D en MEF) y a
+  // futuro COURIER (timestamp del adapter).
+  fechaOrigen DateTime?
+
   // ORIGEN DEL DATO (no quién hizo la acción física — eso vive en observacion).
   // Valores: "ML" | "COURIER" | "SISTEMA" | "OPERADOR" — ver constante
   // lib/constants/fuente-evento.FUENTE_EVENTO (fuente de verdad del enum).

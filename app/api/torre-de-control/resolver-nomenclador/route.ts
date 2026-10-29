@@ -30,6 +30,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { resolverContext } from "@/lib/auth-context";
+import { FUENTE_EVENTO } from "@/lib/constants/fuente-evento";
 
 // Ventana temporal por defecto para frecuencia ponderada (en dias).
 const VENTANA_DIAS_DEFAULT = 30;
@@ -84,11 +85,26 @@ export async function GET(request: Request) {
       },
       select: {
         estadoCrudoOriginal: true,
+        fuente: true,
         envio: { select: { courierId: true } },
       },
     });
 
     const totalEventos = eventosEnVentana.length;
+
+    // Bifurcación por fuente: los eventos fuente=ML resuelven su mapeo contra
+    // el Courier VIRTUAL "MEF" (donde viven los mapeos ML→canónico del volcado
+    // MEF, Chat D), no contra el courier físico del envío. Sin este fix, un
+    // evento ML busca su crudo bajo Moci's/Andreani y nunca lo encuentra →
+    // falso "sin mapear" eterno. Degrada seguro: si el Courier MEF no existe
+    // (seed aún no corrió), mefCourierId=null → fallback al comportamiento
+    // actual (los eventos ML seguirían contando como sin mapear hasta que el
+    // seed cree el courier + los mapeos, misma situación que antes del fix).
+    const mefCourier = await prisma.courier.findUnique({
+      where: { nombre: "MEF" },
+      select: { id: true },
+    });
+    const mefCourierId = mefCourier?.id ?? null;
 
     // Set de claves (courierId|estadoCrudo) que NO estan mapeadas, para lookup O(1).
     const setNoMapeados = new Set(
@@ -100,7 +116,11 @@ export async function GET(request: Request) {
     const frecuenciaPorClave = new Map<string, number>();
     for (const ev of eventosEnVentana) {
       if (!ev.estadoCrudoOriginal) continue;
-      const clave = `${ev.envio.courierId}|${ev.estadoCrudoOriginal}`;
+      const courierIdParaMapeo =
+        (ev.fuente === FUENTE_EVENTO.ML && mefCourierId !== null)
+          ? mefCourierId
+          : ev.envio.courierId;
+      const clave = `${courierIdParaMapeo}|${ev.estadoCrudoOriginal}`;
       if (setNoMapeados.has(clave)) {
         eventosSinMapeo++;
         frecuenciaPorClave.set(clave, (frecuenciaPorClave.get(clave) || 0) + 1);

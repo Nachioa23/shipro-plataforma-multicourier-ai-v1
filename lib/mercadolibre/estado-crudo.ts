@@ -1,8 +1,22 @@
 // ============================================================================
 // MEF — Volcado de eventos ML al timeline unificado EventoTracking (Chat D,
-// 2026-10-28). Espejo del patrón adapter courier: guardar CRUDO ("status" o
-// "status/substatus"), traducir al LEER vía Nomenclador. Fuente única "MEF"
-// (los mapeos ML→canónico Shipro son UNO solo, no por courier físico).
+// 2026-10-28; patrón ajustado 2026-10-29). Espejo del patrón adapter courier:
+// TRADUCIR AL ESCRIBIR vía Nomenclador. Fuente única "MEF" (los mapeos
+// ML→canónico Shipro son UNO solo, no por courier físico; viven bajo el
+// Courier VIRTUAL nombre="MEF" seedeado en 20261028130000_mef_nomenclador_seed).
+//
+// Decisión de diseño (Chat D + Nacho + Chat A 2026-10-29): guardar CRUDO y
+// traducir al leer rompería los 7 consumers de buyer-facing/dashboard/push TN/
+// métricas que leen `evento.estado` asumiendo canónico Shipro. Alineamos al
+// patrón vigente del repo (el cron de couriers pre-traduce al escribir):
+//   - estado              = CANÓNICO Shipro (lookup Nomenclador MEF).
+//   - estadoCrudoOriginal = crudo "status[/substatus]" (respaldo auditable).
+//
+// Fallback (crudo sin mapeo en Nomenclador MEF): estado = crudo tal cual +
+// auto-create de la row Nomenclador con estadoShipro=null (mismo patrón que
+// el cron de couriers en app/api/cron/rastreo/route.ts:82-86) → aparece en
+// la Torre métrica 1.1 para que el admin resuelva vía UI. Nunca descartamos
+// el evento.
 //
 // Dos puntos de entrada:
 //   - emitirEventoActualMlBestEffort — 1 evento del status actual del body.
@@ -12,11 +26,10 @@
 //     que llegaron antes de que el Envio interno existiera).
 //
 // Anti-duplicado: findFirst por (envioId, estadoCrudoOriginal, fechaOrigen,
-// fuente=ML) antes del create. Descarta SOLO el MISMO evento repetido (mismo
-// status y misma hora). Un intento NUEVO con otra hora NO es duplicado — se
-// guarda (cada visita fallida es su propia fila para la métrica de primera
-// visita futura). NO usar body.attempts del webhook: eso es reintentos HTTP
-// de ML, no visitas del courier.
+// fuente=ML) — por CRUDO, no por canónico. Dos crudos distintos pueden mapear
+// al mismo canónico (p.ej. buyer_absent + reprogrammed → VISITA_FALLIDA) y
+// son eventos distintos; dedupear por canónico los colapsaría erróneamente.
+// NO usar body.attempts: eso es reintentos HTTP de ML, no visitas del courier.
 //
 // Best-effort: never throw. Si no existe el Envio todavía (webhook antes del
 // create del interno), skip + log — el worker catchup lo cubre.
@@ -24,6 +37,59 @@
 
 import prisma from "@/lib/prisma";
 import { FUENTE_EVENTO } from "@/lib/constants/fuente-evento";
+
+// Nombre canónico del Courier virtual (seeded en
+// 20261028130000_mef_nomenclador_seed). Lookup único por nombre, cacheado
+// module-level para evitar un findUnique por cada evento emitido en instancias
+// calientes. Serverless cold-start resuelve una vez por invocación.
+const MEF_COURIER_NOMBRE = "MEF";
+let _mefCourierIdCache: number | null = null;
+
+async function getMefCourierId(): Promise<number | null> {
+  if (_mefCourierIdCache !== null) return _mefCourierIdCache;
+  const row = await prisma.courier.findUnique({
+    where: { nombre: MEF_COURIER_NOMBRE },
+    select: { id: true },
+  });
+  if (row) _mefCourierIdCache = row.id;
+  return row ? row.id : null;
+}
+
+// Traduce el crudo "status[/substatus]" al canónico Shipro via Nomenclador MEF.
+// Fallback (sin Courier MEF, sin mapeo, o estadoShipro=null): devuelve el crudo
+// tal cual + auto-registra la row Nomenclador para que aparezca en Torre 1.1.
+async function traducirCrudoViaNomencladorMef(estadoCrudo: string): Promise<string> {
+  const mefCourierId = await getMefCourierId();
+  if (mefCourierId === null) {
+    console.warn(
+      `[mef-estado-crudo] Courier virtual "${MEF_COURIER_NOMBRE}" no existe — ` +
+        `seed 20261028130000_mef_nomenclador_seed no corrió. Fallback: estado=crudo.`,
+    );
+    return estadoCrudo;
+  }
+  const mapeo = await prisma.nomenclador.findUnique({
+    where: { courierId_estadoCrudo: { courierId: mefCourierId, estadoCrudo } },
+    select: { estadoShipro: true },
+  });
+  if (mapeo) {
+    return mapeo.estadoShipro || estadoCrudo;
+  }
+  // Auto-create con estadoShipro=null (mirror cron rastreo:82-86). Idempotente
+  // via unique @@unique([courierId, estadoCrudo]); P2002 bajo race → ignoramos.
+  try {
+    await prisma.nomenclador.create({
+      data: { courierId: mefCourierId, estadoCrudo, estadoShipro: null },
+    });
+  } catch (e: any) {
+    if (e?.code !== "P2002") {
+      console.warn(
+        "[mef-estado-crudo] auto-create Nomenclador MEF falló (best-effort):",
+        e instanceof Error ? e.message : String(e).slice(0, 200),
+      );
+    }
+  }
+  return estadoCrudo;
+}
 
 export function armarEstadoCrudoMl(body: unknown): string | null {
   if (!body || typeof body !== "object") return null;
@@ -53,7 +119,9 @@ async function emitirEventoTrackingMl(params: {
   fechaOrigen: Date | null;
   shipmentId: string;
 }): Promise<void> {
-  const { envioId, estadoCrudo, fechaOrigen, shipmentId } = params;
+  const { envioId, estadoCrudo, fechaOrigen } = params;
+  // Dedupe por CRUDO (no por canónico): dos crudos distintos pueden mapear al
+  // mismo canónico y son eventos distintos.
   const existente = await prisma.eventoTracking.findFirst({
     where: {
       envioId,
@@ -64,9 +132,10 @@ async function emitirEventoTrackingMl(params: {
     select: { id: true },
   });
   if (existente) return;
+  const estadoCanonico = await traducirCrudoViaNomencladorMef(estadoCrudo);
   await prisma.eventoTracking.create({
     data: {
-      estado: estadoCrudo,
+      estado: estadoCanonico,
       estadoCrudoOriginal: estadoCrudo,
       observacion: `MEF: ${estadoCrudo}`,
       envioId,

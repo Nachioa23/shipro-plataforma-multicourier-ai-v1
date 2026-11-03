@@ -17,6 +17,13 @@ import { normalizarProvincia } from "@/lib/constants/normalizar-provincia";
 // (lib/cotizador/scoring.ts) + del tipo de ventana (lib/utils/confiabilidad.ts).
 import { calcularScoring } from "@/lib/cotizador/scoring";
 import type { VentanaConfiabilidad } from "@/lib/utils/confiabilidad";
+// PIEZA 0 cascada de promesa: días hábiles extraído a módulo reutilizable
+// (ver header de lib/utils/dias-habiles.ts). El formateo a string español
+// sigue viviendo acá — solo el cálculo del Date se externaliza.
+import {
+  obtenerFeriadosActivosCacheados,
+  calcularRangoDiasHabiles,
+} from "@/lib/utils/dias-habiles";
 
 export interface CotizarInput {
   empresaId: number | null;
@@ -93,30 +100,17 @@ export interface CotizarResult {
 }
 
 // =================================================================
-// HELPER: CÁLCULO DE DÍAS HÁBILES (Soporta Feriados DB)
+// HELPER: FORMATEO DE FECHA ESTIMADA (texto UX en español)
 // =================================================================
+// El cálculo del rango de días hábiles (loop + skip findes/feriados) se
+// extrajo a lib/utils/dias-habiles.ts (PIEZA 0 cascada de promesa). Acá
+// queda sólo el formateo a string: byte-por-byte idéntico al original.
 async function calcularFechaEstimada(horasSla: number): Promise<string> {
   const diasHabilesRequeridos = Math.max(1, Math.ceil(horasSla / 24));
 
-  const feriadosDB = await prisma.feriado.findMany({ where: { activo: true } });
-  const fechasFeriados = feriadosDB.map(f => f.fecha.toISOString().split('T')[0]);
-
-  const sumarDiasHabiles = (fechaBase: Date, diasExtras: number) => {
-    let fecha = new Date(fechaBase);
-    let agregados = 0;
-    while (agregados < diasExtras) {
-      fecha.setDate(fecha.getDate() + 1);
-      const fechaString = fecha.toISOString().split('T')[0];
-      const esFinDeSemana = fecha.getDay() === 0 || fecha.getDay() === 6;
-      const esFeriado = fechasFeriados.includes(fechaString);
-      if (!esFinDeSemana && !esFeriado) agregados++;
-    }
-    return fecha;
-  };
-
+  const feriados = await obtenerFeriadosActivosCacheados();
   const hoy = new Date();
-  const fechaMin = sumarDiasHabiles(hoy, Math.max(1, diasHabilesRequeridos - 1));
-  const fechaMax = sumarDiasHabiles(hoy, diasHabilesRequeridos);
+  const { fechaMin, fechaMax } = calcularRangoDiasHabiles(hoy, diasHabilesRequeridos, feriados);
 
   const opcionesFormato: Intl.DateTimeFormatOptions = { weekday: 'long', day: 'numeric', month: 'long' };
 

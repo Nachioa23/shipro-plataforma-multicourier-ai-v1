@@ -2,11 +2,11 @@
 
 import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
-import { 
-  Settings2, Truck, Route, Plus, Save, ShieldAlert, 
-  Edit3, Mail, Trash2, ArrowRight, Target, 
+import {
+  Settings2, Truck, Route, Plus, Save, ShieldAlert,
+  Edit3, Mail, Trash2, ArrowRight, Target,
   AlertTriangle, X, Loader2, Globe, Building,
-  Power, GitMerge, Calendar, Info, CheckCircle2
+  Power, GitMerge, Calendar, Info, CheckCircle2, Clock
 } from 'lucide-react';
 import CourierDrawer, { CourierEditable } from "@/components/admin-couriers/CourierDrawer";
 import IntegrarCourierDrawer from "@/components/admin-couriers/IntegrarCourierDrawer";
@@ -16,7 +16,7 @@ export default function AdminCouriersMaestro() {
   const { data: session } = useSession();
 
   // ================= ESTADOS GENERALES =================
-  const [activeTab, setActiveTab] = useState<'flota' | 'reglas' | 'feriados'>('flota');
+  const [activeTab, setActiveTab] = useState<'flota' | 'reglas' | 'feriados' | 'slas'>('flota');
   const [cargando, setCargando] = useState(true);
   const [guardando, setGuardando] = useState(false);
   const [mensajeGlobal, setMensajeGlobal] = useState<{texto: string, tipo: 'ok'|'error'} | null>(null);
@@ -53,6 +53,15 @@ export default function AdminCouriersMaestro() {
   const [feriados, setFeriados] = useState<any[]>([]);
   const [inputFechas, setInputFechas] = useState("");
 
+  // ================= ESTADOS: SLAs POR ZONA (PIEZA 3 cascada de promesa) =================
+  // Alimenta el nivel declarado (nivel 4) de lib/utils/promesa-calibrada.ts.
+  // El endpoint /api/admin/sla-couriers hace upsert por (courierId, zonaNombre).
+  // zonaNombre DEBE ser una provincia canónica (PROVINCIAS_AR) — guard server-side.
+  const [slas, setSlas] = useState<any[]>([]);
+  const [slaCourierId, setSlaCourierId] = useState<string>("");
+  const [slaZonaNombre, setSlaZonaNombre] = useState<string>("");
+  const [slaDias, setSlaDias] = useState<string>("");
+
   // ================= CARGA INICIAL DE DATOS =================
   const cargarTodo = async () => {
     setCargando(true);
@@ -74,6 +83,15 @@ export default function AdminCouriersMaestro() {
       const resFeriados = await fetch('/api/admin/feriados');
       const dataFeriados = await resFeriados.json();
       if (Array.isArray(dataFeriados)) setFeriados(dataFeriados);
+
+      // 4. Cargar SLAs por Zona (shape: { slas, couriers, provincias }).
+      // Reaprovechamos couriers de /api/admin/couriers para el dropdown — no
+      // duplicamos la lista aunque el endpoint también la devuelva.
+      const resSlas = await fetch('/api/admin/sla-couriers');
+      if (resSlas.ok) {
+        const dataSlas = await resSlas.json();
+        if (Array.isArray(dataSlas?.slas)) setSlas(dataSlas.slas);
+      }
 
     } catch (error) {
       console.error("Error al cargar el cuartel general:", error);
@@ -162,6 +180,64 @@ export default function AdminCouriersMaestro() {
     setGuardando(false);
   };
 
+  // ================= FUNCIONES: SLAs POR ZONA =================
+  const handleGuardarSla = async () => {
+    if (!slaCourierId || !slaZonaNombre || !slaDias) {
+      mostrarMensaje("Completá courier, provincia y días", "error");
+      return;
+    }
+    const diasNum = parseInt(slaDias, 10);
+    if (!Number.isInteger(diasNum) || diasNum <= 0) {
+      mostrarMensaje("Días debe ser un entero mayor a 0", "error");
+      return;
+    }
+    setGuardando(true);
+    try {
+      const res = await fetch('/api/admin/sla-couriers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          courierId: Number(slaCourierId),
+          zonaNombre: slaZonaNombre,
+          diasPactados: diasNum,
+        }),
+      });
+      if (res.ok) {
+        mostrarMensaje("SLA declarado guardado", "ok");
+        setSlaCourierId(""); setSlaZonaNombre(""); setSlaDias("");
+        await cargarTodo();
+      } else {
+        const err = await res.json().catch(() => ({ error: "Error al guardar" }));
+        mostrarMensaje(err?.error || "Error al guardar", "error");
+      }
+    } catch (e) {
+      mostrarMensaje("Error de red al guardar", "error");
+    }
+    setGuardando(false);
+  };
+
+  const handleBorrarSla = async (id: number) => {
+    if (!confirm("¿Borrar este SLA declarado?")) return;
+    try {
+      const res = await fetch(`/api/admin/sla-couriers?id=${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        mostrarMensaje("SLA eliminado", "ok");
+        await cargarTodo();
+      } else {
+        const err = await res.json().catch(() => ({ error: "Error al eliminar" }));
+        mostrarMensaje(err?.error || "Error al eliminar", "error");
+      }
+    } catch (e) {
+      mostrarMensaje("Error de red al eliminar", "error");
+    }
+  };
+
+  const handlePrecargarSla = (sla: any) => {
+    setSlaCourierId(String(sla.courierId));
+    setSlaZonaNombre(sla.zonaNombre);
+    setSlaDias(String(sla.diasPactados));
+  };
+
   // ================= UTILIDADES =================
   const mostrarMensaje = (texto: string, tipo: 'ok'|'error') => {
     setMensajeGlobal({texto, tipo});
@@ -217,6 +293,9 @@ export default function AdminCouriersMaestro() {
           </button>
           <button onClick={() => setActiveTab('feriados')} className={`pb-3 text-sm font-bold border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'feriados' ? 'border-violet-400 text-violet-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}>
             <Calendar className="w-4 h-4" /> Calendario y Feriados
+          </button>
+          <button onClick={() => setActiveTab('slas')} className={`pb-3 text-sm font-bold border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'slas' ? 'border-violet-400 text-violet-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}>
+            <Clock className="w-4 h-4" /> SLAs por Zona
           </button>
         </div>
       </header>
@@ -429,6 +508,130 @@ export default function AdminCouriersMaestro() {
                           </div>
                         </div>
                       ))
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* ================= TAB 4: SLAs POR ZONA (PIEZA 3 cascada de promesa) ================= */}
+              {activeTab === 'slas' && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-10 animate-in fade-in duration-300">
+                  {/* FORMULARIO: courier × provincia × días */}
+                  <div className="space-y-4">
+                    <h2 className="text-sm font-black text-gray-400 uppercase tracking-widest flex items-center gap-2">
+                      <Plus className="w-4 h-4" /> Declarar SLA (Courier × Provincia)
+                    </h2>
+                    <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm space-y-4">
+                      <div className="flex items-start gap-3 p-3 bg-blue-50 text-blue-700 rounded-xl text-xs font-medium border border-blue-100">
+                        <Info className="w-5 h-5 shrink-0" />
+                        <p>Plazo pactado del courier por provincia. Alimenta el <strong>nivel declarado</strong> de la cascada de promesa cuando no hay medición real.</p>
+                      </div>
+
+                      <div>
+                        <label className="text-xs font-bold text-gray-600 uppercase">Courier</label>
+                        <select
+                          className="w-full mt-1 border border-gray-300 rounded-lg text-sm p-2 outline-none bg-white"
+                          value={slaCourierId}
+                          onChange={e => setSlaCourierId(e.target.value)}
+                        >
+                          <option value="">Elegí un courier...</option>
+                          {couriers.map(c => (
+                            <option key={c.id} value={String(c.id)}>{c.nombre}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-xs font-bold text-gray-600 uppercase">Provincia</label>
+                        {/* Dropdown CERRADO contra PROVINCIAS_AR — espeja el guard
+                            server-side en /api/admin/sla-couriers. Nunca input libre. */}
+                        <select
+                          className="w-full mt-1 border border-gray-300 rounded-lg text-sm p-2 outline-none bg-white"
+                          value={slaZonaNombre}
+                          onChange={e => setSlaZonaNombre(e.target.value)}
+                        >
+                          <option value="">Elegí una provincia...</option>
+                          {PROVINCIAS_AR.map(p => <option key={p} value={p}>{p}</option>)}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-xs font-bold text-gray-600 uppercase">Días hábiles pactados</label>
+                        <input
+                          type="number"
+                          min={1}
+                          step={1}
+                          placeholder="Ej: 3"
+                          className="w-full mt-1 border border-gray-300 rounded-lg text-sm p-2 outline-none"
+                          value={slaDias}
+                          onChange={e => setSlaDias(e.target.value)}
+                        />
+                      </div>
+
+                      <button
+                        disabled={guardando || !slaCourierId || !slaZonaNombre || !slaDias}
+                        onClick={handleGuardarSla}
+                        className="w-full py-3 bg-gray-900 text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-gray-800 disabled:opacity-50 transition-all"
+                      >
+                        {guardando ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />} Guardar SLA
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* LISTA agrupada por courier (click precarga, upsert = re-guardar) */}
+                  <div className="space-y-4">
+                    <h2 className="text-sm font-black text-gray-400 uppercase tracking-widest">
+                      SLAs Declarados ({slas.length})
+                    </h2>
+                    {slas.length === 0 ? (
+                      <div className="p-10 bg-white border border-gray-200 rounded-2xl text-center text-gray-400 font-medium text-sm">
+                        Sin SLAs declarados. Hasta cargar filas, la cascada de promesa cae al piso de 4 días hábiles.
+                      </div>
+                    ) : (
+                      <div className="space-y-4 max-h-[600px] overflow-y-auto">
+                        {Array.from(
+                          slas.reduce((map: Map<string, any[]>, sla: any) => {
+                            const key = sla.courier?.nombre || `Courier ${sla.courierId}`;
+                            const list = map.get(key) || [];
+                            list.push(sla);
+                            map.set(key, list);
+                            return map;
+                          }, new Map<string, any[]>())
+                        ).map(([courierNombre, filas]: [string, any[]]) => (
+                          <div key={courierNombre} className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
+                            <div className="bg-gray-50 border-b border-gray-200 px-5 py-3 flex items-center justify-between">
+                              <h3 className="font-black text-gray-800 text-sm">{courierNombre}</h3>
+                              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-tighter">
+                                {filas.length} {filas.length === 1 ? 'zona' : 'zonas'}
+                              </span>
+                            </div>
+                            <div className="divide-y divide-gray-50">
+                              {filas.map((sla) => (
+                                <div
+                                  key={sla.id}
+                                  className="p-4 flex justify-between items-center hover:bg-gray-50 transition-colors cursor-pointer group"
+                                  onClick={() => handlePrecargarSla(sla)}
+                                  title="Click para precargar en el formulario (upsert = re-guardar)"
+                                >
+                                  <div>
+                                    <p className="font-bold text-gray-800">{sla.zonaNombre}</p>
+                                    <p className="text-[10px] text-gray-400 font-black uppercase tracking-tighter">
+                                      {sla.diasPactados} {sla.diasPactados === 1 ? 'día hábil' : 'días hábiles'} pactados
+                                    </p>
+                                  </div>
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); handleBorrarSla(sla.id); }}
+                                    className="p-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 opacity-0 group-hover:opacity-100 transition-opacity"
+                                    title="Borrar SLA"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     )}
                   </div>
                 </div>

@@ -89,11 +89,24 @@ export function calcularP75(horas: number[]): number | null {
   return ordenados[Math.min(indice, ordenados.length - 1)];
 }
 
-// Fallback hardcoded por courier (mismo criterio que cotizador actual).
-function fallbackHardcoded(nombreCourier: string): number {
-  const nombreLimpio = nombreCourier.toLowerCase().trim();
-  if (nombreLimpio === "mocis") return 24;
-  return 72;
+// PIEZA 1+2 cascada de promesa — piso plano del helper.
+// 4 días hábiles (96h) es el punto medio local/interior que absorbe el armado
+// del e-commerce + courier promedio. Se usa SOLO cuando los niveles 1-3
+// (P75 por depósito/courier, P75 por courier, MetricaSLA) no alcanzan muestra
+// mínima — la medición manda sobre el piso.
+//
+// El nivel 4 sigue devolviendo esCalibracionReal=false + etiqueta
+// "Tiempo estimado": la UX ya hace visible que es estimado, no medido.
+export const PISO_PROMESA_HORAS = 96;
+
+// Piso plano de la cascada (ex-fallbackHardcoded, aplanado en PIEZA 1+2).
+// Antes ramificaba por courier: 24h si nombreCourier==="mocis", 72h el resto.
+// El match nunca activaba para Moci's en producción porque el nombre real en
+// BD es "Moci's" (con apóstrofe) y toLowerCase().trim() devolvía "moci's" —
+// nunca coincidía con "mocis". Aplanar el piso elimina esa rama muerta de paso.
+// Se mantiene la firma con el parámetro ignorado para no modificar el callsite.
+function fallbackHardcoded(_nombreCourier: string): number {
+  return PISO_PROMESA_HORAS;
 }
 
 /**

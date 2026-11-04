@@ -6,12 +6,15 @@
 //
 // Que hace:
 //   Dado un (courierId, depositoId?, provinciaDestino), devuelve la promesa
-//   calibrada en horas via cuadruple fallback:
+//   calibrada en horas via quintuple fallback (3 medidos + 1 declarado + piso):
 //
 //     Nivel 1: P75 historico por (deposito, courier, provincia) si muestra >= 10
 //     Nivel 2: P75 historico por (courier, provincia) si muestra >= 10
 //     Nivel 3: promedio MetricaSLA por (courier, provincia) si existe
-//     Nivel 4: fallback hardcoded (24h Mocis, 72h resto)
+//     Nivel 4: SlaCourier DECLARADO por (courier, provincia) si existe fila
+//              (PIEZA 3: plazo pactado del courier, no medido — honestidad
+//              via esCalibracionReal=false)
+//     Nivel 5: piso plano 96h (ex-hardcoded, aplanado en PIEZA 1+2)
 //
 //   La decision 3 de la metrica (nivel de seguridad) hardcodea P75 en v1.
 //   Cuando se implemente configuracion por cliente, este helper acepta nuevo
@@ -45,7 +48,9 @@ export const UMBRAL_MUESTRA_MINIMA = 10;
 const PERCENTIL_PROMESA = 0.75;
 
 // Niveles de fallback en orden de preferencia.
-export type NivelCalibracion = 1 | 2 | 3 | 4;
+// PIEZA 3 (2026-11-04): se insertó el nivel 4 DECLARADO (SlaCourier) entre
+// la medición y el piso; el piso plano (ex-nivel 4) pasó a nivel 5.
+export type NivelCalibracion = 1 | 2 | 3 | 4 | 5;
 
 export interface PromesaCalibradaResult {
   // Promesa calibrada en horas (siempre).
@@ -59,9 +64,11 @@ export interface PromesaCalibradaResult {
   cantidadMuestra: number | null;
 
   // Etiqueta UX-friendly para mostrar al usuario.
-  etiqueta: "Calibrado por deposito" | "Calibrado por courier" | "Promedio historico" | "Tiempo estimado";
+  etiqueta: "Calibrado por deposito" | "Calibrado por courier" | "Promedio historico" | "Plazo del courier" | "Tiempo estimado";
 
   // Flag de confianza: true si nivel 1 o 2 (datos reales).
+  // DECLARADO (nivel 4) es false: honestidad — es el plazo que el courier promete,
+  // no un dato medido contra entregas reales.
   esCalibracionReal: boolean;
 }
 
@@ -234,14 +241,18 @@ export async function calcularPromesaCalibrada(
 
 /**
  * Intento intermedio en la cadena de fallback:
- *   Consulta MetricaSLA del cron. Si existe, devuelve nivel 3.
- *   Si no existe, devuelve nivel 4 (hardcoded).
+ *   Nivel 3: MetricaSLA del cron (promedio historico pre-calculado).
+ *   Nivel 4: SlaCourier DECLARADO (plazo pactado por courier/provincia).
+ *   Nivel 5: piso plano (ex-hardcoded, aplanado en PIEZA 1+2).
  */
 async function intentarMetricaSLA(
   courierId: number,
   nombreCourier: string,
   provinciaNorm?: string | null
 ): Promise<PromesaCalibradaResult> {
+  // ========================================================================
+  // NIVEL 3 — MetricaSLA (cron pre-calculado, promedio historico)
+  // ========================================================================
   // Query MetricaSLA. Si tenemos provincia, filtramos por ella; si no, traemos
   // cualquier metrica del courier (improbable que aporte, pero es defensivo).
   const where: any = { courierId };
@@ -276,11 +287,51 @@ async function intentarMetricaSLA(
   }
 
   // ========================================================================
-  // NIVEL 4 — Hardcoded por nombre de courier
+  // NIVEL 4 — DECLARADO: SlaCourier por (courier, provincia). PIEZA 3.
+  // ========================================================================
+  // Plazo pactado que el courier declara cumplir para esa zona (dias habiles).
+  // NO es dato medido — por eso esCalibracionReal=false y etiqueta
+  // "Plazo del courier" (la UI puede mostrarlo como "plazo del courier"
+  // distinto a los calibrados reales).
+  //
+  // Vocabulario: SlaCourier.zonaNombre se compara con provinciaNorm via el
+  // MISMO normalizador que usan niveles 1-3 (normalizarProvincia). La UI
+  // puede guardar cualquier capitalizacion/acento canonico de PROVINCIAS_AR
+  // — el normalizador unifica en memoria y mata el bug de vocabulario de
+  // zona por construccion.
+  //
+  // Requiere provincia normalizable. Si no hay provincia, saltea al piso
+  // (mismo guardrail que los niveles medidos).
+  //
+  // Inerte hoy: la tabla SlaCourier esta vacia (sin writers en el repo
+  // al 2026-11-04 — la UI de carga es un sub-paso aparte). Cuando este
+  // vacia, findFirst devuelve null → cae al nivel 5 piso, comportamiento
+  // identico al pre-pieza.
+  if (provinciaNorm) {
+    const slasCourier = await prisma.slaCourier.findMany({
+      where: { courierId },
+      select: { zonaNombre: true, diasPactados: true },
+    });
+    const matchDeclarado = slasCourier.find(
+      s => normalizarProvincia(s.zonaNombre) === provinciaNorm
+    );
+    if (matchDeclarado) {
+      return {
+        slaHoras: matchDeclarado.diasPactados * 24,
+        nivel: 4,
+        cantidadMuestra: null,
+        etiqueta: "Plazo del courier",
+        esCalibracionReal: false,
+      };
+    }
+  }
+
+  // ========================================================================
+  // NIVEL 5 — Piso plano (ex-nivel 4 hardcoded). PIEZA 1+2.
   // ========================================================================
   return {
     slaHoras: fallbackHardcoded(nombreCourier),
-    nivel: 4,
+    nivel: 5,
     cantidadMuestra: null,
     etiqueta: "Tiempo estimado",
     esCalibracionReal: false,

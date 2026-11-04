@@ -56,11 +56,11 @@ export interface PromesaCalibradaResult {
   // Promesa calibrada en horas (siempre).
   slaHoras: number;
 
-  // Nivel de fallback que se uso (1 = mejor calibracion, 4 = hardcoded).
+  // Nivel de fallback que se uso (1 = mejor calibracion, 5 = piso plano 96h).
   nivel: NivelCalibracion;
 
   // Cantidad de envios en la muestra que produjo la promesa.
-  // null para nivel 4 (hardcoded sin muestra).
+  // null para niveles 4 (SlaCourier declarado) y 5 (piso): ninguno mide, no hay muestra.
   cantidadMuestra: number | null;
 
   // Etiqueta UX-friendly para mostrar al usuario.
@@ -102,7 +102,7 @@ export function calcularP75(horas: number[]): number | null {
 // (P75 por depósito/courier, P75 por courier, MetricaSLA) no alcanzan muestra
 // mínima — la medición manda sobre el piso.
 //
-// El nivel 4 sigue devolviendo esCalibracionReal=false + etiqueta
+// El nivel 5 (piso) sigue devolviendo esCalibracionReal=false + etiqueta
 // "Tiempo estimado": la UX ya hace visible que es estimado, no medido.
 export const PISO_PROMESA_HORAS = 96;
 
@@ -119,11 +119,12 @@ function fallbackHardcoded(_nombreCourier: string): number {
 /**
  * Calcula la promesa de entrega calibrada para una combinacion especifica.
  *
- * Aplica cuadruple fallback en orden:
+ * Aplica quintuple fallback en orden (PIEZA 3, 2026-11-04):
  *   1. P75 por (deposito, courier, provincia)
  *   2. P75 por (courier, provincia)
  *   3. Promedio MetricaSLA por (courier, provincia)
- *   4. Hardcoded por nombre de courier
+ *   4. SlaCourier DECLARADO por (courier, provincia) — plazo pactado, no medido
+ *   5. Piso plano 96h / 4 dias habiles (PISO_PROMESA_HORAS)
  *
  * @param courierId ID del courier que va a hacer el envio.
  * @param depositoId ID del deposito de origen. Puede ser null cuando el caller
@@ -347,7 +348,7 @@ async function intentarMetricaSLA(
 //
 // SEMANTICA: analitica retroactiva. Diferente a calcularPromesaCalibrada()
 // que esta arriba — esa es para el cotizador real-time al checkout con
-// cuadruple fallback (Nivel 1-4). calcularPromesaAnalitica retorna el
+// quintuple fallback (Nivel 1-5, PIEZA 3). calcularPromesaAnalitica retorna el
 // resumen global + combinaciones sobre envios YA entregados en la ventana,
 // para mostrar en Torre y Panel cliente.
 //

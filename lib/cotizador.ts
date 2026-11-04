@@ -571,13 +571,15 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
         });
 
       // Torre de Control Metrica 2.3 (DEUDA 39, 2026-06-05): asignacion de
-      // SLA via cuadruple fallback del helper compartido.
+      // SLA via quintuple fallback del helper compartido (PIEZA 3, 2026-11-04).
       // - Nivel 1: P75 por (deposito, courier, provincia) si muestra >= 10
       // - Nivel 2: P75 por (courier, provincia) si muestra >= 10
       // - Nivel 3: promedio MetricaSLA por (courier, provincia) si existe
-      // - Nivel 4: hardcoded por courier (Mocis 24h, resto 72h)
+      // - Nivel 4: SlaCourier DECLARADO por (courier, provincia) si existe fila
+      //           (plazo pactado del courier, no medido)
+      // - Nivel 5: piso plano 96h / 4 dias habiles (PISO_PROMESA_HORAS).
       // Decision B.2: etiqueta UX binaria mantenida. esSlaReal = true si la
-      // calibracion es real (nivel 1 o 2), false si es promedio o hardcoded.
+      // calibracion es real (nivel 1 o 2), false para promedio / declarado / piso.
       const promesaResult = await calcularPromesaCalibrada(
         config.id,
         depositoIdParaCalibracion,

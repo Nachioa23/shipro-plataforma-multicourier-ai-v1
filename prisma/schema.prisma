@@ -883,8 +883,8 @@ model Envio {
   // pre-PIEZA 0 queda null → se saltan en el cómputo de confiabilidad (sin leakage
   // temporal — primer dato real = primer envío post-deploy).
   slaPromesaHs      Int? // promesa calibrada en HORAS crudas (fuente: promesaCalibrada.slaHoras).
-  slaPromesaNivel   Int? // nivel del fallback que produjo la promesa. 1=calibrado (depósito, courier, provincia); 2=(courier, provincia); 3=promedio MetricaSLA; 4=SLA teórico hardcoded. Mide la CONFIANZA del propio dato (on-time medido contra Nivel 4 vale menos que contra Nivel 1).
-  slaPromesaMuestra Int? // cantidad de envíos en la muestra que calibró la promesa; null en Nivel 4 (sin muestra). Audita la fuerza del dato ("por qué Nivel 4 si había 50 envíos a Córdoba").
+  slaPromesaNivel   Int? // nivel del fallback que produjo la promesa. 1=P75 (depósito, courier, provincia); 2=P75 (courier, provincia); 3=promedio MetricaSLA; 4=SLA DECLARADO del courier (SlaCourier por provincia); 5=piso estimado (96h / 4 días hábiles). Mide la CONFIANZA del propio dato (on-time medido contra Nivel 5 vale menos que contra Nivel 1).
+  slaPromesaMuestra Int? // cantidad de envíos en la muestra que calibró la promesa; null en Niveles 4 y 5 (sin muestra: declarado y piso no tienen muestra medida). Audita la fuerza del dato ("por qué Nivel 5 si había 50 envíos a Córdoba").
 
   numeroOrden            String?
 

@@ -15,12 +15,20 @@
 //   - Dedupe por `service_code` (ya es estable per generarServiceCodeShopify).
 //
 // `min_delivery_date` / `max_delivery_date` opcionales: si `slaHs` presente, se
-// derivan como `now + slaHs` en formato Shopify (`YYYY-MM-DD HH:mm:ss -0300`).
-// Si no, se omiten (Shopify los admite null/undefined).
+// derivan en formato Shopify (`YYYY-MM-DD HH:mm:ss -0300`) a partir de días
+// hábiles (saltea findes + feriados activos) usando `lib/utils/dias-habiles.ts`
+// — misma cuenta que `calcularFechaEstimada` del cotizador, para que Shopify
+// no diverja del resto de las superficies (PIEZA 4 cascada de promesa). Rango
+// real: min = (días-1) hábiles, max = días hábiles después de hoy. Si slaHs
+// no viene, se omiten (Shopify los admite null/undefined).
 // =============================================================================
 
 import type { Prisma } from "@prisma/client";
 import { generarServiceCodeShopify } from "@/lib/shopify/servicios";
+import {
+  obtenerFeriadosActivosCacheados,
+  calcularRangoDiasHabiles,
+} from "@/lib/utils/dias-habiles";
 
 // Shape mínimo requerido por este helper — subset de OpcionTarifa.
 // No importamos el tipo completo para dejar el helper reusable desde
@@ -71,11 +79,14 @@ function formatShopifyDate(d: Date): string {
  * @param currency - código de moneda del request (ej. "ARS").
  * @returns array de rates listos para `{ rates: [...] }` del response.
  */
-export function mapearCotizacionAShopify(
+export async function mapearCotizacionAShopify(
   domicilio: OpcionDomicilioShape[],
   currency: string
-): ShopifyRate[] {
+): Promise<ShopifyRate[]> {
   const ahora = new Date();
+  // Cargar feriados una sola vez por invocación (el helper cachea a nivel
+  // módulo con TTL; esta llamada es barata y evita N queries por opción).
+  const feriados = await obtenerFeriadosActivosCacheados();
   const seen = new Set<string>();
   const rates: ShopifyRate[] = [];
 
@@ -98,10 +109,15 @@ export function mapearCotizacionAShopify(
     };
 
     if (typeof o.slaHs === "number" && o.slaHs > 0) {
-      const eta = new Date(ahora.getTime() + o.slaHs * 60 * 60 * 1000);
-      const etaStr = formatShopifyDate(eta);
-      rate.min_delivery_date = etaStr;
-      rate.max_delivery_date = etaStr;
+      // PIEZA 4 cascada de promesa: ETA por días hábiles (saltea findes +
+      // feriados), misma fuente que `calcularFechaEstimada` del cotizador.
+      // Antes: `now + slaHs*3600s` era wall-clock crudo → "domingo 20:00"
+      // para un slaHs=48h emitido viernes 18:00, cuando lo correcto es lunes.
+      // Para una promesa de 1 día hábil el rango colapsa naturalmente (min=max).
+      const diasHabiles = Math.ceil(o.slaHs / 24);
+      const { fechaMin, fechaMax } = calcularRangoDiasHabiles(ahora, diasHabiles, feriados);
+      rate.min_delivery_date = formatShopifyDate(fechaMin);
+      rate.max_delivery_date = formatShopifyDate(fechaMax);
     }
 
     rates.push(rate);

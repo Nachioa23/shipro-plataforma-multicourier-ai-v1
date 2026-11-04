@@ -134,7 +134,7 @@ export async function POST(request: Request) {
     });
 
     const currency = typeof rate.currency === "string" ? rate.currency : "ARS";
-    const rates = mapearCotizacionAShopify(resultado.domicilio ?? [], currency);
+    const rates = await mapearCotizacionAShopify(resultado.domicilio ?? [], currency);
 
     // CotizacionSnapshot best-effort (DEUDA 111 — mismo shape que TN rates).
     try {

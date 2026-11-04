@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import { CourierFactory } from "@/lib/couriers/CourierFactory";
 import { obtenerCredencialesShipro, parsearCredencialesPropias } from "@/lib/couriers/credenciales";
 import { normalizarParaComparacion } from "@/lib/couriers/normalizar";
-import { calcularPromesaCalibrada } from "@/lib/utils/promesa-calibrada";
+import { calcularPromesaCalibrada, PISO_PROMESA_HORAS } from "@/lib/utils/promesa-calibrada";
 import { calcularFeeOperacion } from "@/lib/utils/operacion-fee";
 import {
   resolverMarkupCourierPorcentaje,
@@ -459,7 +459,10 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
       );
       slaHorasFallback = promesa.slaHoras;
     } catch {
-      slaHorasFallback = 72;
+      // Catch defensivo: el helper lanzó excepción. Alineado con el piso
+      // único de la cascada (PIEZA 1+2) para que el piso de emergencia
+      // coincida con el nivel 4 del helper — una única fuente de verdad.
+      slaHorasFallback = PISO_PROMESA_HORAS;
     }
     const textoFallback = await calcularFechaEstimada(slaHorasFallback);
 

@@ -13,6 +13,7 @@ import {
 import type { Paquete } from "@/lib/couriers/CourierInterface";
 import { IVA_AR_MULTIPLIER } from "@/lib/constants/iva";
 import { normalizarProvincia } from "@/lib/constants/normalizar-provincia";
+import { resolverProvinciaDesdeCP } from "@/lib/geo/resolver-cp";
 // DEUDA 186 FASE 3 PIEZA 3 — scoring en sombra. Imports del helper puro
 // (lib/cotizador/scoring.ts) + del tipo de ventana (lib/utils/confiabilidad.ts).
 import { calcularScoring } from "@/lib/cotizador/scoring";
@@ -335,6 +336,22 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
   // explicito. Funciona para 99% de los flujos (e-commerce usa predeterminado).
   const depositoIdParaCalibracion: number | null = empresa?.depositos?.[0]?.id ?? null;
 
+  // PIEZA 3 fix (2026-11-04) — provincia canónica SOLO para la promesa (nivel 4
+  // SlaCourier y niveles 1-3). El dashboard cotiza por CP sin mandar
+  // provinciaDestino → sin esta resolución, calcularPromesaCalibrada recibía
+  // undefined → el Nivel 4 nunca se consultaba → caía al piso 96h aun con
+  // SlaCourier cargado. Dos pasos:
+  //   1. Si provinciaDestino vino: canonizar via Función A (ALIAS → PROVINCIAS_AR).
+  //   2. Si no vino / no canoniza: resolver desde cpDestino (helper devuelve la
+  //      provincia dominante ya canonica — DEUDA 26).
+  // Variable NUEVA — el provinciaDestino crudo del input sigue intacto para la
+  // regla PROVINCIA_DESTINO (:766) y los snapshots (:844+). No se despiertan
+  // reglas dormidas: la seleccion/precio no usa esta variable.
+  const provinciaParaPromesa =
+    normalizarProvincia(provinciaDestino) ??
+    (await resolverProvinciaDesdeCP(cpDestino))?.provincia ??
+    null;
+
   // DEUDA 10 Paso 2: resolver nombreCourier -> Courier.id real en UNA query
   // (config.id es CredencialCourier.id, NO Courier.id). Map para el upsert del historico.
   // DEUDA 91 (FILTER): la MISMA query trae los servicios activos+mapeados por courier.
@@ -454,7 +471,7 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
       const promesa = await calcularPromesaCalibrada(
         config.id,
         depositoIdParaCalibracion,
-        provinciaDestino,
+        provinciaParaPromesa,
         config.nombreCourier
       );
       slaHorasFallback = promesa.slaHoras;
@@ -583,7 +600,7 @@ export async function cotizar(input: CotizarInput): Promise<CotizarResult> {
       const promesaResult = await calcularPromesaCalibrada(
         config.id,
         depositoIdParaCalibracion,
-        provinciaDestino,
+        provinciaParaPromesa,
         config.nombreCourier
       );
       const slaHorasFinal = promesaResult.slaHoras;

@@ -535,7 +535,10 @@ export default function AdminCouriersMaestro() {
                           onChange={e => setSlaCourierId(e.target.value)}
                         >
                           <option value="">Elegí un courier...</option>
-                          {couriers.map(c => (
+                          {/* Solo couriers activos: MEF (virtual, activo=false) y cualquier
+                              courier pausado no deberían recibir SLA declarado. La tab Flota
+                              sigue viendo todos para poder gestionarlos. */}
+                          {couriers.filter(c => c.activo === true).map(c => (
                             <option key={c.id} value={String(c.id)}>{c.nombre}</option>
                           ))}
                         </select>

@@ -25,11 +25,8 @@
 
 import type { Prisma } from "@prisma/client";
 import { generarServiceCodeShopify } from "@/lib/shopify/servicios";
-import {
-  obtenerFeriadosActivosCacheados,
-  calcularRangoDiasHabiles,
-} from "@/lib/utils/dias-habiles";
-import { DIAS_PREPARACION_DEFAULT } from "@/lib/constants/preparacion";
+import { obtenerFeriadosActivosCacheados } from "@/lib/utils/dias-habiles";
+import { calcularPromesaFechas, construirCopyPromesa } from "@/lib/utils/promesa-fecha";
 
 // Shape mínimo requerido por este helper — subset de OpcionTarifa.
 // No importamos el tipo completo para dejar el helper reusable desde
@@ -41,6 +38,10 @@ interface OpcionDomicilioShape {
   precioFinal: Prisma.Decimal;
   precioFinalBuyer?: Prisma.Decimal;
   slaHs?: number;
+  // Señal de confianza de la promesa: "Basado en datos reales" (nivel 1-2 de
+  // la cascada) vs "Tiempo estimado" (niveles 3-5, no medidos reales). Se
+  // propaga al copy UX del `description` ("...entrega el martes (estimada)").
+  etiquetaSla?: string;
 }
 
 export interface ShopifyRate {
@@ -106,20 +107,25 @@ export async function mapearCotizacionAShopify(
       service_code,
       total_price,
       currency,
-      description: o.modalidad,
     };
 
     if (typeof o.slaHs === "number" && o.slaHs > 0) {
-      // PIEZA 4 cascada de promesa: ETA por días hábiles (saltea findes +
-      // feriados), misma fuente que `calcularFechaEstimada` del cotizador.
-      // Capa de preparación v1 (2026-11-11): slaHs es TRÁNSITO; se suma
-      // DIAS_PREPARACION_DEFAULT para llevar la fecha al comprador a
-      // end-to-end. Misma suma que hace el cotizador en calcularFechaEstimada.
-      const diasTransito = Math.ceil(o.slaHs / 24);
-      const totalDias = DIAS_PREPARACION_DEFAULT + diasTransito;
-      const { fechaMin, fechaMax } = calcularRangoDiasHabiles(ahora, totalDias, feriados);
-      rate.min_delivery_date = formatShopifyDate(fechaMin);
-      rate.max_delivery_date = formatShopifyDate(fechaMax);
+      // PIEZA 4 cascada de promesa + capa de preparación v1: ETA end-to-end
+      // (prep + tránsito, días hábiles) centralizado en lib/utils/promesa-fecha.
+      // Misma cuenta que el cotizador — consistencia por construcción.
+      const fechas = await calcularPromesaFechas({
+        slaHoras: o.slaHs,
+        fechaBase: ahora,
+        feriados,
+      });
+      rate.min_delivery_date = formatShopifyDate(fechas.fechaMin);
+      rate.max_delivery_date = formatShopifyDate(fechas.fechaMax);
+      // STEP 2 (2026-11-11): `description` ex-redundante con `service_name`
+      // (usaba `o.modalidad`) pasa a ser la copia UX de la promesa E2E.
+      // "estimado" reusa `etiquetaSla` ya calculado por la cascada — el
+      // helper no recomputa confianza.
+      const estimado = o.etiquetaSla === "Tiempo estimado";
+      rate.description = construirCopyPromesa(fechas, { estimado });
     }
 
     rates.push(rate);

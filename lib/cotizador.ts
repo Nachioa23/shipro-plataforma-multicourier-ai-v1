@@ -14,18 +14,15 @@ import type { Paquete } from "@/lib/couriers/CourierInterface";
 import { IVA_AR_MULTIPLIER } from "@/lib/constants/iva";
 import { normalizarProvincia } from "@/lib/constants/normalizar-provincia";
 import { resolverProvinciaDesdeCP } from "@/lib/geo/resolver-cp";
-import { DIAS_PREPARACION_DEFAULT } from "@/lib/constants/preparacion";
 // DEUDA 186 FASE 3 PIEZA 3 — scoring en sombra. Imports del helper puro
 // (lib/cotizador/scoring.ts) + del tipo de ventana (lib/utils/confiabilidad.ts).
 import { calcularScoring } from "@/lib/cotizador/scoring";
 import type { VentanaConfiabilidad } from "@/lib/utils/confiabilidad";
-// PIEZA 0 cascada de promesa: días hábiles extraído a módulo reutilizable
-// (ver header de lib/utils/dias-habiles.ts). El formateo a string español
-// sigue viviendo acá — solo el cálculo del Date se externaliza.
-import {
-  obtenerFeriadosActivosCacheados,
-  calcularRangoDiasHabiles,
-} from "@/lib/utils/dias-habiles";
+// Cómputo de fechas de la promesa (prep + tránsito, días hábiles) centralizado
+// en el helper compartido lib/utils/promesa-fecha.ts (2026-11-11). El texto UX
+// "Llega el X" / "Llega entre X e Y" sigue armándose acá — el helper sólo
+// provee los Date (fechaMin/fechaMax), idénticos al cómputo previo in-situ.
+import { calcularPromesaFechas } from "@/lib/utils/promesa-fecha";
 
 export interface CotizarInput {
   empresaId: number | null;
@@ -104,28 +101,20 @@ export interface CotizarResult {
 // =================================================================
 // HELPER: FORMATEO DE FECHA ESTIMADA (texto UX en español)
 // =================================================================
-// El cálculo del rango de días hábiles (loop + skip findes/feriados) se
-// extrajo a lib/utils/dias-habiles.ts (PIEZA 0 cascada de promesa). Acá
-// queda sólo el formateo a string.
-//
-// Capa de preparación v1 (2026-11-11): horasSla viene de la cascada en
-// TRÁNSITO (lo que mide MetricaSLA entre fechaImpresion y fechaEntrega).
-// Para la promesa al comprador (end-to-end) se suma DIAS_PREPARACION_DEFAULT
-// antes de calcular el rango. El texto no cambia; cambia la fecha que informa.
+// El cálculo de fechas (prep + tránsito, días hábiles saltando findes +
+// feriados) vive en lib/utils/promesa-fecha.ts (centralizado 2026-11-11).
+// Acá queda SOLO el formateo a string del texto UX legacy — byte-idéntico
+// al cómputo pre-centralización. El copy enriquecido para canales con
+// `description` (Shopify) usa `construirCopyPromesa` del helper, no este.
 async function calcularFechaEstimada(horasSla: number): Promise<string> {
-  const diasTransito = Math.max(1, Math.ceil(horasSla / 24));
-  const totalDias = DIAS_PREPARACION_DEFAULT + diasTransito;
-
-  const feriados = await obtenerFeriadosActivosCacheados();
-  const hoy = new Date();
-  const { fechaMin, fechaMax } = calcularRangoDiasHabiles(hoy, totalDias, feriados);
+  const fechas = await calcularPromesaFechas({ slaHoras: horasSla });
 
   const opcionesFormato: Intl.DateTimeFormatOptions = { weekday: 'long', day: 'numeric', month: 'long' };
 
-  if (fechaMin.getTime() === fechaMax.getTime() || horasSla <= 24) {
-    return `Llega el ${fechaMax.toLocaleDateString('es-AR', opcionesFormato)}`;
+  if (fechas.fechaMin.getTime() === fechas.fechaMax.getTime() || horasSla <= 24) {
+    return `Llega el ${fechas.fechaMax.toLocaleDateString('es-AR', opcionesFormato)}`;
   }
-  return `Llega entre el ${fechaMin.toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric' })} y el ${fechaMax.toLocaleDateString('es-AR', opcionesFormato)}`;
+  return `Llega entre el ${fechas.fechaMin.toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric' })} y el ${fechas.fechaMax.toLocaleDateString('es-AR', opcionesFormato)}`;
 }
 
 /**

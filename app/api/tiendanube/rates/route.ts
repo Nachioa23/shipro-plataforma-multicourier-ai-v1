@@ -5,6 +5,8 @@ import { generarCodeServicio } from "@/lib/tiendanube/servicios-publicados";
 import { geocodificarDireccion } from "@/lib/geo/geocodificar-direccion";
 import { resolverSucursalesCercanas } from "@/lib/tiendanube/sucursales-checkout";
 import { armarBultoApilado } from "@/lib/empaquetado/armar-bulto";
+import { obtenerFeriadosActivosCacheados } from "@/lib/utils/dias-habiles";
+import { calcularPromesaFechas, formatFechaARDateTime } from "@/lib/utils/promesa-fecha";
 
 // Peso default (kg) cuando no hay peso disponible. Se usa en dos casos:
 // (1) Modo B activo pero SIN peso configurado (config a medias) → respeta la
@@ -173,11 +175,20 @@ export async function POST(request: Request) {
     //   trazabilidad (útil cuando Tiendanube devuelve el reference al crear label).
     const currency = body.currency ?? "ARS";
 
-    // SHIP (domicilio): sin cambios respecto al mapeo previo. Un rate por opción;
-    // dedup por code estable (mismo courier+servicio no publica dos veces).
-    const mapShip = (o: any) => {
+    // 2026-11-11: fechas E2E de la promesa (prep + tránsito, días hábiles)
+    // via el helper compartido lib/utils/promesa-fecha.ts. Se pre-carga
+    // feriados + ahora UNA vez para pasarlos al helper por rate (cero queries
+    // adicionales por opción). Shape de min/max: `YYYY-MM-DD HH:mm:ss -0300`
+    // (datetime AR, mismo formato que Shopify).
+    const feriadosProm = await obtenerFeriadosActivosCacheados();
+    const ahoraProm = new Date();
+
+    // SHIP (domicilio): un rate por opción; dedup por code estable (mismo
+    // courier+servicio no publica dos veces). Pasa a async por el helper
+    // de fechas; el filter dedupe queda igual.
+    const mapShip = async (o: any) => {
       if (!o.codigoServicio) return null; // sin code estable → no se publica
-      return {
+      const rate: any = {
         name: `${o.courier} - ${o.modalidad}`,
         code: generarCodeServicio(o.courier, o.codigoServicio),
         // DEUDA 156: el comprador ve el precio con descuento del cliente (precioFinalBuyer);
@@ -187,10 +198,19 @@ export async function POST(request: Request) {
         type: "ship" as const,
         reference: JSON.stringify({ courier: o.courier, modalidad: o.modalidad, codigoServicio: o.codigoServicio, id: o.id }),
       };
+      if (typeof o.slaHs === "number" && o.slaHs > 0) {
+        const fechas = await calcularPromesaFechas({
+          slaHoras: o.slaHs,
+          fechaBase: ahoraProm,
+          feriados: feriadosProm,
+        });
+        rate.min_delivery_date = formatFechaARDateTime(fechas.fechaMin);
+        rate.max_delivery_date = formatFechaARDateTime(fechas.fechaMax);
+      }
+      return rate;
     };
-    const ship = (resultado.domicilio ?? [])
-      .map(mapShip)
-      .filter((r): r is NonNullable<typeof r> => r !== null);
+    const shipAll = await Promise.all((resultado.domicilio ?? []).map(mapShip));
+    const ship = shipAll.filter((r): r is NonNullable<typeof r> => r !== null);
     const seen = new Set<string>();
     const shipUnique = ship.filter((r) => (seen.has(r.code) ? false : (seen.add(r.code), true)));
 
@@ -217,8 +237,21 @@ export async function POST(request: Request) {
             lng: coords.longitud,
             topN: 5,
           });
+          // Pickup comparte el SLA de la opción cotizada → pre-computar las
+          // fechas E2E una vez por opción (no por sucursal) y reusar.
+          let minFecha: string | undefined;
+          let maxFecha: string | undefined;
+          if (typeof o.slaHs === "number" && o.slaHs > 0) {
+            const fechas = await calcularPromesaFechas({
+              slaHoras: o.slaHs,
+              fechaBase: ahoraProm,
+              feriados: feriadosProm,
+            });
+            minFecha = formatFechaARDateTime(fechas.fechaMin);
+            maxFecha = formatFechaARDateTime(fechas.fechaMax);
+          }
           for (const suc of sucursales) {
-            pickup.push({
+            const rate: any = {
               name: `${o.courier} - Retiro en ${suc.nombre}`,
               code,
               // DEUDA 156: el comprador ve el precio con descuento del cliente (precioFinalBuyer);
@@ -229,7 +262,10 @@ export async function POST(request: Request) {
               address: suc.address,
               hours: suc.hours,
               reference: JSON.stringify({ courier: o.courier, modalidad: o.modalidad, codigoServicio: o.codigoServicio, sucursalId: suc.sucursalId, id: o.id }),
-            });
+            };
+            if (minFecha) rate.min_delivery_date = minFecha;
+            if (maxFecha) rate.max_delivery_date = maxFecha;
+            pickup.push(rate);
           }
         }
       } catch (pickupErr) {

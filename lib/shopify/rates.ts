@@ -29,6 +29,7 @@ import {
   obtenerFeriadosActivosCacheados,
   calcularRangoDiasHabiles,
 } from "@/lib/utils/dias-habiles";
+import { DIAS_PREPARACION_DEFAULT } from "@/lib/constants/preparacion";
 
 // Shape mínimo requerido por este helper — subset de OpcionTarifa.
 // No importamos el tipo completo para dejar el helper reusable desde
@@ -111,11 +112,12 @@ export async function mapearCotizacionAShopify(
     if (typeof o.slaHs === "number" && o.slaHs > 0) {
       // PIEZA 4 cascada de promesa: ETA por días hábiles (saltea findes +
       // feriados), misma fuente que `calcularFechaEstimada` del cotizador.
-      // Antes: `now + slaHs*3600s` era wall-clock crudo → "domingo 20:00"
-      // para un slaHs=48h emitido viernes 18:00, cuando lo correcto es lunes.
-      // Para una promesa de 1 día hábil el rango colapsa naturalmente (min=max).
-      const diasHabiles = Math.ceil(o.slaHs / 24);
-      const { fechaMin, fechaMax } = calcularRangoDiasHabiles(ahora, diasHabiles, feriados);
+      // Capa de preparación v1 (2026-11-11): slaHs es TRÁNSITO; se suma
+      // DIAS_PREPARACION_DEFAULT para llevar la fecha al comprador a
+      // end-to-end. Misma suma que hace el cotizador en calcularFechaEstimada.
+      const diasTransito = Math.ceil(o.slaHs / 24);
+      const totalDias = DIAS_PREPARACION_DEFAULT + diasTransito;
+      const { fechaMin, fechaMax } = calcularRangoDiasHabiles(ahora, totalDias, feriados);
       rate.min_delivery_date = formatShopifyDate(fechaMin);
       rate.max_delivery_date = formatShopifyDate(fechaMax);
     }

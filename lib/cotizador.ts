@@ -14,6 +14,7 @@ import type { Paquete } from "@/lib/couriers/CourierInterface";
 import { IVA_AR_MULTIPLIER } from "@/lib/constants/iva";
 import { normalizarProvincia } from "@/lib/constants/normalizar-provincia";
 import { resolverProvinciaDesdeCP } from "@/lib/geo/resolver-cp";
+import { DIAS_PREPARACION_DEFAULT } from "@/lib/constants/preparacion";
 // DEUDA 186 FASE 3 PIEZA 3 — scoring en sombra. Imports del helper puro
 // (lib/cotizador/scoring.ts) + del tipo de ventana (lib/utils/confiabilidad.ts).
 import { calcularScoring } from "@/lib/cotizador/scoring";
@@ -105,13 +106,19 @@ export interface CotizarResult {
 // =================================================================
 // El cálculo del rango de días hábiles (loop + skip findes/feriados) se
 // extrajo a lib/utils/dias-habiles.ts (PIEZA 0 cascada de promesa). Acá
-// queda sólo el formateo a string: byte-por-byte idéntico al original.
+// queda sólo el formateo a string.
+//
+// Capa de preparación v1 (2026-11-11): horasSla viene de la cascada en
+// TRÁNSITO (lo que mide MetricaSLA entre fechaImpresion y fechaEntrega).
+// Para la promesa al comprador (end-to-end) se suma DIAS_PREPARACION_DEFAULT
+// antes de calcular el rango. El texto no cambia; cambia la fecha que informa.
 async function calcularFechaEstimada(horasSla: number): Promise<string> {
-  const diasHabilesRequeridos = Math.max(1, Math.ceil(horasSla / 24));
+  const diasTransito = Math.max(1, Math.ceil(horasSla / 24));
+  const totalDias = DIAS_PREPARACION_DEFAULT + diasTransito;
 
   const feriados = await obtenerFeriadosActivosCacheados();
   const hoy = new Date();
-  const { fechaMin, fechaMax } = calcularRangoDiasHabiles(hoy, diasHabilesRequeridos, feriados);
+  const { fechaMin, fechaMax } = calcularRangoDiasHabiles(hoy, totalDias, feriados);
 
   const opcionesFormato: Intl.DateTimeFormatOptions = { weekday: 'long', day: 'numeric', month: 'long' };
 

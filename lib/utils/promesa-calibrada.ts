@@ -97,14 +97,19 @@ export function calcularP75(horas: number[]): number | null {
 }
 
 // PIEZA 1+2 cascada de promesa — piso plano del helper.
-// 4 días hábiles (96h) es el punto medio local/interior que absorbe el armado
-// del e-commerce + courier promedio. Se usa SOLO cuando los niveles 1-3
+// 3 días hábiles (72h) de TRÁNSITO. Se usa SOLO cuando los niveles 1-3
 // (P75 por depósito/courier, P75 por courier, MetricaSLA) no alcanzan muestra
 // mínima — la medición manda sobre el piso.
 //
+// NOTA (2026-11-11, capa de preparación v1): el piso bajó de 96h a 72h al
+// separar prep y tránsito. Los niveles 1-3 ya miden TRÁNSITO (P75 entre
+// fechaImpresion y fechaEntrega), y la prep se suma SOLO en display
+// (ver DIAS_PREPARACION_DEFAULT en lib/constants/preparacion.ts). End-to-end
+// sin datos sigue siendo 4 días hábiles = 72h tránsito + 24h prep.
+//
 // El nivel 5 (piso) sigue devolviendo esCalibracionReal=false + etiqueta
 // "Tiempo estimado": la UX ya hace visible que es estimado, no medido.
-export const PISO_PROMESA_HORAS = 96;
+export const PISO_PROMESA_HORAS = 72;
 
 // Piso plano de la cascada (ex-fallbackHardcoded, aplanado en PIEZA 1+2).
 // Antes ramificaba por courier: 24h si nombreCourier==="mocis", 72h el resto.

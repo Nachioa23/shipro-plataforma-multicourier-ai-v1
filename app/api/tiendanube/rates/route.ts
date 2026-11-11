@@ -178,8 +178,9 @@ export async function POST(request: Request) {
     // 2026-11-11: fechas E2E de la promesa (prep + tránsito, días hábiles)
     // via el helper compartido lib/utils/promesa-fecha.ts. Se pre-carga
     // feriados + ahora UNA vez para pasarlos al helper por rate (cero queries
-    // adicionales por opción). Shape de min/max: `YYYY-MM-DD HH:mm:ss -0300`
-    // (datetime AR, mismo formato que Shopify).
+    // adicionales por opción). Shape ISO 8601 AR exigido por TN:
+    // `YYYY-MM-DDTHH:mm:ss-0300` (separador "T", sin espacio antes del
+    // offset) — ver header de formatFechaARDateTime.
     const feriadosProm = await obtenerFeriadosActivosCacheados();
     const ahoraProm = new Date();
 

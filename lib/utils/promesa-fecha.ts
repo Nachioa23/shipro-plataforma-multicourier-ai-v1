@@ -107,9 +107,15 @@ export function construirCopyPromesa(
 }
 
 // ----------------------------------------------------------------------------
-// Formato ISO 8601 AR (`YYYY-MM-DD HH:mm:ss -0300`) — mismo que Shopify espera
-// en min/max_delivery_date. Útil para canales que piden datetime (Shopify, TN).
-// AR es un solo huso sin DST (recon timezone 2026-10-14): offset -0300 fijo.
+// Formato ISO 8601 AR usado por Tiendanube en min/max_delivery_date:
+// `YYYY-MM-DDTHH:mm:ss-0300` (separador "T", sin espacio antes del offset).
+// Shape verbatim del ejemplo oficial del shipping-carrier rate de TN:
+// "2016-07-14T14:48:45-0300". AR es un solo huso sin DST (recon timezone
+// 2026-10-14): offset -0300 fijo.
+//
+// Shopify NO usa este formato — tiene su propio `formatShopifyDate` local
+// en lib/shopify/rates.ts con el shape `YYYY-MM-DD HH:mm:ss -0300` (espacio
+// separador y espacio antes del offset) que Shopify documenta aparte.
 // ----------------------------------------------------------------------------
 export function formatFechaARDateTime(d: Date): string {
   const argMs = d.getTime() - 3 * 60 * 60 * 1000;
@@ -120,5 +126,5 @@ export function formatFechaARDateTime(d: Date): string {
   const hh = String(arg.getUTCHours()).padStart(2, "0");
   const mi = String(arg.getUTCMinutes()).padStart(2, "0");
   const ss = String(arg.getUTCSeconds()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss} -0300`;
+  return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}-0300`;
 }

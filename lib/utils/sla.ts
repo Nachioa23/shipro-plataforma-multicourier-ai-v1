@@ -25,9 +25,16 @@
 // ============================================================================
 
 import prisma from "@/lib/prisma";
+import { PISO_PROMESA_HORAS } from "@/lib/utils/promesa-calibrada";
 
 const VENTANA_DIAS_DEFAULT = 90;
 const META_FALLBACK_DIAS = 5;
+// DEUDA 61 NIVEL 3 (fallback meta) — 3 días hábiles de tránsito = piso de
+// la cascada de promesa (PISO_PROMESA_HORAS 72h/24). Reemplaza el 5 arbitrario
+// como meta cuando el courier/zona no tiene SlaCourier cargado. Aplica SOLO
+// en calcularMapaSlaAnalitica; la legacy calcularMapaSLA sigue con META_FALLBACK_DIAS.
+// Derivada por construcción: si cambia el piso en promesa-calibrada.ts, esto se ajusta solo.
+const META_FALLBACK_DIAS_ANALITICA = Math.ceil(PISO_PROMESA_HORAS / 24);
 
 // Normalizacion de provincias a "zonas" legacy.
 // Mantenida exacta como en /api/metricas para no alterar numeros visibles.
@@ -439,7 +446,7 @@ export async function calcularMapaSlaAnalitica(
 
     // Meta pactada (lookup con key normalizado).
     const slaKey = `${e.courierId}|${provNorm}`;
-    const metaDias = slaLookup.get(slaKey) ?? META_FALLBACK_DIAS;
+    const metaDias = slaLookup.get(slaKey) ?? META_FALLBACK_DIAS_ANALITICA;
 
     // Acumular en zona.
     if (!zonaAccum.has(provNorm)) {
@@ -512,7 +519,7 @@ export async function calcularMapaSlaAnalitica(
         : 0;
       const metaPromedio = a.metaPactadas.length > 0
         ? Math.round(a.metaPactadas.reduce((s, v) => s + v, 0) / a.metaPactadas.length)
-        : META_FALLBACK_DIAS;
+        : META_FALLBACK_DIAS_ANALITICA;
       const indice = metaPromedio > 0 ? Number((transitoPromedio / metaPromedio).toFixed(2)) : 0;
       const cumplimientoZona = a.transitos.filter((t, i) => t <= a.metaPactadas[i]).length;
       const porcentajeCumplimiento = a.transitos.length > 0
@@ -566,8 +573,8 @@ export async function calcularMapaSlaAnalitica(
     totalEnviosTransito: cantidadEnviosTransito,
     totalEnviosPrep: cantidadConPrep,
     fuente: "Envios entregados + diccionario SlaCourier (zonas normalizadas) + eventos (incidencias/intentos)",
-    nivelImplementado: "NIVEL 2: transito real vs meta pactada por zona (BUG 1) + cumplimiento E2E vs promesa checkout + incidencias + intentos entrega (BUG 3)",
-    nivelPendiente: "NIVEL 3 (DEUDA 61): fallback META_FALLBACK_DIAS configurable + correlacion con MetricaSLA pre-computada",
+    nivelImplementado: "NIVEL 2.5: transito real vs meta pactada por zona (BUG 1) + cumplimiento E2E vs promesa checkout + incidencias + intentos entrega (BUG 3) + fallback meta derivado del piso de la cascada (3 dias habiles = PISO_PROMESA_HORAS/24)",
+    nivelPendiente: "NIVEL 3 (DEUDA 61): correlacion con MetricaSLA pre-computada",
   };
 
   if (!ctx.modoDios) {
@@ -587,7 +594,7 @@ export async function calcularMapaSlaAnalitica(
         : 0;
       const metaPromedio = e.metaPactadas.length > 0
         ? Math.round(e.metaPactadas.reduce((s, v) => s + v, 0) / e.metaPactadas.length)
-        : META_FALLBACK_DIAS;
+        : META_FALLBACK_DIAS_ANALITICA;
       const indice = metaPromedio > 0 ? Number((transitoPromedio / metaPromedio).toFixed(2)) : 0;
       return {
         empresaId: e.empresaId,

@@ -350,6 +350,10 @@ export async function calcularMapaSlaAnalitica(
       diasPrometidosCheckout: true,
       destino: { select: { provincia: true } },
       empresa: { select: { id: true, nombre: true } },
+      // DEUDA 61 BUG 3: incidencias + intentos entrega. Mismo shape que
+      // consume la función legacy calcularMapaSLA (match de estado por
+      // includes("VISITA_FALLIDA" | "INCIDENCIA" | "FALLIDA")).
+      eventos: { select: { estado: true, fecha: true } },
     },
   });
 
@@ -379,6 +383,14 @@ export async function calcularMapaSlaAnalitica(
   let cantidadEnviosE2E = 0;
   let cantidadEnviosTransito = 0;
 
+  // DEUDA 61 BUG 3: acumuladores de incidencias + intentos entrega. Se
+  // calculan sobre TODOS los envios del scope (estadoActual=ENTREGADO),
+  // antes del guard de fechaImpresion/fechaEntrega — mismo criterio que
+  // la legacy calcularMapaSLA (:135-148).
+  let enviosConIncidencia = 0;
+  let sumaIntentosEntrega = 0;
+  let totalConIntentos = 0;
+
   // Per-empresa accum (solo modoDios global con ctx.empresaId === null).
   type EmpresaAccum = {
     empresaId: number;
@@ -394,6 +406,23 @@ export async function calcularMapaSlaAnalitica(
   const empresaMap = new Map<number, EmpresaAccum>();
 
   for (const e of envios) {
+    // DEUDA 61 BUG 3: contar incidencias + intentos sobre TODOS los envios
+    // entregados del scope, ANTES del guard de fechaImpresion/fechaEntrega.
+    // Criterio de match idéntico a la legacy calcularMapaSLA (:135-148).
+    const inc = (e.eventos || []).filter(ev => {
+      const s = (ev.estado || "").toUpperCase();
+      return s.includes("VISITA_FALLIDA") || s.includes("INCIDENCIA") || s.includes("FALLIDA");
+    });
+    const ent = (e.eventos || []).filter(ev => {
+      const s = (ev.estado || "").toUpperCase();
+      return s === "ENTREGADO" || s.includes("VISITA_FALLIDA") || s.includes("FALLIDA");
+    });
+    if (inc.length > 0) enviosConIncidencia++;
+    if (ent.length > 0) {
+      totalConIntentos++;
+      sumaIntentosEntrega += ent.length;
+    }
+
     if (!e.fechaImpresion || !e.fechaEntrega) continue;
     cantidadEnviosE2E++;
 
@@ -521,9 +550,14 @@ export async function calcularMapaSlaAnalitica(
     cumplimientoE2E,
     slaHealthIndex,
     promedioPreparacion,
-    totalEnviosConIncidencia: 0,           // DEUDA 61 BUG 2 — preservar
-    porcentajeEnviosConIncidencia: 0,      // DEUDA 61 BUG 2 — preservar
-    promedioIntentosEntrega: 0,            // DEUDA 61 BUG 3 — preservar
+    // DEUDA 61 BUG 3 corregido (portado desde calcularMapaSLA legacy :198-204).
+    totalEnviosConIncidencia: enviosConIncidencia,
+    porcentajeEnviosConIncidencia: envios.length > 0
+      ? Math.round((enviosConIncidencia / envios.length) * 1000) / 10
+      : 0,
+    promedioIntentosEntrega: totalConIntentos > 0
+      ? Number((sumaIntentosEntrega / totalConIntentos).toFixed(2))
+      : 0,
   };
 
   const calidadDatos: CalidadDatosSLA = {
@@ -531,9 +565,9 @@ export async function calcularMapaSlaAnalitica(
     totalEnviosE2E: cantidadEnviosE2E,
     totalEnviosTransito: cantidadEnviosTransito,
     totalEnviosPrep: cantidadConPrep,
-    fuente: "Envios entregados + diccionario SlaCourier (zonas normalizadas)",
-    nivelImplementado: "NIVEL 1.5: transito real vs meta pactada por zona (DEUDA 61 BUG 1 corregido) + cumplimiento E2E vs promesa checkout",
-    nivelPendiente: "NIVEL 2 (DEUDA 61): incidencias + intentos entrega + correlacion con MetricaSLA pre-computada",
+    fuente: "Envios entregados + diccionario SlaCourier (zonas normalizadas) + eventos (incidencias/intentos)",
+    nivelImplementado: "NIVEL 2: transito real vs meta pactada por zona (BUG 1) + cumplimiento E2E vs promesa checkout + incidencias + intentos entrega (BUG 3)",
+    nivelPendiente: "NIVEL 3 (DEUDA 61): fallback META_FALLBACK_DIAS configurable + correlacion con MetricaSLA pre-computada",
   };
 
   if (!ctx.modoDios) {

@@ -37,6 +37,7 @@ export const NOMBRES_DISPLAY: Record<string, string> = {
   correoargentino: "Correo Argentino",
   hopenvios: "Hop Envíos",
   intralog: "Intralog",
+  pickit: "Pickit",
 };
 
 // Helper: devuelve el nombre de display de un courier, con fallback a la
@@ -144,6 +145,22 @@ export const SERVICIOS_SOPORTADOS: Record<string, Partial<Record<CodigoServicio,
     inversa_cambio: null,                       // no confirmado en doc de Intralog
     inversa_devolucion_retiro_domicilio: null,
     inversa_devolucion_dropoff_sucursal: null,
+  },
+  // Pickit — MVP (Chat B). Capacidades técnicas del adapter:
+  //   - entrega_domicilio_estandar → DOM/dispatch (POST /budget + /transaction)
+  //   - entrega_sucursal / entrega_punto_retiro → PP/dispatch (Pickit Points)
+  // El resto queda null hasta confirmar en QA cuando la UAT levante (V2: SM
+  // Same-Day, express, inversas/cambios). Cotizaciones y despachos SIN validar
+  // empíricamente hasta que UAT responda (hoy 504 Gateway Time-out).
+  pickit: {
+    entrega_domicilio_estandar: "domicilio",
+    entrega_domicilio_express: null,            // V2: Same-Day (SM) — pendiente QA
+    entrega_sucursal: "sucursal",
+    entrega_punto_retiro: "sucursal",
+    entrega_elocker: null,
+    inversa_cambio: null,                       // V2
+    inversa_devolucion_retiro_domicilio: null,  // V2
+    inversa_devolucion_dropoff_sucursal: null,  // V2
   },
 };
 

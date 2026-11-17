@@ -176,7 +176,12 @@ export interface ICourierIntegrator {
   // El tracking/etiquetaUrl de la raíz es el PRINCIPAL (agrupador del courier si lo da, o
   // el del primer bulto). bultos[] es el detalle por bulto (multi-bulto). Retrocompatible:
   // callers que solo leen tracking/etiquetaUrl siguen funcionando.
-  despachar(params: DespachoParams): Promise<{ tracking: string, etiquetaBase64?: string, etiquetaUrl?: string, bultos?: ResultadoBulto[] }>;
+  //
+  // refInterno (opcional): ID interno que el courier usa en SU propia API para
+  // operar el envío despachado — distinto del `tracking` público que va al
+  // comprador. Hoy solo lo usa Pickit (transactionId vs pickitCode). La
+  // persistencia la cablea Chat A; adapters que no lo necesitan lo omiten.
+  despachar(params: DespachoParams): Promise<{ tracking: string, etiquetaBase64?: string, etiquetaUrl?: string, bultos?: ResultadoBulto[], refInterno?: string }>;
 
   // Descarga el PDF de la etiqueta REAL del courier ya despachado. Contrato unificado
   // (Refactor-A, DEUDA 144 Momento 3): recibe { trackingNumber, etiquetaUrl } y cada adapter

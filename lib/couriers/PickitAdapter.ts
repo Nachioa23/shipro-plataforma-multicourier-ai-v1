@@ -56,20 +56,28 @@ async function fetchConTimeout(
   }
 }
 
-// URL default: UAT. Producción se setea via env PICKIT_BASE_URL (leído por
-// credenciales/pickit.ts obtenerShipro) o `baseUrl` en creds propias.
-// TODO QA: confirmar URL de producción cuando Pickit la libere.
+// URLs por ambiente (confirmadas en doc oficial §Ambientes, vía GN):
+//   UAT  → https://api.uat.pickit.com.ar
+//   PROD → https://api.pickit.net
+// Prioridad: creds.baseUrl (PICKIT_BASE_URL o json.baseUrl) > sandbox flag.
 const PICKIT_UAT_URL = "https://api.uat.pickit.com.ar";
+const PICKIT_PROD_URL = "https://api.pickit.net";
 
 // Mapeo tipoEntrega Shipro → (serviceType, workflowTag, operationType) Pickit.
-// TODO CONFIRMAR EN QA: la doc explicita DOM/PP/SM/ST pero operationType ∈ {1,2}
-// sin aclarar semántica. Same-Day (SM) queda para V2.
-type PickitServiceDescriptor = { serviceType: 'DOM' | 'PP'; workflowTag: 'dispatch'; operationType: 1 };
+// CONFIRMADO vía doc oficial (GN): operationType 1 = a punto (PP), 2 = a domicilio.
+// El ejemplo oficial de "Envío a Domicilio" usa serviceType='PP' + operationType=2
+// — Pickit deriva el destino del operationType, no del serviceType.
+//
+// CONFIRMAR EN QA: la doc es inconsistente (el enum serviceType lista DOM, pero
+// el ejemplo de domicilio usa PP). Si PP+2 falla con "La combinación de
+// serviceType, operationType y workflowTag es invalida", probar DOM+2.
+// Same-Day (SM) queda para V2.
+type PickitServiceDescriptor = { serviceType: 'DOM' | 'PP'; workflowTag: 'dispatch'; operationType: 1 | 2 };
 
 function descriptorPorTipoEntrega(tipoEntrega?: string): PickitServiceDescriptor | null {
   switch (tipoEntrega) {
     case 'domicilio':
-      return { serviceType: 'DOM', workflowTag: 'dispatch', operationType: 1 };
+      return { serviceType: 'PP', workflowTag: 'dispatch', operationType: 2 };
     case 'sucursal':
       return { serviceType: 'PP', workflowTag: 'dispatch', operationType: 1 };
     // inversa/cambio/devolucion → V2 (sin soporte en MVP).
@@ -90,7 +98,12 @@ export class PickitAdapter implements ICourierIntegrator {
 
   constructor(credenciales: CredencialesPickit) {
     this.creds = credenciales;
-    this.baseUrl = credenciales.baseUrl?.trim() || PICKIT_UAT_URL;
+    // Prioridad: creds.baseUrl (env PICKIT_BASE_URL o json.baseUrl) > sandbox
+    // flag > prod. sandbox=true apunta a UAT; sin sandbox, prod (api.pickit.net
+    // — URL confirmada en doc oficial §Ambientes).
+    this.baseUrl =
+      credenciales.baseUrl?.trim() ||
+      (credenciales.sandbox ? PICKIT_UAT_URL : PICKIT_PROD_URL);
   }
 
   // Headers de auth. Pickit usa dos casings del mismo campo según endpoint

@@ -81,6 +81,10 @@ export interface TramoSnapshot {
   courierId: number;
   tipo: "recoleccion" | "entrega" | "ciclo_completo";
   trackingExterno: string | null;
+  // id privado del courier (ej. Pickit transactionId) para cancelar/re-etiquetar.
+  // Hoy solo lo popula Pickit; el resto lo deja null y cancelarEnvio cae al
+  // fallback trackingExterno.
+  refCourierInterno?: string | null;
   sucursalOrigenId?: number | null;
   sucursalDestinoId?: number | null;
 }
@@ -260,6 +264,7 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
       const tracking = respuesta?.tracking || null;
       const etiquetaUrl = respuesta?.etiquetaUrl || null;
       const bultos = respuesta?.bultos;
+      const refInterno = respuesta?.refInterno ?? null;
 
       if (!tracking) {
         return {
@@ -275,6 +280,7 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
         courierId: courierIdMain,
         tipo: "entrega",
         trackingExterno: tracking,
+        refCourierInterno: refInterno,
         sucursalOrigenId: input.sucursalOrigenId ?? null,
         sucursalDestinoId: input.sucursalDestinoId ?? null,
       };
@@ -352,11 +358,13 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
     let etiquetaUrlMain: string | null = null;
     let bultosMain: ResultadoBulto[] | undefined = undefined;
 
+    let refInternoMain: string | null = null;
     try {
       const respuestaMain = await motorMain.despachar(paramsDespacho);
       trackingMain = respuestaMain?.tracking || null;
       etiquetaUrlMain = respuestaMain?.etiquetaUrl || null;
       bultosMain = respuestaMain?.bultos;
+      refInternoMain = respuestaMain?.refInterno ?? null;
     } catch (errMain: any) {
       // Ancla falla → sin envío. Mismo signal que hoy: tracking:null, tramos:[],
       // error humano → crear.ts lo mapea a BLOQUEADO_PARCIAL reintentable.
@@ -383,6 +391,7 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
       courierId: courierIdMain,
       tipo: "entrega",
       trackingExterno: trackingMain,
+      refCourierInterno: refInternoMain,
       sucursalDestinoId: input.sucursalDestinoId ?? null,
     };
 
@@ -449,6 +458,7 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
     const tracking = respuesta?.tracking || null;
     const etiquetaUrl = respuesta?.etiquetaUrl || null;
     const bultos = respuesta?.bultos;
+    const refInterno = respuesta?.refInterno ?? null;
 
     if (!tracking) {
       return {
@@ -464,6 +474,7 @@ export async function despacharCourier(input: DispatchInput): Promise<DispatchRe
       courierId: courierIdMain,
       tipo: "ciclo_completo",
       trackingExterno: tracking,
+      refCourierInterno: refInterno,
       sucursalDestinoId: input.sucursalDestinoId ?? null,
     };
 

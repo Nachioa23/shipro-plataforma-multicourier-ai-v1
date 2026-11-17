@@ -192,6 +192,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
     courierId: number;
     tipo: "recoleccion" | "entrega" | "ciclo_completo";
     trackingExterno: string | null;
+    refCourierInterno?: string | null;
     sucursalOrigenId?: number | null;
     sucursalDestinoId?: number | null;
   }[] = [];
@@ -1220,6 +1221,7 @@ export async function crearEnvio(input: CrearEnvioInput) {
           courierId: t.courierId,
           tipo: t.tipo,
           trackingExterno: t.trackingExterno,
+          refCourierInterno: t.refCourierInterno ?? null,
           sucursalOrigenId: t.sucursalOrigenId ?? null,
           sucursalDestinoId: t.sucursalDestinoId ?? null,
         })),

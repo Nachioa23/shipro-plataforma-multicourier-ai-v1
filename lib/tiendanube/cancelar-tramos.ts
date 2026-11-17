@@ -58,6 +58,9 @@ export interface EnvioParaCancelar {
   tramos: Array<{
     orden: number;
     trackingExterno: string | null;
+    // id privado del courier (ej. Pickit transactionId). Si el caller lo pasa,
+    // cancelarEnvio lo prioriza sobre trackingExterno.
+    refCourierInterno?: string | null;
     courierId: number;
     courier: { nombre: string };
   }>;
@@ -97,7 +100,12 @@ export async function cancelarTramosEnCourier(
 
     try {
       const motor = CourierFactory.crear(nombreCourierTramo, llaves);
-      const cancelado = await motor.cancelarEnvio(tramo.trackingExterno!);
+      // refCourierInterno (ej. Pickit transactionId) tiene prioridad sobre
+      // trackingExterno — el courier cancela por su id privado si lo tiene,
+      // y si no, por el tracking público. Backward-compatible: adapters que
+      // no populan refCourierInterno reciben trackingExterno como hoy.
+      const idCancelacion = tramo.refCourierInterno ?? tramo.trackingExterno!;
+      const cancelado = await motor.cancelarEnvio(idCancelacion);
       if (cancelado) {
         tramosCancelados++;
         console.log(

@@ -1808,6 +1808,13 @@ model TramoEnvio {
 
   trackingExterno String? // Tracking propio del courier para este tramo.
 
+  // ID privado del courier para operar el envío despachado (cancelar /
+  // re-etiquetar), distinto del `trackingExterno` público. Hoy solo lo
+  // populan los adapters que lo necesitan — Pickit (transactionId vs
+  // pickitCode). Opcional + nullable: el resto de couriers lo dejan null y
+  // sus call-sites de cancelación caen al fallback trackingExterno.
+  refCourierInterno String?
+
   estadoActual String @default("PENDIENTE")
   // Estado homogeneizado por Nomenclador (lenguaje Shipro).
 

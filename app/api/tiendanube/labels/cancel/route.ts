@@ -220,6 +220,7 @@ export async function POST(request: Request) {
         tramos: etiqueta.envio.tramos.map((t) => ({
           orden: t.orden,
           trackingExterno: t.trackingExterno,
+          refCourierInterno: t.refCourierInterno,
           courierId: t.courierId,
           courier: { nombre: t.courier.nombre },
         })),

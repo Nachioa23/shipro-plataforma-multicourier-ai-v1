@@ -6,6 +6,7 @@ import { CorreoArgentinoAdapter, CredencialesCorreoArgentino } from './CorreoArg
 import { HopEnviosAdapter, CredencialesHopEnvios } from './HopEnviosAdapter';
 import { IntralogAdapter } from './IntralogAdapter';
 import { PickitAdapter, CredencialesPickit } from './PickitAdapter';
+import { MockCourierAdapter } from './MockCourierAdapter';
 import { normalizarParaComparacion } from './normalizar';
 import { SERVICIOS_SOPORTADOS } from './serviciosSoportados';
 
@@ -61,6 +62,20 @@ export function courierTieneSoporte(courierNombre: string): boolean {
 
 export class CourierFactory {
   static crear(courier: string, credenciales: any): ICourierIntegrator {
+    // ------------------------------------------------------------------
+    // LOAD TEST ESCAPE HATCH — NUNCA debe activarse en prod.
+    // Doble gate independiente (NODE_ENV se removió porque next start lo
+    // fija en "production" y queremos testear contra el build de prod):
+    //   1. flag explícito LOAD_TEST_MOCK_COURIERS=true,
+    //   2. DATABASE_URL NO apunta a la BD de prod (akamaidb).
+    // Si cualquiera de las 2 falla, caemos al switch real.
+    // ------------------------------------------------------------------
+    const dbHost = process.env.DATABASE_URL || "";
+    if (process.env.LOAD_TEST_MOCK_COURIERS === 'true' && !dbHost.includes('akamaidb')) {
+      console.warn('⚠️ [LOAD TEST] MockCourierAdapter activo para', courier, '— NUNCA en prod');
+      return new MockCourierAdapter(courier);
+    }
+
     // Defense-in-depth: tolerar variantes ("Moci's", "MOCIS", "andreani ")
     // sin importar cómo el caller normalizó. Una sola fuente de verdad.
     switch (normalizarParaComparacion(courier)) {

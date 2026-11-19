@@ -8,6 +8,7 @@ import {
 } from './CourierInterface';
 import type { CredencialesPickit } from './credenciales/pickit';
 import { resolverProvinciaDesdeCP } from '@/lib/geo/resolver-cp';
+import { traducirEstadoPickit } from './pickit-estados';
 
 // Re-export para que CourierFactory pueda importar el tipo desde un solo lugar
 // (mismo patrón que Oca/CorreoArgentino/HopEnvios re-exportando sus creds).
@@ -502,37 +503,7 @@ export class PickitAdapter implements ICourierIntegrator {
   // Sin match → devuelve el crudo (patrón Hop).
   // ==========================================
   traducirEstado(estadoCrudo: string): string {
-    const raw = String(estadoCrudo || '').trim();
-    const norm = raw.toLowerCase();
-
-    // Progresión exitosa
-    if (norm === 'dispatched' || norm === 'confirmed') return 'EN_CAMINO';
-    if (norm === 'retired' || norm === 'picked' || norm === 'pickedup') return 'PAQUETE_RECOLECTADO';
-    if (norm === 'intransit' || norm === 'transit' || norm === 'enroute') return 'EN_TRANSITO_A_DESTINO';
-    if (
-      norm === 'delivery' ||
-      norm === 'homedistribution' ||
-      norm === 'deliverylastmile' ||
-      norm === 'outfordelivery'
-    ) return 'EN_DISTRIBUCION';
-    if (norm === 'delivered') return 'ENTREGADO';
-
-    // Incidencias / cierres
-    if (norm === 'notdelivery' || norm === 'nodelivered' || norm === 'notdelivered') return 'VISITA_FALLIDA';
-    if (norm === 'cancel' || norm === 'canceled' || norm === 'canceledcourier' || norm === 'cancelled') return 'CANCELADO';
-    if (
-      norm === 'returntosender' ||
-      norm === 'returnedtosender' ||
-      norm === 'returned'
-    ) return 'DEVUELTO_AL_REMITENTE';
-    if (
-      norm === 'lost' ||
-      norm === 'damaged' ||
-      norm === 'stolen' ||
-      norm === 'finaldisposition'
-    ) return 'INCIDENCIA';
-
-    return estadoCrudo;
+    return traducirEstadoPickit(estadoCrudo);
   }
 
   // ==========================================

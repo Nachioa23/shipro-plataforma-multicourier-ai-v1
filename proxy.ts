@@ -27,6 +27,7 @@ const PUBLIC_API_EXACT = [
   "/api/tiendanube/labels/admin-link", // Admin Link Tiendanube — el merchant llega redirect desde el admin (DEUDA 144 Momento 3).
   "/api/empresa/api-key/via-token", // DEUDA 150 Pieza 2 — setup de API Key vía link tokenizado (auth via token single-use en body/query, no sesión).
   "/api/mercadolibre/webhooks",  // MEF Fase 1 step 4 — receiver de webhooks ML (auth por IP fail-open + GET autenticado con x-format-new; el x-signature/HMAC era de Mercado Pago, no del marketplace; ver DEUDA 180 + fix 2026-09-21).
+  "/api/pickit/webhook", // Webhook de tracking de Pickit — self-auth via campo `token` del body (sin HMAC). Dormido sin PICKIT_WEBHOOK_TOKEN.
 ];
 const API_KEY_EXACT = [
   "/api/checkouts",
